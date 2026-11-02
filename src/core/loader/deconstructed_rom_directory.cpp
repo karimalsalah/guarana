@@ -610,3 +610,4 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadNSOModules(Modules& out_mo
 }
 
 } // namespace Loader
+
