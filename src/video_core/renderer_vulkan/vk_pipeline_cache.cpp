@@ -2739,6 +2739,11 @@ void PipelineCache::TickFrame() {
         counters.kept_spirv_entries.store(kept_stages.Size(), std::memory_order_relaxed);
         counters.kept_spirv_bytes.store(kept_stages.Bytes(), std::memory_order_relaxed);
         EvictUnusedPipelines();
+        if (device.IsExtGraphicsPipelineLibrarySupported()) {
+            // The libraries of pipelines destroyed since the last check (an evicted pipeline
+            // goes once the GPU is done with it, above).
+            graphics_libraries.PruneUnused();
+        }
     }
 }
 
