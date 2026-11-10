@@ -413,71 +413,27 @@ void ReportTextureMemo() {
     }
 }
 
-// EDEN_NX2_DRAW_TEMPLATE_VERIFY=1, read once: draws a draw template holds for are resolved in
-// full and compared with it.
-const bool draw_template_verify = [] {
-    const char* const value = std::getenv("EDEN_NX2_DRAW_TEMPLATE_VERIFY");
-    return value != nullptr && value[0] == '1';
-}();
-
-// Draw templates on the drawing thread, logged every 10 s with EDEN_NX2_GPU_PROFILE or the
-// verify env.
-struct DrawTemplateStats {
-    u64 memo_hits{}; ///< Memo-eligible draws the texture memo resolved, before any lookup
-    u64 hits{};      ///< Templates found and valid; with verify, these are resolved in full
-    u64 misses{};
-    u64 kept{};
-    u64 not_kept{}; ///< Changing sampler variants, too many textures or descriptors not keepable
-    std::array<u64, static_cast<size_t>(VideoCommon::DrawTemplateCheck::Count)> rejected{};
-    /// Misses against the pipeline's last template: none yet, other tables or sampler binding,
-    /// other handle words; and misses whose key was kept before (evicted or rejected since)
-    std::array<u64, 4> miss_kinds{};
-    u64 prepare_deleted{};
-    u64 verified{};
-    std::array<u64, 4> mismatches{}; ///< Views, samplers, descriptors, rescaling words
-    u64 mismatched_draws{};
-    u64 total_mismatched_draws{};
-    std::chrono::steady_clock::time_point next_report{};
-} draw_template_stats;
-
-/// Every key a template was kept for, for DrawTemplateStats::miss_kinds (verify or profile only).
-std::unordered_set<u64> kept_template_keys;
-
-void ReportDrawTemplates() {
-    DrawTemplateStats& stats = draw_template_stats;
-    if (((stats.hits + stats.misses) & 1023) != 0 ||
-        (!VideoCommon::Nx2Profile::Enabled() && !draw_template_verify)) {
-        return;
+/// EDEN_NX2_GPL_OPTIMIZE_THREADS=<n> (default 1): the optimized links of EDEN_NX2_GPL_OPTIMIZE run
+/// on their own pool of n low-priority threads, so they don't slow down the builds that draws
+/// wait for. 0 returns null: they run as Background jobs of the shader job scheduler instead.
+/// The pool stays a Common::ThreadWorker of its own (not shader jobs) so its thread count and
+/// placement are kept apart from the scheduler's workers.
+Common::ThreadWorker* GplOptimizeWorkers() {
+    static const size_t threads = [] {
+        const char* const value = std::getenv("EDEN_NX2_GPL_OPTIMIZE_THREADS");
+        const size_t count =
+            value != nullptr && *value != 0 ? std::strtoul(value, nullptr, 10) : size_t{1};
+        LOG_INFO(Render_Vulkan, "Nx2Perf gpl: optimized links on {}", count == 0
+                                    ? std::string{"the shader job scheduler (Background)"}
+                                    : fmt::format("{} low-priority thread(s)", count));
+        return count;
+    }();
+    if (threads == 0) {
+        return nullptr;
     }
-    const auto now = std::chrono::steady_clock::now();
-    if (now < stats.next_report) {
-        return;
-    }
-    if (stats.next_report != std::chrono::steady_clock::time_point{}) {
-        using Check = VideoCommon::DrawTemplateCheck;
-        const auto rejected = [&](Check check) {
-            return stats.rejected[static_cast<size_t>(check)];
-        };
-        LOG_INFO(Render_Vulkan,
-                 "Draw templates in 10 s: {} texture memo hits, {} hits, {} misses ({} first of "
-                 "their pipeline, {} other tables, {} other handle words, {} kept before), {} "
-                 "kept, {} not keepable; rejected: {} host memory, {} scale, {} view deleted, {} "
-                 "descriptor bytes, {} prepare deleted images",
-                 stats.memo_hits, stats.hits, stats.misses, stats.miss_kinds[0],
-                 stats.miss_kinds[1], stats.miss_kinds[2], stats.miss_kinds[3], stats.kept,
-                 stats.not_kept, rejected(Check::HostMemory), rejected(Check::Scale),
-                 rejected(Check::ViewDeleted), rejected(Check::Descriptors), stats.prepare_deleted);
-        if (draw_template_verify) {
-            LOG_INFO(Render_Vulkan,
-                     "Draw template verify in 10 s: {} checked, {} mismatched: {} views, {} "
-                     "samplers, {} descriptors, {} rescaling words ({} mismatched in total)",
-                     stats.verified, stats.mismatched_draws, stats.mismatches[0],
-                     stats.mismatches[1], stats.mismatches[2], stats.mismatches[3],
-                     stats.total_mismatched_draws);
-        }
-    }
-    stats = {.total_mismatched_draws = stats.total_mismatched_draws,
-             .next_report = now + std::chrono::seconds{10}};
+    static Common::ThreadWorker workers(threads, "VkGplOptimize", {},
+                                        Common::ThreadPlacement::Background);
+    return &workers;
 }
 } // Anonymous namespace
 
@@ -507,6 +463,7 @@ GraphicsPipeline::GraphicsPipeline(
       guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(stages)},
       library_cache{library_params.library_cache}, spirv_hashes{library_params.spirv_hashes},
+      build_jobs{build_queue.jobs},
       worker_only_build{build_queue.jobs && static_cast<bool>(emit_stages)},
       mesh_emulation{std::move(mesh_emulation_)}, prepass_shaders{std::move(prepass_shaders_)},
       prepass_split{prepass_shaders != nullptr},
@@ -801,6 +758,31 @@ GraphicsPipeline::GraphicsPipeline(
                     library_cache->RecordFallback();
                     FallBackToMonolithic(render_pass);
                 }
+                if (made && GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries() &&
+                    build_jobs) {
+                    // Optimized link on its own low-priority pool, swapped in at a later draw
+                    // (ConfigureDraw). Dropped if the pipeline goes away before the link started
+                    // (drop_unstarted, or a cancelled Background job when
+                    // EDEN_NX2_GPL_OPTIMIZE_THREADS=0).
+                    auto link = [this, render_pass] {
+                        optimized_pipeline = LinkLibraries(render_pass, true);
+                        optimized_ready.store(true, std::memory_order_release);
+                    };
+                    if (Common::ThreadWorker* const pool = GplOptimizeWorkers()) {
+                        optimized_build.emplace(pool, std::move(link), true);
+                    } else {
+                        optimized_build.emplace(
+                            PipelineBuildQueue{
+                                .jobs = build_jobs,
+                                .priority = VideoCommon::ShaderJobPriority::Background,
+                            },
+                            std::move(link));
+                    }
+                }
+                // The libraries hold the shaders now (the fallback has used them too).
+                for (vk::ShaderModule& module : spv_modules) {
+                    module.reset();
+                }
             } else {
                 pipeline = MakePipeline(render_pass);
             }
@@ -817,6 +799,9 @@ GraphicsPipeline::GraphicsPipeline(
             ReportPipelineBuildFailure(exception.GetResult());
             throw;
         }
+        // Read by the GPU thread once the build is marked done; `pipeline` itself may be swapped
+        // later on the scheduler thread (optimized link).
+        has_pipeline = static_cast<bool>(pipeline);
         if (pipeline_statistics) {
             pipeline_statistics->Collect(device, *pipeline);
         }
@@ -1499,7 +1484,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             scheduler.RequestOutsideRenderPassOperationContext();
         }
     }
-    if (IsBuilt() && (!pipeline || build->Failed())) {
+    if (IsBuilt() && (!has_pipeline || build->Failed())) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
@@ -1675,7 +1660,7 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
             scheduler.RequestOutsideRenderPassOperationContext();
         }
     }
-    if (IsBuilt() && (!pipeline || build->Failed())) {
+    if (IsBuilt() && (!has_pipeline || build->Failed())) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
@@ -1947,6 +1932,18 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     scheduler.RequestDrawRenderpass(texture_cache.GetFramebuffer());
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
+    }
+    // Only once the first build is done: until then its thread may still read `pipeline`.
+    if (IsBuilt() && optimized_ready.load(std::memory_order_acquire) && !optimized_bound) {
+        // The optimized pipeline is in. Swap on the scheduler thread, in order with the draws
+        // recorded so far, and bind again; the first one stays alive for the command buffers
+        // that bound it.
+        optimized_bound = true;
+        scheduler.ForgetGraphicsPipeline(this);
+        scheduler.Record([this](vk::CommandBuffer) {
+            retired_pipeline = std::move(pipeline);
+            pipeline = std::move(optimized_pipeline);
+        });
     }
     if (!IsBuilt()) {
         // Wait for the pipeline to be built
@@ -2772,11 +2769,11 @@ bool InPart(GplPart part, size_t stage) {
                                              : !IsPreRasterizationStage(stage);
 }
 
-/// Create flags of a shader library, keeping link time optimization info when fast links are not
-/// usable on `device`.
+/// Create flags of a shader library, keeping link time optimization info when optimized links are
+/// on or fast links are not usable on `device`.
 VkPipelineCreateFlags LibraryFlags(const Device& device) {
     VkPipelineCreateFlags flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
-    if (!device.CanFastLinkGraphicsLibraries()) {
+    if (GplOptimizeEnabled() || !device.CanFastLinkGraphicsLibraries()) {
         flags |= VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT;
     }
     return flags;

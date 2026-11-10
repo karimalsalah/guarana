@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include <exception>
 
 #include "common/logging.h"
@@ -23,6 +24,14 @@ double Ms(u64 ns) {
 
 constexpr std::array<const char*, 2> PART_NAMES{"pre-rasterization", "fragment"};
 } // Anonymous namespace
+
+bool GplOptimizeEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_GPL_OPTIMIZE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
 
 std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
     GplPart part, const std::string& key, const Builder& build, u64 name) {

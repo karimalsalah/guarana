@@ -597,6 +597,18 @@ private:
     vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
+    /// Optimized link (GplOptimizeEnabled): the optimized pipeline once its build is done, and
+    /// the first one kept alive after the swap for the command buffers that bound it.
+    vk::Pipeline optimized_pipeline;
+    vk::Pipeline retired_pipeline;
+    std::atomic_bool optimized_ready{};
+    bool optimized_bound{};
+    /// The build produced a pipeline. Written by the build before it completes, read by the GPU
+    /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
+    bool has_pipeline{};
+    /// The scheduler of the build's job (PipelineBuildQueue::jobs), which also runs the optimized
+    /// build as a Background job. Null when built without jobs.
+    VideoCommon::ShaderJobScheduler* const build_jobs;
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
@@ -628,14 +640,9 @@ private:
     std::array<MeshEmulationBuffer, 4> mesh_task_buffers{};
     u32 mesh_capacity{};
 
-    // Alpha-test prepass split: the shaders until the build has made their modules, and the
-    // pipelines of the depth pass [0] and the colour pass [1].
-    std::shared_ptr<PrepassShaders> prepass_shaders;
-    const bool prepass_split;
-    const bool prepass_invariant;
-    std::array<vk::ShaderModule, 2> prepass_modules;
-    std::array<vk::Pipeline, 2> prepass_pipelines;
-
+    /// Declared before `build`: destroyed after it, so the first build (which starts this one)
+    /// has finished when this one is waited for.
+    std::optional<PipelineBuild> optimized_build;
     std::optional<PipelineBuild> build;
 };
 
