@@ -828,6 +828,13 @@ FN_MAX_LIMIT_LIST
         return properties.properties.limits.maxTessellationPatchSize;
     }
 
+    /// Graphics pipelines are linked from per-stage libraries: the use_graphics_pipeline_library
+    /// setting (or EDEN_NX2_GPL=1) is on and the device has VK_EXT_graphics_pipeline_library
+    /// with fast linking.
+    bool IsExtGraphicsPipelineLibrarySupported() const {
+        return graphics_pipeline_library_enabled;
+    }
+
     /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
     bool IsExtMeshShaderSupported() const {
         return extensions.mesh_shader && features.mesh_shader.taskShader &&
@@ -1517,6 +1524,7 @@ private:
         VkPhysicalDeviceSubgroupSizeControlProperties subgroup_size_control{};
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback{};
         VkPhysicalDeviceMaintenance5PropertiesKHR maintenance5{};
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT graphics_pipeline_library{};
         VkPhysicalDevicePipelineBinaryPropertiesKHR pipeline_binary{};
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
@@ -1530,6 +1538,12 @@ private:
     Extensions extensions{};
     Features features{};
     Properties properties{};
+
+    /// EDEN_NX2_GPL: kept out of the extension tables so a run without the switch creates the
+    /// device exactly as before.
+    bool graphics_pipeline_library_requested{};
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT graphics_pipeline_library_features{};
+    bool graphics_pipeline_library_enabled{};
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};

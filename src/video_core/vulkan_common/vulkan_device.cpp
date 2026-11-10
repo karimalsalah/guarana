@@ -1508,6 +1508,24 @@ bool Device::GetSuitability(bool requires_swapchain) {
     FOR_EACH_VK_FEATURE_EXT(FEATURE_EXTENSION);
     FOR_EACH_VK_EXTENSION(EXTENSION);
 
+    // Shader libraries setting or EDEN_NX2_GPL=1: graphics pipelines linked from per-stage
+    // libraries (vk_pipeline_library).
+    graphics_pipeline_library_requested = [] {
+        if (Settings::values.use_graphics_pipeline_library.GetValue()) {
+            return true;
+        }
+        const char* value = std::getenv("EDEN_NX2_GPL");
+        return value && *value && *value != '0';
+    }();
+    if (graphics_pipeline_library_requested &&
+        supported_extensions.contains(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
+        supported_extensions.contains(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+        loaded_extensions.insert(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+        loaded_extensions.insert(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+    } else {
+        graphics_pipeline_library_requested = false;
+    }
+
     extensions.depth_stencil_resolve =
         extensions.depth_stencil_resolve &&
         (instance_version >= VK_API_VERSION_1_2 || extensions.create_renderpass2);
@@ -1641,6 +1659,12 @@ bool Device::GetSuitability(bool requires_swapchain) {
         SetNext(next, device_fault_features);
     }
 
+    if (graphics_pipeline_library_requested) {
+        graphics_pipeline_library_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT;
+        SetNext(next, graphics_pipeline_library_features);
+    }
+
     // Perform the feature test.
     physical.GetFeatures2(features2);
 
@@ -1756,6 +1780,12 @@ bool Device::GetSuitability(bool requires_swapchain) {
         properties.integer_dot_product.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES;
         SetNext(next, properties.integer_dot_product);
+    }
+
+    if (graphics_pipeline_library_requested) {
+        properties.graphics_pipeline_library.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT;
+        SetNext(next, properties.graphics_pipeline_library);
     }
 
     // Perform the property fetch.
@@ -2081,49 +2111,28 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
-    // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
-    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used, and the per-primitive
-    // rate of native mesh programs with EDEN_NX2_MESH_OUT bit 2.
-    if (!mesh_primitive_rate || !extensions.mesh_shader) {
-        features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
-    }
-    features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
-    extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
-                                       features.fragment_shading_rate.pipelineFragmentShadingRate &&
-                                       instance_version >= VK_API_VERSION_1_2 &&
-                                       std::getenv("EDEN_NX2_VRS") != nullptr;
-    if (!extensions.fragment_shading_rate ||
-        !features.fragment_shading_rate.primitiveFragmentShadingRate) {
-        // The mesh feature needs the primitive rate one.
-        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    }
-    if (mesh_primitive_rate) {
-        LOG_INFO(Render_Vulkan,
-                 "EDEN_NX2_MESH_OUT: per-primitive shading rate of mesh programs {} (multiple "
-                 "viewports {}, non-trivial combiners {})",
-                 IsMeshPrimitiveShadingRateSupported() ? "enabled" : "not available",
-                 properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports,
-                 properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps);
-    }
-    fragment_shading_rates.clear();
-    if (extensions.fragment_shading_rate) {
-        std::string rates;
-        for (const VkPhysicalDeviceFragmentShadingRateKHR& rate :
-             physical.GetFragmentShadingRatesKHR()) {
-            if ((rate.sampleCounts & VK_SAMPLE_COUNT_1_BIT) == 0) {
-                continue;
-            }
-            fragment_shading_rates.push_back(rate.fragmentSize);
-            rates += fmt::format(" {}x{}", rate.fragmentSize.width, rate.fragmentSize.height);
+    // VK_EXT_graphics_pipeline_library (EDEN_NX2_GPL): used only with fast linking, which makes
+    // a link cost a fraction of a millisecond.
+    if (graphics_pipeline_library_requested) {
+        const bool usable =
+            graphics_pipeline_library_features.graphicsPipelineLibrary &&
+            properties.graphics_pipeline_library.graphicsPipelineLibraryFastLinking;
+        if (!usable) {
+            LOG_WARNING(Render_Vulkan,
+                        "Nx2Perf gpl: the device has no graphics pipeline library fast linking, "
+                        "EDEN_NX2_GPL ignored");
+            loaded_extensions.erase(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+            loaded_extensions.erase(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+            graphics_pipeline_library_features.graphicsPipelineLibrary = VK_FALSE;
         }
-        const VkExtent2D max_size = properties.fragment_shading_rate.maxFragmentSize;
-        LOG_INFO(Render_Vulkan,
-                 "EDEN_NX2_VRS: VK_KHR_fragment_shading_rate enabled, rates:{}, max {}x{}", rates,
-                 max_size.width, max_size.height);
-    } else if (loaded_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
-        // Not a warning: the extension is left out unless asked for.
-        RemoveExtensionFeature(extensions.fragment_shading_rate, features.fragment_shading_rate,
-                               VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+        graphics_pipeline_library_enabled = usable;
+        if (usable) {
+            LOG_INFO(Render_Vulkan,
+                     "Nx2Perf gpl: graphics pipeline libraries on (fast linking, independent "
+                     "interpolation decoration {})",
+                     properties.graphics_pipeline_library
+                         .graphicsPipelineLibraryIndependentInterpolationDecoration);
+        }
     }
 
     // VK_KHR_shader_quad_control

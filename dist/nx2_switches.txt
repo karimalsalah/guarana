@@ -58,3 +58,7 @@ EDEN_NX2_EXTRAPOLATE=1
 #EDEN_NX2_SPLIT_SKIP=1
 #EDEN_NX2_AUTO_STUB=1
 #EDEN_NX2_KEEP_ASTC=1
+
+# Graphics pipelines linked from per-stage shader libraries (VK_EXT_graphics_pipeline_library),
+# like the Shader libraries setting. Needs a driver with fast linking.
+#EDEN_NX2_GPL=1
