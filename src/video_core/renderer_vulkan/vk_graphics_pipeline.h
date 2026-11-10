@@ -477,20 +477,12 @@ private:
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
 
-    /// The pipeline itself, or one of the two an alpha-test prepass split draws with: the depth
-    /// pass (the depth-only fragment shader, no colour written) and the colour pass (the fragment
-    /// shader with early fragment tests, depth compared for equality and not written).
-    enum class PipelineVariant : u8 {
-        Main,
-        PrepassDepth,
-        PrepassColor,
-    };
+    struct PipelineStates;
 
-    void MakePipeline(VkRenderPass render_pass, PipelineVariant variant = PipelineVariant::Main);
+    /// The fixed-function create state of the pipeline.
+    void FillStates(PipelineStates& states) const;
 
-    /// Builds the split's two pipelines after the pipeline itself, from the same modules for the
-    /// stages before the fragment one. A failure leaves the pipeline without them.
-    void MakePrepassPipelines(VkRenderPass render_pass);
+    vk::Pipeline MakePipeline(VkRenderPass render_pass);
 
     void Validate();
 
