@@ -62,3 +62,6 @@ EDEN_NX2_EXTRAPOLATE=1
 # Graphics pipelines linked from per-stage shader libraries (VK_EXT_graphics_pipeline_library),
 # like the Shader libraries setting. Needs a driver with fast linking.
 #EDEN_NX2_GPL=1
+# With libraries on: =1 links them fast on every driver, =0 links them with link time
+# optimization on every driver. Unset: fast, except on AMD's Windows driver.
+#EDEN_NX2_GPL_FAST_LINK=1
