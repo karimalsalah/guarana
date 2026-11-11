@@ -563,7 +563,6 @@ struct System::Impl {
 
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
-        Settings::ClearPresetValues();
 
         is_powered_on = false;
         exit_locked = false;
@@ -586,6 +585,8 @@ struct System::Impl {
         audio_core.reset();
         gpu_core.reset();
         host1x_core.reset();
+        // The renderer reads the preset values until it is gone.
+        Settings::ClearPresetValues();
         perf_stats.reset();
         cpu_manager.Shutdown();
         debugger.reset();
