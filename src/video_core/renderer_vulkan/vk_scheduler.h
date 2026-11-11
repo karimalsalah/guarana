@@ -8,6 +8,7 @@
 
 #include <array>
 #include <chrono>
+#include <compare>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -456,6 +457,7 @@ private:
 
     void TraceGpuSubmission();
     void ReportWorkTimes(double submission_sum_ms);
+    void ReportPassTimes();
     void TraceShader(u64 hash, u32 stage);
 
     u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
@@ -512,6 +514,27 @@ private:
     std::vector<WorkTrace> trace_work_items;
     u32 trace_work_count{};
     u32 trace_work_dropped{};
+    static constexpr u32 TraceMaxPasses = 2048;
+    static constexpr u32 TraceNoPass = ~u32{0};
+    /// What DKB gpu_pass groups render passes by. Formats are PixelFormat values.
+    struct PassTrace {
+        auto operator<=>(const PassTrace&) const = default;
+
+        u32 width{};
+        u32 height{};
+        u8 color_format{}; ///< First color target's, Invalid without one
+        u8 num_colors{};
+        u8 depth_format{};
+        u8 samples{};
+    };
+    /// Worker thread: timestamps around a render pass of a sampled submission.
+    void TracePassBegin(vk::CommandBuffer cmdbuf, const PassTrace& pass);
+    void TracePassEnd(vk::CommandBuffer cmdbuf);
+    vk::QueryPool trace_pass_pool;
+    std::vector<PassTrace> trace_pass_items;
+    u32 trace_pass_count{};
+    u32 trace_pass_dropped{};
+    u32 trace_pass_open{TraceNoPass};
     Common::DkbFrameTrace::RateLimit trace_gpu_rate;
     u64 trace_gpu_tick{};
     u64 trace_frame_end{};

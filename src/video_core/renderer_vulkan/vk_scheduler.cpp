@@ -35,6 +35,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
+#include "video_core/texture_cache/formatter.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -142,6 +143,15 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .pipelineStatistics = 0,
                 });
                 trace_work_items.resize(TraceMaxWork);
+                trace_pass_items.resize(TraceMaxPasses);
+                trace_pass_pool = device.GetLogical().CreateQueryPool({
+                    .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                    .queryCount = TraceMaxPasses * 2,
+                    .pipelineStatistics = 0,
+                });
             } catch (const vk::Exception& error) {
                 LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());
             }
@@ -356,6 +366,26 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
     std::array<VkClearValue, 9> values{};
     for (u32 i = 0; i < clear_value_count && i < values.size(); ++i) {
         values[i] = clear_values[i];
+    }
+    if (trace_pass_pool) {
+        const RenderPassKey& key = framebuffer->RenderPassKeyBase();
+        PassTrace pass{
+            .width = render_area.width,
+            .height = render_area.height,
+            .color_format = static_cast<u8>(VideoCore::Surface::PixelFormat::Invalid),
+            .num_colors = 0,
+            .depth_format = static_cast<u8>(key.depth_format),
+            .samples = static_cast<u8>(key.samples),
+        };
+        for (const VideoCore::Surface::PixelFormat format : key.color_formats) {
+            if (format == VideoCore::Surface::PixelFormat::Invalid) {
+                continue;
+            }
+            if (pass.num_colors++ == 0) {
+                pass.color_format = static_cast<u8>(format);
+            }
+        }
+        Record([this, pass](vk::CommandBuffer cmdbuf) { TracePassBegin(cmdbuf, pass); });
     }
     const bool after_compute = std::exchange(compute_writes_pending, false);
     Record([renderpass, framebuffer_handle, render_area, values, clear_value_count,
@@ -741,6 +771,95 @@ void Scheduler::ReportWorkTimes(double submission_sum_ms) {
              submission_sum_ms - total_ms, slowest);
 }
 
+void Scheduler::TracePassBegin(vk::CommandBuffer cmdbuf, const PassTrace& pass) {
+    if (!trace_gpu_recording) {
+        return;
+    }
+    if (trace_pass_count == TraceMaxPasses) {
+        ++trace_pass_dropped;
+        return;
+    }
+    trace_pass_open = trace_pass_count++;
+    trace_pass_items[trace_pass_open] = pass;
+    cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_pass_pool,
+                          trace_pass_open * 2);
+}
+
+void Scheduler::TracePassEnd(vk::CommandBuffer cmdbuf) {
+    if (trace_pass_open == TraceNoPass) {
+        return;
+    }
+    cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_pass_pool,
+                          trace_pass_open * 2 + 1);
+    trace_pass_open = TraceNoPass;
+}
+
+void Scheduler::ReportPassTimes() {
+    const u32 count = std::exchange(trace_pass_count, 0);
+    const u32 dropped = std::exchange(trace_pass_dropped, 0);
+    if (count == 0) {
+        return;
+    }
+    struct Result {
+        u64 timestamp;
+        u64 available;
+    };
+    std::vector<Result> results(count * 2);
+    const auto result = device.GetLogical().GetQueryResults(
+        *trace_pass_pool, 0, count * 2, results.size() * sizeof(Result), results.data(),
+        sizeof(Result), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    if (result != VK_SUCCESS && result != VK_NOT_READY) {
+        return;
+    }
+    struct Totals {
+        double total_ms{};
+        double max_ms{};
+        u32 count{};
+    };
+    std::map<PassTrace, Totals> by_target;
+    double total_ms{};
+    u32 timed{};
+    for (u32 i = 0; i < count; ++i) {
+        if (results[i * 2].available == 0 || results[i * 2 + 1].available == 0) {
+            continue;
+        }
+        const double ms = static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
+                              results[i * 2].timestamp, results[i * 2 + 1].timestamp,
+                              trace_timestamp_bits)) *
+                          trace_timestamp_period / 1e6;
+        Totals& totals = by_target[trace_pass_items[i]];
+        totals.total_ms += ms;
+        totals.max_ms = (std::max)(totals.max_ms, ms);
+        ++totals.count;
+        total_ms += ms;
+        ++timed;
+    }
+    std::vector<std::pair<PassTrace, Totals>> sorted(by_target.begin(), by_target.end());
+    std::ranges::sort(sorted, std::greater<>{},
+                      [](const auto& entry) { return entry.second.total_ms; });
+    const size_t targets = sorted.size();
+    if (sorted.size() > 12) {
+        sorted.resize(12);
+    }
+    const auto format_name = [](u8 format) {
+        const auto pixel_format = static_cast<VideoCore::Surface::PixelFormat>(format);
+        return pixel_format == VideoCore::Surface::PixelFormat::Invalid
+                   ? std::string{"-"}
+                   : fmt::format("{}", pixel_format);
+    };
+    std::string top;
+    for (const auto& [pass, totals] : sorted) {
+        top += fmt::format(" {}x{}/{}/{}/{}/{}={:.3f}ms/{}x(max {:.3f}ms)", pass.width,
+                           pass.height, format_name(pass.color_format), u32{pass.num_colors},
+                           format_name(pass.depth_format), u32{pass.samples}, totals.total_ms,
+                           totals.count, totals.max_ms);
+    }
+    LOG_INFO(Render_Vulkan,
+             "DKB gpu_pass renderer_frame={} passes={} timed={} dropped={} targets={} "
+             "pass_sum_ms={:.3f} top:{}",
+             trace_sample_frame, count, timed, dropped, targets, total_ms, top);
+}
+
 void Scheduler::TraceGpuSubmission() {
     if (trace_gpu_pending) {
         master_semaphore->Refresh();
@@ -874,6 +993,7 @@ void Scheduler::TraceGpuSubmission() {
                      work.dispatch_attempts, shaders, work.untracked_uses);
         }
         ReportWorkTimes(total_ms);
+        ReportPassTimes();
         trace_gpu_tick = 0;
         trace_gpu_count = 0;
         trace_gpu_skipped = 0;
@@ -887,6 +1007,9 @@ void Scheduler::TraceGpuSubmission() {
     if (trace_gpu_count == 0 && trace_work_pool) {
         // Draws are timed inside render passes, where queries cannot be reset.
         current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+    }
+    if (trace_gpu_count == 0 && trace_pass_pool) {
+        current_upload_cmdbuf.ResetQueryPool(*trace_pass_pool, 0, TraceMaxPasses * 2);
     }
     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
                                         trace_gpu_count * 2);
@@ -924,6 +1047,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             trace_submissions[trace_gpu_count] = trace_work;
             ++trace_gpu_count;
             trace_gpu_recording = false;
+            trace_pass_open = TraceNoPass;
         } else if (trace_gpu_sampling) {
             ++trace_gpu_skipped;
         }
@@ -1069,6 +1193,9 @@ void Scheduler::EndRenderPass()
                                        0, XFB_OUTPUT_BARRIER);
             }
         });
+        if (trace_pass_pool) {
+            Record([this](vk::CommandBuffer cmdbuf) { TracePassEnd(cmdbuf); });
+        }
 
         state.renderpass = VkRenderPass{};
         num_renderpass_images = 0;
