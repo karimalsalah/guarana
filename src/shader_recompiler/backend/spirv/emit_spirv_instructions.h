@@ -656,5 +656,7 @@ void PatchCooperativeHmma(std::vector<u32>& code, const CooperativeHmmaTypes& ty
 /// Appends the shared memory of the 16x16x16 HMMA path to a program that runs it, and returns the
 /// word where it starts.
 std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Program& program);
+/// The same for the scratch of the software helpers, in a program that gathers through it.
+std::optional<u32> ReserveSoftwareMatrixScratch(const Profile& profile, IR::Program& program);
 
 } // namespace Shader::Backend::SPIRV

@@ -111,6 +111,11 @@ struct Profile {
     bool support_cooperative_hmma{};
     /// Without the above, HMMA runs on 16x16x16 cooperative matrices through shared memory
     bool support_cooperative_hmma_16x16x16{};
+    /// Software HMMA gathers its operands from a subgroup's scratch in shared memory instead of
+    /// shuffling them; the pipeline gets full subgroups of the guest's 32 lanes
+    bool support_software_matrix_shared_memory{};
+    /// Experiment: the above without its subgroup barriers (a subgroup's lanes run in lockstep)
+    bool software_matrix_shared_memory_no_barrier{};
     u32 max_subgroup_size{};
 
     u32 gl_max_compute_smem_size{};
