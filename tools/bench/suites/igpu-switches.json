@@ -1,0 +1,24 @@
+{
+  "name": "igpu-switches",
+  "description": "Environment switches that may help integrated GPUs, each against the baseline in Hyrule Field. Everything given on the command line (base ini, mods, power policy) applies to every variant. Variants that change GPU work are paired with a traced twin (<name>-trace) whose row carries the GPU time per shader and pass; traced rows are slower and are compared with baseline-trace only.",
+  "scene": "../scenes/oot-hyrule-field.json",
+  "options": {},
+  "base": {"env": {}},
+  "baseline": "baseline",
+  "paired": {"suffix": "-trace", "env": {"EDEN_DKB_FRAME_TRACE": "1"}},
+  "runs": [
+    {
+      "variants": [
+        {"name": "baseline", "paired": true},
+        {"name": "mesh-cull-1", "env": {"EDEN_NX2_MESH_CULL": "1"}, "paired": true},
+        {"name": "mesh-cull-5", "env": {"EDEN_NX2_MESH_CULL": "5"}, "paired": true},
+        {"name": "mesh-cull-7", "env": {"EDEN_NX2_MESH_CULL": "7"}, "paired": true},
+        {"name": "vrs-2x2", "env": {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}, "paired": true},
+        {"name": "vrs-2x2-mesh-cull-7", "env": {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2", "EDEN_NX2_MESH_CULL": "7"}, "paired": true},
+        {"name": "spin-scale-0.25", "env": {"EDEN_NX2_SPIN_SCALE": "0.25"}},
+        {"name": "eco-background", "env": {"EDEN_NX2_ECO_BACKGROUND": "1"}},
+        {"name": "low-memory", "env": {"EDEN_NX2_LOW_MEMORY": "1"}}
+      ]
+    }
+  ]
+}
