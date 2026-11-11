@@ -16,6 +16,8 @@ struct ExtrapolationSource {
     /// The scene before and after the game drew its HUD, when both exist; null otherwise.
     VkImageView hud_reference{};
     VkImageView hud_composite{};
+    /// hud_reference holds linear colour while hud_composite is sRGB-encoded.
+    bool hud_reference_linear{};
     /// The camera jumped: the motion describes no movement to continue.
     bool cut{};
 };

@@ -18,6 +18,7 @@ namespace {
 
 constexpr u32 FLAG_HUD = 1;
 constexpr u32 FLAG_DEBUG = 2;
+constexpr u32 FLAG_HUD_LINEAR = 4;
 constexpr u32 SAMPLED_BINDINGS = 4;
 constexpr u32 OUTPUT_BINDING = 4;
 constexpr u32 GROUP_SIZE = 8;
@@ -147,7 +148,8 @@ void FrameExtrapolation::Generate(const Device& device, Scheduler& scheduler,
         .screen_width = static_cast<f32>(screen.extent.width),
         .screen_height = static_cast<f32>(screen.extent.height),
         .advance = advance,
-        .flags = (has_hud ? FLAG_HUD : 0) | (debug ? FLAG_DEBUG : 0),
+        .flags = (has_hud ? FLAG_HUD : 0) | (debug ? FLAG_DEBUG : 0) |
+                 (has_hud && source.hud_reference_linear ? FLAG_HUD_LINEAR : 0),
     };
 
     scheduler.Record([this, constants, set, destination, extent](vk::CommandBuffer cmdbuf) {

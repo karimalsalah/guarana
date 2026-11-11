@@ -1303,6 +1303,11 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     }
     if (!copied) {
         kept(result);
+    } else {
+        const auto& cbuf = launch_description.const_buffer_config[0];
+        const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+        rasterizer->OotNetworkBypassed(memory_manager.Read<u32>(cbuf_address + handle_offset) &
+                                       0xfffff);
     }
     return copied;
 }
