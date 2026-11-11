@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -17,6 +18,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench  # noqa: E402
+import play  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -231,6 +233,15 @@ class FakeEmulator:
             return {"result": {"available": True, "package_w": 28.0 + self.measured, "cpu_w": 9.0, "gpu_w": 15.0}}
         if method == "memory" and "memory" in self.methods:
             return {"result": {"working_set_mb": 4096, "dump": "C:\\Users\\somebody\\dumps"}}
+        if method == "reject_shaders" and "reject_shaders" in self.methods:
+            if params.get("reject"):
+                self.shot = solid(0)  # the rejected shader drew most of the picture
+            return {"result": {"applied": True, "rejected": params["hashes"] if params.get("reject") else []}}
+        if method in ("set_shading_rate", "power_set") and method in self.methods:
+            return {"result": dict(params)}
+        if method == "gpu_costs" and "gpu_costs" in self.methods:
+            self.costs = params.get("enable", getattr(self, "costs", False))
+            return {"result": {"enabled": self.costs, "frame": 7, "work": [{"hash": "78134ce8125d5959", "ms": 15.1}]}}
         return {"error": f"unknown method \"{method}\""}
 
     def serve(self):
@@ -477,17 +488,122 @@ class SanitizeTest(unittest.TestCase):
 
 
 class FakeProcess:
-    def __init__(self, emulator):
+    """linger: how many more poll() calls report it alive after kill(), like an emulator that is
+    still writing its settings. at_exit runs when it is finally gone."""
+
+    def __init__(self, emulator, linger=0, at_exit=None):
         self.emulator = emulator
         self.pid = os.getpid()
         self.exited = False
+        self.killed = False
+        self.linger = linger
+        self.at_exit = at_exit
 
     def poll(self):
+        if self.killed and not self.exited:
+            if self.linger > 0:
+                self.linger -= 1
+            else:
+                self.exited = True
+                if self.at_exit:
+                    self.at_exit()
         return 0 if self.exited else None
 
     def kill(self):
-        self.exited = True
+        self.killed = True
         self.emulator.close()
+        self.poll()
+
+
+QUERY_HEAD = """Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)
+  GUID Alias: SCHEME_BALANCED
+  Subgroup GUID: 54533251-82be-4824-96c1-47b60b740d00  (Processor power management)
+    GUID Alias: SUB_PROCESSOR
+    Power Setting GUID: 06cadf0e-64ed-448a-8927-ce7bf90eb35d  (A setting without an alias)
+      Minimum Possible Setting: 0x00000000
+      Maximum Possible Setting: 0x00000064
+    Current AC Power Setting Index: 0x0000003c
+    Current DC Power Setting Index: 0x0000003c
+"""
+QUERY_PERCENT = """
+    Power Setting GUID: 893dee8e-2bef-41e0-89c6-b55d0929964c  (Some processor state)
+      GUID Alias: {name}
+      Minimum Possible Setting: 0x00000000
+      Maximum Possible Setting: 0x00000064
+      Possible Settings increment: 0x00000001
+      Possible Settings units: %
+    Current AC Power Setting Index: 0x{ac:08x}
+    Current DC Power Setting Index: 0x{dc:08x}
+"""
+QUERY_INDEX = """
+    Power Setting GUID: be337238-0d82-4146-a960-4f3749d470c7  (Processor performance boost mode)
+      GUID Alias: {name}
+      Possible Setting Index: 000
+      Possible Setting Friendly Name: Disabled
+      Possible Setting Index: 002
+      Possible Setting Friendly Name: Aggressive
+    Current AC Power Setting Index: 0x{ac:08x}
+    Current DC Power Setting Index: 0x{dc:08x}
+"""
+TELEMETRY = """Time      MHz   Watts  Temp  LimitedBy
+09:15:01  2250  14.5   71    None
+09:15:02  2150  15.5   72    Power
+09:15:03  2200  15.0   72    Power
+"""
+TYPEPERF = """
+"(PDH-CSV 4.0)","\\\\SOMEHOST\\Energy Meter(rapl_package0_pkg)\\Power","\\\\SOMEHOST\\Energy Meter(rapl_package0_pp0)\\Power","\\\\SOMEHOST\\Energy Meter(rapl_package0_pp1)\\Power"
+"11/11/2026 21:39:39.769","27000.000000","9000.500000"," "
+"11/11/2026 21:39:40.784","29000.000000","9001.500000","15250.000000"
+Exiting, please wait...
+The command completed successfully.
+"""
+
+
+class FakeHost:
+    """Stands in for powercfg, typeperf, the GPU telemetry script, the process survey and
+    taskkill. Any other command fails the test: nothing real is ever run."""
+
+    def __init__(self):
+        self.power = {"PERFBOOSTMODE": [2, 1], "PROCTHROTTLEMIN": [100, 5], "PROCTHROTTLEMIN1": [100, 5],
+                      "PROCTHROTTLEMAX": [100, 100]}
+        self.commands = []
+        self.energy = True
+        self.fail = None
+        self.activated = 0
+        self.survey = {"processes": [], "power_online": True, "battery_pct": 100}
+
+    def query(self):
+        return QUERY_HEAD + "".join((QUERY_INDEX if name == "PERFBOOSTMODE" else QUERY_PERCENT).format(
+            name=name, ac=ac, dc=dc) for name, (ac, dc) in self.power.items())
+
+    def ran(self, tool):
+        return [command for command in self.commands if command[0] == tool]
+
+    def __call__(self, command, timeout=60):
+        self.commands.append(list(command))
+        if self.fail and self.fail in " ".join(command):
+            return 1, "Access is denied."
+        tool = command[0]
+        if tool == "powercfg" and command[1:] == ["/qh", "SCHEME_CURRENT", "SUB_PROCESSOR"]:
+            return 0, self.query()
+        if tool == "powercfg" and command[1:4] == ["/setacvalueindex", "SCHEME_CURRENT", "SUB_PROCESSOR"]:
+            self.power[command[4]][0] = int(command[5])
+            return 0, ""
+        if tool == "powercfg" and command[1:] == ["/setactive", "SCHEME_CURRENT"]:
+            self.activated += 1
+            return 0, ""
+        if tool == "typeperf":
+            return (0, TYPEPERF) if self.energy else (1, "Error: No valid counters.")
+        if tool == "powershell" and "-File" in command:
+            return 0, TELEMETRY
+        if tool == "powershell" and "-EncodedCommand" in command:
+            return 0, "noise before\n" + json.dumps(self.survey)
+        if tool == "taskkill":
+            return 0, ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    def ac(self):
+        return {name: values[0] for name, values in self.power.items()}
 
 
 class FakeMeter:
@@ -503,8 +619,8 @@ class FakeMeter:
         return dict(self.reading)
 
 
-class RunTest(unittest.TestCase):
-    """The whole run against a fake emulator: nothing is launched."""
+class RunCase(unittest.TestCase):
+    """A user folder, a scene and a fake emulator: nothing is launched and no host tool runs."""
 
     INI = b"[Renderer]\r\nbackend\\default=true\r\nbackend=1\r\n\r\n[UI]\r\nfullscreen\\default=false\r\nfullscreen=true\r\n"
 
@@ -539,6 +655,10 @@ class RunTest(unittest.TestCase):
             probe.bind(("127.0.0.1", 0))
             self.port = probe.getsockname()[1]
         self.emulator_options = {}
+        self.process_options = {}
+        self.log_text = None
+        self.host = FakeHost()
+        self.state = os.path.join(self.folder, "state")
         self.launches = []
         self.stopped = []
         self.slept = []
@@ -551,6 +671,10 @@ class RunTest(unittest.TestCase):
             hardware = staticmethod(lambda: json.loads(json.dumps(HARDWARE)))
             cpu_meter = FakeMeter
             free_ram = staticmethod(lambda: 12.0)
+            run_command = staticmethod(self.host)
+            window_size = staticmethod(lambda pid: "1280x761")
+            process_memory = staticmethod(lambda pid: {"working_set_mb": 3900, "working_set_peak_mb": 4100,
+                                                       "private_mb": 5200, "private_peak_mb": 5300})
             log = staticmethod(self.log.append)
 
             @staticmethod
@@ -559,9 +683,14 @@ class RunTest(unittest.TestCase):
                 test.addCleanup(emulator.close)
                 with open(test.ini, "rb") as file:
                     ini = file.read()
+                mods = os.path.join(test.user, "load", "0400486024DEC000")
                 test.launches.append({"exe": exe, "game": game, "env": env, "ini": ini, "emulator": emulator,
-                                      "saves": sorted(os.listdir(os.path.join(test.save, "slot")))})
-                return FakeProcess(emulator)
+                                      "saves": sorted(os.listdir(os.path.join(test.save, "slot"))),
+                                      "mods": sorted(os.listdir(mods)) if os.path.isdir(mods) else None,
+                                      "power": test.host.ac()})
+                if test.log_text is not None:
+                    test.write(os.path.join(test.user, "log", "eden_log.txt"), test.log_text.encode())
+                return FakeProcess(emulator, **test.process_options)
 
             @staticmethod
             def stop(process):
@@ -581,7 +710,7 @@ class RunTest(unittest.TestCase):
         args = bench.build_parser().parse_args([
             "run", "--exe", self.exe, "--game", self.game, "--scene", self.scene, "--user-dir", self.user,
             "--save-backup", self.backup, "--reference", self.reference, "--out", self.out,
-            "--port", str(self.port), *extra])
+            "--port", str(self.port), "--state-dir", self.state, *extra])
         code = bench.command_run(args, self.deps)
         files = [name for name in os.listdir(self.out) if name.endswith(".jsonl")] if os.path.isdir(self.out) else []
         rows = []
@@ -597,6 +726,16 @@ class RunTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.save + ".bench-keep"))
         self.assertTrue(all(process is None or process.exited for process in self.stopped))
         self.assertFalse(bench.DebugClient(port=self.port).listening())
+        self.assertEqual(self.host.ac(), FakeHost().ac())
+        self.assertFalse(os.path.exists(os.path.join(self.state, "power-restore.json")))
+        load = os.path.join(self.user, "load")
+        if os.path.isdir(load):
+            self.assertEqual(os.listdir(load), ["0400486024DEC000"])
+            self.assertEqual(sorted(os.listdir(os.path.join(load, "0400486024DEC000"))), ["Owner Mod"])
+
+
+class RunTest(RunCase):
+    """The whole run against a fake emulator."""
 
     def test_valid_run(self):
         self.emulator_options = {"methods": ("power", "memory")}
@@ -615,7 +754,11 @@ class RunTest(unittest.TestCase):
         self.assertEqual(row["sustained"]["fps_min"], 50.0)
         self.assertEqual(len(row["sustained"]["samples"]), 3)
         self.assertEqual(row["sustained"]["fps_avg"], 55.0)
-        self.assertEqual(row["power"], {"package_w": 30.0, "cpu_w": 9.0, "gpu_w": 15.0})
+        self.assertEqual(row["power"], {"package_w": 30.0, "cpu_w": 9.0, "gpu_w": 15.0, "source": "debug_server"})
+        self.assertEqual(self.host.commands, [])
+        self.assertEqual((row["probe"], row["mods"], row["power_policy"], row["log"], row["trace"]),
+                         (False, None, None, None, None))
+        self.assertEqual((row["window"], row["process_memory"]["private_peak_mb"]), ("1280x761", 5300))
         self.assertEqual(row["watts"], 30.0)
         self.assertEqual(row["memory"], {"working_set_mb": 4096, "dump": "~\\dumps"})
         self.assertIsNone(row["gpu_costs"])
@@ -785,7 +928,7 @@ class SystemTest(unittest.TestCase):
 
     def test_stop_process_always_ends_it(self):
         child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(120)"])
-        bench.stop_process(child, grace_s=2)
+        bench.stop_process(child, grace_s=2, close_grace_s=1)
         self.assertIsNotNone(child.poll())
         bench.stop_process(child)
         bench.stop_process(None)
@@ -868,6 +1011,826 @@ class ShippedFilesTest(unittest.TestCase):
             self.assertIsInstance(variant.get("env", {}), dict)
         scene = bench.load_json(os.path.join(HERE, "scenes", "oot-hyrule-field.json"), "scene")
         self.assertEqual(scene["reference"], "reference/oot-hyrule-field.png")
+
+
+class AddonsTest(unittest.TestCase):
+    TEXT = "[UI]\r\nfullscreen=true\r\n\r\n[DisabledAddOns]\r\nsize=1\r\n1\\title_id=5\r\n1\\disabled\\size=0\r\n\r\n[Controls]\r\nx=1\r\n"
+
+    def test_block_is_the_one_the_emulator_writes(self):
+        text = bench.ini_apply_text(self.TEXT, {}, ("0400486024DEC000", ["Update", "DLC 1"]))
+        self.assertEqual(text, "[UI]\r\nfullscreen=true\r\n\r\n[DisabledAddOns]\r\nsize=1\r\n"
+                         "1\\title_id\\default=false\r\n1\\title_id=288309953924349952\r\n1\\disabled\\size=2\r\n"
+                         "1\\disabled\\1\\d\\default=false\r\n1\\disabled\\1\\d=Update\r\n"
+                         "1\\disabled\\2\\d\\default=false\r\n1\\disabled\\2\\d=DLC 1\r\n\r\n[Controls]\r\nx=1\r\n")
+        self.assertEqual(bench.ini_apply_text(text, {}, ("0400486024DEC000", ["Update", "DLC 1"])), text)
+
+    def test_empty_list_enables_everything(self):
+        text = bench.ini_apply_text(self.TEXT, {}, ("0400486024DEC000", []))
+        self.assertEqual(text, "[UI]\r\nfullscreen=true\r\n\r\n[DisabledAddOns]\r\nsize=0\r\n\r\n[Controls]\r\nx=1\r\n")
+        self.assertEqual(bench.ini_apply_text(self.TEXT, {"UI": {"fullscreen": False}}),
+                         self.TEXT.replace("fullscreen=true", "fullscreen\\default=false\r\nfullscreen=false"))
+
+    def test_missing_and_last_section(self):
+        self.assertEqual(bench.ini_apply_text("[UI]\nx=1\n", {}, ("0400486024DEC000", [])),
+                         "[UI]\nx=1\n\n[DisabledAddOns]\nsize=0\n")
+        self.assertEqual(bench.ini_apply_text("[DisabledAddOns]\nsize=3\njunk\n", {}, ("0400486024DEC000", [])),
+                         "[DisabledAddOns]\nsize=0\n")
+
+    def test_guard_with_a_base_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            live, base = os.path.join(folder, "qt-config.ini"), os.path.join(folder, "base.ini")
+            with open(live, "wb") as file:
+                file.write(b"[UI]\r\nmine=1\r\n")
+            with open(base, "wb") as file:
+                file.write(b"[UI]\r\nfullscreen=true\r\n\r\n[DisabledAddOns]\r\nsize=0\r\n")
+            guard = bench.IniGuard(live)
+            guard.apply({"UI": {"fullscreen": False}}, base, ("0400486024DEC000", ["Update"]))
+            with open(live, "rb") as file:
+                applied = file.read()
+            self.assertNotIn(b"mine=1", applied)
+            self.assertIn(b"fullscreen\\default=false\r\nfullscreen=false\r\n", applied)
+            self.assertIn(b"1\\disabled\\1\\d=Update\r\n", applied)
+            guard.restore()
+            with open(live, "rb") as file:
+                self.assertEqual(file.read(), b"[UI]\r\nmine=1\r\n")
+            with open(base, "rb") as file:
+                self.assertIn(b"size=0", file.read())
+
+
+TRACE_LOG = """[  42.9] Render.Vulkan <Info> vk_scheduler.cpp:949:TraceGpuSubmission: DKB gpu_frame renderer_frame=2 last_submission_tick=12 gpu_frame_span_ms=61.804 gpu_submission_sum_ms=13.428 gpu_busy_ms=12.000 measured_submissions=5 dropped_submissions=0 valid_bits=36 period_ns=52.083332
+[  42.9] Render.Vulkan <Info> vk_scheduler.cpp:771:ReportWorkTimes: DKB gpu_work renderer_frame=2 timed=1 dropped=0 timed_sum_ms=0.105 submission_sum_ms=3.872 untimed_ms=3.767 slowest: s1:16aff33d999f993f+s5:52402d8e8ab55263=0.105ms/1x(max 0.105ms size 6x1x0)
+[  43.0] Frontend <Info> C:\\Users\\somebody\\lichii: an unrelated line
+[  99.1] Render.Vulkan <Info> vk_scheduler.cpp:949:TraceGpuSubmission: DKB gpu_frame renderer_frame=3300 last_submission_tick=9000 gpu_frame_span_ms=24.500 gpu_submission_sum_ms=23.100 gpu_busy_ms=22.750 measured_submissions=6 dropped_submissions=0 valid_bits=36 period_ns=52.083332
+[  99.1] Render.Vulkan <Info> vk_scheduler.cpp:771:ReportWorkTimes: DKB gpu_work renderer_frame=3300 timed=412 dropped=0 timed_sum_ms=21.900 submission_sum_ms=23.100 untimed_ms=1.200 slowest: s1:1917b5b970b5f601+s5:78134ce8125d5959#m=15.125ms/40x(max 2.500ms size 1920x1080x1) s6:5f43233f59d916f8=2.250ms/3x(max 1.000ms size 240x135x1)""" + "".join(
+    f" s1:{index:016x}+s5:{index + 1:016x}=0.{9 - index}00ms/1x(max 0.{9 - index}00ms size 6x1x0)" for index in range(8)) + """
+[  99.1] Render.Vulkan <Info> vk_scheduler.cpp:860:ReportPassTimes: DKB gpu_pass renderer_frame=3300 passes=31 timed=31 dropped=0 targets=9 pass_sum_ms=22.400 top: 1920x1080/B10G11R11_FLOAT/1/D32_FLOAT/1=16.500ms/4x(max 15.200ms) 2560x1440/A8B8G8R8_SRGB/1/-/1=0.107ms/1x(max 0.107ms)
+"""
+
+
+class HostToolsTest(unittest.TestCase):
+    def test_power_policy_arguments(self):
+        self.assertEqual(bench.parse_power_policy(["perfboostmode=0", "PROCTHROTTLEMIN=5, PROCTHROTTLEMIN1=0x5"]),
+                         {"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5, "PROCTHROTTLEMIN1": 5})
+        self.assertEqual(bench.parse_power_policy({"PROCTHROTTLEMAX": 99}), {"PROCTHROTTLEMAX": 99})
+        self.assertEqual(bench.parse_power_policy(None), {})
+        for bad in (["PERFBOOSTMODE"], ["PERFBOOSTMODE=off"], ["A B=1"], ["X=1 & calc"], ["X=-1"], {"X": True}):
+            with self.assertRaises(bench.BenchError, msg=bad):
+                bench.parse_power_policy(bad)
+
+    def test_powercfg_query_parsing(self):
+        settings = bench.parse_powercfg_query(FakeHost().query())
+        self.assertEqual(settings, {"PERFBOOSTMODE": (2, 1), "PROCTHROTTLEMIN": (100, 5),
+                                    "PROCTHROTTLEMIN1": (100, 5), "PROCTHROTTLEMAX": (100, 100)})
+        # Another display language: only the layout is the same.
+        german = FakeHost().query().replace("GUID Alias", "GUID-Alias").replace(
+            "Current AC Power Setting Index", "Index der aktuellen Wechselstromeinstellung").replace(
+            "Current DC Power Setting Index", "Index der aktuellen Gleichstromeinstellung")
+        self.assertEqual(bench.parse_powercfg_query(german), settings)
+        self.assertEqual(bench.parse_powercfg_query("Access is denied."), {})
+
+    def test_power_policy_applies_and_restores(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost()
+            restore = os.path.join(folder, "state", "power-restore.json")
+            policy = bench.PowerPolicy({"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5, "NOSUCHSETTING": 1}, host, restore)
+            self.assertEqual(policy.apply(), {"applied": {"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5},
+                                              "previous": {"PERFBOOSTMODE": 2, "PROCTHROTTLEMIN": 100},
+                                              "skipped": ["NOSUCHSETTING"]})
+            self.assertEqual(host.ac(), {"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5, "PROCTHROTTLEMIN1": 100,
+                                         "PROCTHROTTLEMAX": 100})
+            self.assertEqual(host.power["PROCTHROTTLEMIN"][1], 5)  # the battery value is not touched
+            self.assertEqual(host.commands[0], ["powercfg", "/qh", "SCHEME_CURRENT", "SUB_PROCESSOR"])
+            self.assertIn(["powercfg", "/setacvalueindex", "SCHEME_CURRENT", "SUB_PROCESSOR", "PROCTHROTTLEMIN", "5"],
+                          host.commands)
+            self.assertEqual(host.commands[-1], ["powercfg", "/setactive", "SCHEME_CURRENT"])
+            with open(restore) as file:
+                self.assertEqual(json.load(file), {"previous": {"PERFBOOSTMODE": 2, "PROCTHROTTLEMIN": 100}})
+            policy.restore()
+            self.assertEqual(host.ac(), FakeHost().ac())
+            self.assertEqual(host.activated, 2)
+            self.assertFalse(os.path.exists(restore))
+            policy.restore()
+            self.assertEqual(host.activated, 2)
+
+    def test_power_policy_recovers_what_a_killed_run_left(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost()
+            restore = os.path.join(folder, "power-restore.json")
+            bench.PowerPolicy({"PERFBOOSTMODE": 0}, host, restore).apply()  # never restored
+            self.assertEqual(host.ac()["PERFBOOSTMODE"], 0)
+            # The next run must not take the left-over 0 for the machine's own value.
+            second = bench.PowerPolicy({"PERFBOOSTMODE": 1, "PROCTHROTTLEMAX": 80}, host, restore)
+            self.assertEqual(second.apply()["previous"], {"PERFBOOSTMODE": 2, "PROCTHROTTLEMAX": 100})
+            self.assertEqual(bench.PowerPolicy({}, host, restore).recover(), {"PERFBOOSTMODE": 2, "PROCTHROTTLEMAX": 100})
+            self.assertEqual(host.ac(), FakeHost().ac())
+            self.assertIsNone(bench.PowerPolicy({}, host, restore).recover())
+
+    def test_power_policy_failure_is_reported_and_undone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost()
+            host.fail = "PROCTHROTTLEMIN 5"
+            policy = bench.PowerPolicy({"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5}, host,
+                                       os.path.join(folder, "power-restore.json"))
+            with self.assertRaisesRegex(bench.BenchError, "powercfg /setacvalueindex.*Access is denied"):
+                policy.apply()
+            self.assertEqual(host.ac()["PERFBOOSTMODE"], 0)
+            host.fail = None
+            policy.restore()
+            self.assertEqual(host.ac(), FakeHost().ac())
+            host.fail = "/qh"
+            with self.assertRaisesRegex(bench.BenchError, "powercfg /qh"):
+                bench.PowerPolicy({"PERFBOOSTMODE": 0}, host).apply()
+            self.assertEqual(host.ac(), FakeHost().ac())
+
+    def test_energy_counters(self):
+        self.assertEqual(bench.parse_typeperf(TYPEPERF), {"package_w": 28.0, "cpu_w": 9.0, "gpu_w": 15.25})
+        self.assertEqual(bench.parse_typeperf("Error: No valid counters.\n"), {})
+        host = FakeHost()
+        meter = bench.EnergyMeter(host)
+        self.assertEqual(meter.read()["package_w"], 28.0)
+        self.assertEqual(host.commands[0][:2], ["typeperf", "\\Energy Meter(rapl_package0_pkg)\\Power"])
+        self.assertEqual(host.commands[0][-4:], ["-si", "1", "-sc", "2"])
+        host.energy = False
+        dead = bench.EnergyMeter(host)
+        self.assertIsNone(dead.read())
+        self.assertIsNone(dead.read())
+        self.assertEqual(len(host.ran("typeperf")), 2)  # a machine without the counters is asked once
+
+    def test_gpu_telemetry(self):
+        self.assertEqual(bench.parse_gpu_telemetry(TELEMETRY),
+                         {"gpu_mhz": 2200, "gpu_telemetry_w": 15.0, "gpu_limited_by": "Power"})
+        self.assertEqual(bench.parse_gpu_telemetry("10:00:00 1800 9.5\n"), {"gpu_mhz": 1800, "gpu_telemetry_w": 9.5})
+        self.assertEqual(bench.parse_gpu_telemetry("10:00:00  1800  9.5  Thermal Limit\n")["gpu_limited_by"],
+                         "Thermal Limit")
+        self.assertEqual(bench.parse_gpu_telemetry("the script failed\n"), {})
+        host = FakeHost()
+        self.assertEqual(bench.read_gpu_telemetry(None, host), {})
+        self.assertEqual(bench.read_gpu_telemetry("C:\\tools\\gpu.ps1", host)["gpu_mhz"], 2200)
+        self.assertEqual(host.commands, [["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                          "C:\\tools\\gpu.ps1", "-Samples", "3", "-IntervalMs", "700"]])
+
+    def test_trace_summary_uses_the_last_lines(self):
+        trace = bench.parse_trace(TRACE_LOG.splitlines())
+        self.assertEqual(trace["frame"], {"renderer_frame": 3300, "gpu_frame_span_ms": 24.5,
+                                          "gpu_submission_sum_ms": 23.1, "gpu_busy_ms": 22.75,
+                                          "measured_submissions": 6, "dropped_submissions": 0})
+        work = trace["work"]
+        self.assertEqual((work["renderer_frame"], work["timed"], work["timed_sum_ms"], work["untimed_ms"]),
+                         (3300, 412, 21.9, 1.2))
+        self.assertEqual(len(work["top"]), 8)
+        self.assertEqual(work["top"][0], {"shader": "s1:1917b5b970b5f601+s5:78134ce8125d5959", "kind": "m",
+                                          "ms": 15.125, "count": 40, "max_ms": 2.5})
+        self.assertEqual(work["top"][1], {"shader": "s6:5f43233f59d916f8", "ms": 2.25, "count": 3, "max_ms": 1.0})
+        self.assertEqual((trace["pass"]["passes"], trace["pass"]["targets"], trace["pass"]["pass_sum_ms"]),
+                         (31, 9, 22.4))
+        self.assertEqual(trace["pass"]["top"], [
+            {"target": "1920x1080/B10G11R11_FLOAT/1/D32_FLOAT/1", "ms": 16.5, "count": 4, "max_ms": 15.2},
+            {"target": "2560x1440/A8B8G8R8_SRGB/1/-/1", "ms": 0.107, "count": 1, "max_ms": 0.107}])
+        self.assertEqual(bench.private_strings(trace), [])
+        self.assertIsNone(bench.parse_trace(["nothing traced", "DKB gpu_hist renderer_frame=1"]))
+        old = bench.parse_trace(["DKB gpu_frame renderer_frame=2 gpu_frame_span_ms=61.804 measured_submissions=5"])
+        self.assertEqual(old, {"frame": {"renderer_frame": 2, "gpu_frame_span_ms": 61.804, "measured_submissions": 5}})
+
+    def test_collect_log(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "eden_log.txt")
+            target = os.path.join(folder, "results", "logs", "row.log.txt")
+            self.assertEqual(bench.collect_log(source, target), (False, None))
+            with open(source, "wb") as file:
+                file.write(TRACE_LOG.encode() + b"\xff odd byte\n")
+            copied, trace = bench.collect_log(source, target)
+            self.assertTrue(copied)
+            self.assertEqual(trace["frame"]["renderer_frame"], 3300)
+            with open(target, "rb") as file:
+                self.assertTrue(file.read().endswith(b"\xff odd byte\n"))
+
+    def test_this_process(self):
+        memory = bench.process_memory(os.getpid())
+        if memory is None:
+            self.skipTest("this host does not report process memory")
+        self.assertGreater(memory["working_set_mb"], 0)
+        self.assertGreaterEqual(memory["working_set_peak_mb"], memory["working_set_mb"])
+        size = bench.window_client_size(os.getpid())
+        self.assertTrue(size is None or re.fullmatch(r"\d+x\d+", size))
+        self.assertIsNone(bench.window_client_size(0x7ffffffe))
+
+    def test_wait_gone(self):
+        class Slow:
+            polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return 0 if self.polls > 3 else None
+        slept = []
+        self.assertTrue(bench.wait_gone(Slow(), slept.append))
+        self.assertEqual(slept, [0.5, 0.5, 0.5])
+        self.assertTrue(bench.wait_gone(None, slept.append))
+        stuck = Slow()
+        stuck.polls = -1000
+        self.assertFalse(bench.wait_gone(stuck, slept.append, timeout_s=2))
+
+    def test_real_run_command_reports_a_missing_tool(self):
+        code, output = bench.run_command(["no-such-tool-xyz-123"], 5)
+        self.assertEqual(code, 1)
+        self.assertTrue(output)
+
+
+class HarnessRunTest(RunCase):
+    """What replaces the PowerShell harness: base ini, mods, add-ons, power, telemetry, probes."""
+
+    def setUp(self):
+        super().setUp()
+        self.library = os.path.join(self.folder, "mods")
+        for mod in ("DualSense UI", "Arc Perf Aggressive", "Unused"):
+            self.write(os.path.join(self.library, mod, "romfs", "file.bin"), mod.encode())
+        self.write(os.path.join(self.user, "load", "0400486024DEC000", "Owner Mod", "x.bin"), b"owner's mod")
+        self.base = os.path.join(self.folder, "base.ini")
+        self.write(self.base, b"[Renderer]\r\nbackend\\default=true\r\nbackend=1\r\nfrom_base=1\r\n\r\n"
+                              b"[DisabledAddOns]\r\nsize=0\r\n\r\n[UI]\r\nfullscreen=true\r\n")
+        self.telemetry = os.path.join(self.folder, "gpu-telemetry.ps1")
+        self.write(self.telemetry, b"")
+        self.log_text = TRACE_LOG
+
+    def variant_file(self, **fields):
+        path = os.path.join(self.folder, f"{fields['name']}.json")
+        self.write(path, json.dumps(fields).encode())
+        return path
+
+    def test_everything_at_once(self):
+        self.emulator_options = {"methods": ("gpu_costs", "set_shading_rate", "power_set")}
+        variant = self.variant_file(
+            name="full", settings={"Renderer": {"backend": 2}}, env={"EDEN_NX2_VRS": "1"},
+            mods=["DualSense UI", "Arc Perf Aggressive"], addons_off=["Update"],
+            power_policy={"PROCTHROTTLEMIN": 5, "NOSUCHSETTING": 3}, late_s=150,
+            live=[{"method": "set_shading_rate", "params": {"hashes": ["78134ce8125d5959"], "rate": "2x2"}},
+                  {"method": "power_set", "params": {"spin_scale": 0.25}},
+                  {"method": "gpu_costs", "params": {"enable": True}}])
+        code, rows = self.run_bench("--variant", variant, "--base-ini", self.base, "--mod-library", self.library,
+                                    "--power-policy", "PERFBOOSTMODE=0", "--power-policy", "PROCTHROTTLEMIN=50",
+                                    "--gpu-telemetry", self.telemetry, "--sustain-min", "0.5")
+        self.assertEqual(code, 0, self.log)
+        row = rows[0]
+        self.assertEqual(bench.validate_row(row), [])
+        self.assertTrue(row["valid"])
+        self.assertEqual(row["warnings"], ["power_policy_partial"])
+
+        launch = self.launches[0]
+        self.assertIn(b"from_base=1", launch["ini"])
+        self.assertIn(b"backend\\default=false\r\nbackend=2\r\n", launch["ini"])
+        self.assertIn(b"[DisabledAddOns]\r\nsize=1\r\n1\\title_id\\default=false\r\n1\\title_id=288309953924349952\r\n"
+                      b"1\\disabled\\size=1\r\n1\\disabled\\1\\d\\default=false\r\n1\\disabled\\1\\d=Update\r\n\r\n[UI]",
+                      launch["ini"])
+        self.assertIn(b"fullscreen\\default=false\r\nfullscreen=false", launch["ini"])
+        self.assertEqual(launch["mods"], ["Arc Perf Aggressive", "DualSense UI"])
+        self.assertEqual(launch["power"], {"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5, "PROCTHROTTLEMIN1": 100,
+                                           "PROCTHROTTLEMAX": 100})
+        self.assertEqual(row["power_policy"], {"applied": {"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5},
+                                               "previous": {"PERFBOOSTMODE": 2, "PROCTHROTTLEMIN": 100},
+                                               "skipped": ["NOSUCHSETTING"]})
+        self.assertEqual((row["base_ini"], row["mods"], row["addons_off"], row["probe"], row["reject"]),
+                         ("base.ini", ["DualSense UI", "Arc Perf Aggressive"], ["Update"], False, []))
+        self.assertEqual(row["live"][1], {"method": "power_set", "params": {"spin_scale": 0.25}})
+
+        # No `power` method in this build: watts come from the energy counters.
+        self.assertEqual(row["power"], {"package_w": 28.0, "cpu_w": 9.0, "gpu_w": 15.25, "source": "energy_meter"})
+        self.assertEqual(row["watts"], 28.0)
+        self.assertNotIn("no_power_reading", row["warnings"])
+        self.assertEqual((row["gpu_mhz"], row["gpu_limited_by"], row["gpu_telemetry_w"]), (2200, "Power", 15.0))
+        samples = row["sustained"]["samples"]
+        self.assertEqual(len(samples), 3)
+        for sample in samples:
+            self.assertEqual((sample["package_w"], sample["gpu_w"], sample["gpu_mhz"], sample["gpu_limited_by"]),
+                             (28.0, 15.25, 2200, "Power"))
+        self.assertEqual((row["sustained"]["watts_avg"], row["sustained"]["gpu_mhz_min"]), (28.0, 2200))
+        self.assertEqual(row["late"], {"after_s": 150.0, "fps": 50.0, "p50_ms": 20.0, "p99_ms": 30.0,
+                                       "package_w": 28.0, "cpu_w": 9.0, "gpu_w": 15.25, "gpu_mhz": 2200,
+                                       "gpu_telemetry_w": 15.0, "gpu_limited_by": "Power"})
+        self.assertEqual([seconds for seconds in self.slept if seconds > 2], [10.0, 4.0, 50.0, 3.0, 150.0])
+        self.assertEqual((row["window"], row["process_memory"]["working_set_peak_mb"]), ("1280x761", 4100))
+        self.assertEqual(row["gpu_costs"]["enabled"], True)
+
+        requests = launch["emulator"].requests
+        methods = [request["method"] for request in requests]
+        live = [request for request in requests if request["method"] in ("set_shading_rate", "power_set")]
+        self.assertEqual(live[0]["params"], {"hashes": ["78134ce8125d5959"], "rate": "2x2"})
+        self.assertLess(methods.index("screenshot"), methods.index("set_shading_rate"))
+        self.assertLess(methods.index("power_set"), methods.index("frame_times"))
+        self.assertEqual(methods.count("frame_times"), 7)
+
+        self.assertEqual(row["id"], os.path.basename(row["screenshot"])[:-len(".png")])
+        self.assertEqual(row["log"], f"logs/{row['id']}.log.txt")
+        with open(os.path.join(self.out, "logs", f"{row['id']}.log.txt"), encoding="utf-8") as file:
+            self.assertEqual(file.read(), TRACE_LOG)
+        self.assertEqual(row["trace"]["work"]["top"][0]["ms"], 15.125)
+        self.assertEqual(row["trace"]["frame"]["gpu_frame_span_ms"], 24.5)
+        self.assertNotIn("somebody", json.dumps(row))
+        self.assertNotIn(self.folder, json.dumps(row))
+        self.assert_left_clean()
+
+    def test_command_line_mods_apply_to_variants_without_a_list(self):
+        none = self.variant_file(name="no-mods", mods=[])
+        plain = self.variant_file(name="plain")
+        code, rows = self.run_bench("--variant", plain, "--variant", none, "--mod-library", self.library,
+                                    "--mod", "DualSense UI")
+        self.assertEqual(code, 0, self.log)
+        self.assertEqual([launch["mods"] for launch in self.launches], [["DualSense UI"], []])
+        self.assertEqual([row["mods"] for row in rows], [["DualSense UI"], []])
+        self.assertEqual([row["power_policy"] for row in rows], [None, None])
+        self.assertEqual(self.host.ran("powercfg"), [])
+        self.assert_left_clean()
+
+    def test_without_mods_the_owners_stay_in_place(self):
+        code, rows = self.run_bench()
+        self.assertEqual((code, self.launches[0]["mods"], rows[0]["mods"]), (0, ["Owner Mod"], None))
+        self.assert_left_clean()
+
+    def test_probe_rejects_measures_and_restores(self):
+        self.emulator_options = {"methods": ("reject_shaders",)}
+        probe = self.variant_file(name="rej-78134ce8", reject=["78134CE8125D5959", "5f43233f59d916f8"])
+        code, rows = self.run_bench("--variant", probe)
+        self.assertEqual(code, 0, self.log)
+        row = rows[0]
+        # The picture changed after the rejection and the row is still valid: the scene was
+        # checked before it and not after.
+        self.assertEqual((row["valid"], row["probe"], row["scene_ok"], row["scene_diff"], row["fps"]),
+                         (True, True, True, 0.0, 55.0))
+        self.assertEqual(row["reject"], ["78134ce8125d5959", "5f43233f59d916f8"])
+        self.assertEqual(bench.validate_row(row), [])
+        requests = self.launches[0]["emulator"].requests
+        methods = [request["method"] for request in requests]
+        rejects = [request["params"] for request in requests if request["method"] == "reject_shaders"]
+        self.assertEqual(rejects, [
+            {"hashes": ["78134ce8125d5959", "5f43233f59d916f8"], "timeout_s": 20, "reject": True},
+            {"hashes": ["78134ce8125d5959", "5f43233f59d916f8"], "timeout_s": 20, "reject": False}])
+        first = methods.index("reject_shaders")
+        self.assertLess(methods.index("screenshot"), first)
+        self.assertLess(first, methods.index("frame_times"))
+        self.assertEqual(methods[-1], "reject_shaders")
+        self.assertIn(20.0, self.slept)
+        with open(os.path.join(self.out, row["screenshot"]), "rb") as file:
+            self.assertEqual(bench.image_diff(file.read(), solid(0)), 0)
+        self.assert_left_clean()
+
+        # table never counts a probe; rows of the same file that are not probes stay.
+        code, rows = self.run_bench()
+        table = bench.render_table(self.out, every=True)
+        self.assertNotIn("rej-78134ce8", table)
+        self.assertIn("| test-scene | baseline | 55.0 |", table)
+        results = [name for name in os.listdir(self.out) if name.endswith(".jsonl")]
+        self.assertEqual(bench.validate_file(os.path.join(self.out, results[0])), ([], 2))
+
+    def test_probe_without_the_method_is_an_error_row(self):
+        probe = self.variant_file(name="rej", reject=["78134ce8125d5959"])
+        code, rows = self.run_bench("--variant", probe)
+        self.assertEqual((code, rows[0]["invalid_reasons"], rows[0]["probe"]), (2, ["error"], True))
+        self.assertIn("reject_shaders", rows[0]["error"])
+        self.assertEqual(rows[0]["warnings"], ["reject_not_restored"])
+        self.assert_left_clean()
+
+    def test_failed_live_call_is_an_error_row(self):
+        live = self.variant_file(name="live", live=[{"method": "set_shading_rate", "params": {"rate": "2x2"}}])
+        code, rows = self.run_bench("--variant", live)
+        self.assertEqual((code, rows[0]["invalid_reasons"], rows[0]["fps"]), (2, ["error"], None))
+        self.assertIn("set_shading_rate", rows[0]["error"])
+        self.assert_left_clean()
+
+    def test_bad_variants_are_refused_before_anything_is_touched(self):
+        for fields, message in (({"reject": ["78134ce8"]}, "16-digit"),
+                                ({"mods": ["..\\elsewhere"]}, "plain names"),
+                                ({"mods": "DualSense UI"}, "mods is a list"),
+                                ({"live": ["gpu_costs"]}, "method, params"),
+                                ({"power_policy": {"PERFBOOSTMODE": "fast"}}, "NAME=NUMBER"),
+                                ({"late_s": "soon"}, "numbers")):
+            with self.assertRaisesRegex(bench.BenchError, message, msg=fields):
+                self.run_bench("--variant", self.variant_file(name="bad", **fields), "--mod-library", self.library)
+        with self.assertRaisesRegex(bench.BenchError, "mod not found in the library"):
+            self.run_bench("--variant", self.variant_file(name="bad", mods=["Missing Mod"]),
+                           "--mod-library", self.library)
+        with self.assertRaisesRegex(bench.BenchError, "mods need --mod-library"):
+            self.run_bench("--mod", "DualSense UI")
+        with self.assertRaisesRegex(bench.BenchError, "base ini not found"):
+            self.run_bench("--base-ini", os.path.join(self.folder, "missing.ini"))
+        with self.assertRaisesRegex(bench.BenchError, "telemetry script not found"):
+            self.run_bench("--gpu-telemetry", os.path.join(self.folder, "missing.ps1"))
+        with self.assertRaisesRegex(bench.BenchError, "names must differ"):
+            self.run_bench("--variant", self.variant_file(name="twice"), "--variant", self.variant_file(name="twice"))
+        self.assertEqual((self.launches, self.host.commands), ([], []))
+        self.assert_left_clean()
+
+    def test_power_policy_that_cannot_be_applied_is_an_error_row(self):
+        self.host.fail = "PERFBOOSTMODE 0"
+        code, rows = self.run_bench("--power-policy", "PROCTHROTTLEMIN=5,PERFBOOSTMODE=0")
+        self.assertEqual((code, rows[0]["invalid_reasons"], self.launches), (2, ["error"], []))
+        self.assertIn("powercfg /setacvalueindex", rows[0]["error"])
+        self.assert_left_clean()
+        # When even putting them back fails the run stops, and the restore file stays for the next start.
+        self.host.fail = "/setactive"
+        with self.assertRaisesRegex(bench.BenchError, "powercfg /setactive"):
+            self.run_bench("--power-policy", "PERFBOOSTMODE=0")
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "power-restore.json")))
+        self.host.fail = None
+        self.assertEqual(self.run_bench()[0], 0)
+        self.assert_left_clean()
+
+    def test_crash_in_the_middle_restores_mods_and_power(self):
+        def explode(*_):
+            self.assertEqual(self.host.ac()["PERFBOOSTMODE"], 0)
+            raise KeyboardInterrupt
+        original = bench.play_input_script
+        bench.play_input_script = explode
+        self.addCleanup(setattr, bench, "play_input_script", original)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_bench("--mod-library", self.library, "--mod", "Unused", "--power-policy", "PERFBOOSTMODE=0",
+                           "--base-ini", self.base)
+        self.assertEqual(self.launches[0]["mods"], ["Unused"])
+        self.assert_left_clean()
+
+    def test_next_run_repairs_what_a_killed_run_left(self):
+        mods = os.path.join(self.user, "load", "0400486024DEC000")
+        bench.ModGuard(self.library, mods).apply(["Unused"])  # never restored
+        bench.PowerPolicy({"PERFBOOSTMODE": 0}, self.host, os.path.join(self.state, "power-restore.json")).apply()
+        self.assertEqual(os.listdir(mods), ["Unused"])
+        code, rows = self.run_bench()
+        self.assertEqual(code, 0, self.log)
+        self.assertEqual((self.launches[0]["mods"], self.launches[0]["power"]["PERFBOOSTMODE"]), (["Owner Mod"], 2))
+        self.assertIn("restored the mod folders an interrupted run had left aside", self.log)
+        self.assertIn("restored the power settings an interrupted run had left changed", self.log)
+        self.assert_left_clean()
+
+    def test_mod_guard_when_the_title_has_no_mod_folder(self):
+        target = os.path.join(self.folder, "elsewhere", "load", "0400486024DEC000")
+        guard = bench.ModGuard(self.library, target)
+        guard.apply(["DualSense UI"])
+        self.assertEqual(os.listdir(target), ["DualSense UI"])
+        guard.restore()
+        self.assertEqual(os.listdir(target), [])
+        self.assertEqual(os.listdir(os.path.dirname(target)), ["0400486024DEC000"])
+
+    def test_settings_are_restored_only_once_the_emulator_is_gone(self):
+        seen = {}
+
+        def at_exit():
+            with open(self.ini, "rb") as file:
+                seen["ini"] = file.read()
+            seen["power"] = self.host.ac()["PERFBOOSTMODE"]
+            # The emulator writes its settings as it exits.
+            with open(self.ini, "ab") as file:
+                file.write(b"written_at_exit=1\r\n")
+        self.process_options = {"linger": 3, "at_exit": at_exit}
+        code, rows = self.run_bench("--variant", self.variant, "--power-policy", "PERFBOOSTMODE=0")
+        self.assertEqual(code, 0, self.log)
+        self.assertIn(b"backend=2", seen["ini"])
+        self.assertEqual(seen["power"], 0)
+        self.assertEqual(self.slept[-3:], [2, 0.5, 0.5])
+        self.assertEqual(rows[0]["warnings"], [])
+        self.assert_left_clean()
+
+    def test_emulator_that_never_exits_is_reported(self):
+        self.process_options = {"linger": 10**6}
+        code, rows = self.run_bench()
+        self.assertEqual((code, rows[0]["warnings"]), (0, ["emulator_still_running"]))
+        self.launches[0]["emulator"].close()
+        with open(self.ini, "rb") as file:
+            self.assertEqual(file.read(), self.INI)
+
+    def test_dry_run_lists_the_new_steps(self):
+        variant = self.variant_file(name="full", mods=["DualSense UI"], addons_off=["Update"], late_s=150,
+                                    reject=["78134ce8125d5959"], power_policy={"PROCTHROTTLEMIN": 5},
+                                    live=[{"method": "gpu_costs", "params": {"enable": True}}])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code, rows = self.run_bench("--dry-run", "--variant", variant, "--base-ini", self.base,
+                                        "--mod-library", self.library, "--power-policy", "PERFBOOSTMODE=0",
+                                        "--gpu-telemetry", self.telemetry)
+        text = output.getvalue()
+        self.assertEqual((code, rows, self.launches, self.host.commands), (0, [], [], []))
+        self.assertNotIn("PROBLEM", text)
+        for expected in ("aside and copy in: DualSense UI", "replace the settings file with", "base.ini",
+                         "set [DisabledAddOns] to: Update", "PERFBOOSTMODE=0 PROCTHROTTLEMIN=5",
+                         'call gpu_costs {"enable": true}', "reject shaders 78134ce8125d5959 (probe row",
+                         "wait 20 s", "gpu-telemetry.ps1", "wait 150 s, measure one more window",
+                         "screenshot again, save it", "the mod folders, the power settings"):
+            self.assertIn(expected, text)
+        self.assert_left_clean()
+
+
+class SuiteTest(RunCase):
+    def suite_args(self, suite, *extra):
+        parser = bench.build_parser()
+        args = parser.parse_args([
+            "suite", suite, "--exe", self.exe, "--game", self.game, "--user-dir", self.user,
+            "--save-backup", self.backup, "--reference", self.reference, "--out", self.out,
+            "--port", str(self.port), "--state-dir", self.state, *extra])
+        return args, parser.suite_defaults
+
+    def test_shipped_suite(self):
+        args, defaults = self.suite_args(os.path.join(HERE, "suites", "igpu-switches.json"),
+                                         "--power-policy", "PERFBOOSTMODE=0")
+        plans, compare_to = bench.load_suite(args.suite, args, defaults)
+        self.assertEqual(len(plans), 1)
+        plan = plans[0]
+        self.assertEqual((plan.suite, plan.scene["name"]), ("igpu-switches", "oot-hyrule-field"))
+        env = {variant["name"]: variant.get("env") or {} for variant in plan.variants}
+        trace = {"EDEN_DKB_FRAME_TRACE": "1"}
+        vrs = {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}
+        self.assertEqual(env, {
+            "baseline": {}, "baseline-trace": trace,
+            "mesh-cull-1": {"EDEN_NX2_MESH_CULL": "1"}, "mesh-cull-1-trace": {"EDEN_NX2_MESH_CULL": "1", **trace},
+            "mesh-cull-5": {"EDEN_NX2_MESH_CULL": "5"}, "mesh-cull-5-trace": {"EDEN_NX2_MESH_CULL": "5", **trace},
+            "mesh-cull-7": {"EDEN_NX2_MESH_CULL": "7"}, "mesh-cull-7-trace": {"EDEN_NX2_MESH_CULL": "7", **trace},
+            "vrs-2x2": vrs, "vrs-2x2-trace": {**vrs, **trace},
+            "vrs-2x2-mesh-cull-7": {**vrs, "EDEN_NX2_MESH_CULL": "7"},
+            "vrs-2x2-mesh-cull-7-trace": {**vrs, "EDEN_NX2_MESH_CULL": "7", **trace},
+            "spin-scale-0.25": {"EDEN_NX2_SPIN_SCALE": "0.25"},
+            "eco-background": {"EDEN_NX2_ECO_BACKGROUND": "1"},
+            "low-memory": {"EDEN_NX2_LOW_MEMORY": "1"}})
+        self.assertEqual(list(env)[:2], ["baseline", "baseline-trace"])
+        self.assertEqual(compare_to[("oot-hyrule-field", "vrs-2x2")], "baseline")
+        self.assertEqual(compare_to[("oot-hyrule-field", "vrs-2x2-trace")], "baseline-trace")
+        self.assertEqual(compare_to[("oot-hyrule-field", "low-memory")], "baseline")
+        self.assertTrue(all(variant["power_policy"] == {"PERFBOOSTMODE": 0} and not variant["reject"]
+                            and "paired" not in variant for variant in plan.variants))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(bench.command_suite(args.__class__(**{**vars(args), "dry_run": True}), defaults,
+                                                 self.deps), 0)
+        self.assertIn("variant vrs-2x2-mesh-cull-7-trace:", output.getvalue())
+        self.assertEqual((self.launches, self.host.commands), ([], []))
+
+    def write_suite(self, **fields):
+        path = os.path.join(self.folder, "suites", "mine.json")
+        self.write(os.path.join(self.folder, "extra.json"), json.dumps(
+            {"name": "from-file", "env": {"FILE": "1"}, "power_policy": {"PROCTHROTTLEMAX": 90}}).encode())
+        suite = {"name": "mine", "scene": "../scene.json", "options": {"window_s": 5, "settle_s": 7},
+                 "base": {"env": {"BASE": "1"}, "power_policy": {"PERFBOOSTMODE": 0}},
+                 "paired": {"suffix": "-trace", "env": {"EDEN_DKB_FRAME_TRACE": "1"}},
+                 "runs": [{"variants": [{"name": "baseline", "paired": True},
+                                        {"name": "switch", "env": {"SWITCH": "1"}, "paired": True},
+                                        "../extra.json"]},
+                          {"options": {"window_s": 3}, "baseline": "other",
+                           "variants": [{"name": "other", "env": {"BASE": "2"}}]}]}
+        suite.update(fields)
+        self.write(path, json.dumps(suite).encode())
+        return path
+
+    def test_suite_runs_and_prints_the_comparison(self):
+        self.emulator_options = {"fps": (50.0, 60.0, 55.0, 44.0)}
+        args, defaults = self.suite_args(self.write_suite())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = bench.command_suite(args, defaults, self.deps)
+        self.assertEqual(code, 0, self.log)
+        rows = [row for _, row, _ in bench.read_rows(os.path.join(self.out, [
+            name for name in os.listdir(self.out) if name.endswith(".jsonl")][0]))]
+        self.assertEqual([row["variant"] for row in rows],
+                         ["baseline", "baseline-trace", "switch", "switch-trace", "from-file", "other"])
+        self.assertTrue(all(row["suite"] == "mine" and row["valid"] for row in rows))
+        self.assertEqual([row["window_s"] for row in rows], [5.0] * 5 + [3.0])
+        self.assertEqual([launch["env"].get("BASE") for launch in self.launches], ["1"] * 5 + ["2"])
+        self.assertEqual(self.launches[3]["env"]["SWITCH"] + self.launches[3]["env"]["EDEN_DKB_FRAME_TRACE"], "11")
+        self.assertNotIn("EDEN_DKB_FRAME_TRACE", self.launches[2]["env"])
+        self.assertEqual(rows[4]["power_policy"]["applied"], {"PERFBOOSTMODE": 0, "PROCTHROTTLEMAX": 90})
+        self.assertEqual(rows[0]["power_policy"]["applied"], {"PERFBOOSTMODE": 0})
+        self.assertIn(7.0, self.slept)
+        text = output.getvalue()
+        self.assertIn("| scene | variant | fps | vs baseline |", text)
+        self.assertIn("| test-scene | baseline | 55.0 | baseline | 18.2 | 27.3 | 28.0 | - | - | - | yes |", text)
+        self.assertIn("| test-scene | switch | 55.0 | +0.0% vs baseline |", text)
+        self.assertIn("| test-scene | switch-trace | 55.0 | +0.0% vs baseline-trace |", text)
+        self.assertIn("| test-scene | other | 55.0 | baseline |", text)
+        self.assert_left_clean()
+
+    def test_comparison_table(self):
+        rows = [dict(good_row(), variant="baseline", fps=50.0),
+                dict(good_row(), variant="fast", fps=60.0, watts=27.5, gpu_mhz=2200, gpu_limited_by="Power",
+                     late={"fps": 41.0}),
+                dict(good_row(), variant="broken", fps=70.0, valid=False, invalid_reasons=["wrong_scene"]),
+                dict(good_row(), variant="probe", fps=75.0, probe=True, reject=["78134ce8125d5959"]),
+                dict(good_row(), variant="alone", fps=80.0)]
+        compare_to = {("oot-hyrule-field", name): "baseline" for name in ("baseline", "fast", "broken", "probe")}
+        text = bench.render_suite(rows, compare_to)
+        self.assertIn("| oot-hyrule-field | baseline | 50.0 | baseline |", text)
+        self.assertIn("| oot-hyrule-field | fast | 60.0 | +20.0% vs baseline | 18.2 | 27.3 | 27.5 | 2200 | Power | "
+                      "41.0 | yes |", text)
+        self.assertIn("| broken | 70.0 | - |", text)
+        self.assertIn("INVALID: wrong_scene |", text)
+        self.assertIn("| probe | 75.0 | +50.0% vs baseline |", text)
+        self.assertIn("| yes (probe) |", text)
+        self.assertIn("| alone | 80.0 | - |", text)
+
+    def test_command_line_wins_over_suite_options(self):
+        args, defaults = self.suite_args(self.write_suite(), "--window-s", "9", "--scene", self.scene)
+        plans, _ = bench.load_suite(args.suite, args, defaults)
+        self.assertEqual([(plan.window_s, plan.settle_s) for plan in plans], [(9.0, 7.0), (9.0, 7.0)])
+
+    def test_bad_suites(self):
+        for fields, message in (({"options": {"exe": "x"}}, "unknown option exe"),
+                                ({"runs": []}, "non-empty list"),
+                                ({"runs": [{"variants": []}]}, "without variants"),
+                                ({"runs": [{"variants": [5]}]}, "object or a file name"),
+                                ({"runs": [{"variants": [{"name": "a"}, {"name": "a"}]}]}, "names must differ"),
+                                ({"scene": None}, "no scene")):
+            args, defaults = self.suite_args(self.write_suite(**fields))
+            with self.assertRaisesRegex(bench.BenchError, message, msg=fields):
+                bench.load_suite(args.suite, args, defaults)
+
+    def test_merge_variant(self):
+        merged = bench.merge_variant(
+            {"env": {"A": "1", "B": "1"}, "mods": ["x"], "settings": {"UI": {"a": 1}}, "power_policy": {"P": 1}},
+            {"name": "v", "env": {"B": "2"}, "settings": {"UI": {"b": 2}}, "late_s": 5})
+        self.assertEqual(merged, {"name": "v", "env": {"A": "1", "B": "2"}, "mods": ["x"], "late_s": 5,
+                                  "settings": {"UI": {"a": 1, "b": 2}}, "power_policy": {"P": 1}})
+        self.assertEqual(bench.merge_variant({}, {"name": "v"}), {"name": "v", "settings": {}})
+
+
+class ProbeSchemaTest(unittest.TestCase):
+    def test_probe_and_reject_go_together(self):
+        row = dict(good_row(), probe=True, reject=["78134ce8125d5959"])
+        self.assertEqual(bench.validate_row(row), [])
+        self.assertTrue(any("probe" in problem for problem in bench.validate_row(dict(row, probe=False))))
+        self.assertTrue(any("probe" in problem for problem in bench.validate_row(dict(good_row(), probe=True))))
+        self.assertTrue(any("16-digit" in problem for problem in bench.validate_row(dict(row, reject=["78134ce8"]))))
+        self.assertTrue(any("log" in problem
+                            for problem in bench.validate_row(dict(good_row(), log="logs/../../x.log.txt"))))
+        self.assertEqual(bench.validate_row(dict(good_row(), log="logs/2026-11-11-x.log.txt", probe=False,
+                                                 reject=[], trace={"frame": {}}, power_policy=None)), [])
+
+
+class FakeGame:
+    def __init__(self, result=0):
+        self.result = result
+        self.waited = False
+
+    def wait(self):
+        self.waited = True
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+class PlayTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = folder.name
+        self.exe = os.path.join(self.folder, "lichii.exe")
+        self.game = os.path.join(self.folder, "game.nup")
+        for path in (self.exe, self.game):
+            open(path, "wb").close()
+        self.state = os.path.join(self.folder, "state")
+        self.restore = os.path.join(self.state, "power-restore.json")
+        self.host = FakeHost()
+        self.host.survey = {"processes": [
+            {"name": "chrome", "pid": 4242, "cpu_pct": 7.5, "ram_mb": 900, "gpu_mb": 1200},
+            {"name": "dwm", "pid": 900, "cpu_pct": 9.0, "ram_mb": 100, "gpu_mb": 800},
+            {"name": "notepad", "pid": 77, "cpu_pct": 0.5, "ram_mb": 20, "gpu_mb": 60}],
+            "power_online": False, "battery_pct": 41}
+        self.log = []
+        self.launches = []
+        self.running = set()
+        self.game_result = 0
+        test = self
+
+        class TestDeps(play.Deps):
+            run_command = staticmethod(self.host)
+            running = staticmethod(lambda image: image in test.running)
+            log = staticmethod(self.log.append)
+            sleep = staticmethod(lambda seconds: None)
+
+            @staticmethod
+            def launch(exe, game, env):
+                test.launches.append({"exe": exe, "game": game, "env": env, "power": test.host.ac(),
+                                      "restore_file": os.path.isfile(test.restore)})
+                return FakeGame(test.game_result)
+
+        self.deps = TestDeps
+
+    def profile(self, **fields):
+        path = os.path.join(self.folder, "profile.json")
+        with open(path, "w") as file:
+            json.dump({"name": "test-profile", "env": {}, **fields}, file)
+        return path
+
+    def play(self, *extra):
+        args = play.build_parser().parse_args(["--exe", self.exe, "--game", self.game, "--state-dir", self.state,
+                                               *extra])
+        return play.play(args, self.deps)
+
+    def test_shipped_profile_has_no_switches_yet(self):
+        profile = play.load_profile(play.DEFAULT_PROFILE)
+        self.assertEqual(profile, {"name": "oot-intel-igpu", "env": {}, "power_policy": {}})
+        with open(play.DEFAULT_PROFILE, encoding="utf-8") as file:
+            self.assertIn("measured gain", json.load(file)["_comment_env"])
+
+    def test_session_applies_the_profile_and_restores(self):
+        self.game_result = 3
+        code = self.play("--profile", self.profile(env={"EDEN_NX2_MESH_CULL": 7}, power_policy={"PERFBOOSTMODE": 0}),
+                         "--power-policy", "PROCTHROTTLEMIN=5", "--power-policy", "NOSUCHSETTING=1")
+        self.assertEqual(code, 3)
+        launch = self.launches[0]
+        self.assertEqual((launch["exe"], launch["game"]), (self.exe, self.game))
+        self.assertEqual(launch["env"]["EDEN_NX2_MESH_CULL"], "7")
+        self.assertNotIn(bench.DEBUG_ENV, {key for key in launch["env"] if key not in os.environ})
+        self.assertEqual((launch["power"]["PERFBOOSTMODE"], launch["power"]["PROCTHROTTLEMIN"]), (0, 5))
+        self.assertTrue(launch["restore_file"])
+        self.assertEqual(self.host.ac(), FakeHost().ac())
+        self.assertFalse(os.path.exists(self.restore))
+        text = "\n".join(self.log)
+        self.assertIn("PERFBOOSTMODE 2 -> 0, PROCTHROTTLEMIN 100 -> 5; not on this machine: NOSUCHSETTING", text)
+        self.assertIn("environment: EDEN_NX2_MESH_CULL=7", text)
+        self.assertIn("power settings restored", text)
+        self.assertEqual(self.host.ran("taskkill"), [])
+
+    def test_report_of_the_machine(self):
+        self.play("--profile", self.profile())
+        text = "\n".join(self.log)
+        self.assertIn("top CPU: dwm 9%, chrome 7.5%, notepad 0.5%", text)
+        self.assertIn("top GPU memory: chrome 1200 MB, dwm 800 MB, notepad 60 MB", text)
+        self.assertIn("WARNING: chrome (pid 4242) uses 7.5% CPU and 1200 MB GPU memory", text)
+        self.assertIn("--close chrome", text)
+        self.assertNotIn("WARNING: dwm", text)
+        self.assertNotIn("WARNING: notepad", text)
+        self.assertIn("WARNING: on battery (41%)", text)
+        self.assertEqual(self.host.ran("taskkill"), [])  # reported, not closed
+        self.assertEqual(self.host.ran("powercfg"), [])  # no policy: power settings are not even read
+        self.assertEqual(len(self.launches), 1)
+
+    def test_quiet_machine_and_missing_survey(self):
+        self.host.survey = {"processes": {"name": "notepad", "pid": 1, "cpu_pct": 1.0, "ram_mb": 5, "gpu_mb": 0},
+                            "power_online": True, "battery_pct": 100}
+        self.play("--profile", self.profile())
+        self.assertIn("nothing heavy is running", self.log)
+        self.assertFalse(any("WARNING" in line for line in self.log))
+        self.assertEqual(play.describe_survey(None, "lichii.exe"),
+                         ["could not list the running processes (needs Windows PowerShell): not checked"])
+        self.assertIsNone(play.survey(lambda command, timeout: (1, "not recognized")))
+        own = [{"name": "lichii", "pid": 5, "cpu_pct": 50.0, "gpu_mb": 3000}]
+        self.assertEqual(play.heavy_processes(own, "lichii.exe"), [])
+        self.assertEqual(play.heavy_processes(own, "other.exe"), own)
+
+    def test_close_ends_only_the_named_processes(self):
+        self.running = {"chrome.exe"}
+        self.play("--profile", self.profile(), "--close", "chrome", "--close", "obs64.exe")
+        self.assertEqual(self.host.ran("taskkill"), [["taskkill", "/IM", "chrome.exe"],
+                                                     ["taskkill", "/F", "/IM", "chrome.exe"],
+                                                     ["taskkill", "/IM", "obs64.exe"]])
+        self.assertEqual(len(self.launches), 1)
+
+    def test_dry_run_changes_nothing(self):
+        self.running = {"lichii.exe"}
+        code = self.play("--dry-run", "--close", "chrome", "--power-policy", "PERFBOOSTMODE=0,NOSUCHSETTING=1",
+                         "--profile", self.profile(env={"A": "1"}))
+        self.assertEqual((code, self.launches), (0, []))
+        self.assertEqual(self.host.ac(), FakeHost().ac())
+        self.assertEqual([command[:2] for command in self.host.commands if command[0] != "powershell"],
+                         [["powercfg", "/qh"]])
+        self.assertFalse(os.path.exists(self.state))
+        text = "\n".join(self.log)
+        for expected in ("would close chrome", "would set (AC, restored on exit): PERFBOOSTMODE 2 -> 0",
+                         "not on this machine, skipped: NOSUCHSETTING", "would set environment: A=1",
+                         f"would start {self.exe}", "WARNING: on battery",
+                         "PROBLEM: lichii.exe is already running"):
+            self.assertIn(expected, text)
+
+    def test_power_left_by_a_killed_session_is_restored_at_the_next_start(self):
+        bench.PowerPolicy({"PERFBOOSTMODE": 0, "PROCTHROTTLEMIN": 5}, self.host, self.restore).apply()
+        self.assertEqual(self.play("--dry-run", "--profile", self.profile()), 0)
+        self.assertEqual(self.host.ac()["PERFBOOSTMODE"], 0)  # a dry run does not even repair
+        self.assertTrue(any("would restore the power settings" in line for line in self.log))
+        self.play("--profile", self.profile())
+        self.assertEqual(self.launches[0]["power"], FakeHost().ac())
+        self.assertFalse(os.path.exists(self.restore))
+        self.assertTrue(any("restored the power settings an earlier session left changed" in line
+                            for line in self.log))
+
+    def test_interrupt_and_launch_failure_restore_the_power_settings(self):
+        self.game_result = KeyboardInterrupt()
+        self.assertEqual(self.play("--profile", self.profile(), "--power-policy", "PERFBOOSTMODE=0"), 130)
+        self.assertEqual(self.launches[0]["power"]["PERFBOOSTMODE"], 0)
+        self.assertEqual(self.host.ac(), FakeHost().ac())
+
+        def broken(exe, game, env):
+            raise OSError("cannot start")
+        self.deps.launch = staticmethod(broken)
+        with self.assertRaises(OSError):
+            self.play("--profile", self.profile(), "--power-policy", "PERFBOOSTMODE=0")
+        self.assertEqual(self.host.ac(), FakeHost().ac())
+        self.assertFalse(os.path.exists(self.restore))
+
+    def test_refusals(self):
+        self.running = {"lichii.exe"}
+        with self.assertRaisesRegex(bench.BenchError, "already running"):
+            self.play("--profile", self.profile())
+        self.running = set()
+        os.remove(self.game)
+        with self.assertRaisesRegex(bench.BenchError, "game not found"):
+            self.play("--profile", self.profile())
+        with self.assertRaisesRegex(bench.BenchError, "profile"):
+            self.play("--profile", os.path.join(self.folder, "missing.json"))
+        self.assertEqual((self.launches, self.host.commands), ([], []))
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(play.main(["--exe", self.exe, "--game", self.game, "--state-dir", self.state]), 1)
+        self.assertIn("game not found", errors.getvalue())
 
 
 if __name__ == "__main__":

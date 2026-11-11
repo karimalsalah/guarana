@@ -1,0 +1,8 @@
+{
+  "name": "oot-intel-igpu",
+  "description": "The Legend of Zelda: Ocarina of Time on Intel integrated graphics (Arc / Xe).",
+  "_comment_env": "Leave env EMPTY until a switch has a measured gain: a switch is added here only with valid rows of suites/igpu-switches.json (in results/) that show it faster or cooler than the baseline on the same machine, with scene_ok true. Name the rows in the commit that adds it.",
+  "env": {},
+  "_comment_power_policy": "Optional powercfg processor settings (AC values) for the session, e.g. {\"PERFBOOSTMODE\": 0, \"PROCTHROTTLEMIN\": 5, \"PROCTHROTTLEMIN1\": 5}. Empty for the same reason as env; pass --power-policy on the command line to try one.",
+  "power_policy": {}
+}
