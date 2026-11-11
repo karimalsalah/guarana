@@ -843,6 +843,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     // EDEN_NX2_MESH_CULL=<bits> (experiment): native mesh programs cull their triangles. 1 drops
     // those outside the frustum, 2 those that cover no pixel centre, 4 emits no outputs for a
     // workgroup with no triangle left; 7 is all three.
+    if (const char* const density = std::getenv("EDEN_NX2_TASK_DENSITY")) {
+        profile.mesh_task_percent =
+            (std::min)(static_cast<u32>(std::strtoul(density, nullptr, 0)), u32{100});
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_TASK_DENSITY: task programs ask for {}% of their mesh "
+                                "workgroups",
+                 profile.mesh_task_percent);
+    }
     static const char* const mesh_cull{std::getenv("EDEN_NX2_MESH_CULL")};
     if (mesh_cull != nullptr) {
         using namespace Shader::Backend::SPIRV;

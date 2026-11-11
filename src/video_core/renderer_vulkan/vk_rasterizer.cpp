@@ -87,6 +87,106 @@ using VideoCommon::ImageViewType;
 
 
 namespace {
+// EDEN_NX2_DRAW_STATS=<fragment hash>: counts what one mesh draw of that shader does (task and
+// mesh program runs, primitives made, clipped and kept, fragment program runs), about once a
+// second. Only the worker thread touches this.
+struct DrawStatsProbe {
+    u64 fragment{};
+    vk::QueryPool statistics;
+    vk::QueryPool primitives;
+    u32 groups{};
+    u32 wait{};
+    bool pending{};
+};
+
+DrawStatsProbe& DrawStats() {
+    static DrawStatsProbe probe = [] {
+        DrawStatsProbe made;
+        if (const char* const value = std::getenv("EDEN_NX2_DRAW_STATS")) {
+            made.fragment = std::strtoull(value, nullptr, 16);
+        }
+        return made;
+    }();
+    return probe;
+}
+
+bool BeginDrawStats(const Device& device, vk::CommandBuffer cmdbuf, u64 fragment, u32 groups) {
+    DrawStatsProbe& probe = DrawStats();
+    if (probe.fragment == 0 || fragment != probe.fragment) {
+        return false;
+    }
+    static constexpr VkQueryPipelineStatisticFlags statistics =
+        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT |
+        VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT;
+    if (!probe.statistics) {
+        try {
+            probe.statistics = device.GetLogical().CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                .queryCount = 1,
+                .pipelineStatistics = statistics,
+            });
+            probe.primitives = device.GetLogical().CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT,
+                .queryCount = 1,
+                .pipelineStatistics = 0,
+            });
+        } catch (const vk::Exception& error) {
+            LOG_WARNING(Render_Vulkan, "EDEN_NX2_DRAW_STATS unavailable: {}", error.what());
+            probe.fragment = 0;
+            return false;
+        }
+    }
+    if (probe.pending) {
+        std::array<u64, 6> counts{};
+        std::array<u64, 2> made{};
+        const VkQueryResultFlags flags =
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT;
+        const VkResult first = device.GetLogical().GetQueryResults(
+            *probe.statistics, 0, 1, sizeof(counts), counts.data(), sizeof(counts), flags);
+        const VkResult second = device.GetLogical().GetQueryResults(
+            *probe.primitives, 0, 1, sizeof(made), made.data(), sizeof(made), flags);
+        if (first != VK_SUCCESS || second != VK_SUCCESS || counts[5] == 0 || made[1] == 0) {
+            return false;
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Draw stats {:016x}: {} task workgroups drawn, {} task runs, {} mesh runs, {} "
+                 "primitives made, {} into clipping, {} out of clipping, {} fragment runs",
+                 probe.fragment, probe.groups, counts[3], counts[4], made[0], counts[0], counts[1],
+                 counts[2]);
+        probe.pending = false;
+        probe.wait = 15;
+        return false;
+    }
+    if (probe.wait != 0) {
+        --probe.wait;
+        return false;
+    }
+    device.GetLogical().ResetQueryPool(*probe.statistics, 0, 1);
+    device.GetLogical().ResetQueryPool(*probe.primitives, 0, 1);
+    cmdbuf.BeginQuery(*probe.statistics, 0, 0);
+    cmdbuf.BeginQuery(*probe.primitives, 0, 0);
+    probe.groups = groups;
+    return true;
+}
+
+void EndDrawStats(vk::CommandBuffer cmdbuf) {
+    DrawStatsProbe& probe = DrawStats();
+    cmdbuf.EndQuery(*probe.primitives, 0);
+    cmdbuf.EndQuery(*probe.statistics, 0);
+    probe.pending = true;
+}
+} // Anonymous namespace
+
+namespace {
 
 /// read_gpu_memory: the first address space (the bound channel's first) that maps the whole range,
 /// read as the GPU reads it, without flushing GPU caches.
@@ -1661,10 +1761,14 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
+                const bool stats = BeginDrawStats(device, cmdbuf, hashes.second, groups);
                 scheduler.TraceGpuWork(
                     cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
                     [&] { split.Draw(cmdbuf, [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }); },
                     'm');
+                if (stats) {
+                    EndDrawStats(cmdbuf);
+                }
             });
             return;
         }

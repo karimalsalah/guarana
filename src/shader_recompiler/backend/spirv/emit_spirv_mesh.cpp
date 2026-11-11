@@ -263,7 +263,16 @@ void TaskEpilogue(EmitContext& ctx) {
         return;
     }
     Barrier(ctx);
-    const Id count{ctx.OpLoad(ctx.U32[1], PayloadWord(ctx, ctx.Const(1U)))};
+    Id count{ctx.OpLoad(ctx.U32[1], PayloadWord(ctx, ctx.Const(1U)))};
+    if (ctx.profile.mesh_task_percent < 100) {
+        // Experiment: fewer mesh workgroups per task, rounded up so a task keeps at least one.
+        count = ctx.OpUDiv(ctx.U32[1],
+                           ctx.OpIAdd(ctx.U32[1],
+                                      ctx.OpIMul(ctx.U32[1], count,
+                                                 ctx.Const(ctx.profile.mesh_task_percent)),
+                                      ctx.Const(99U)),
+                           ctx.Const(100U));
+    }
     const Id one{ctx.Const(1U)};
     // Marker for OpEmitMeshTasksEXT count, 1, 1, payload (PatchMeshInstructions).
     ctx.OpStore(count, one);

@@ -1820,7 +1820,10 @@ void Device::RemoveUnsuitableExtensions() {
     if (!mesh_primitive_rate) {
         features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
     }
-    features.mesh_shader.meshShaderQueries = VK_FALSE;
+    // Kept for EDEN_NX2_DRAW_STATS only.
+    if (std::getenv("EDEN_NX2_DRAW_STATS") == nullptr) {
+        features.mesh_shader.meshShaderQueries = VK_FALSE;
+    }
     extensions.mesh_shader = features.mesh_shader.taskShader && features.mesh_shader.meshShader;
     // EDEN_NX2_FORCE_MESH_FALLBACK=1: leave VK_EXT_mesh_shader disabled, so task/mesh draws take
     // the compute fallback a device without it uses.
