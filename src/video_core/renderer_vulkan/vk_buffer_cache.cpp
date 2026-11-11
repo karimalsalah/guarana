@@ -135,10 +135,14 @@ Buffer::Buffer(BufferCacheRuntime& runtime, DAddr cpu_addr_, u64 size_bytes_,
     : VideoCommon::BufferBase(cpu_addr_, size_bytes_), device{&runtime.device},
       scheduler{&runtime.scheduler},
       buffer{CreateBuffer(*device, runtime.memory_allocator, SizeBytes(),
-                          runtime.SparseAlignmentFor(sparse_compatible_), runtime.uma_direct)},
+                          runtime.SparseAlignmentFor(sparse_compatible_),
+                          runtime.uma_direct && cpu_addr_ != 0)},
       tracker{SizeBytes()}, old_tracker{runtime.uma_generations ? SizeBytes() : 0} {
     sparse_compatible = sparse_compatible_;
-    if (runtime.uma_direct && runtime.SparseAlignmentFor(sparse_compatible_) <= 1) {
+    // Not the inline index buffer (address 0): it is freed at once when it grows, while recorded
+    // draws still read it, and a mapped successor zeroed here could take its memory.
+    if (runtime.uma_direct && cpu_addr_ != 0 &&
+        runtime.SparseAlignmentFor(sparse_compatible_) <= 1) {
         mapped_for_uploads = true;
         if (buffer.IsHostCoherent()) {
             direct_upload_span = buffer.Mapped();
