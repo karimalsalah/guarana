@@ -242,6 +242,13 @@ per-title default.
 compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).
 `enable` turns the sampling on or off (`EDEN_NX2_COST_SAMPLING=1` starts with it on); `frame` is
 0 until a frame was sampled, `age_ms` says how old the sample is.
+**`set_shading_rate`** `{hashes?, rate?, all?}`. With `EDEN_NX2_VRS` set at launch, every guest
+graphics pipeline takes its fragment shading rate (VK_KHR_fragment_shading_rate) as dynamic
+state. This sets the fragment size (`1x1`, `2x1`, `1x2`, `2x2`, `4x2`, `2x4`, `4x4`; `2x2` when
+omitted) for the draws of the listed fragment shader hashes, from the next draw on, or with
+`all: true` for every shader not listed. `1x1` restores. Without hashes it returns the table.
+`EDEN_NX2_VRS_HASHES=<hash>:<rate>,...` and `EDEN_NX2_VRS_DEFAULT=<rate>` set the same table at
+boot. Rates are clamped to the device's.
 
 **`reject_shaders`** `{hashes?, reject?, timeout_s?}`. This is `EDEN_NX2_REJECT_HASH` at
 runtime: the same keys (native program key or shader hash) and the same effect. Pipeline

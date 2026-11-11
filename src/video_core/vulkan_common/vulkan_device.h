@@ -78,6 +78,7 @@ VK_DEFINE_HANDLE(VmaPool)
     FEATURE(EXT, TransformFeedback, TRANSFORM_FEEDBACK, transform_feedback)                        \
     FEATURE(EXT, VertexInputDynamicState, VERTEX_INPUT_DYNAMIC_STATE, vertex_input_dynamic_state)  \
     FEATURE(KHR, CooperativeMatrix, COOPERATIVE_MATRIX, cooperative_matrix)                        \
+    FEATURE(KHR, FragmentShadingRate, FRAGMENT_SHADING_RATE, fragment_shading_rate)                \
     FEATURE(KHR, Maintenance5, MAINTENANCE_5, maintenance5)                                        \
     FEATURE(KHR, Maintenance6, MAINTENANCE_6, maintenance6)                                        \
     FEATURE(KHR, PipelineBinary, PIPELINE_BINARY, pipeline_binary)                                 \
@@ -736,6 +737,16 @@ FN_MAX_LIMIT_LIST
                features.mesh_shader.meshShader;
     }
 
+    /// Returns true if per-draw shading rates are in use (VK_KHR_fragment_shading_rate with
+    /// EDEN_NX2_VRS set): every guest graphics pipeline then has the rate as dynamic state.
+    bool IsKhrFragmentShadingRateSupported() const {
+        return extensions.fragment_shading_rate &&
+               features.fragment_shading_rate.pipelineFragmentShadingRate;
+    }
+
+    /// Returns the largest supported fragment size that fits in the wanted one.
+    VkExtent2D ClampFragmentShadingRate(VkExtent2D wanted) const;
+
     /// Returns true if the device supports VK_KHR_image_format_list.
     bool IsKhrImageFormatListSupported() const {
         return extensions.image_format_list || instance_version >= VK_API_VERSION_1_2;
@@ -1374,6 +1385,7 @@ private:
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
         VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix{};
+        VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragment_shading_rate{};
         VkPhysicalDeviceShaderIntegerDotProductProperties integer_dot_product{};
 
         VkPhysicalDeviceProperties properties{};
@@ -1386,6 +1398,7 @@ private:
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};
     VkPhysicalDeviceProperties2 properties2{};
+    std::vector<VkExtent2D> fragment_shading_rates; ///< Supported fragment sizes (EDEN_NX2_VRS).
 
     // Misc features
     bool is_optimal_astc_supported{};          ///< Support for all guest ASTC formats.

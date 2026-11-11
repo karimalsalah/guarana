@@ -129,6 +129,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdPushDescriptorSetWithTemplateKHR);
     X(vkCmdSetBlendConstants);
     X(vkCmdSetDepthBias);
+    X(vkCmdSetFragmentShadingRateKHR);
     X(vkCmdSetDepthBias2EXT);
     X(vkCmdSetDepthBounds);
     X(vkCmdSetEvent);
@@ -324,6 +325,7 @@ bool Load(VkInstance instance, InstanceDispatch& dld) noexcept {
     X(vkDestroySurfaceKHR);
     X(vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR);
     X(vkGetPhysicalDeviceFeatures2);
+    X(vkGetPhysicalDeviceFragmentShadingRatesKHR);
     X(vkGetPhysicalDeviceFormatProperties2);
     X(vkGetPhysicalDeviceProperties2);
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
@@ -1035,6 +1037,29 @@ std::vector<VkCooperativeMatrixPropertiesKHR> PhysicalDevice::GetCooperativeMatr
     }
     properties.resize(num);
     return properties;
+}
+
+std::vector<VkPhysicalDeviceFragmentShadingRateKHR> PhysicalDevice::GetFragmentShadingRatesKHR()
+    const {
+    if (!dld->vkGetPhysicalDeviceFragmentShadingRatesKHR) {
+        return {};
+    }
+    u32 num = 0;
+    if (dld->vkGetPhysicalDeviceFragmentShadingRatesKHR(physical_device, &num, nullptr) !=
+        VK_SUCCESS) {
+        return {};
+    }
+    std::vector<VkPhysicalDeviceFragmentShadingRateKHR> rates(
+        num, VkPhysicalDeviceFragmentShadingRateKHR{
+                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR,
+                 .pNext = nullptr,
+             });
+    if (dld->vkGetPhysicalDeviceFragmentShadingRatesKHR(physical_device, &num, rates.data()) !=
+        VK_SUCCESS) {
+        return {};
+    }
+    rates.resize(num);
+    return rates;
 }
 
 bool PhysicalDevice::GetSurfaceSupportKHR(u32 queue_family_index, VkSurfaceKHR surface) const {

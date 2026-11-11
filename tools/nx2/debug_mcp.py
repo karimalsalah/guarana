@@ -137,6 +137,23 @@ TOOLS = [
         },
     },
     {
+        "name": "set_shading_rate",
+        "description": "EDEN_NX2_VRS_HASHES at runtime (needs EDEN_NX2_VRS at launch): shades the "
+                       "draws of these fragment shader hashes (frame dump 'shaders') at the given "
+                       "fragment size, from the next draw on; 1x1 restores. all=true sets the rate "
+                       "of every shader not listed. With no hashes, lists the rates. Rates are "
+                       "clamped to what the device supports.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "hashes": {"type": "array", "items": {"type": "string"}},
+                "rate": {"type": "string",
+                         "enum": ["1x1", "2x1", "1x2", "2x2", "4x2", "2x4", "4x4"]},
+                "all": {"type": "boolean"},
+            },
+        },
+    },
+    {
         "name": "sample",
         "description": "Sampling profiler: pauses the named host threads about 1000 times a second "
                        "for the given seconds and returns where they were (self, self <- caller, "

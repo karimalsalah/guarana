@@ -8,6 +8,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "common/common_types.h"
@@ -93,5 +95,32 @@ u64 SetRejected(std::span<const u64> hashes, bool rejected);
 void NoteRejectApplied(u64 generation);
 /// Server thread: waits until the rasterizer applied the generation.
 [[nodiscard]] bool WaitRejectApplied(u64 generation, std::chrono::milliseconds timeout);
+
+/// Fragment size a fragment shader is shaded at (EDEN_NX2_VRS, VK_KHR_fragment_shading_rate).
+struct ShadingRate {
+    u8 width{1};
+    u8 height{1};
+
+    bool operator==(const ShadingRate&) const = default;
+};
+
+struct ShadingRateTable {
+    u64 generation{};
+    /// The rate of every fragment shader not listed.
+    ShadingRate fallback{};
+    /// Sorted by fragment shader hash.
+    std::vector<std::pair<u64, ShadingRate>> rates;
+};
+
+/// "1x1", "2x1", "1x2", "2x2", "4x2", "2x4" or "4x4".
+[[nodiscard]] std::optional<ShadingRate> ParseShadingRate(std::string_view text);
+/// Any thread: sets the rate of these fragment shader hashes ("1x1" forgets them), or with
+/// `all` the rate of every shader not listed. The table starts from EDEN_NX2_VRS_HASHES
+/// (<hash>:<rate>,...) and EDEN_NX2_VRS_DEFAULT (<rate>), and outlives debug sessions.
+void SetShadingRates(std::span<const u64> hashes, ShadingRate rate, bool all);
+[[nodiscard]] ShadingRateTable ShadingRates();
+/// Any thread, each draw: the rate wanted for this fragment shader. One atomic load and a search
+/// in a copy the thread keeps; the lock is taken only after the table changed.
+[[nodiscard]] ShadingRate ShadingRateFor(u64 fragment_hash);
 
 } // namespace VideoCore::Nx2Debug

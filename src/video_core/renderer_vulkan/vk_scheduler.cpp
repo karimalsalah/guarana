@@ -1230,6 +1230,7 @@ void Scheduler::AllocateNewContext() {
 void Scheduler::InvalidateState() {
     ++recording_epoch;
     state.graphics_pipeline = nullptr;
+    state.fragment_shading_rate = {0, 0};
     state.rescaling_defined = false;
     state.descriptor_buffer_bound = false;
     state_tracker.InvalidateCommandBufferState();

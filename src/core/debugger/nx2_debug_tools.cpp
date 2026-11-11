@@ -481,6 +481,40 @@ json RejectShaders(ToolState&, const json& params) {
     return result;
 }
 
+json SetShadingRate(ToolState&, const json& params) {
+    if (!IsVulkan()) {
+        throw std::runtime_error{"shading rates need the Vulkan renderer"};
+    }
+    std::vector<u64> hashes;
+    for (const json& hash : params.value("hashes", json::array())) {
+        hashes.push_back(ParseShaderHash(hash.get<std::string>()));
+    }
+    const bool all = params.value("all", false);
+    if (!hashes.empty() || all) {
+        const std::string text = params.value("rate", std::string{"2x2"});
+        const auto rate = VideoCore::Nx2Debug::ParseShadingRate(text);
+        if (!rate) {
+            throw std::runtime_error{fmt::format(
+                "bad rate \"{}\": want 1x1, 2x1, 1x2, 2x2, 4x2, 2x4 or 4x4", text)};
+        }
+        VideoCore::Nx2Debug::SetShadingRates(hashes, *rate, all);
+    }
+    const auto size = [](VideoCore::Nx2Debug::ShadingRate rate) {
+        return fmt::format("{}x{}", rate.width, rate.height);
+    };
+    const VideoCore::Nx2Debug::ShadingRateTable table = VideoCore::Nx2Debug::ShadingRates();
+    json rates = json::object();
+    for (const auto& [hash, rate] : table.rates) {
+        rates[Hex(hash)] = size(rate);
+    }
+    const bool enabled = std::getenv("EDEN_NX2_VRS") != nullptr;
+    json result = {{"enabled", enabled}, {"default", size(table.fallback)}, {"rates", std::move(rates)}};
+    if (!enabled) {
+        result["note"] = "EDEN_NX2_VRS is not set: the rates are kept but no draw uses them";
+    }
+    return result;
+}
+
 json SampleThreads(ToolState& state, const json& params) {
     const std::string threads = params.value("threads", std::string{"GPU,GPUBack"});
     const double seconds = Param<double>(params, "seconds", 10.0, 1.0, 60.0);
@@ -840,6 +874,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"log_filter", handler(LogFilter)},
         {"capture_frame", handler(CaptureFrame)},
         {"reject_shaders", handler(RejectShaders)},
+        {"set_shading_rate", handler(SetShadingRate)},
         {"sample", handler(SampleThreads)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},
