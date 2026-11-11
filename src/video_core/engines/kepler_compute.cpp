@@ -1059,7 +1059,7 @@ std::optional<Texture::TICEntry> KeplerCompute::ConstBuffer0Image(u32 offset) co
     return GetTICEntry(tic_index);
 }
 
-bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_hash) {
     using namespace VideoCommon::OotNetwork;
     if (!BypassEnabled(program_id)) {
         return false;
@@ -1079,29 +1079,78 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
     if (tonemapped.Address() == 0) {
         return false;
     }
+    // A program whose dispatch is left to the game is logged once per reason, with the images
+    // its handles select: one run in a mode with other programs shows which ones to name.
+    const auto kept = [&](std::string_view reason) {
+        static std::unordered_set<u64> noted;
+        const u64 id = native_key ^ std::hash<std::string_view>{}(reason);
+        if (noted.size() >= 256 || !noted.insert(id).second) {
+            return;
+        }
+        const auto images = [this](const std::vector<u32>& offsets) {
+            std::string text;
+            for (size_t index = 0; index < offsets.size() && index < 8; ++index) {
+                const u32 offset = offsets[index];
+                const auto tic = ConstBuffer0Image(offset);
+                text += tic ? fmt::format(" +{:#x}={:#x} {}x{} format {:#x}", offset,
+                                          tic->Address(), tic->Width(), tic->Height(),
+                                          static_cast<u32>(tic->format.Value()))
+                            : fmt::format(" +{:#x}=unreadable", offset);
+            }
+            return text;
+        };
+        const auto handles = NativeImageHandles(regs.code_loc.Address());
+        LOG_INFO(HW_GPU,
+                 "Ocarina of Time: dispatch not bypassed ({}): key {:016x} hash {:016x} grid "
+                 "{}x{}x{} block {}x{}x{}, tonemapped {}x{}, reads{}, stores{}",
+                 reason, native_key, unique_hash, launch_description.grid_dim_x.Value(),
+                 launch_description.grid_dim_y.Value(), launch_description.grid_dim_z.Value(),
+                 launch_description.block_dim_x.Value(), launch_description.block_dim_y.Value(),
+                 launch_description.block_dim_z.Value(), tonemapped.width, tonemapped.height,
+                 images(handles.first), images(handles.second));
+    };
     if (native_key == PrepassProgramKey || native_key == NetworkProgramKey) {
-        return bypass->output_replaced.load(std::memory_order_relaxed);
+        const bool skipped = bypass->output_replaced.load(std::memory_order_relaxed);
+        if (!skipped) {
+            kept("network pass, output pass not replaced");
+        }
+        return skipped;
     }
     if (native_key != OutputProgramKey) {
+        kept("not a known pass");
         return false;
     }
     // The copy needs the tonemapped image to be a B10G11R11 block-linear image of the output's size.
     const auto output = ConstBuffer0Image(OutputImageHandleOffset);
-    if (!output || output->format != Texture::TextureFormat::B10G11R11 || output->Address() == 0 ||
-        output->Address() == tonemapped.Address() || !output->IsBlockLinear() ||
-        tonemapped.format != Tegra::RenderTargetFormat::B10G11R11_FLOAT ||
-        tonemapped.tile_mode.is_pitch_linear || tonemapped.width != output->Width() ||
-        tonemapped.height != output->Height()) {
+    const char* unexpected = nullptr;
+    if (!output) {
+        unexpected = "output descriptor unreadable";
+    } else if (output->format != Texture::TextureFormat::B10G11R11) {
+        unexpected = "output not B10G11R11";
+    } else if (output->Address() == 0 || output->Address() == tonemapped.Address()) {
+        unexpected = "output address";
+    } else if (!output->IsBlockLinear()) {
+        unexpected = "output not block-linear";
+    } else if (tonemapped.format != Tegra::RenderTargetFormat::B10G11R11_FLOAT) {
+        unexpected = "tonemapped image not B10G11R11";
+    } else if (tonemapped.tile_mode.is_pitch_linear) {
+        unexpected = "tonemapped image not block-linear";
+    } else if (tonemapped.width != output->Width() || tonemapped.height != output->Height()) {
+        unexpected = "sizes differ";
+    }
+    // What the latest output pass came to; logged when it changes.
+    static const char* outcome = nullptr;
+    if (unexpected) {
         bypass->output_replaced.store(false, std::memory_order_relaxed);
-        static bool warned = false;
-        if (!std::exchange(warned, true)) {
+        if (std::exchange(outcome, unexpected) != unexpected) {
             LOG_WARNING(HW_GPU,
-                        "Ocarina of Time: unexpected network images; not replaced (tonemapped {}x{}, "
-                        "output {})",
-                        tonemapped.width, tonemapped.height,
+                        "Ocarina of Time: unexpected network images; not replaced ({}: tonemapped "
+                        "{}x{}, output {})",
+                        unexpected, tonemapped.width, tonemapped.height,
                         output ? fmt::format("{}x{}", output->Width(), output->Height())
                                : std::string{"unreadable"});
         }
+        kept(unexpected);
         return false;
     }
     Fermi2D::Surface destination{};
@@ -1138,12 +1187,14 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
     };
     const bool copied = rasterizer->AccelerateSurfaceCopy(source, destination, config);
     bypass->output_replaced.store(copied, std::memory_order_relaxed);
-    static bool logged = false;
-    if (!std::exchange(logged, true)) {
+    const char* const result = copied ? "copy of the tonemapped image" : "copy failed";
+    if (std::exchange(outcome, result) != result) {
         LOG_INFO(HW_GPU,
                  "Ocarina of Time: anti-aliasing network bypassed ({}): {:#x} -> {:#x} {}x{}",
-                 copied ? "copy of the tonemapped image" : "copy failed", tonemapped.Address(),
-                 output->Address(), width, height);
+                 result, tonemapped.Address(), output->Address(), width, height);
+    }
+    if (!copied) {
+        kept(result);
     }
     return copied;
 }
