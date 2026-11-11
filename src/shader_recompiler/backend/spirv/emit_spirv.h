@@ -39,6 +39,12 @@ constexpr u32 RENDERAREA_LAYOUT_OFFSET = offsetof(RenderAreaLayout, render_area)
     return EmitSPIRV(profile, {}, program, binding);
 }
 
+/// Whether EmitSPIRV gathers the program's software HMMA operands from subgroup scratch in shared
+/// memory (Profile::support_software_matrix_shared_memory). Its pipeline needs full subgroups of
+/// the guest's 32 lanes; this answers before the SPIR-V exists.
+[[nodiscard]] bool UsesSoftwareMatrixSharedMemory(const Profile& profile,
+                                                  const IR::Program& program);
+
 /// Words per lane in the buffer of EmitCooperativeHmmaTest: the guest registers a0 a1 a2 a3 b0 b1
 /// c0 c1 as input, then d0 d1 as output.
 constexpr u32 COOPERATIVE_HMMA_TEST_LANE_WORDS = 10;

@@ -683,6 +683,225 @@ TEST_CASE("16x16x16 cooperative HMMA falls back to the software helper",
     REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
 }
 
+namespace {
+
+constexpr u32 OP_VARIABLE = 59;
+constexpr u32 OP_ACCESS_CHAIN = 65;
+constexpr u32 OP_CONTROL_BARRIER = 224;
+constexpr u32 STORAGE_CLASS_WORKGROUP = 4;
+
+/// The instructions of a module that touch workgroup memory or synchronise it, by index.
+struct SharedAccesses {
+    std::vector<size_t> stores;
+    std::vector<size_t> loads;
+    std::vector<size_t> barriers;
+};
+
+SharedAccesses FindSharedAccesses(const Module& module) {
+    std::vector<u32> pointers;
+    SharedAccesses result;
+    for (size_t index = 0; index < module.insts.size(); ++index) {
+        const auto& inst = module.insts[index];
+        const auto is_shared = [&](u32 pointer) {
+            return std::ranges::find(pointers, pointer) != pointers.end();
+        };
+        if (inst.opcode == OP_VARIABLE && inst.words[2] == STORAGE_CLASS_WORKGROUP) {
+            pointers.push_back(inst.words[1]);
+        } else if (inst.opcode == OP_ACCESS_CHAIN && is_shared(inst.words[2])) {
+            pointers.push_back(inst.words[1]);
+        } else if (inst.opcode == Op::Store && is_shared(inst.words[0])) {
+            result.stores.push_back(index);
+        } else if (inst.opcode == Op::Load && is_shared(inst.words[2])) {
+            result.loads.push_back(index);
+        } else if (inst.opcode == OP_CONTROL_BARRIER) {
+            result.barriers.push_back(index);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_CASE("Shared-memory software HMMA gathers its operands instead of shuffling them",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {8U, 16U}) {
+        for (const bool vector_view : {false, true}) {
+            CAPTURE(depth, vector_view);
+            TensorProgram fixture{1, depth};
+            fixture.profile.support_software_matrix_shared_memory = true;
+            fixture.profile.support_explicit_workgroup_layout = vector_view;
+            // What the pipeline asks before the SPIR-V exists
+            REQUIRE(Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile,
+                                                                   fixture.program));
+            const auto code = fixture.Emit("shared-k" + std::to_string(depth) +
+                                           (vector_view ? "-vector" : "-scalar"));
+            REQUIRE(fixture.program.info.uses_subgroup_shared_scratch);
+            REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+            REQUIRE(fixture.program.shared_memory_size == 2 * 192 * 4); // Two warps
+            REQUIRE_FALSE(HasCapability(code, CAPABILITY_COOPERATIVE_MATRIX));
+            REQUIRE_FALSE(HasCapability(code, CAPABILITY_VULKAN_MEMORY_MODEL));
+            REQUIRE(Instructions(code, 57).size() == 1); // OpFunctionCall
+            REQUIRE(Instructions(code, 345).empty());    // OpGroupNonUniformShuffle
+
+            const Module module{code};
+            const auto& insts = module.insts;
+            const auto function = std::ranges::find_if(insts, [](const Module::Inst& inst) {
+                return inst.opcode == Op::Function && (inst.words[2] & 0x2) != 0;
+            });
+            REQUIRE(function != insts.end());
+            std::vector<u32> parameters;
+            for (auto it = function + 1; it != insts.end() && it->opcode == Op::FunctionParameter;
+                 ++it) {
+                parameters.push_back(it->words[1]);
+            }
+            REQUIRE(parameters.size() == 3);
+
+            // The group body: the loop body for K=16, the whole helper for K=8.
+            size_t body_begin = module.IndexOf(*function);
+            size_t body_end = insts.size();
+            const auto loop = std::ranges::find_if(
+                insts, [](const Module::Inst& inst) { return inst.opcode == Op::LoopMerge; });
+            REQUIRE((loop != insts.end()) == (depth == 16));
+            if (depth == 16) {
+                body_begin = module.IndexOf(*loop);
+                body_end = module.defs.at(loop->words[1]);
+                REQUIRE(body_begin < body_end);
+            }
+            const auto in_body = [&](size_t index) {
+                return index > body_begin && index < body_end;
+            };
+
+            // Each lane stores the registers of the groups that run: a0 a1 b0, then a2 a3 b1.
+            const SharedAccesses shared{FindSharedAccesses(module)};
+            std::vector<std::pair<u32, u32>> stored;
+            for (const size_t index : shared.stores) {
+                stored.push_back(OperandSource(module, insts[index].words[1], parameters));
+            }
+            std::ranges::sort(stored);
+            using Sources = std::vector<std::pair<u32, u32>>;
+            REQUIRE(stored == (depth == 8 ? Sources{{0, 0}, {0, 1}, {1, 0}}
+                                          : Sources{{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}}));
+
+            // A subgroup barrier after the stores, and one after the loads for the next multiply.
+            const auto constants = Constants(code);
+            REQUIRE(shared.barriers.size() == 2);
+            for (const size_t index : shared.barriers) {
+                const auto& words = insts[index].words;
+                REQUIRE(constants.at(words[0]) == 3);     // Subgroup execution scope
+                REQUIRE(constants.at(words[1]) == 3);     // Subgroup memory scope
+                REQUIRE(constants.at(words[2]) == 0x108); // AcquireRelease | WorkgroupMemory
+            }
+            for (const size_t index : shared.stores) {
+                REQUIRE(index > module.IndexOf(*function));
+                REQUIRE(index < shared.barriers[0]);
+            }
+            // A K=8 group reads four words of two A rows and of two B columns.
+            REQUIRE(shared.loads.size() == (vector_view ? 4U : 16U));
+            for (const size_t index : shared.loads) {
+                REQUIRE(index > shared.barriers[0]);
+                REQUIRE(index < shared.barriers[1]);
+                REQUIRE(in_body(index));
+            }
+            if (depth == 16) {
+                REQUIRE(shared.barriers[0] < body_begin);
+                REQUIRE(shared.barriers[1] > body_end);
+            }
+
+            // The arithmetic of the shuffling helper.
+            u32 roundings = 0, fmas = 0;
+            for (size_t index = 0; index < insts.size(); ++index) {
+                if (module.IsExtInst(insts[index], Op::RoundEven)) {
+                    CHECK(in_body(index));
+                    ++roundings;
+                } else if (module.IsExtInst(insts[index], Op::Fma)) {
+                    CHECK(in_body(index));
+                    ++fmas;
+                }
+            }
+            CHECK(roundings == 4);
+            CHECK(fmas == 32);
+        }
+    }
+}
+
+TEST_CASE("Shared-memory software HMMA shares one helper per depth",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {8U, 16U}) {
+        TensorProgram fixture{64, depth};
+        fixture.profile.support_software_matrix_shared_memory = true;
+        // No Vulkan memory model here, so coherent memory does not matter.
+        fixture.program.info.requires_coherent_global_memory = true;
+        // The scratch follows the guest's shared memory, from a multiple of four words.
+        fixture.program.shared_memory_size = 20;
+        const auto code = fixture.Emit("shared-k" + std::to_string(depth) + "-many");
+        REQUIRE(fixture.program.info.uses_subgroup_shared_scratch);
+        REQUIRE(fixture.program.shared_memory_size == 32 + 2 * 192 * 4);
+        REQUIRE(Instructions(code, 57).size() == 64);                // OpFunctionCall
+        REQUIRE(Instructions(code, OP_CONTROL_BARRIER).size() == 2); // In the helper only
+        REQUIRE(Instructions(code, 345).empty());                    // OpGroupNonUniformShuffle
+        const auto models = Instructions(code, 14); // OpMemoryModel
+        REQUIRE(models.size() == 1);
+        REQUIRE(models[0][1] == 1); // GLSL450
+
+        TensorProgram unsynchronized{64, depth};
+        unsynchronized.profile.support_software_matrix_shared_memory = true;
+        unsynchronized.profile.software_matrix_shared_memory_no_barrier = true;
+        const auto racy = unsynchronized.Emit();
+        REQUIRE(unsynchronized.program.info.uses_subgroup_shared_scratch);
+        REQUIRE(Instructions(racy, OP_CONTROL_BARRIER).empty());
+        REQUIRE(Instructions(racy, 345).empty()); // OpGroupNonUniformShuffle
+
+        TensorProgram scalar{64, depth};
+        scalar.profile.support_software_matrix_shared_memory = true;
+        scalar.profile.support_explicit_workgroup_layout = true;
+        scalar.profile.software_matrix_shared_memory_scalar_loads = true;
+        const Module words{scalar.Emit()};
+        REQUIRE(FindSharedAccesses(words).loads.size() == 16); // Despite the vector view
+    }
+}
+
+TEST_CASE("Shared-memory software HMMA keeps the shuffles where a program cannot gather",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{1, 16};
+    fixture.profile.support_software_matrix_shared_memory = true;
+    SECTION("a workgroup that leaves a warp unfilled") {
+        fixture.program.workgroup_size = {48, 1, 1};
+    }
+    SECTION("a workgroup row that leaves a warp unfilled") {
+        fixture.program.workgroup_size = {16, 2, 1};
+    }
+    SECTION("scratch past the shared memory limit") {
+        fixture.profile.max_compute_shared_memory_size = 2 * 192 * 4 - 4;
+    }
+    // The same program without the switch
+    TensorProgram reference{1, 16};
+    reference.program.workgroup_size = fixture.program.workgroup_size;
+    reference.profile.max_compute_shared_memory_size =
+        fixture.profile.max_compute_shared_memory_size;
+    REQUIRE_FALSE(
+        Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile, fixture.program));
+    const auto code = fixture.Emit();
+    REQUIRE(code == reference.Emit());
+    REQUIRE(Instructions(code, 345).size() == 16); // OpGroupNonUniformShuffle
+    REQUIRE(Instructions(code, OP_CONTROL_BARRIER).empty());
+    REQUIRE(fixture.program.shared_memory_size == 0);
+    REQUIRE_FALSE(fixture.program.info.uses_subgroup_shared_scratch);
+}
+
+TEST_CASE("Shared-memory software HMMA leaves tensor cores their multiplies",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{1, 16};
+    fixture.profile.support_software_matrix_shared_memory = true;
+    fixture.profile.support_cooperative_hmma_16x16x16 = true;
+    REQUIRE_FALSE(
+        Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile, fixture.program));
+    const auto code = fixture.Emit();
+    REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 1);
+    REQUIRE(fixture.program.info.uses_cooperative_matrix);
+    REQUIRE_FALSE(fixture.program.info.uses_subgroup_shared_scratch);
+    REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
+}
+
 TEST_CASE("Captured Bananza matrix shaders lower without an environment override",
           "[video_core][tensor][ampere]") {
     TensorMode mode{nullptr};

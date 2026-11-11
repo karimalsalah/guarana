@@ -21,6 +21,11 @@ constexpr u32 LayoutRowMajor = 0;
 constexpr u32 LayoutColumnMajor = 1;
 // Subgroup scope, acquire-release on workgroup memory.
 constexpr u32 SubgroupBarrierSemantics = 0x8 | 0x100;
+// Scratch of the software helpers that gather from shared memory, per 32-lane subgroup. A row r
+// is the eight words (k / 2) at 16 * (r % 8) + 8 * (r / 8), which puts a lane's rows g and g + 8
+// together; B column n is the eight words at 128 + 8n. A lane reads 16 consecutive words of each.
+constexpr u32 SOFTWARE_SCRATCH_WORDS = 192;
+constexpr u32 SOFTWARE_SCRATCH_B = 128;
 
 // A cooperative matrix needs its whole subgroup: every row of the workgroup fills whole warps and
 // the pipeline is created with full subgroups. Cooperative matrices also need the Vulkan memory
@@ -116,6 +121,48 @@ void SubgroupBarrier(EmitContext& ctx) {
     ctx.OpControlBarrier(scope, scope, ctx.Const(SubgroupBarrierSemantics));
 }
 
+void DefineSubgroupId(EmitContext& ctx) {
+    ctx.AddCapability(spv::Capability::GroupNonUniform);
+    const Id input_u32 = ctx.TypePointer(spv::StorageClass::Input, ctx.U32[1]);
+    ctx.tensor_subgroup_id = ctx.AddGlobalVariable(input_u32, spv::StorageClass::Input);
+    ctx.Decorate(ctx.tensor_subgroup_id, spv::Decoration::BuiltIn, spv::BuiltIn::SubgroupId);
+    ctx.interfaces.push_back(ctx.tensor_subgroup_id);
+}
+
+// Byte offset of the software helpers' scratch in a program that gathers through shared memory.
+// Lanes read what the other lanes of their warp stored, so as for a cooperative matrix every row
+// of the workgroup fills whole warps and the pipeline is created with full subgroups. The memory
+// model stays GLSL450, so coherent memory is no obstacle.
+std::optional<u32> SoftwareMatrixScratchOffset(const Profile& profile,
+                                               const IR::Program& program) {
+    if (!profile.support_software_matrix_shared_memory || profile.support_cooperative_hmma ||
+        profile.support_cooperative_hmma_16x16x16 || program.stage != Stage::Compute ||
+        !profile.SupportsSubgroupStage(Stage::Compute) || program.workgroup_size[0] == 0 ||
+        program.workgroup_size[0] % GUEST_WARP_LANES != 0) {
+        return std::nullopt;
+    }
+    bool has_hmma{};
+    for (const auto* block : program.blocks) {
+        for (const auto& inst : block->Instructions()) {
+            has_hmma |= inst.GetOpcode() == IR::Opcode::TensorMulAdd && inst.Flags<u32>() != 0;
+        }
+    }
+    if (!has_hmma) {
+        return std::nullopt;
+    }
+    const u32 invocations = program.workgroup_size[0] * program.workgroup_size[1] *
+                            program.workgroup_size[2];
+    const u32 subgroups = invocations / GUEST_WARP_LANES;
+    const u32 scratch_offset = (program.shared_memory_size + 15U) & ~15U;
+    const u32 total = scratch_offset + subgroups * SOFTWARE_SCRATCH_WORDS * 4U;
+    // Past the device limit the pipeline would fail to build: keep the shuffles.
+    if (subgroups == 0 || (profile.max_compute_shared_memory_size != 0 &&
+                           total > profile.max_compute_shared_memory_size)) {
+        return std::nullopt;
+    }
+    return scratch_offset;
+}
+
 // One HMMA.16816.F16 (or .1688 with zero upper halves) of a 32-lane warp on 16x16x16 matrices: the
 // NVIDIA fragments go to row-major A, column-major B (columns 8-15 zero) and row-major C tiles in
 // shared memory, one cooperative-matrix multiply-add replaces the per-lane emulation, and each lane
@@ -201,16 +248,35 @@ std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Pro
     return scratch_offset / 4U;
 }
 
+bool UsesSoftwareMatrixSharedMemory(const Profile& profile, const IR::Program& program) {
+    return SoftwareMatrixScratchOffset(profile, program).has_value();
+}
+
+std::optional<u32> ReserveSoftwareMatrixScratch(const Profile& profile, IR::Program& program) {
+    const std::optional<u32> scratch_offset{SoftwareMatrixScratchOffset(profile, program)};
+    if (!scratch_offset) {
+        return std::nullopt;
+    }
+    const u32 subgroups = program.workgroup_size[0] * program.workgroup_size[1] *
+                          program.workgroup_size[2] / GUEST_WARP_LANES;
+    program.shared_memory_size = *scratch_offset + subgroups * SOFTWARE_SCRATCH_WORDS * 4U;
+    return *scratch_offset / 4U;
+}
+
 void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program) {
     if (ctx.tensor_scratch_word) {
         ctx.cooperative_hmma =
             DefineCooperativeHmmaTypes(ctx, ctx.U32[1], 16, ctx.profile.supported_spirv);
-        ctx.AddCapability(spv::Capability::GroupNonUniform);
-        const Id input_u32 = ctx.TypePointer(spv::StorageClass::Input, ctx.U32[1]);
-        ctx.tensor_subgroup_id = ctx.AddGlobalVariable(input_u32, spv::StorageClass::Input);
-        ctx.Decorate(ctx.tensor_subgroup_id, spv::Decoration::BuiltIn, spv::BuiltIn::SubgroupId);
-        ctx.interfaces.push_back(ctx.tensor_subgroup_id);
+        DefineSubgroupId(ctx);
         return;
+    }
+    // Without tensor cores the helpers below gather from shared memory when the program can: every
+    // lane stores its A and B registers, a subgroup barrier makes them visible, and each lane loads
+    // the two A rows and two B columns it multiplies instead of shuffling them out of other lanes.
+    const bool shared{ctx.software_matrix_scratch_word.has_value()};
+    const bool barriers{!ctx.profile.software_matrix_shared_memory_no_barrier};
+    if (shared) {
+        DefineSubgroupId(ctx);
     }
     const bool cooperative{ctx.profile.support_cooperative_hmma && SupportsCooperativeHmma(program)};
     std::array<bool, 2> needed{};
@@ -232,9 +298,11 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
     for (u32 variant = 0; variant < 2; ++variant) {
         if (!needed[variant]) continue;
         ctx.AddCapability(spv::Capability::GroupNonUniform);
-        ctx.AddCapability(spv::Capability::GroupNonUniformShuffle);
+        if (!shared) {
+            ctx.AddCapability(spv::Capability::GroupNonUniformShuffle);
+        }
         if (!ctx.SupportsSubgroups() ||
-            ctx.profile.has_broken_spirv_subgroup_shuffle)
+            (!shared && ctx.profile.has_broken_spirv_subgroup_shuffle))
             throw NotImplementedException("Software HMMA requires subgroup shuffle support");
         const Id u32ty = ctx.U32[1], f32ty = ctx.F32[1];
         const auto imm = [&](u32 v) { return ctx.Const(v); };
@@ -287,22 +355,83 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
         }
         ctx.OpStore(counter, imm(0));
         const Id lane = ctx.OpLoad(u32ty, ctx.subgroup_local_invocation_id);
-        const Id warp_base = and_(lane, ~31U);
-        const Id row_base = and_(lane, 28);
-        const Id col_base = ctx.OpShiftLeftLogical(u32ty, and_(lane, 3), imm(3));
-        const Id a_base = add(warp_base, row_base);
-        const Id b_base = add(warp_base, col_base);
+        const auto offset = [&](Id word, u32 words) {
+            return words != 0 ? add(word, imm(words)) : word;
+        };
+        // Shuffles: the first lane holding the lane's A rows and B columns. Shared memory: the
+        // first scratch word of them.
+        Id a_base{}, b_base{};
+        if (shared) {
+            const Id subgroup = ctx.OpLoad(u32ty, ctx.tensor_subgroup_id);
+            const Id scratch = offset(ctx.OpIMul(u32ty, subgroup, imm(SOFTWARE_SCRATCH_WORDS)),
+                                      *ctx.software_matrix_scratch_word);
+            const Id scratch_b = add(scratch, imm(SOFTWARE_SCRATCH_B));
+            const Id g4 = and_(lane, 28);
+            const Id t = and_(lane, 3);
+            a_base = add(scratch, ctx.OpShiftLeftLogical(u32ty, g4, imm(2)));
+            b_base = add(scratch_b, ctx.OpShiftLeftLogical(u32ty, t, imm(4)));
+            // The lane's own registers: pair t of its A rows and of B's column g, each K half.
+            const Id a_own = add(a_base, t);
+            const Id b_own = add(add(scratch_b, ctx.OpShiftLeftLogical(u32ty, g4, imm(1))), t);
+            for (u32 half = 0; half <= variant; ++half) {
+                for (u32 row = 0; row < 2; ++row) {
+                    ctx.OpStore(SharedWord(ctx, offset(a_own, row * 8 + half * 4)),
+                                inputs[row + half * 2]);
+                }
+                ctx.OpStore(SharedWord(ctx, offset(b_own, half * 4)), inputs[4 + half]);
+            }
+            if (barriers) {
+                SubgroupBarrier(ctx);
+            }
+        } else {
+            const Id warp_base = and_(lane, ~31U);
+            const Id row_base = and_(lane, 28);
+            const Id col_base = ctx.OpShiftLeftLogical(u32ty, and_(lane, 3), imm(3));
+            a_base = add(warp_base, row_base);
+            b_base = add(warp_base, col_base);
+        }
+        // A K=8 group's four words of an A row or B column, which start at a multiple of four:
+        // one load where the shared memory has a vector view.
+        const auto load_group = [&](Id word) {
+            std::array<Id, 4> words;
+            if (ctx.uses_explicit_workgroup_layout &&
+                !ctx.profile.software_matrix_shared_memory_scalar_loads) {
+                const Id index = ctx.OpShiftRightLogical(u32ty, word, imm(2));
+                const Id vector = ctx.OpLoad(
+                    ctx.U32[4], ctx.OpAccessChain(ctx.shared_u32x4, ctx.shared_memory_u32x4,
+                                                  ctx.u32_zero_value, index));
+                for (u32 i = 0; i < 4; ++i)
+                    words[i] = ctx.OpCompositeExtract(u32ty, vector, i);
+            } else {
+                for (u32 i = 0; i < 4; ++i)
+                    words[i] = ctx.OpLoad(u32ty, SharedWord(ctx, offset(word, i)));
+            }
+            return words;
+        };
         // Unrolling a K=8 group lets its shuffles overlap, which latency-bound small dispatches
         // need; unrolling all of K=16 raises register pressure and slows large dispatches.
-        const auto emit_group = [&](auto pick) {
+        // `group`: for K=16 gathers, the group's word offset in an A row or B column (0 or 4).
+        const auto emit_group = [&](auto pick, std::optional<Id> group) {
+            std::array<std::array<Id, 4>, 2> a_words{}, b_words{};
+            if (shared) {
+                // A row and a B column are eight words: four for each K=8 group.
+                const Id a_group = group ? add(a_base, *group) : a_base;
+                const Id b_group = group ? add(b_base, *group) : b_base;
+                for (u32 i = 0; i < 2; ++i) {
+                    a_words[i] = load_group(offset(a_group, i * 8));
+                    b_words[i] = load_group(offset(b_group, i * 8));
+                }
+            }
             for (u32 component = 0; component < 4; ++component) {
-                const Id b = pick(inputs[4], inputs[5]);
+                const Id b = shared ? Id{} : pick(inputs[4], inputs[5]);
                 std::array<Id, 2> bs;
                 for (u32 col = 0; col < 2; ++col)
-                    bs[col] = unpack(ctx.OpGroupNonUniformShuffle(
+                    bs[col] = unpack(shared ? b_words[col][component]
+                                            : ctx.OpGroupNonUniformShuffle(
                         u32ty, imm(3), b, add(b_base, imm(component + col * 4))));
                 for (u32 row = 0; row < 2; ++row) {
-                    const Id as = unpack(ctx.OpGroupNonUniformShuffle(
+                    const Id as = unpack(shared ? a_words[row][component]
+                                                : ctx.OpGroupNonUniformShuffle(
                         u32ty, imm(3), pick(inputs[row], inputs[row + 2]),
                         add(a_base, imm(component))));
                     for (u32 col = 0; col < 2; ++col) {
@@ -321,7 +450,7 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
                 ctx.OpStore(accumulator, round_half(ctx.OpLoad(f32ty, accumulator)));
         };
         if (variant == 0) {
-            emit_group([](Id low, Id) { return low; });
+            emit_group([](Id low, Id) { return low; }, std::nullopt);
         } else {
             const Id header = ctx.OpLabel(), body = ctx.OpLabel(), next = ctx.OpLabel(),
                      end = ctx.OpLabel();
@@ -332,13 +461,19 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
             ctx.OpLoopMerge(end, next, spv::LoopControlMask::DontUnroll);
             ctx.OpBranchConditional(more, body, end);
             ctx.AddLabel(body);
-            const Id upper = ctx.OpIEqual(ctx.U1, group, imm(1));
-            emit_group([&](Id low, Id high) { return ctx.OpSelect(u32ty, upper, high, low); });
+            const Id upper = shared ? Id{} : ctx.OpIEqual(ctx.U1, group, imm(1));
+            emit_group([&](Id low, Id high) { return ctx.OpSelect(u32ty, upper, high, low); },
+                       shared ? std::optional<Id>{ctx.OpShiftLeftLogical(u32ty, group, imm(2))}
+                              : std::nullopt);
             ctx.OpBranch(next);
             ctx.AddLabel(next);
             ctx.OpStore(counter, add(group, imm(1)));
             ctx.OpBranch(header);
             ctx.AddLabel(end);
+        }
+        // The next multiply stores to the same scratch: no lane may still be reading this one's.
+        if (shared && barriers) {
+            SubgroupBarrier(ctx);
         }
         std::array<Id, 2> packed;
         for (u32 row = 0; row < 2; ++row)

@@ -8,6 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -648,6 +650,30 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         !profile.support_cooperative_hmma && device.IsCooperativeHmma16x16x16Supported();
     if (profile.support_cooperative_hmma_16x16x16) {
         LOG_INFO(Render_Vulkan, "Guest tensor operations run on 16x16x16 cooperative matrices");
+    }
+    // EDEN_NX2_SW_MATRIX_SHARED=1 (experiment): without tensor cores, guest tensor operations
+    // gather their operands from shared memory instead of shuffling them between lanes.
+    // Variants, in any combination ("1,nobarrier,scalar"): "nobarrier" leaves out the subgroup
+    // barriers around the gather, "scalar" loads single words even with a vector view.
+    static const char* const sw_matrix_shared{std::getenv("EDEN_NX2_SW_MATRIX_SHARED")};
+    if (sw_matrix_shared != nullptr && sw_matrix_shared[0] != '\0' &&
+        sw_matrix_shared[0] != '0') {
+        // Subgroups of exactly the guest's 32 lanes, all full, as for the 16x16x16 matrices
+        profile.support_software_matrix_shared_memory =
+            !profile.support_cooperative_hmma && !profile.support_cooperative_hmma_16x16x16 &&
+            (subgroup_stages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+            device.IsExtSubgroupSizeControlSupported() &&
+            device.IsComputeFullSubgroupsSupported() &&
+            device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+        profile.software_matrix_shared_memory_no_barrier =
+            std::strstr(sw_matrix_shared, "nobarrier") != nullptr;
+        profile.software_matrix_shared_memory_scalar_loads =
+            std::strstr(sw_matrix_shared, "scalar") != nullptr;
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_SW_MATRIX_SHARED={}: software tensor operations {}",
+                 sw_matrix_shared,
+                 profile.support_software_matrix_shared_memory
+                     ? "gather from shared memory"
+                     : "keep their shuffles (tensor cores in use, or no full 32-lane subgroups)");
     }
 
     host_info = Shader::HostTranslateInfo{
@@ -2904,6 +2930,17 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                     program.shared_memory_size / 1024,
                     max_shared_memory / 1024);
         program.shared_memory_size = max_shared_memory;
+    }
+    // EmitSPIRV sets this too, but a deferred job emits after the pipeline copied the info.
+    program.info.uses_subgroup_shared_scratch =
+        Shader::Backend::SPIRV::UsesSoftwareMatrixSharedMemory(profile, program);
+    if (profile.support_software_matrix_shared_memory && program.info.uses_subgroup_shuffles) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_SW_MATRIX_SHARED: compute shader {:016x} (shuffles or tensor "
+                 "operations), workgroup {}x{}x{}, {} shared bytes: shared-memory gather {}",
+                 key.unique_hash, program.workgroup_size[0], program.workgroup_size[1],
+                 program.workgroup_size[2], program.shared_memory_size,
+                 program.info.uses_subgroup_shared_scratch ? "on" : "off");
     }
     std::unique_ptr<ComputePipeline> pipeline;
     const u64 ir_bytes = emit_pools ? IrBytes(std::span(&program, 1)) : 0;
