@@ -1140,7 +1140,8 @@ void BlitScale(Scheduler& scheduler, VkImage src_image, VkImage dst_image, const
     const VkFilter vk_filter = is_bilinear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([dst_image, src_image, extent, resources, aspect_mask, resolution, is_2d,
+    scheduler.RecordEmu(TraceCategory::ImageBlit, {extent.width, extent.height, 0},
+        [dst_image, src_image, extent, resources, aspect_mask, resolution, is_2d,
                       vk_filter, up_scaling](vk::CommandBuffer cmdbuf) {
         const u32 scaled_width = resolution.ScaleUp(extent.width);
         const u32 scaled_height = is_2d ? resolution.ScaleUp(extent.height) : extent.height;
@@ -1706,7 +1707,10 @@ void TextureCacheRuntime::ReinterpretImage(Image& dst, Image& src,
     const VkImage dst_image = dst.Handle();
     const VkImage src_image = src.Handle();
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([dst_image, src_image, copy_buffer, src_aspect_mask, dst_aspect_mask,
+    scheduler.RecordEmu(TraceCategory::ImageReinterpret,
+                        {dst.info.size.width, dst.info.size.height,
+                         static_cast<u32>(copies.size())},
+                        [dst_image, src_image, copy_buffer, src_aspect_mask, dst_aspect_mask,
                       vk_in_copies, vk_out_copies](vk::CommandBuffer cmdbuf) {
         RangedBarrierRange dst_range;
         RangedBarrierRange src_range;
@@ -2372,7 +2376,9 @@ void TextureCacheRuntime::BlitImage(Framebuffer* dst_framebuffer, ImageView& dst
     const VkImageSubresourceLayers dst_layers = MakeSubresourceLayers(&dst);
     const VkImageSubresourceLayers src_layers = MakeSubresourceLayers(&src);
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([filter, dst_region, src_region, dst_image, src_image, dst_layers, src_layers,
+    scheduler.RecordEmu(TraceCategory::ImageBlit,
+                        {dst.size.width, dst.size.height, is_resolve ? 1U : 0U},
+                        [filter, dst_region, src_region, dst_image, src_image, dst_layers, src_layers,
                       aspect_mask, is_resolve](vk::CommandBuffer cmdbuf) {
         const std::array read_barriers{
             VkImageMemoryBarrier{
@@ -2620,7 +2626,11 @@ void TextureCacheRuntime::CopyImage(Image& dst, Image& src,
     const VkImage dst_image = dst.Handle();
     const VkImage src_image = src.Handle();
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([dst_image, src_image, aspect_mask, vk_copies](vk::CommandBuffer cmdbuf) {
+    // Size: the first region's extent and the region count.
+    scheduler.RecordEmu(TraceCategory::ImageCopy,
+                        {copies[0].extent.width, copies[0].extent.height,
+                         static_cast<u32>(copies.size())},
+                        [dst_image, src_image, aspect_mask, vk_copies](vk::CommandBuffer cmdbuf) {
         RangedBarrierRange dst_range;
         RangedBarrierRange src_range;
         for (const VkImageCopy& copy : vk_copies) {
@@ -2755,7 +2765,9 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
                 .extent = {copy.extent.width, copy.extent.height, 1},
             };
             scheduler.RequestOutsideRenderPassOperationContext();
-            scheduler.Record([shadow_image, dst_image, region, aspect_mask, attachment_stage,
+            scheduler.RecordEmu(TraceCategory::ImageCopyMsaa,
+                                {region.extent.width, region.extent.height, 1},
+                                [shadow_image, dst_image, region, aspect_mask, attachment_stage,
                               attachment_write,
                               attachment_read_write](vk::CommandBuffer cmdbuf) {
                 const std::array pre_barriers{
@@ -3203,7 +3215,10 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
         const VkBuffer src_buffer = buffer;
         const VkImageAspectFlags vk_aspect_mask = upload_aspect_mask;
 
-        scheduler->Record([src_buffer, temp_vk_image, vk_aspect_mask,
+        scheduler->RecordEmu(TraceCategory::ImageUpload,
+                             {info.size.width, info.size.height,
+                              static_cast<u32>(copies.size())},
+                             [src_buffer, temp_vk_image, vk_aspect_mask,
                            vk_copies](vk::CommandBuffer cmdbuf) {
             CopyBufferToImage(cmdbuf, src_buffer, temp_vk_image, vk_aspect_mask, false, vk_copies);
         });
@@ -3257,7 +3272,9 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
     const VkImageAspectFlags vk_aspect_mask = aspect_mask;
     const bool was_initialized = std::exchange(initialized, true);
 
-    scheduler->Record([src_buffer, vk_image, vk_aspect_mask, was_initialized,
+    scheduler->RecordEmu(TraceCategory::ImageUpload,
+                         {info.size.width, info.size.height, static_cast<u32>(copies.size())},
+                         [src_buffer, vk_image, vk_aspect_mask, was_initialized,
                        vk_copies](vk::CommandBuffer cmdbuf) {
         CopyBufferToImage(cmdbuf, src_buffer, vk_image, vk_aspect_mask, was_initialized, vk_copies);
     });
@@ -3392,7 +3409,10 @@ void Image::DownloadMemory(std::span<VkBuffer> buffers_span, std::span<size_t> o
             }
 
             scheduler->RequestOutsideRenderPassOperationContext();
-            scheduler->Record([buffers = std::move(buffers_vector), image = temp_vk_image,
+            scheduler->RecordEmu(TraceCategory::ImageDownload,
+                                 {info.size.width, info.size.height,
+                                  static_cast<u32>(copies.size())},
+                                 [buffers = std::move(buffers_vector), image = temp_vk_image,
                                aspect_mask_ = aspect_mask, vk_copies](vk::CommandBuffer cmdbuf) {
                 const VkImageMemoryBarrier read_barrier{
                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -3463,7 +3483,9 @@ void Image::DownloadMemory(std::span<VkBuffer> buffers_span, std::span<size_t> o
                 TransformBufferImageCopies(copies, offsets_span[index], aspect_mask));
         }
         scheduler->RequestOutsideRenderPassOperationContext();
-        scheduler->Record([buffers = std::move(buffers_vector), image = *original_image,
+        scheduler->RecordEmu(TraceCategory::ImageDownload,
+                             {info.size.width, info.size.height, static_cast<u32>(copies.size())},
+                             [buffers = std::move(buffers_vector), image = *original_image,
                            aspect_mask_ = aspect_mask, vk_copies](vk::CommandBuffer cmdbuf) {
             const VkImageMemoryBarrier read_barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,

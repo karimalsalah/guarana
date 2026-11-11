@@ -35,6 +35,7 @@
 #include "video_core/nx2_profile.h"
 #include "video_core/render_trace.h"
 #include "video_core/texture_cache/conversion.h"
+#include "video_core/texture_cache/formatter.h"
 #include "video_core/texture_cache/host_memory_limit.h"
 #include "video_core/texture_cache/host_mip_limits.h"
 #include "video_core/texture_cache/image_view_base.h"
@@ -1099,7 +1100,7 @@ bool TextureCache<P>::RescaleRenderTargets() {
 }
 
 template <class P>
-void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
+void TextureCache<P>::UpdateRenderTargets(bool is_clear, bool is_draw) {
     using namespace VideoCommon::Dirty;
     struct ClearingScope {
         bool& flag;
@@ -1108,14 +1109,47 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
         }
     } clearing_scope{clearing_render_targets};
     clearing_render_targets = is_clear;
+    // Whether this use can write the color targets and the depth target. A guest draw writes
+    // color only through a non-zero color mask and depth/stencil only with depth writes or the
+    // stencil test on (the test CheckFeedbackLoop uses); the host draws with the same state.
+    // Clears and every other caller count as writing. Deliberately coarse: any color mask on
+    // counts for all color targets, and rasterizer discard is not looked at.
+    bool color_writable = true;
+    bool depth_writable = true;
+    const bool lazy = Nx2AliasLazy();
+    const bool trace = Nx2AliasTrace();
+    if (is_draw && !is_clear && (lazy || trace)) [[unlikely]] {
+        const auto& regs = maxwell3d->regs;
+        color_writable = false;
+        const size_t num_masks = regs.color_mask_common != 0 ? 1 : regs.color_mask.size();
+        for (size_t index = 0; index < num_masks; ++index) {
+            const auto& mask = regs.color_mask[index];
+            color_writable |= mask.R != 0 || mask.G != 0 || mask.B != 0 || mask.A != 0;
+        }
+        depth_writable = regs.depth_write_enabled != 0 || regs.stencil_enable != 0;
+        alias_trace_draws += trace ? 1 : 0;
+    }
+    // EDEN_NX2_ALIAS_LAZY: a target the draw cannot write is prepared like a sampled image, so
+    // its modification tick stays and SynchronizeAliases does not copy it into the aliases the
+    // next draws sample (it did once per draw: the tick was raised by every draw).
+    const auto prepare_target = [&](ImageViewId view_id, bool can_write) {
+        const bool mark = can_write || !lazy;
+        const bool invalidate = is_clear && IsFullClear(view_id);
+        if (!trace || !PreparesImage(slot_image_views, view_id)) [[likely]] {
+            PrepareImageView(view_id, mark, invalidate);
+            return;
+        }
+        const ImageId image_id = slot_image_views[view_id].image_id;
+        const u64 tick_before = slot_images[image_id].modification_tick;
+        PrepareImageView(view_id, mark, invalidate);
+        TraceAliasTarget(image_id, tick_before, can_write, mark);
+    };
     auto& flags = maxwell3d->dirty.flags;
     if (!flags[Dirty::RenderTargets]) {
         for (size_t index = 0; index < NUM_RT; ++index) {
-            ImageViewId& color_buffer_id = render_targets.color_buffer_ids[index];
-            PrepareImageView(color_buffer_id, true, is_clear && IsFullClear(color_buffer_id));
+            prepare_target(render_targets.color_buffer_ids[index], color_writable);
         }
-        const ImageViewId depth_buffer_id = render_targets.depth_buffer_id;
-        PrepareImageView(depth_buffer_id, true, is_clear && IsFullClear(depth_buffer_id));
+        prepare_target(render_targets.depth_buffer_id, depth_writable);
         return;
     }
 
@@ -1128,12 +1162,11 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     }
 
     for (size_t index = 0; index < NUM_RT; ++index) {
-        ImageViewId& color_buffer_id = render_targets.color_buffer_ids[index];
-        PrepareImageView(color_buffer_id, true, is_clear && IsFullClear(color_buffer_id));
+        prepare_target(render_targets.color_buffer_ids[index], color_writable);
     }
     const ImageViewId depth_buffer_id = render_targets.depth_buffer_id;
 
-    PrepareImageView(depth_buffer_id, true, is_clear && IsFullClear(depth_buffer_id));
+    prepare_target(depth_buffer_id, depth_writable);
 
     rt_active_mask = 0;
     rt_image_id = {};
@@ -4232,6 +4265,11 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
     bool any_rescaled = True(image.flags & ImageFlagBits::Rescaled);
     bool any_modified = True(image.flags & ImageFlagBits::GpuModified);
     u64 most_recent_tick = image.modification_tick;
+    alias_trace_dst_tick = image.modification_tick;
+    alias_trace_in_sync = true;
+    SCOPE_EXIT {
+        alias_trace_in_sync = false;
+    };
     for (const AliasedImage& aliased : image.aliased_images) {
         ImageBase& aliased_image = slot_images[aliased.id];
         if (image.modification_tick < aliased_image.modification_tick) {
@@ -4298,6 +4336,7 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
     } else {
         RefreshContents(image, image_id);
         if (!image.aliased_images.empty()) {
+            alias_trace_dst_write = is_modification;
             SynchronizeAliases(image_id);
         }
     }
@@ -4362,6 +4401,9 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
         // BC1 and BC3 blocks differ in size, so the host can't copy between them; both hold the
         // same guest data, which is uploaded from guest memory instead.
         return;
+    }
+    if (Nx2AliasTrace()) [[unlikely]] {
+        TraceAliasCopy(dst_id, src_id, copies);
     }
     // As in BlitImage: land a parked deferred clear before the copy overwrites the image.
     runtime.FlushDeferredClear();
@@ -4448,6 +4490,122 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
 
         runtime.ConvertImage(dst_framebuffer, dst_view, src_view);
     }
+}
+
+template <class P>
+void TextureCache<P>::TraceAliasTarget(ImageId image_id, u64 tick_before, bool can_write,
+                                       bool marked) {
+    AliasTraceTicks& ticks = alias_trace_ticks[image_id.index];
+    const u64 tick = slot_images[image_id].modification_tick;
+    if (can_write) {
+        ticks = {.genuine = tick, .fake = 0};
+        return;
+    }
+    if (ticks.fake == 0 || ticks.fake != tick_before) {
+        // Something else changed the image since the last draw that could not write it.
+        ticks.genuine = tick_before;
+    }
+    if (marked) {
+        ticks.fake = tick;
+    }
+}
+
+template <class P>
+void TextureCache<P>::TraceAliasCopy(ImageId dst_id, ImageId src_id,
+                                     std::span<const ImageCopy> copies) {
+    const ImageBase& dst = slot_images[dst_id];
+    const ImageBase& src = slot_images[src_id];
+    const auto is_target = [this](ImageId id) {
+        if ((rt_active_mask & (1u << NUM_RT)) != 0 && id == rt_depth_image_id) {
+            return true;
+        }
+        for (size_t index = 0; index < NUM_RT; ++index) {
+            if ((rt_active_mask & (1u << index)) != 0 && id == rt_image_id[index]) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto pair = std::ranges::find_if(alias_trace_pairs, [&](const AliasTracePair& entry) {
+        return entry.dst == dst_id && entry.src == src_id && entry.dst_addr == dst.gpu_addr &&
+               entry.src_addr == src.gpu_addr;
+    });
+    if (pair == alias_trace_pairs.end()) {
+        if (alias_trace_pairs.size() >= 256) {
+            ++alias_trace_untracked;
+            return;
+        }
+        AliasTracePair entry;
+        entry.dst = dst_id;
+        entry.src = src_id;
+        entry.dst_addr = dst.gpu_addr;
+        entry.src_addr = src.gpu_addr;
+        entry.dst_info = dst.info;
+        entry.src_info = src.info;
+        if (!copies.empty()) {
+            entry.extent = copies.front().extent;
+        }
+        entry.regions = static_cast<u32>(copies.size());
+        pair = alias_trace_pairs.insert(alias_trace_pairs.end(), entry);
+    }
+    ++pair->copies;
+    pair->dst_rt += is_target(dst_id) ? 1 : 0;
+    pair->src_rt += is_target(src_id) ? 1 : 0;
+    if (alias_trace_in_sync) {
+        ++pair->sync;
+        pair->dst_read += alias_trace_dst_write ? 0 : 1;
+        if (const auto ticks = alias_trace_ticks.find(src_id.index);
+            ticks != alias_trace_ticks.end() && ticks->second.fake != 0 &&
+            ticks->second.fake == src.modification_tick) {
+            ++pair->src_nowrite;
+            pair->needless += alias_trace_dst_tick >= ticks->second.genuine ? 1 : 0;
+        }
+    }
+    if (const auto now = std::chrono::steady_clock::now(); now >= alias_trace_next) {
+        if (alias_trace_next != std::chrono::steady_clock::time_point{}) {
+            ReportAliasTrace();
+        }
+        alias_trace_next = now + std::chrono::seconds{1};
+    }
+}
+
+template <class P>
+void TextureCache<P>::ReportAliasTrace() {
+    std::ranges::sort(alias_trace_pairs, std::greater<>{}, &AliasTracePair::copies);
+    u32 copies = 0;
+    u32 sync = 0;
+    u32 needless = 0;
+    for (const AliasTracePair& pair : alias_trace_pairs) {
+        copies += pair.copies;
+        sync += pair.sync;
+        needless += pair.needless;
+    }
+    LOG_INFO(HW_GPU,
+             "Nx2AliasTrace window copies={} sync_copies={} needless={} pairs={} untracked={} "
+             "draws={} lazy={}",
+             copies, sync, needless, alias_trace_pairs.size(), alias_trace_untracked,
+             alias_trace_draws, Nx2AliasLazy() ? 1 : 0);
+    const auto describe = [](ImageId id, GPUVAddr addr, const ImageInfo& info) {
+        return fmt::format("id:{} addr:{:#x} fmt:{} type:{} size:{}x{}x{} levels:{} layers:{} "
+                           "samples:{}",
+                           id.index, addr, info.format, static_cast<u32>(info.type),
+                           info.size.width, info.size.height, info.size.depth,
+                           info.resources.levels, info.resources.layers, info.num_samples);
+    };
+    for (size_t rank = 0; rank < alias_trace_pairs.size() && rank < 8; ++rank) {
+        const AliasTracePair& pair = alias_trace_pairs[rank];
+        LOG_INFO(HW_GPU,
+                 "Nx2AliasTrace pair rank={} copies={} sync={} needless={} src_nowrite={} "
+                 "src_rt={} dst_rt={} dst_read={} extent={}x{}x{} regions={} src=[{}] dst=[{}]",
+                 rank, pair.copies, pair.sync, pair.needless, pair.src_nowrite, pair.src_rt,
+                 pair.dst_rt, pair.dst_read, pair.extent.width, pair.extent.height,
+                 pair.extent.depth, pair.regions,
+                 describe(pair.src, pair.src_addr, pair.src_info),
+                 describe(pair.dst, pair.dst_addr, pair.dst_info));
+    }
+    alias_trace_pairs.clear();
+    alias_trace_untracked = 0;
+    alias_trace_draws = 0;
 }
 
 template <class P>

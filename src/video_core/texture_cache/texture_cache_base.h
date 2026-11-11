@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
@@ -59,6 +60,26 @@ struct ChannelState;
 } // namespace Tegra
 
 namespace VideoCommon {
+
+/// EDEN_NX2_ALIAS_LAZY=1 (experiment): a draw marks a render target modified only when its
+/// write masks let it write that target, so aliases sampled between such draws are not copied
+/// again. Off: every draw marks every bound target.
+[[nodiscard]] inline bool Nx2AliasLazy() noexcept {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_ALIAS_LAZY");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+/// EDEN_NX2_ALIAS_TRACE=1: once a second, the image pairs the texture cache copied most.
+[[nodiscard]] inline bool Nx2AliasTrace() noexcept {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_ALIAS_TRACE");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
 
 using Tegra::Texture::TICEntry;
 using Tegra::Texture::TSCEntry;
@@ -338,7 +359,8 @@ public:
 
     /// Update bound render targets and upload memory if necessary
     /// @param is_clear True when the render targets are being used for clears
-    void UpdateRenderTargets(bool is_clear);
+    /// @param is_draw True for a guest draw, whose write masks are in the 3D registers
+    void UpdateRenderTargets(bool is_clear, bool is_draw = false);
 
     /// Find a framebuffer with the currently bound render targets
     /// UpdateRenderTargets should be called before this
@@ -577,6 +599,12 @@ private:
     /// Synchronize image aliases, copying data if needed
     void SynchronizeAliases(ImageId image_id);
 
+    /// EDEN_NX2_ALIAS_TRACE: counts one image copy and logs the busiest pairs once a second.
+    void TraceAliasCopy(ImageId dst_id, ImageId src_id, std::span<const ImageCopy> copies);
+    void ReportAliasTrace();
+    /// EDEN_NX2_ALIAS_TRACE: a draw or clear bound the image as a render target.
+    void TraceAliasTarget(ImageId image_id, u64 tick_before, bool can_write, bool marked);
+
     /// Prepare an image view to be used
     void PrepareImageView(ImageViewId image_view_id, bool is_modification, bool invalidate);
 
@@ -668,6 +696,38 @@ private:
     /// True while a clear binds its render targets (UpdateRenderTargets(true)), so JoinImages can
     /// skip the upload of a new target the clear overwrites whole.
     bool clearing_render_targets = false;
+
+    struct AliasTracePair {
+        ImageId dst;
+        ImageId src;
+        GPUVAddr dst_addr{};
+        GPUVAddr src_addr{};
+        ImageInfo dst_info;
+        ImageInfo src_info;
+        Extent3D extent{};  ///< Of the first region of the first copy
+        u32 regions{};      ///< Of the first copy
+        u32 copies{};
+        u32 sync{};         ///< Copies made by SynchronizeAliases
+        u32 dst_rt{};       ///< The destination was a bound render target
+        u32 dst_read{};     ///< The destination was prepared to be read (sampled by the draw)
+        u32 src_rt{};       ///< The source was a bound render target
+        u32 src_nowrite{};  ///< The source's newest tick came from a draw that could not write it
+        u32 needless{};     ///< ... and the destination already held its last real change
+    };
+    /// A render target's ticks: the newest one from something that could write it, and the one
+    /// the last draw that could not write it left (0 when a writing draw came after).
+    struct AliasTraceTicks {
+        u64 genuine{};
+        u64 fake{};
+    };
+    std::vector<AliasTracePair> alias_trace_pairs;
+    std::unordered_map<u32, AliasTraceTicks> alias_trace_ticks;
+    std::chrono::steady_clock::time_point alias_trace_next{};
+    u32 alias_trace_draws{};
+    u32 alias_trace_untracked{};
+    u64 alias_trace_dst_tick{};   ///< SynchronizeAliases: the image's tick before it
+    bool alias_trace_in_sync{};   ///< SynchronizeAliases is copying
+    bool alias_trace_dst_write{}; ///< PrepareImage: the image is prepared to be written
     bool is_rescaling = false;
     u64 total_used_memory = 0;
     u64 minimum_memory;

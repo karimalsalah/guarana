@@ -2173,7 +2173,8 @@ void RasterizerVulkan::Clear(u32 layer_count) {
             if (can_defer_clear) {
                 scheduler.DeferColorClear(framebuffer, color_attachment, clear_value);
             } else {
-                scheduler.Record([color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
+                scheduler.RecordEmu(TraceCategory::ClearInPass, {clear_rect.rect.extent.width, clear_rect.rect.extent.height, 0},
+                    [color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
                     const VkClearAttachment attachment{
                         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                         .colorAttachment = color_attachment,
@@ -2221,7 +2222,8 @@ void RasterizerVulkan::Clear(u32 layer_count) {
         ds_value.depthStencil.stencil = regs.clear_stencil;
         scheduler.DeferDepthStencilClear(framebuffer, ds_value);
     } else {
-        scheduler.Record([clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
+        scheduler.RecordEmu(TraceCategory::ClearInPass, {clear_rect.rect.extent.width, clear_rect.rect.extent.height, 1},
+            [clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
                           clear_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
             VkClearAttachment attachment;
             attachment.aspectMask = aspect_flags;
@@ -2831,9 +2833,21 @@ void RasterizerVulkan::WaitForIdle() {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
 
-    query_cache.NotifyWFI();
+    // EDEN_NX2_DEFER_WFI=1 (experiment): every driver keeps the open render pass as MoltenVK
+    // does below. The query sync would end it too (QueryCacheRuntime::Barriers), so it waits
+    // until FlushWork finds no pass open, or the next fence (CommitAsyncFlushes) syncs it.
+    static const bool defer_wfi = [] {
+        const char* const value = std::getenv("EDEN_NX2_DEFER_WFI");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    if (defer_wfi && scheduler.IsRenderPassActive()) {
+        deferred_wfi_query_sync = true;
+    } else {
+        deferred_wfi_query_sync = false;
+        query_cache.NotifyWFI();
+    }
 
-    if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
+    if ((device.IsMoltenVK() || defer_wfi) && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
         fence_manager.SignalOrdering();
         return;
@@ -3683,6 +3697,13 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
 }
 
 void RasterizerVulkan::FlushWork() {
+    SCOPE_EXIT {
+        // The query sync a deferred WaitForIdle left (EDEN_NX2_DEFER_WFI).
+        if (deferred_wfi_query_sync && !scheduler.IsRenderPassActive()) [[unlikely]] {
+            deferred_wfi_query_sync = false;
+            query_cache.NotifyWFI();
+        }
+    };
 #ifdef __ANDROID__
     static constexpr bool android = true;
 #else

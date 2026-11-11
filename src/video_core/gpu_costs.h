@@ -31,6 +31,13 @@ struct GpuCostSnapshot {
             return fragment_hash == 0;
         }
     };
+    /// Emulator-issued work of one kind (image copies, uploads, its own compute passes, ...).
+    struct EmuEntry {
+        std::string category;
+        u32 count{};
+        double total_ms{};
+        double max_ms{};
+    };
     struct Pass {
         u32 width{};
         u32 height{};
@@ -46,8 +53,10 @@ struct GpuCostSnapshot {
     u64 frame{};
     double frame_span_ms{}; ///< First submission's start to the last one's end, -1 when unknown
     double submission_sum_ms{};
-    double timed_sum_ms{};    ///< Sum of the timed draws and dispatches
+    double timed_sum_ms{};    ///< Sum of the timed guest draws and dispatches
+    double emu_sum_ms{};      ///< Sum of the timed emulator work
     std::vector<Entry> work;  ///< Slowest first
+    std::vector<EmuEntry> emu; ///< Slowest first
     std::vector<Pass> passes; ///< Slowest first
     std::chrono::steady_clock::time_point when{};
 };

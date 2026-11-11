@@ -313,9 +313,14 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     frame->color_space = output.color_space;
 
     scheduler.RequestOutsideRenderPassOperationContext();
+    {
+        const auto& layout = render_window.GetFramebufferLayout();
+        scheduler.RecordEmuBegin(TraceCategory::Present, {layout.width, layout.height, 0});
+    }
     blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers,
                               render_window.GetFramebufferLayout(),
                               present_manager.SwapchainImageCount(), output_format.format, output);
+    scheduler.RecordEmuEnd();
 
 #ifdef HAS_LSFG
     // Frames predicted from this one: presented after it, unlike interpolated frames.
