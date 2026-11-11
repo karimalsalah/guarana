@@ -270,6 +270,7 @@ try
                       ? fmt::format("{} {}", device.GetVendorName(), GetDriverVersion(device))
                       : std::string{},
         .api = "Vulkan",
+        .integrated = device.IsIntegrated(),
     };
     Report();
 } catch (const vk::Exception& exception) {

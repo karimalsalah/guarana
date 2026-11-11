@@ -31,6 +31,7 @@ struct RendererDeviceInfo {
     std::string model;
     std::string driver;
     std::string api;
+    bool integrated{}; ///< An integrated GPU: it shares the package power budget with the CPU
 };
 
 enum class FrameGenState : u8 {

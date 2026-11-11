@@ -43,6 +43,7 @@
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
+#include "video_core/auto_shading_rate.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
@@ -413,6 +414,11 @@ GraphicsPipeline::GraphicsPipeline(
         num_image_elements += Shader::NumDescriptors(info->texture_descriptors);
         num_image_elements += Shader::NumDescriptors(info->image_descriptors);
         num_descriptor_entries += NumDescriptorEntries(*info);
+    }
+    if (device.IsKhrFragmentShadingRateSupported() && key.unique_hashes[5] != 0 &&
+        stage_infos[NUM_STAGES - 1].stores_frag_depth) {
+        // Coarse shading and shader depth writes do not mix on the devices this is for.
+        VideoCore::AutoShadingRate::NoteDepthWriter(key.unique_hashes[5]);
     }
     fragment_has_color0_output = stage_infos[NUM_STAGES - 1].stores_frag_color[0];
     // The guest leaves render target components the fragment shader doesn't output untouched,

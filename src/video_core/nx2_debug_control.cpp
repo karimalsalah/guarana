@@ -351,6 +351,18 @@ void SetShadingRates(std::span<const u64> hashes, ShadingRate rate, bool all) {
     shading_generation.fetch_add(1, std::memory_order_release);
 }
 
+void SetAutoShadingRates(std::vector<std::pair<u64, ShadingRate>> rates) {
+    std::erase_if(rates, [](const auto& entry) { return entry.second == ShadingRate{}; });
+    std::ranges::sort(rates, {}, &std::pair<u64, ShadingRate>::first);
+    std::scoped_lock lock{shading.mutex};
+    ReadShadingRateEnvLocked();
+    if (shading.table.auto_rates == rates) {
+        return;
+    }
+    shading.table.auto_rates = std::move(rates);
+    shading_generation.fetch_add(1, std::memory_order_release);
+}
+
 ShadingRateTable ShadingRates() {
     std::scoped_lock lock{shading.mutex};
     ReadShadingRateEnvLocked();
@@ -367,7 +379,17 @@ ShadingRate ShadingRateFor(u64 fragment_hash) {
     }
     const auto it = std::ranges::lower_bound(table.rates, fragment_hash, {},
                                              &std::pair<u64, ShadingRate>::first);
-    return it != table.rates.end() && it->first == fragment_hash ? it->second : table.fallback;
+    if (it != table.rates.end() && it->first == fragment_hash) {
+        return it->second;
+    }
+    if (table.auto_rates.empty() || table.fallback != ShadingRate{}) {
+        return table.fallback;
+    }
+    const auto automatic = std::ranges::lower_bound(table.auto_rates, fragment_hash, {},
+                                                    &std::pair<u64, ShadingRate>::first);
+    return automatic != table.auto_rates.end() && automatic->first == fragment_hash
+               ? automatic->second
+               : table.fallback;
 }
 
 } // namespace VideoCore::Nx2Debug

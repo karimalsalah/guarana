@@ -134,8 +134,12 @@ add_library(
     string_util.cpp
     string_util.h
     swap.h
+    power_governor.cpp
+    power_governor.h
     power_meter.cpp
     power_meter.h
+    power_policy.cpp
+    power_policy.h
     power_tuning.cpp
     power_tuning.h
     thread.cpp
@@ -181,7 +185,7 @@ set_source_files_properties(zbic_compression.cpp PROPERTIES
 if(WIN32)
     target_sources(common PRIVATE windows/timer_resolution.cpp
         windows/timer_resolution.h)
-    target_link_libraries(common PRIVATE cfgmgr32 dxgi ntdll)
+    target_link_libraries(common PRIVATE cfgmgr32 dxgi ntdll powrprof)
 endif()
 
 if(NOT WIN32)

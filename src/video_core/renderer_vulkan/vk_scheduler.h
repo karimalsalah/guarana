@@ -134,7 +134,7 @@ public:
             return;
         }
         const u32 query = trace_work_count * 2;
-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind};
+        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind, trace_pass_open};
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
         work();
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
@@ -569,6 +569,7 @@ private:
         /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
         std::array<u32, 3> size{};
         char kind{};
+        u32 pass{~u32{0}}; ///< Index of the timed render pass it ran in, TraceNoPass without one
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;

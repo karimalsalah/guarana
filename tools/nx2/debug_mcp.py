@@ -142,7 +142,11 @@ TOOLS = [
                        "draws of these fragment shader hashes (frame dump 'shaders') at the given "
                        "fragment size, from the next draw on; 1x1 restores. all=true sets the rate "
                        "of every shader not listed. With no hashes, lists the rates. Rates are "
-                       "clamped to what the device supports.",
+                       "clamped to what the device supports. auto=<fps> starts the governor "
+                       "(EDEN_NX2_VRS_AUTO) that coarsens the costliest fragment shaders while "
+                       "frames are slower than the target, auto=0 stops it; the reply has its "
+                       "table and deny lists under 'auto'. auto_deny/auto_allow add or remove "
+                       "hashes the governor must leave alone.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -150,6 +154,9 @@ TOOLS = [
                 "rate": {"type": "string",
                          "enum": ["1x1", "2x1", "1x2", "2x2", "4x2", "2x4", "4x4"]},
                 "all": {"type": "boolean"},
+                "auto": {"type": "number", "minimum": 0, "maximum": 1000},
+                "auto_deny": {"type": "array", "items": {"type": "string"}},
+                "auto_allow": {"type": "array", "items": {"type": "string"}},
             },
         },
     },
@@ -275,7 +282,8 @@ TOOLS = [
                        "since the previous call): package_w, cpu_w (cores) and gpu_w (integrated "
                        "GPU), valid false when nothing was measured; process_cpu_cores (CPU time "
                        "per wall time of the emulator), gpu_busy_ms of the last sampled frame, "
-                       "and the power_set switches.",
+                       "the power_set switches, and with EDEN_NX2_POWER_POLICY=igpu the session "
+                       "power scheme change (policy) and the spin governor (governor).",
         "inputSchema": {
             "type": "object",
             "properties": {"window_ms": {"type": "integer", "minimum": 0, "maximum": 10000}},
