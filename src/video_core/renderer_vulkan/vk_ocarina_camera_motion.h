@@ -62,10 +62,14 @@ public:
 
     /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.
+    /// `extent` is what the game drew, at the top left of `color` and `depth`. With a
+    /// `largest_extent` (EDEN_NX2_OOT_FSR_ANY) the extent may change from frame to frame: FSR 3.1
+    /// keeps images of the largest one and its history across the change.
     bool Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                 VkExtent2D output_extent, VkExtent2D target_extent, const std::array<f32, 16>& current,
                 const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh,
-                VkImage depth_image, u64 frame, std::array<f32, 2> jitter = {});
+                VkImage depth_image, u64 frame, std::array<f32, 2> jitter = {},
+                VkExtent2D largest_extent = {});
 
 private:
     struct Impl;

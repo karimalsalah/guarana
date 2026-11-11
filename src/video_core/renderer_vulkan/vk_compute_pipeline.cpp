@@ -410,8 +410,9 @@ void ComputePipeline::RunBuild() {
     build_task = nullptr;
 }
 
-bool ComputePipeline::CanReplaceOcarinaUpscale() const {
+bool ComputePipeline::CanReplaceOcarinaUpscale(bool output_pass) const {
     const bool known_shader =
+        output_pass ||
         shader_hash == 0xe40f5efb5480e692ULL || shader_hash == 0xef542df87cacfe9eULL ||
         shader_hash == Ocarina1440pShader ||
         shader_hash == OcarinaFullSizeShader;

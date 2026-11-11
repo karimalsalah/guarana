@@ -271,6 +271,10 @@ public:
     std::optional<f32> ocarina_fsr_lod_bias;
     /// Set when the Ocarina upscaler fails during the session: samplers drop the bias again.
     bool ocarina_fsr_failed{};
+    /// EDEN_NX2_OOT_FSR_ANY: the bias of the scale FSR last upscaled at, in quarter LODs below
+    /// zero (VideoCommon::OcarinaFsrLodBiasQuarters), in place of the session's bias and in
+    /// either console mode. 0 until FSR replaces a frame.
+    u8 ocarina_fsr_lod_quarters{};
     /// The game DLSS network's health check (ProbeGameDlssOutput), created on first use.
     std::unique_ptr<DlssNetworkProbe> dlss_network_probe;
     std::optional<std::chrono::steady_clock::time_point> fsr3_last_evaluation;
@@ -868,6 +872,8 @@ private:
         bool srgb_border;
         bool drop_compare;
         bool drop_lod_bias; ///< the image was written by the GPU: no Ocarina FSR LOD bias
+        /// TextureCacheRuntime::ocarina_fsr_lod_quarters in place of the session's bias, when set
+        u8 lod_bias_quarters;
         std::array<VkComponentSwizzle, 4> swizzle;
 
         bool operator==(const VariantKey&) const noexcept = default;
@@ -893,6 +899,7 @@ private:
 
     const Device* device_ptr{nullptr};
     const bool* ocarina_fsr_failed{}; ///< TextureCacheRuntime::ocarina_fsr_failed
+    const u8* ocarina_fsr_lod_quarters{}; ///< TextureCacheRuntime::ocarina_fsr_lod_quarters
     Tegra::Texture::TSCEntry descriptor{};
     VkSamplerCreateInfo base_ci{};
     VkSamplerReductionModeEXT reduction_mode{VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT};

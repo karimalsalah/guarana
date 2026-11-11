@@ -37,4 +37,38 @@ constexpr bool KeepOcarinaFsrLodBias(bool docked, bool upscaler_failed, bool gpu
     return docked && !upscaler_failed && !gpu_written;
 }
 
+/// EDEN_NX2_OOT_FSR_ANY: whether the temporal upscaler takes a scene drawn at
+/// render_width x render_height to an output of output_width x output_height: not smaller, at
+/// most 4x, and the same shape to within a render pixel (the game draws 854x480 for 1920x1080).
+constexpr bool OcarinaUpscaleFits(unsigned render_width, unsigned render_height,
+                                  unsigned output_width, unsigned output_height) {
+    if (render_width == 0 || render_height == 0 || output_width < render_width ||
+        output_height < render_height || output_width > render_width * 4ULL) {
+        return false;
+    }
+    const unsigned long long across = 1ULL * output_width * render_height;
+    const unsigned long long down = 1ULL * output_height * render_width;
+    const unsigned long long difference = across > down ? across - down : down - across;
+    return difference <= (output_width > output_height ? output_width : output_height);
+}
+
+/// EDEN_NX2_OOT_FSR_ANY: AMD's bias log2(render / output) - 1 for the upscale in use, in quarter
+/// LODs below zero as a sampler variant names it (6 is -1.5): 4 at 1:1, 6 for 3/4 scale, 9 for
+/// 854 -> 1920. 0 without sizes.
+constexpr unsigned OcarinaFsrLodBiasQuarters(unsigned render_width, unsigned output_width) {
+    if (render_width == 0 || output_width < render_width) {
+        return 0;
+    }
+    // log2(output / render) in quarters, rounded, without <cmath>: the largest q whose
+    // 2^((2q - 1) / 8) the ratio still reaches.
+    constexpr double eighth_root = 1.0905077326652577; // 2^(1/8)
+    const double ratio = static_cast<double>(output_width) / static_cast<double>(render_width);
+    unsigned quarters = 0;
+    for (double bound = eighth_root; quarters < 8 && ratio >= bound;
+         bound *= eighth_root * eighth_root) {
+        ++quarters;
+    }
+    return 4 + quarters;
+}
+
 } // namespace VideoCommon

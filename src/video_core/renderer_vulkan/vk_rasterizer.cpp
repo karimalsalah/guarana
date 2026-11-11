@@ -1204,7 +1204,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                 oot_effects_scene = scene.Handle(Shader::TextureType::Color2D);
                 oot_effects_address = scene.gpu_addr;
                 oot_effects_frame = render_trace_frame;
-                oot_live_dlss->SaveEffectsBase(oot_effects_scene, oot_motion.extent,
+                oot_live_dlss->SaveEffectsBase(oot_effects_scene, oot_motion.drawn,
                                                render_trace_frame);
             }
         }
@@ -2355,8 +2355,24 @@ void RasterizerVulkan::DispatchCompute() {
         }
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
+    // EDEN_NX2_OOT_FSR_ANY: the output pass of any resolution step, as the engine knows it.
+    const bool any_step_pass =
+        OcarinaFsrAnyStep() && kepler_compute->IsNativeMode() &&
+        kepler_compute->IsOotOutputPass(native_key, pipeline->ShaderHash());
+    if (any_step_pass) {
+        oot_fsr_pass_frame = render_trace_frame;
+        static std::set<u64> warned;
+        if (!pipeline->CanReplaceOcarinaUpscale(true) && warned.size() < 64 &&
+            warned.insert(pipeline->ShaderHash()).second) {
+            LOG_WARNING(Render_Vulkan,
+                        "Ocarina temporal: output pass {:016x} (key {:016x}) is left to the game: "
+                        "its bindings are not ones the replacement can stand in for",
+                        pipeline->ShaderHash(), native_key);
+        }
+    }
     // The full-size 1080p pass is replaced only by FSR (native AA); DLAA through it is untested.
-    const bool can_replace = OcarinaTemporalEnabled() && pipeline->CanReplaceOcarinaUpscale() &&
+    const bool can_replace = OcarinaTemporalEnabled() &&
+                             pipeline->CanReplaceOcarinaUpscale(any_step_pass) &&
                              (pipeline->ShaderHash() != ComputePipeline::OcarinaFullSizeShader ||
                               oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr) &&
                              !indirect_address && !frame_dump.Capturing();
@@ -3107,6 +3123,11 @@ bool RasterizerVulkan::OcarinaTemporalEnabled() const {
     return *oot_backend != VideoCommon::OcarinaUpscaleBackend::Native;
 }
 
+bool RasterizerVulkan::OcarinaFsrAnyStep() const {
+    return VideoCommon::OotNetwork::FsrAnyStepRequested() && OcarinaTemporalEnabled() &&
+           oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr;
+}
+
 bool RasterizerVulkan::OcarinaGuideOnly() const {
     return ExtrapolationRequested() && !oot_guide_failed &&
            Settings::values.frame_gen.GetValue() &&
@@ -3152,15 +3173,32 @@ void RasterizerVulkan::TrackOcarinaCamera() {
         device_memory.ReadBlockUnsafe(binding.device_addr, camera.data(), sizeof(camera));
         constexpr size_t extent_offset = 0x120 / sizeof(f32);
         constexpr size_t projection_wz = 0xa8 / sizeof(f32);
-        if (camera[extent_offset] != static_cast<f32>(color.size.width) ||
-            camera[extent_offset + 1] != static_cast<f32>(color.size.height) ||
-            camera[projection_wz] != -1.0f || camera[projection_wz + 1] != 0.0f) {
+        VkExtent2D drawn{color.size.width, color.size.height};
+        bool sized = camera[extent_offset] == static_cast<f32>(color.size.width) &&
+                     camera[extent_offset + 1] == static_cast<f32>(color.size.height);
+        if (OcarinaFsrAnyStep()) {
+            // A low resolution step renders into part of a wider target (854x480 of 864x480).
+            // The render area is the scene when it is all but the target; the camera may then
+            // describe either.
+            const auto& clip = maxwell3d->regs.surface_clip;
+            const u32 clip_width = clip.width, clip_height = clip.height;
+            if (clip.x == 0 && clip.y == 0 && clip_width != 0 && clip_height != 0 &&
+                clip_width <= drawn.width && clip_height <= drawn.height &&
+                drawn.width - clip_width < 32 && drawn.height - clip_height < 32) {
+                drawn = {clip_width, clip_height};
+            }
+            sized = sized ||
+                    (std::abs(camera[extent_offset] - static_cast<f32>(drawn.width)) < 1.0f &&
+                     std::abs(camera[extent_offset + 1] - static_cast<f32>(drawn.height)) < 1.0f);
+        }
+        if (!sized || camera[projection_wz] != -1.0f || camera[projection_wz + 1] != 0.0f) {
             return;
         }
         const std::span values{camera};
         oot_camera_sample_frame = render_trace_frame;
         oot_motion.camera_channel = gpu_memory;
         oot_motion.extent = {color.size.width, color.size.height};
+        oot_motion.drawn = drawn;
         std::copy_n(values.begin() + 0x30 / sizeof(f32), 16, oot_motion.current.begin());
         std::copy_n(values.begin() + 0x180 / sizeof(f32), 16, oot_motion.previous.begin());
     });
@@ -3188,13 +3226,17 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
     // half-size passes and full-screen passes (which keep the depth bound without using it, as
     // #678 found, some with depth writes on: with the test off nothing writes depth) stay put.
     const auto& regs = maxwell3d->regs;
-    if (oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr && oot_motion.extent.width != 0 &&
+    // EDEN_NX2_OOT_FSR_ANY: the scene size follows the game's dynamic resolution, and a frame's
+    // first scene draws can come before its camera tells the size. The size is the last replaced
+    // frame's, so the first frame of another step is drawn without an offset, all of it.
+    const VkExtent2D scene = OcarinaFsrAnyStep() ? oot_fsr_scene : oot_motion.extent;
+    if (oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr && scene.width != 0 &&
         oot_dlss_frame && *oot_dlss_frame + 1 >= render_trace_frame && regs.depth_test_enable) {
         const auto& targets = texture_cache.GetRenderTargets();
         if (targets.depth_buffer_id) {
             const auto& depth = texture_cache.GetImageView(targets.depth_buffer_id);
-            if (depth.size.width == oot_motion.extent.width &&
-                depth.size.height == oot_motion.extent.height && !depth.IsRescaled()) {
+            if (depth.size.width == scene.width && depth.size.height == scene.height &&
+                !depth.IsRescaled()) {
                 // Halton (2, 3) with AMD's phase count for the last FSR frame's scale.
                 const u32 index = static_cast<u32>(render_trace_frame % oot_jitter_phases) + 1;
                 want = {Halton(index, 2) - 0.5f, Halton(index, 3) - 0.5f};
@@ -3310,9 +3352,15 @@ void RasterizerVulkan::ReadOcarinaActor(OcarinaActorMesh& mesh) {
 /// Track the scene depth on its reader dispatch, or try to replace a recognized upscale dispatch.
 bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace) {
     constexpr u64 depth_reader = 0x1fc7a0423116281fULL;
+    // EDEN_NX2_OOT_FSR_ANY: a second program read the same depth through the same handle in the
+    // same scenes. It gives the depth of frames the first one leaves without.
+    constexpr u64 second_depth_reader = 0x3456eac1b79ed5b8ULL;
+    const bool any_step = OcarinaFsrAnyStep();
+    const bool second_reader = any_step && pipeline.ShaderHash() == second_depth_reader &&
+                               oot_motion.depth_frame != render_trace_frame;
     const bool pass_1440p = replace && pipeline.ShaderHash() == ComputePipeline::Ocarina1440pShader;
     // The guide for frame extrapolation needs the depth too; it replaces nothing.
-    if ((!replace && pipeline.ShaderHash() != depth_reader) ||
+    if ((!replace && pipeline.ShaderHash() != depth_reader && !second_reader) ||
         !(replace ? OcarinaTemporalEnabled() : OcarinaMotionTracked())) {
         return false;
     }
@@ -3353,10 +3401,22 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         return false;
     }
     // Logs why the game's own upscale draws, when the reason changes and every 120th repeat.
-    const auto fail = [this](const char* reason) {
+    // With EDEN_NX2_OOT_FSR_ANY as a warning that names the pass and the sizes known so far.
+    VkExtent2D output_size{};
+    const auto fail = [&](const char* reason) {
         if (reason != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
-            LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({})",
-                     render_trace_frame, reason);
+            if (any_step) {
+                LOG_WARNING(Render_Vulkan,
+                            "Ocarina temporal: the game's upscale draws frame {} ({}): pass "
+                            "{:016x}, scene {}x{} drawn {}x{}, output {}x{}",
+                            render_trace_frame, reason, pipeline.ShaderHash(),
+                            oot_motion.extent.width, oot_motion.extent.height,
+                            oot_motion.drawn.width, oot_motion.drawn.height, output_size.width,
+                            output_size.height);
+            } else {
+                LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({})",
+                         render_trace_frame, reason);
+            }
         }
         if (reason != oot_fallback_reason) {
             oot_fallback_reason = reason;
@@ -3401,19 +3461,34 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
     auto& target = texture_cache.GetImageView(written[0]);
     using VideoCore::Surface::PixelFormat;
     const auto extent = oot_motion.extent;
+    // What the game drew of the scene images, the upscaler's render size: all of them without
+    // EDEN_NX2_OOT_FSR_ANY.
+    const auto drawn = oot_motion.drawn;
+    output_size = {target.size.width, target.size.height};
     const bool native_size = pipeline.ShaderHash() == ComputePipeline::OcarinaFullSizeShader;
+    // With EDEN_NX2_OOT_FSR_ANY any scale of the same shape, for any resolution step's pass.
     const bool valid_extents =
         pass_1440p ? extent.width == 2560 && extent.height == 1440 && target.size.width == 2560 &&
                          target.size.height == 1440
+        : any_step ? drawn.width <= extent.width && drawn.height <= extent.height &&
+                         VideoCommon::OcarinaUpscaleFits(drawn.width, drawn.height,
+                                                         target.size.width, target.size.height)
         : native_size ? target.size.width == extent.width && target.size.height == extent.height
                       : target.size.width == extent.width * 4 / 3 &&
                             target.size.height == extent.height * 4 / 3;
+    if (any_step && !valid_extents) {
+        return fail("the scene does not scale to the output");
+    }
+    // The upscale's input has the scene's size; with EDEN_NX2_OOT_FSR_ANY it holds what was drawn.
+    const bool color_sized =
+        any_step ? color.size.width >= drawn.width && color.size.height >= drawn.height
+                 : color.size.width == extent.width && color.size.height == extent.height;
     if (!valid_extents || !color.BackingImage() || !target.BackingImage() ||
         color.IsRescaled() || target.IsRescaled() ||
         color.Samples() != VK_SAMPLE_COUNT_1_BIT || target.Samples() != VK_SAMPLE_COUNT_1_BIT ||
         color.range != VideoCommon::SubresourceRange{} || target.range != VideoCommon::SubresourceRange{} ||
         color.format != PixelFormat::E5B9G9R9_FLOAT || target.format != PixelFormat::B10G11R11_FLOAT ||
-        color.size.width != extent.width || color.size.height != extent.height ||
+        !color_sized ||
         color.ImageHandle() == target.ImageHandle() || depth.ImageHandle() == target.ImageHandle()) {
         return fail("unexpected upscale images");
     }
@@ -3451,10 +3526,16 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         const VkExtent2D output_extent = native_resolution ? extent
                                          : upscale_4k      ? VkExtent2D{3840, 2160}
                                                            : target_extent;
+        // EDEN_NX2_OOT_FSR_ANY: the game's dynamic resolution tops out at 3/4 of its output. FSR
+        // keeps images of that size, so a resolution step costs it neither them nor its history.
+        const VkExtent2D largest = any_step && !pass_1440p
+                                       ? VkExtent2D{target_extent.width * 3 / 4,
+                                                    target_extent.height * 3 / 4}
+                                       : VkExtent2D{};
         const bool recorded = oot_live_dlss->Record(color_view, depth.DepthView(), target_view,
-                                                   extent, output_extent, target_extent, oot_motion.current,
+                                                   drawn, output_extent, target_extent, oot_motion.current,
                                                    oot_motion.previous, mesh, depth.ImageHandle(),
-                                                   render_trace_frame, jitter);
+                                                   render_trace_frame, jitter, largest);
         if (!recorded) {
             return fail("temporal upscaler declined the frame");
         }
@@ -3466,9 +3547,39 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         oot_dlss_frame = render_trace_frame;
         // AMD's jitter phase count for FSR: 8 * (output / render width)^2, so 18 for 1440p -> 4K
         // and 8 for native AA.
-        const f32 ratio = static_cast<f32>(output_extent.width) / static_cast<f32>(extent.width);
+        const f32 ratio = static_cast<f32>(output_extent.width) / static_cast<f32>(drawn.width);
         oot_jitter_phases = std::max(1U, static_cast<u32>(8.0f * ratio * ratio));
         oot_fallback_reason = nullptr;
+        if (any_step) {
+            // The next frame's scene draws are offset when they have this size.
+            oot_fsr_scene = extent;
+            // Mipmapped textures take the bias of the scale in use (Sampler::MakeKey).
+            const u32 lod_quarters =
+                VideoCommon::OcarinaFsrLodBiasQuarters(drawn.width, output_extent.width);
+            texture_cache_runtime.ocarina_fsr_lod_quarters = static_cast<u8>(lod_quarters);
+            const bool new_sizes = drawn.width != oot_fsr_render.width ||
+                                   drawn.height != oot_fsr_render.height ||
+                                   output_extent.width != oot_fsr_output.width ||
+                                   output_extent.height != oot_fsr_output.height;
+            if (new_sizes && oot_fsr_size_logs < 512) {
+                ++oot_fsr_size_logs;
+                LOG_INFO(Render_Vulkan,
+                         "Ocarina temporal: FSR replaces pass {:016x} from frame {}: {}x{} of "
+                         "{}x{} -> {}x{}, {} jitter phases, texture LOD bias {:.2f}",
+                         pipeline.ShaderHash(), render_trace_frame, drawn.width, drawn.height,
+                         extent.width, extent.height, output_extent.width, output_extent.height,
+                         oot_jitter_phases, -0.25f * static_cast<f32>(lod_quarters));
+            }
+            oot_fsr_render = drawn;
+            oot_fsr_output = output_extent;
+            // The frame before the game draws its HUD over it in another image, which tells
+            // frame extrapolation the HUD apart (as OotNetworkBypassed keeps it).
+            if (ExtrapolationRequested() && !upscale_4k) {
+                oot_fsr_hud_scene = target.Handle(Shader::TextureType::Color2D);
+                oot_fsr_hud_extent = target_extent;
+                oot_fsr_hud_frame = render_trace_frame;
+            }
+        }
         return true;
     } catch (const vk::Exception& error) {
         LOG_WARNING(Render_Vulkan, "Ocarina temporal upscaling unavailable: {}", error.what());
@@ -3790,6 +3901,32 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         oot_hud_composite = info.image_view;
         oot_hud_frame = render_trace_frame;
     }
+    // EDEN_NX2_OOT_FSR_ANY: the same for the frame FSR drew at the game's output size.
+    if (oot_fsr_hud_frame == render_trace_frame && oot_fsr_hud_scene && info.image_view &&
+        !scaled && info.width == oot_fsr_hud_extent.width &&
+        info.height == oot_fsr_hud_extent.height &&
+        image_view->format == VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM) {
+        oot_hud_composite = info.image_view;
+        oot_hud_frame = render_trace_frame;
+    }
+    // EDEN_NX2_OOT_FSR_ANY: a frame with a scene and no dispatch known as the game's upscale,
+    // logged as TryOcarinaUpscale logs the frames it leaves to the game.
+    if (oot_camera_sample_frame == render_trace_frame &&
+        oot_fsr_pass_frame != render_trace_frame && OcarinaFsrAnyStep()) {
+        static const char* const unknown_pass = "no dispatch known as the game's upscale";
+        if (unknown_pass != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
+            LOG_WARNING(Render_Vulkan,
+                        "Ocarina temporal: the game's upscale draws frame {} ({}): scene {}x{} "
+                        "drawn {}x{}; EDEN_NX2_OOT_BYPASS_OUTPUT=<shader hash> names a pass",
+                        render_trace_frame, unknown_pass, oot_motion.extent.width,
+                        oot_motion.extent.height, oot_motion.drawn.width,
+                        oot_motion.drawn.height);
+        }
+        if (unknown_pass != oot_fallback_reason) {
+            oot_fallback_reason = unknown_pass;
+            oot_fallback_repeats = 0;
+        }
+    }
     return info;
 }
 
@@ -3810,7 +3947,13 @@ std::optional<ExtrapolationSource> RasterizerVulkan::OcarinaExtrapolationSource(
     }
     auto source = oot_live_dlss->Extrapolation(render_trace_frame);
     if (source && oot_hud_frame == render_trace_frame) {
-        source->hud_reference = oot_live_dlss->SceneReferenceView();
+        if (oot_fsr_hud_frame == render_trace_frame) {
+            // EDEN_NX2_OOT_FSR_ANY: the game's own output image, as for a bypassed frame.
+            source->hud_reference = oot_fsr_hud_scene;
+            source->hud_reference_linear = true;
+        } else {
+            source->hud_reference = oot_live_dlss->SceneReferenceView();
+        }
         source->hud_composite = oot_hud_composite;
     }
     return source;

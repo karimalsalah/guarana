@@ -7,12 +7,15 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <list>
 #include <memory>
 #include <utility>
 
 #include "common/assert.h"
+#include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -47,6 +50,34 @@
 #include "video_core/shader_notify.h"
 
 namespace Tegra {
+
+namespace {
+/// EDEN_NX2_GPU_TIME_SCALE=<float> (experiment, 1 without it): multiplies the GPU time a Switch 2
+/// title measures with report timestamps, on top of GPU Clocks (gpu_timestamp.h). A title that
+/// sizes its dynamic resolution from that time renders lower with a larger value; the time never
+/// exceeds the real one, so with GPU Clocks at Normal the useful range is 0 to 1.
+f64 AmpereTimeScale() {
+    static const f64 scale = [] {
+        const char* const text = std::getenv("EDEN_NX2_GPU_TIME_SCALE");
+        if (text == nullptr || text[0] == '\0') {
+            return 1.0;
+        }
+        char* end = nullptr;
+        const f64 value = std::strtod(text, &end);
+        if (end == text || !std::isfinite(value) || value <= 0.0) {
+            LOG_WARNING(HW_GPU, "EDEN_NX2_GPU_TIME_SCALE={} is not a positive number; ignored",
+                        text);
+            return 1.0;
+        }
+        LOG_INFO(HW_GPU,
+                 "EDEN_NX2_GPU_TIME_SCALE: Switch 2 titles see {} x the GPU time since each "
+                 "present that GPU Clocks gives them, at most the real time",
+                 value);
+        return value;
+    }();
+    return scale;
+}
+} // Anonymous namespace
 
 struct GPU::Impl {
     explicit Impl(Core::System& system_, bool is_async_, bool use_nvdec_)
@@ -201,7 +232,7 @@ struct GPU::Impl {
     [[nodiscard]] u64 GetTicks() const {
         return ReadGpuTimestamp(system.CoreTiming(), g_nx2_ampere.load(std::memory_order_relaxed),
                                 Settings::values.gpu_clock.GetValue(),
-                                ampere_anchor.load(std::memory_order_relaxed));
+                                ampere_anchor.load(std::memory_order_relaxed), AmpereTimeScale());
     }
 
     void RendererFrameEndNotify() {
