@@ -1802,7 +1802,16 @@ void Device::RemoveUnsuitableExtensions() {
     // VK_EXT_mesh_shader: Switch 2 titles draw some geometry with task and mesh programs. Only
     // the two stages are used; the multiview, shading rate and query features need more.
     features.mesh_shader.multiviewMeshShader = VK_FALSE;
-    features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+    // The shading rate one is kept for EDEN_NX2_MESH_OUT bit 2 with EDEN_NX2_VRS (see below).
+    const char* const mesh_out_env{std::getenv("EDEN_NX2_MESH_OUT")};
+    const bool mesh_primitive_rate{
+        std::getenv("EDEN_NX2_VRS") != nullptr && mesh_out_env != nullptr &&
+        (std::strtoul(mesh_out_env, nullptr, 0) & 2) != 0 &&
+        features.mesh_shader.primitiveFragmentShadingRateMeshShader &&
+        features.fragment_shading_rate.primitiveFragmentShadingRate};
+    if (!mesh_primitive_rate) {
+        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+    }
     features.mesh_shader.meshShaderQueries = VK_FALSE;
     extensions.mesh_shader = features.mesh_shader.taskShader && features.mesh_shader.meshShader;
     // EDEN_NX2_FORCE_MESH_FALLBACK=1: leave VK_EXT_mesh_shader disabled, so task/mesh draws take
@@ -1815,13 +1824,29 @@ void Device::RemoveUnsuitableExtensions() {
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
     // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
-    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used.
-    features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
+    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used, and the per-primitive
+    // rate of native mesh programs with EDEN_NX2_MESH_OUT bit 2.
+    if (!mesh_primitive_rate || !extensions.mesh_shader) {
+        features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
+    }
     features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
     extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
                                        features.fragment_shading_rate.pipelineFragmentShadingRate &&
                                        instance_version >= VK_API_VERSION_1_2 &&
                                        std::getenv("EDEN_NX2_VRS") != nullptr;
+    if (!extensions.fragment_shading_rate ||
+        !features.fragment_shading_rate.primitiveFragmentShadingRate) {
+        // The mesh feature needs the primitive rate one.
+        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+    }
+    if (mesh_primitive_rate) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_MESH_OUT: per-primitive shading rate of mesh programs {} (multiple "
+                 "viewports {}, non-trivial combiners {})",
+                 IsMeshPrimitiveShadingRateSupported() ? "enabled" : "not available",
+                 properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports,
+                 properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps);
+    }
     fragment_shading_rates.clear();
     if (extensions.fragment_shading_rate) {
         std::string rates;

@@ -121,6 +121,10 @@ struct Profile {
     u32 max_subgroup_size{};
     /// Experiment (EDEN_NX2_MESH_CULL): culling added to native mesh programs, MESH_CULL_* bits
     u32 mesh_cull{};
+    /// Experiment (EDEN_NX2_MESH_OUT): cheaper native mesh program outputs, MESH_OUT_* bits, and
+    /// the bounding box size in pixels under which MESH_OUT_RATE shades a triangle 2x2
+    u32 mesh_out{};
+    f32 mesh_rate_pixels{4.0f};
 
     u32 gl_max_compute_smem_size{};
 

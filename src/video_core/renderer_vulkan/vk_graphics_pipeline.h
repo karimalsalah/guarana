@@ -281,6 +281,12 @@ public:
         return std::ranges::any_of(stage_infos, &Shader::Info::uses_mesh_cull_viewport);
     }
 
+    /// Mesh pipeline whose mesh program may write a per-primitive shading rate
+    /// (Shader::RuntimeInfo::mesh_out).
+    [[nodiscard]] bool UsesMeshShadingRate() const noexcept {
+        return std::ranges::any_of(stage_infos, &Shader::Info::uses_mesh_shading_rate);
+    }
+
     /// Records viewport 0 (x, y, width, height in host pixels) for that test.
     void PushMeshCullViewport(const std::array<f32, 4>& viewport);
 

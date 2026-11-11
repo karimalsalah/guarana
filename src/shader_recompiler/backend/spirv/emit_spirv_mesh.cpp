@@ -57,9 +57,122 @@ void If(EmitContext& ctx, Id condition, Func&& body) {
     ctx.AddLabel(merge_label);
 }
 
+// Word `address >> shift` of a region of `count` words; a constant in range needs no clamp.
+Id RegionIndex(EmitContext& ctx, const IR::Value& address, u32 shift, u32 count) {
+    if (address.IsImmediate() && (address.U32() >> shift) < count) {
+        return ctx.Const(address.U32() >> shift);
+    }
+    const Id def{ctx.Def(address)};
+    return Clamped(ctx,
+                   shift != 0 ? ctx.OpShiftRightLogical(ctx.U32[1], def, ctx.Const(shift)) : def,
+                   count);
+}
+
+bool ConvertsDepth(const EmitContext& ctx) {
+    return ctx.runtime_info.convert_depth_mode && !ctx.profile.support_native_ndc &&
+           Sirit::ValidId(ctx.output_position);
+}
+
+// MESH_OUT_VECTOR: CopyLines (and, for Position, ConvertDepth) with one store per output vector.
+// Elements without a line are 0, 0, 0, 1. Returns false when the bit is not set.
+bool CopyLineVectors(EmitContext& ctx, Id index, u32 base, u32 num_lines,
+                     const std::vector<EmitContext::MeshLineTarget>& targets) {
+    if ((ctx.mesh_out & MESH_OUT_VECTOR) == 0) {
+        return false;
+    }
+    const Id group{ctx.OpShiftRightLogical(ctx.U32[1], index, ctx.Const(5U))};
+    const Id slot{ctx.OpBitwiseAnd(ctx.U32[1], index, ctx.Const(31U))};
+    const Id first{ctx.OpIAdd(ctx.U32[1],
+                              ctx.OpIMul(ctx.U32[1], group, ctx.Const(num_lines * 32)),
+                              ctx.OpIAdd(ctx.U32[1], slot, ctx.Const(base)))};
+    const auto load = [&](u32 line) {
+        return ctx.OpLoad(ctx.U32[1],
+                          SharedWord(ctx, ctx.mesh_attributes,
+                                     ctx.OpIAdd(ctx.U32[1], first, ctx.Const(line * 32))));
+    };
+    const Id output_vector{ctx.TypePointer(spv::StorageClass::Output, ctx.F32[4])};
+    std::vector<bool> copied(num_lines);
+    for (u32 line = 0; line < num_lines; ++line) {
+        const EmitContext::MeshLineTarget& target{targets[line]};
+        if (!Sirit::ValidId(target.variable) || copied[line]) {
+            continue;
+        }
+        if (target.element >= 4 || !target.is_float) {
+            const Id word{load(line)};
+            const Id pointer_type{target.is_float ? ctx.output_f32 : ctx.output_u32};
+            const Id pointer{target.element == ~0U
+                                 ? ctx.OpAccessChain(pointer_type, target.variable, index)
+                                 : ctx.OpAccessChain(pointer_type, target.variable, index,
+                                                     ctx.Const(target.element))};
+            ctx.OpStore(pointer, target.is_float ? ctx.OpBitcast(ctx.F32[1], word) : word);
+            continue;
+        }
+        std::array<Id, 4> elements{};
+        for (u32 other = line; other < num_lines; ++other) {
+            const EmitContext::MeshLineTarget& part{targets[other]};
+            if (part.variable.value != target.variable.value || part.element >= 4 ||
+                !part.is_float) {
+                continue;
+            }
+            elements[part.element] = ctx.OpBitcast(ctx.F32[1], load(other));
+            copied[other] = true;
+        }
+        if (target.variable.value == ctx.output_position.value && ConvertsDepth(ctx) &&
+            Sirit::ValidId(elements[2]) && Sirit::ValidId(elements[3])) {
+            elements[2] = ctx.OpFMul(ctx.F32[1],
+                                     ctx.OpFAdd(ctx.F32[1], elements[2], elements[3]),
+                                     ctx.Const(0.5f));
+        }
+        for (u32 element = 0; element < 4; ++element) {
+            if (!Sirit::ValidId(elements[element])) {
+                elements[element] = ctx.Const(element == 3 ? 1.0f : 0.0f);
+            }
+        }
+        ctx.OpStore(ctx.OpAccessChain(output_vector, target.variable, index),
+                    ctx.OpCompositeConstruct(ctx.F32[4], std::span<const Id>(elements)));
+    }
+    return true;
+}
+
+// MESH_OUT_RATE: the shading rate of the triangle CulledTriangle just tested, for the
+// invocation's next primitive group: 2x2 when it is in front of the camera and its bounding box
+// is under Profile::mesh_rate_pixels in both directions, else 1x1.
+void PushShadingRate(EmitContext& ctx) {
+    if (!Sirit::ValidId(ctx.mesh_shading_rate)) {
+        return;
+    }
+    const auto& extent{ctx.mesh_triangle_extent};
+    Id rate{ctx.SConst(0)};
+    if (Sirit::ValidId(extent[0]) && Sirit::ValidId(extent[1]) && Sirit::ValidId(extent[2])) {
+        const Id limit{ctx.Const(ctx.profile.mesh_rate_pixels)};
+        // Ordered comparisons: a NaN size keeps 1x1.
+        const Id tiny{ctx.OpLogicalAnd(
+            ctx.U1, extent[0],
+            ctx.OpLogicalAnd(ctx.U1, ctx.OpFOrdLessThan(ctx.U1, extent[1], limit),
+                             ctx.OpFOrdLessThan(ctx.U1, extent[2], limit)))};
+        // Vertical2Pixels | Horizontal2Pixels
+        rate = ctx.OpSelect(ctx.S32[1], tiny, ctx.SConst(5), rate);
+    }
+    ctx.mesh_triangle_extent = {};
+    ctx.mesh_primitive_rates.push_back(rate);
+}
+
+void StoreShadingRate(EmitContext& ctx, Id primitive, size_t group) {
+    if (!Sirit::ValidId(ctx.mesh_shading_rate)) {
+        return;
+    }
+    const Id output_s32{ctx.TypePointer(spv::StorageClass::Output, ctx.S32[1])};
+    ctx.OpStore(ctx.OpAccessChain(output_s32, ctx.mesh_shading_rate, primitive),
+                group < ctx.mesh_primitive_rates.size() ? ctx.mesh_primitive_rates[group]
+                                                        : ctx.SConst(0));
+}
+
 // Copies the lines of element `index` (a vertex or a primitive) from the attribute region.
 void CopyLines(EmitContext& ctx, Id index, u32 base, u32 num_lines,
                const std::vector<EmitContext::MeshLineTarget>& targets) {
+    if (CopyLineVectors(ctx, index, base, num_lines, targets)) {
+        return;
+    }
     // Word of line 0: base + (index / 32) * num_lines * 32 + index % 32.
     const Id group{ctx.OpShiftRightLogical(ctx.U32[1], index, ctx.Const(5U))};
     const Id slot{ctx.OpBitwiseAnd(ctx.U32[1], index, ctx.Const(31U))};
@@ -86,6 +199,9 @@ void CopyLines(EmitContext& ctx, Id index, u32 base, u32 num_lines,
 
 // OpenGL-style clip space: z = (z + w) / 2, from the stage buffer's position lines.
 void ConvertDepth(EmitContext& ctx, Id vertex) {
+    if ((ctx.mesh_out & MESH_OUT_VECTOR) != 0) {
+        return; // CopyLineVectors stored the converted z
+    }
     const auto& lines{ctx.mesh_info.vertex_lines};
     const auto z_line{std::ranges::find(lines, static_cast<u32>(IR::Attribute::PositionZ))};
     const auto w_line{std::ranges::find(lines, static_cast<u32>(IR::Attribute::PositionW))};
@@ -330,6 +446,11 @@ Id CulledTriangle(EmitContext& ctx, Id primitive, Id count, Id viewport) {
                 ctx.OpFloor(ctx.F32[1], ctx.OpFSub(ctx.F32[1], high, ctx.Const(0.5f - margin)))};
             no_centre = ctx.OpLogicalOr(ctx.U1, no_centre,
                                         ctx.OpFOrdEqual(ctx.U1, first_centre, last_centre));
+            if (Sirit::ValidId(ctx.mesh_shading_rate)) {
+                // For PushShadingRate.
+                ctx.mesh_triangle_extent[0] = in_front;
+                ctx.mesh_triangle_extent[element + 1] = ctx.OpFSub(ctx.F32[1], high, low);
+            }
         }
         culled = ctx.OpLogicalOr(ctx.U1, culled, ctx.OpLogicalAnd(ctx.U1, in_front, no_centre));
     }
@@ -367,6 +488,7 @@ void MeshEpilogue(EmitContext& ctx) {
         for (u32 first = 0; first < mesh.max_primitives; first += threads) {
             const Id primitive{ctx.OpIAdd(ctx.U32[1], invocation, ctx.Const(first))};
             culled.push_back(CulledTriangle(ctx, primitive, count, viewport));
+            PushShadingRate(ctx);
             own_left =
                 ctx.OpLogicalOr(ctx.U1, own_left,
                                 ctx.OpLogicalAnd(ctx.U1, ctx.OpULessThan(ctx.U1, primitive, count),
@@ -462,6 +584,7 @@ void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const 
                 ctx.OpStore(ctx.OpAccessChain(output_bool, ctx.mesh_cull_primitive, primitive),
                             culled[first / threads]);
             }
+            StoreShadingRate(ctx, primitive, first / threads);
         });
     }
 }
@@ -483,21 +606,23 @@ Id EmitIsbeRead(EmitContext& ctx, Id address) {
                         word);
 }
 
-void EmitIsbeWriteAttribute(EmitContext& ctx, Id address, Id value) {
-    const Id index{ctx.OpShiftRightLogical(ctx.U32[1], address, ctx.Const(2U))};
+void EmitIsbeWriteAttribute(EmitContext& ctx, const IR::Value& address, Id value) {
     if (ctx.stage == Stage::Task) {
-        ctx.OpStore(PayloadWord(ctx, index), value);
+        ctx.OpStore(ctx.OpAccessChain(ctx.mesh_payload_u32, ctx.mesh_payload,
+                                      RegionIndex(ctx, address, 2, ctx.mesh_info.payload_words)),
+                    value);
         return;
     }
-    ctx.OpStore(SharedWord(ctx, ctx.mesh_attributes, Clamped(ctx, index, ctx.mesh_attribute_words)),
+    ctx.OpStore(SharedWord(ctx, ctx.mesh_attributes,
+                           RegionIndex(ctx, address, 2, ctx.mesh_attribute_words)),
                 value);
 }
 
-void EmitIsbeWriteMapU8(EmitContext& ctx, Id address, Id value) {
+void EmitIsbeWriteMapU8(EmitContext& ctx, const IR::Value& address, Id value) {
     if (ctx.stage != Stage::Mesh) {
         throw NotImplementedException("Stage buffer map write outside mesh programs");
     }
-    ctx.OpStore(SharedWord(ctx, ctx.mesh_map, Clamped(ctx, address, ctx.mesh_map_bytes)),
+    ctx.OpStore(SharedWord(ctx, ctx.mesh_map, RegionIndex(ctx, address, 0, ctx.mesh_map_bytes)),
                 ctx.OpBitwiseAnd(ctx.U32[1], value, ctx.Const(0xffU)));
 }
 

@@ -374,6 +374,8 @@ struct Info {
     bool uses_render_area{};
     /// Mesh program built with the small triangle test (RuntimeInfo::mesh_cull), set by the host
     bool uses_mesh_cull_viewport{};
+    /// Mesh program asked to write a per-primitive shading rate (MESH_OUT_RATE), set by the host
+    bool uses_mesh_shading_rate{};
 
     IR::Type used_constant_buffer_types{};
     IR::Type used_storage_buffer_types{};

@@ -1933,6 +1933,7 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     if (as_compute) {
         return; // the output buffer: DefineMeshEmulationOutput, after the storage buffers
     }
+    mesh_out = runtime_info.mesh_out & (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR);
 
     const Id vertex_count{Const(mesh_info.max_vertices)};
     const Id primitive_count{Const(mesh_info.max_primitives)};
@@ -1961,6 +1962,9 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     const auto target = [&](u32 line, bool per_primitive) -> MeshLineTarget {
         const IR::Attribute attribute{line};
         if (IR::IsGeneric(attribute)) {
+            if ((mesh_out & MESH_OUT_DEAD) != 0 && !runtime_info.mesh_next_stage_loads[attribute]) {
+                return {}; // the fragment stage declares no input for a generic it never loads
+            }
             const u32 index{IR::GenericAttributeIndex(attribute)};
             Id& variable{generics[per_primitive][index]};
             if (!Sirit::ValidId(variable)) {
@@ -2056,6 +2060,18 @@ void EmitContext::DefineMesh(const IR::Program& program) {
         if (profile.supported_spirv >= 0x00010400) {
             interfaces.push_back(mesh_cull_viewport);
         }
+    }
+    // The shading rate comes from the small triangle test's bounding box.
+    if ((mesh_cull & MESH_CULL_SMALL) == 0) {
+        mesh_out &= ~MESH_OUT_RATE;
+    }
+    if ((mesh_out & MESH_OUT_RATE) != 0) {
+        AddExtension("SPV_KHR_fragment_shading_rate");
+        AddCapability(spv::Capability::FragmentShadingRateKHR);
+        mesh_shading_rate =
+            DefineVariable(*this, TypeArray(S32[1], primitive_count),
+                           spv::BuiltIn::PrimitiveShadingRateKHR, spv::StorageClass::Output);
+        Decorate(mesh_shading_rate, spv::Decoration::PerPrimitiveEXT);
     }
 }
 

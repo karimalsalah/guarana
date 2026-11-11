@@ -42,6 +42,11 @@ constexpr u32 MESH_CULL_EMPTY = 4;   ///< no outputs for a workgroup with no tri
 /// render area (at offset 0) leaves unused.
 constexpr u32 MESH_CULL_VIEWPORT_OFFSET = sizeof(RescalingLayout);
 
+/// Cheaper outputs of a native mesh program (Profile and RuntimeInfo mesh_out).
+constexpr u32 MESH_OUT_DEAD = 1;   ///< no output for generic components the fragment stage never reads
+constexpr u32 MESH_OUT_RATE = 2;   ///< 2x2 shading rate for the triangles MESH_CULL_SMALL finds tiny
+constexpr u32 MESH_OUT_VECTOR = 8; ///< one store per output vector instead of one per component
+
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
 [[nodiscard]] inline std::vector<u32> EmitSPIRV(const Profile& profile, IR::Program& program) {
     Bindings binding;
