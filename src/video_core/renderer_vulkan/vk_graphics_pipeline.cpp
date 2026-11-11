@@ -1541,7 +1541,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     // bind, as a pipeline with a static rate (blits, presentation) leaves it undefined.
     VkExtent2D shading_rate{1, 1};
     bool set_shading_rate{};
-    if (device.IsKhrFragmentShadingRateSupported() && !IsMeshPipeline()) {
+    if (false) {
         const auto wanted{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
         shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
         set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
@@ -2108,8 +2108,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
     // EDEN_NX2_VRS: on every guest pipeline, so a shader's rate changes without a rebuild.
     // Not on mesh pipelines: with the rate dynamic their draws vanish on Intel's driver, so they
     // take the rate of their fragment shader at build time instead.
-    const bool dynamic_shading_rate{device.IsKhrFragmentShadingRateSupported() &&
-                                    !IsMeshPipeline()};
+    // Measured on Intel: draws of pipelines with the rate as dynamic state vanish, with or without
+    // mesh programs. Every pipeline takes its shader's rate at build time instead.
+    const bool dynamic_shading_rate{false};
     if (dynamic_shading_rate) {
         dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
     }
@@ -2210,7 +2211,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         "graphics", "graphics-prepass-depth", "graphics-prepass-color"};
     const char* const trace_kind{trace_kinds[static_cast<size_t>(variant)]};
     TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, unoptimized);
-    const bool static_shading_rate{device.IsKhrFragmentShadingRateSupported() && is_mesh};
+    const bool static_shading_rate{device.IsKhrFragmentShadingRateSupported()};
     const auto mesh_rate{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
     const VkPipelineFragmentShadingRateStateCreateInfoKHR static_rate_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
