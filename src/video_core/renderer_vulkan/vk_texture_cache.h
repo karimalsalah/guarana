@@ -126,6 +126,12 @@ public:
     /// EDEN_NX2_MEM_TRACE: staging buffers, then the process, DXGI and VMA (LogMemoryTrace).
     void LogMemoryTrace();
 
+    /// Whether the GPU's memory is the host's RAM.
+    bool IsIntegratedGpu() const;
+
+    /// Bytes of the cached staging buffers of every kind.
+    u64 StagingBytes();
+
     /// True when ASTC is re-compressed to BC3 and opaque images may use BC1 instead.
     bool UseOpaqueAstcFormat() const;
 

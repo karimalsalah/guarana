@@ -17,6 +17,8 @@
 #include <thread>
 
 #include "common/fs/path_util.h"
+#include "common/host_memory.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
@@ -30,6 +32,7 @@
 #include "core/debugger/nx2_debug_server.h"
 #include "core/debugger/nx2_debug_tools.h"
 #include "core/frontend/framebuffer_layout.h"
+#include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
 #include "hid_core/hid_core.h"
@@ -681,6 +684,57 @@ json GpuCosts(ToolState& state, const json& params) {
             {"passes", std::move(passes)}};
 }
 
+/// Host memory of the process and the system, and what the caches last published
+/// (Common::g_memory_counters). All sizes in bytes.
+json MemoryReport(ToolState&, const json&) {
+    const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
+    const Common::MemoryCounters& counters = Common::g_memory_counters;
+    const auto get = [](const std::atomic<u64>& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    return {
+        {"low_memory_mode", Common::LowMemoryMode()},
+        {"low_memory_reason", std::string{Common::LowMemoryModeReason()}},
+        {"process",
+         {
+             {"working_set", usage.working_set},
+             {"private_working_set", usage.private_working_set},
+             {"peak_working_set", usage.peak_working_set},
+             {"commit", usage.commit},
+             {"peak_commit", usage.peak_commit},
+         }},
+        {"system",
+         {
+             {"commit", usage.system_commit},
+             {"commit_limit", usage.system_commit_limit},
+             {"physical_total", usage.physical_total},
+             {"physical_available", usage.physical_available},
+         }},
+        {"guest",
+         {
+             {"size", u64{Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize()}},
+             {"resident_after_trim", get(counters.guest_resident)},
+             {"zero_trimmed_total", get(counters.guest_zero_trimmed)},
+             {"zero_filled_total", Common::HostMemory::ZeroFilledBytes()},
+             {"lazy_commit", get(counters.guest_lazy_commit)},
+         }},
+        {"renderer",
+         {
+             {"device_usage", get(counters.device_usage)},
+             {"texture_expected", get(counters.texture_expected)},
+             {"texture_critical", get(counters.texture_critical)},
+             {"buffer_cache", get(counters.buffer_cache_bytes)},
+             {"staging", get(counters.staging_bytes)},
+             {"mesh_arenas", get(counters.mesh_arena_bytes)},
+             {"graphics_pipelines", get(counters.graphics_pipelines)},
+             {"built_pipelines", get(counters.built_pipelines)},
+             {"kept_pipelines_limit", get(counters.kept_pipelines_limit)},
+             {"kept_spirv_entries", get(counters.kept_spirv_entries)},
+             {"kept_spirv", get(counters.kept_spirv_bytes)},
+         }},
+    };
+}
+
 json ReadMemory(ToolState& state, const json& params) {
     const u64 address = AddressParam(params, "address");
     const u64 size = ReadSize(params, address);
@@ -881,6 +935,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"power", handler(Power)},
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},
+        {"memory", handler(MemoryReport)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},
         {"read_gpu_memory", handler(ReadGpuMemory)},

@@ -31,6 +31,7 @@
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -359,6 +360,11 @@ void RasterizerVulkan::ReadMeshEmulationProbe() {
              probe.frame, probe.groups, triangles, degenerate, outside, bad_index, sample);
 }
 
+/// The largest mesh emulation output arena, and the largest in low memory mode
+/// (Common::LowMemoryMode): what a submission's draws write past it is dropped.
+constexpr u64 MaxMeshArenaSize = u64{1} << 30;
+constexpr u64 LowMemoryMeshArenaSize = u64{256} << 20;
+
 const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     const u64 tick{scheduler.CurrentTick()};
     if (mesh_arena_current < mesh_arenas.size() && mesh_arenas[mesh_arena_current].tick == tick) {
@@ -366,7 +372,9 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     }
     // A finished submission's counter holds the words its draws asked for, including those
     // that did not fit: grow later arenas to hold them.
-    const u64 max_size{(std::min)(u64{1} << 30, u64{device.GetMaxStorageBufferRange()})};
+    const u64 max_size{
+        (std::min)(Common::LowMemoryMode() ? LowMemoryMeshArenaSize : MaxMeshArenaSize,
+                   u64{device.GetMaxStorageBufferRange()})};
     for (MeshArena& arena : mesh_arenas) {
         if (arena.counted || !scheduler.IsFree(arena.tick)) {
             continue;
@@ -412,6 +420,11 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
                 .size = mesh_arena_size,
             });
     }
+    u64 arena_bytes{};
+    for (const MeshArena& arena : mesh_arenas) {
+        arena_bytes += arena.size;
+    }
+    Common::g_memory_counters.mesh_arena_bytes.store(arena_bytes, std::memory_order_relaxed);
     // The GPU is done with this arena, and this submission's commands have not been sent yet.
     const u32 zero{};
     std::memcpy(it->counter.Mapped().data(), &zero, sizeof(zero));

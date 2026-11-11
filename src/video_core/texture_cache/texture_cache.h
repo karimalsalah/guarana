@@ -337,6 +337,13 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     critical_memory = (std::min)(critical_memory, max_critical);
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
+    // Low memory mode on an integrated GPU: see LowMemoryCriticalMemory.
+    if constexpr (requires { runtime.IsIntegratedGpu(); }) {
+        if (Common::LowMemoryMode() && runtime.IsIntegratedGpu()) {
+            critical_memory = (std::min)(critical_memory, LowMemoryCriticalMemory);
+            expected_memory = (std::min)(expected_memory, LowMemoryExpectedMemory);
+        }
+    }
     minimum_memory =
         (std::min)(minimum_memory, expected_memory - (std::min)(expected_memory, u64{1_GiB}));
     // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB raise the collector's thresholds past
@@ -485,6 +492,15 @@ void TextureCache<P>::TickFrame() {
             total_used_memory -= (std::min)(total_used_memory, bytes);
         }
         total_used_memory -= (std::min)(total_used_memory, gpu_sentenced_bytes);
+    }
+    {
+        auto& counters = Common::g_memory_counters;
+        counters.device_usage.store(total_used_memory, std::memory_order_relaxed);
+        counters.texture_expected.store(expected_memory, std::memory_order_relaxed);
+        counters.texture_critical.store(critical_memory, std::memory_order_relaxed);
+        if constexpr (requires { runtime.StagingBytes(); }) {
+            counters.staging_bytes.store(runtime.StagingBytes(), std::memory_order_relaxed);
+        }
     }
     // EDEN_NX2_MEM_TRACE=1: every 2 s, what the cache holds next to what the process and the
     // driver report (memory climbs).

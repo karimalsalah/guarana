@@ -20,6 +20,7 @@
 #include <vector>
 #include <fmt/ranges.h>
 
+#include "common/memory_detect.h"
 #include "common/range_sets.inc"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
@@ -182,6 +183,7 @@ void BufferCache<P>::TickFrame() {
     if (runtime.CanReportMemoryUsage()) {
         total_used_memory = runtime.GetDeviceMemoryUsage();
     }
+    Common::g_memory_counters.buffer_cache_bytes.store(buffer_bytes, std::memory_order_relaxed);
     if (gpu_memory != nullptr && gpu_memory->UsesNativeTiling()) {
         // Switch 2 titles fill the device with textures (their collector watches the budget);
         // title 1's buffers were ~200 MiB of an 8 GB GPU's ~6.8 GB in use, yet this collector
@@ -189,8 +191,10 @@ void BufferCache<P>::TickFrame() {
         // downloading the GPU-written ones, ~5% of the GPU thread) that were recreated later.
         // Collect when the buffers themselves are large. At 1 GiB it held geometry of scenes
         // long gone: title 1's title screen grew to ~0.9 GB of buffers in ten minutes.
-        if (buffer_bytes >= 512_MiB) {
-            RunGarbageCollector(buffer_bytes >= 1_GiB);
+        const bool low_memory = Common::LowMemoryMode();
+        if (buffer_bytes >= (low_memory ? LOW_MEMORY_COLLECT_BYTES : NATIVE_COLLECT_BYTES)) {
+            RunGarbageCollector(buffer_bytes >=
+                                (low_memory ? LOW_MEMORY_CRITICAL_BYTES : NATIVE_CRITICAL_BYTES));
         }
     } else if (total_used_memory >= minimum_memory) {
         RunGarbageCollector(total_used_memory >= critical_memory);

@@ -2899,6 +2899,16 @@ void TextureCacheRuntime::LogMemoryTrace() {
     Vulkan::LogMemoryTrace(device);
 }
 
+bool TextureCacheRuntime::IsIntegratedGpu() const {
+    return device.IsIntegrated();
+}
+
+u64 TextureCacheRuntime::StagingBytes() {
+    return staging_buffer_pool.CachedBytes(MemoryUsage::Upload) +
+           staging_buffer_pool.CachedBytes(MemoryUsage::Download) +
+           staging_buffer_pool.CachedBytes(MemoryUsage::DeviceLocal);
+}
+
 bool TextureCacheRuntime::UseOpaqueAstcFormat() const {
     // EDEN_NX2_ASTC_BC1=0 keeps every re-compressed ASTC image in BC3.
     static const bool enabled = [] {

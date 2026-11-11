@@ -307,6 +307,13 @@ TOOLS = [
                 "enable": {"type": "boolean"},
             },
         },
+        "name": "memory",
+        "description": "Host memory in bytes: the process (working set, commit, peaks), the system "
+                       "(commit against its limit, free RAM), guest memory (resident after the "
+                       "last zero-page trim) and what the renderer's caches hold (device memory "
+                       "against the texture cache thresholds, buffers, staging, mesh arenas, "
+                       "pipelines, kept SPIR-V). Says whether low memory mode is on.",
+        "inputSchema": {"type": "object", "properties": {}},
     },
 ]
 

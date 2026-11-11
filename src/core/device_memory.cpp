@@ -12,6 +12,8 @@
 #include "common/thread.h"
 #endif
 
+#include "common/logging.h"
+#include "common/memory_detect.h"
 #include "core/device_memory.h"
 #include "hle/kernel/board/nintendo/nx/k_system_control.h"
 
@@ -26,6 +28,9 @@ constexpr size_t VirtualReserveSize = 1ULL << 39;
 DeviceMemory::DeviceMemory()
     : buffer{Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize(),
              VirtualReserveSize} {
+    LOG_INFO(HW_Memory, "Low memory mode: {} ({}, {} MiB of RAM)",
+             Common::LowMemoryMode() ? "on" : "off", Common::LowMemoryModeReason(),
+             Common::GetMemInfo().TotalPhysicalMemory >> 20);
 #ifdef _WIN32
     zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
 #endif
@@ -43,6 +48,9 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
     Common::PowerTuning::TagBackgroundThread();
     constexpr size_t Busy = size_t{64} << 20;
+    // Low memory mode looks again sooner: zero pages a quiet minute leaves resident are RAM the
+    // host is short of.
+    const std::chrono::seconds max_interval{Common::LowMemoryMode() ? 15 : 60};
     std::mutex mutex;
     std::condition_variable_any wake;
     std::chrono::seconds interval = 5s;
@@ -56,11 +64,14 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         }
         const auto start = std::chrono::steady_clock::now();
         const auto [resident, trimmed] = buffer.TrimZeroPages();
+        auto& counters = Common::g_memory_counters;
+        counters.guest_resident.store(resident - trimmed, std::memory_order_relaxed);
+        counters.guest_zero_trimmed.fetch_add(trimmed, std::memory_order_relaxed);
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
         if (trimmed < Busy) {
-            interval = (std::min)(interval * 2, std::chrono::seconds{60});
+            interval = (std::min)(interval * 2, max_interval);
             continue;
         }
         interval = 5s;

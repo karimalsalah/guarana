@@ -527,7 +527,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background) {
     // A sixty-fourth of the RAM (16 GB: 256 MB), about 25 KB per evicted pipeline
     const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
-    kept_stages = decltype(kept_stages){ram != 0 ? ram / 64 : u64{256} << 20};
+    u64 kept_spirv = ram != 0 ? ram / 64 : u64{256} << 20;
+    if (Common::LowMemoryMode()) {
+        kept_spirv = (std::min)(kept_spirv, LowMemoryKeptSpirvBytes);
+    }
+    kept_stages = decltype(kept_stages){kept_spirv};
     const auto& float_control{device.FloatControlProperties()};
     const VkDriverId driver_id{device.GetDriverID()};
     const VkShaderStageFlags subgroup_stages{device.GetSubgroupSupportedStages()};
@@ -841,7 +845,10 @@ size_t KeptPipelines() {
 #ifdef __ANDROID__
     return 0;
 #else
-    static const size_t kept = KeptPipelinesForMemory(Common::GetMemInfo().TotalPhysicalMemory);
+    static const size_t kept = [] {
+        const size_t by_ram = KeptPipelinesForMemory(Common::GetMemInfo().TotalPhysicalMemory);
+        return Common::LowMemoryMode() ? (std::min)(by_ram, LowMemoryKeptPipelines) : by_ram;
+    }();
     return kept;
 #endif
 }
@@ -2068,6 +2075,16 @@ void PipelineCache::TickFrame() {
     }
     constexpr u64 EvictCheckFrames = 600;
     if (frame_count % EvictCheckFrames == 0) {
+        auto& counters = Common::g_memory_counters;
+        counters.graphics_pipelines.store(graphics_cache.size(), std::memory_order_relaxed);
+        counters.built_pipelines.store(
+            static_cast<u64>(std::ranges::count_if(graphics_cache, [](const auto& entry) {
+                return entry.second != nullptr && entry.second->IsBuilt();
+            })),
+            std::memory_order_relaxed);
+        counters.kept_pipelines_limit.store(KeptPipelines(), std::memory_order_relaxed);
+        counters.kept_spirv_entries.store(kept_stages.Size(), std::memory_order_relaxed);
+        counters.kept_spirv_bytes.store(kept_stages.Bytes(), std::memory_order_relaxed);
         EvictUnusedPipelines();
     }
 }
@@ -2110,13 +2127,16 @@ void PipelineCache::EvictUnusedPipelines() {
         // evicting them throws the prebuild away (OoT: 1174 of 1346 evicted on the title screen,
         // 684 rebuilt in 10 s on entering the field).
         constexpr size_t MaxUnusedPrebuiltPipelines = 2000;
+        const size_t max_unused_prebuilt = Common::LowMemoryMode()
+                                               ? LowMemoryUnusedPrebuiltPipelines
+                                               : MaxUnusedPrebuiltPipelines;
         size_t kept_prebuilt = 0;
         for (const auto& [key, pipeline] : graphics_cache) {
             if (pipeline == nullptr || pipeline.get() == current_pipeline ||
                 !pipeline->IsBuilt() || pipeline->LastUse() >= cutoff) {
                 continue;
             }
-            if (!pipeline->WasUsed() && kept_prebuilt < MaxUnusedPrebuiltPipelines) {
+            if (!pipeline->WasUsed() && kept_prebuilt < max_unused_prebuilt) {
                 ++kept_prebuilt;
                 continue;
             }

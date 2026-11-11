@@ -18,9 +18,10 @@
 #endif
 #endif
 
+#include <cstdlib>
+
 #ifdef __linux__
 #include <algorithm>
-#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -89,12 +90,16 @@ ProcessMemoryUsage GetProcessMemoryUsage() {
         usage.commit = counters.PrivateUsage;
         usage.working_set = counters.WorkingSetSize;
         usage.private_working_set = counters.PrivateWorkingSetSize;
+        usage.peak_commit = counters.PeakPagefileUsage;
+        usage.peak_working_set = counters.PeakWorkingSetSize;
     }
     PERFORMANCE_INFORMATION performance{};
     performance.cb = sizeof(performance);
     if (GetPerformanceInfo(&performance, sizeof(performance))) {
         usage.system_commit = u64{performance.CommitTotal} * performance.PageSize;
         usage.system_commit_limit = u64{performance.CommitLimit} * performance.PageSize;
+        usage.physical_total = u64{performance.PhysicalTotal} * performance.PageSize;
+        usage.physical_available = u64{performance.PhysicalAvailable} * performance.PageSize;
     }
 #elif defined(__linux__)
     std::ifstream status{"/proc/self/status"};
@@ -124,6 +129,36 @@ std::optional<u64> GetSystemCommitRoom() {
     }
 #endif
     return std::nullopt;
+}
+
+namespace {
+struct LowMemoryDecision {
+    bool enabled;
+    std::string_view reason;
+};
+
+const LowMemoryDecision& GetLowMemoryDecision() {
+    static const LowMemoryDecision decision = []() -> LowMemoryDecision {
+        if (const char* value = std::getenv("EDEN_NX2_LOW_MEMORY"); value && value[0] != '\0') {
+            return {value[0] != '0', "EDEN_NX2_LOW_MEMORY"};
+        }
+#ifdef __ANDROID__
+        return {false, "not automatic on Android"};
+#else
+        const u64 ram = GetMemInfo().TotalPhysicalMemory;
+        return {ram != 0 && ram <= LowMemoryModeRam, "host RAM"};
+#endif
+    }();
+    return decision;
+}
+} // Anonymous namespace
+
+bool LowMemoryMode() {
+    return GetLowMemoryDecision().enabled;
+}
+
+std::string_view LowMemoryModeReason() {
+    return GetLowMemoryDecision().reason;
 }
 
 } // namespace Common

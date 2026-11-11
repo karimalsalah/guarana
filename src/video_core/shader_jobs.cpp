@@ -147,9 +147,13 @@ void ShaderJobContext::SetDriverBytes(u64 bytes) {
     job.work.driver_bytes = bytes;
 }
 
+/// Low memory mode's job budget (Common::LowMemoryMode): the least the default ever is.
+constexpr u64 LowMemoryShaderJobBudget = u64{512} << 20;
+
 u64 DefaultShaderJobBudget() {
     using namespace Common::Literals;
-    return std::max<u64>(Common::GetMemInfo().TotalPhysicalMemory / 8, 512_MiB);
+    const u64 budget = std::max<u64>(Common::GetMemInfo().TotalPhysicalMemory / 8, 512_MiB);
+    return Common::LowMemoryMode() ? std::min<u64>(budget, LowMemoryShaderJobBudget) : budget;
 }
 
 ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
