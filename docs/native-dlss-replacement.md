@@ -152,10 +152,22 @@ lower steps the game's network runs again. With `EDEN_NX2_OOT_FSR_ANY=1` and FSR
 
 `EDEN_NX2_GPU_TIME_SCALE=<float>` (experiment) multiplies the GPU time a Switch 2 title measures
 with report timestamps, on top of GPU Clocks: the time since the last present is divided by the
-clock's 1, 4 or 16 and then multiplied (`AmpereTimeSincePresent` in `gpu_timestamp.h`, read in
-`GPU::Impl::GetTicks`). It never exceeds the real time, so with GPU Clocks at Normal the useful
-range is 0 to 1. Ocarina sizes its dynamic resolution from that time: a larger value gives a
-lower step. Which value gives which step is not known.
+clock's 1, 4 or 16 and then multiplied (`AmpereTimeSincePresent` in `gpu_timestamp.h`). It never
+exceeds the real time, so with GPU Clocks at Normal the useful range is 0 to 1. Ocarina sizes
+its dynamic resolution from that time: a larger value gives a lower step. Which value gives
+which step is not known. The scale is a runtime value (`VideoCore::FrameBudget::GpuTimeScale`),
+latched with each present into the anchor `GPU::Impl::GetTicks` reads, so it changes between
+frames only; the variable is its starting value.
+
+`EDEN_NX2_TARGET_FPS=<fps>` (experiment, not compiled or run yet) lets a controller move that
+scale to hold a frame rate: guest presents are held to the target's interval, and the scale
+goes up when frames take longer than that and slowly down when they have headroom, so the game
+settles on the highest step that fits. The time "since the last present" is the time since the
+renderer composed the previous guest frame, not since a host vsync: at 30 fps it runs over the
+whole 33 ms frame, the wait for the pacer included, and GPU work measured between two reports
+of one frame is scaled as a whole. The Max Resolution add-on must be off (with it the game does
+not follow GPU time), and one of the two frame-rate add-ons on so the game keeps its speed
+below 60 fps. See `frame_budget` in `docs/nx2/debug-mcp.md`.
 
 Shader hashes, buffer offsets and Link's mesh shape are taken from the game's current build.
 A game update that changes them disables the replacement and leaves the game's pass in place.

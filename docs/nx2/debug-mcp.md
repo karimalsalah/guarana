@@ -240,8 +240,8 @@ alone). While it runs, a governor samples once a second and steps `spin_scale` d
 (1 -> 0.5 -> 0.25 -> 0) when the GPU is busy over 90% of a frame that is slower than the target
 and the cores take over half the package power, and back up when the GPU is busy under 70%.
 `governor` has its `state` (`gpu_bound`, `cpu_bound`, `balanced`, `no_data`), inputs and
-`last_change`. The target is `EDEN_NX2_POWER_POLICY_FPS`, else the `EDEN_NX2_VRS_AUTO` target,
-else 30.
+`last_change`. The target is `EDEN_NX2_POWER_POLICY_FPS`, else the `EDEN_NX2_TARGET_FPS` target,
+else the `EDEN_NX2_VRS_AUTO` target, else 30.
 
 **`power_set`** `{spin_scale?, eco_background?, idle_spin_us?}`. Sets the power switches live
 and returns all three. `spin_scale` (0 to 1, `EDEN_NX2_SPIN_SCALE`) scales the busy-wait bounds
@@ -251,6 +251,65 @@ texture decoder, ZeroTrim, ColdHint) on EcoQoS on Windows; it only reaches threa
 afterwards, so set the variable to cover a whole session. `idle_spin_us`
 (`EDEN_NX2_IDLE_SPIN_US`) is how long an idle guest core polls before blocking, -1 for the
 per-title default.
+
+**`frame_budget`** `{target_fps?, scale?}`. The frame budget controller
+(`EDEN_NX2_TARGET_FPS=<fps>` at launch, off without it; not compiled or run yet). It holds a
+Switch 2 title that sizes its own dynamic resolution from GPU time (Ocarina of Time without the
+Max Resolution add-on) at a frame rate, in two parts:
+
+- Cadence. The nx2:vi2 present pacer (`PaceToVblank`, the one behind the FPS limit) holds every
+  guest present until the last deadline plus `1 / target`, so a frame that is done early still
+  takes the whole interval. A frame that is late is not held, and the pacer starts over from a
+  present more than one interval late.
+- Resolution. Every half second of presents is one tick. Its input is `work_ms`: the time from
+  one present's return to the next present's pacing wait, the frame without that wait, as four
+  frames in five of the tick stay under (the 80th percentile: a median would pass a tick with
+  two late frames in five; `frame_ms` is the median present interval). Above `target * 1.04`
+  the GPU time scale (`EDEN_NX2_GPU_TIME_SCALE`, `AmpereTimeSincePresent`) is multiplied by
+  1.25, at every such tick: the game measures more GPU time and renders lower. Below
+  `target * 0.90` for four ticks in a row it is multiplied by 0.92: the game renders higher.
+  Between the two nothing moves.
+
+A game that starts its frames on the nx2:vi2 vsync event waits for the next event after a held
+present returns, and that wait counts as frame time: with the event at 60 Hz up to 16.7 ms of
+headroom can stay hidden (`work_ms` near `frame_ms` although the GPU idles), and the scale is
+then lowered later than it could be. A faster event (`nx2_frame_rate_limit` 120 or 240, for a
+game that keeps its speed there) shortens the wait.
+
+The scale stays between 0.05 and the smaller of 4 and the GPU Clocks divisor (Normal 1, Boost
+4, Overclock 16): the time a title sees never exceeds the real time, so a larger scale changes
+nothing. The scale is latched with each present (`AmpereAnchor`), so a change never moves a
+timestamp back within a frame. `state` is what the last tick found:
+
+| `state` | Meaning |
+|---|---|
+| `off` | No target, or no tick yet |
+| `frozen` | Fewer than three presents in the tick, or frames over four targets long (a loading screen): nothing moves |
+| `on_target` | Inside the band |
+| `slow` | A miss: the scale was raised |
+| `saturated` | A miss with the scale at its upper limit: the game has no resolution left to give |
+| `fast` | Headroom: counting towards a lower, just lowered, or at the lowest scale |
+| `cooldown` | Headroom, but the next lower scale is below the one that last missed |
+| `no_effect` | Headroom, but eight lowers in a row left the frame time alone (the game is at its highest resolution, or does not follow the scale); they go on once frames are 8% slower |
+| `waiting` | Headroom, but the shading-rate governor gives its coarse rates back first |
+
+The scale at which a run of misses began is `miss_scale`: for `cooldown_ticks` more ticks
+(30, doubled up to 240 each time a lower made since brings a miss back) a lower stays one step
+above it, so the scale does not go back and forth over a resolution step. It is forgotten after
+two cool-downs without a miss.
+
+With `EDEN_NX2_VRS_AUTO` on, the shading-rate governor takes the same target and its frame time
+without the pacing wait. It may coarsen only from a miss at the scale's upper limit until the
+scale leaves that limit (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
+hold reason), and while it holds coarse rates the scale is not lowered.
+
+`target_fps` sets the target live (1 to 1000; 0 turns the controller off and puts the scale back
+to `manual_scale`). `scale` sets the scale by hand; with a target the controller goes on from
+it. The reply also has `target_ms`, `samples` (presents of the last tick), `scale`,
+`latched_scale` (the scale as the anchor keeps it, within 0.8%), `min_scale`, `max_scale`,
+`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers` and `last_change`. A change of the
+scale by more than 10% logs one `Frame budget:` line, at most one a second.
+
 **`gpu_costs`** `{top?, enable?}`. Host GPU time of the last sampled frame (one a second, the
 `DKB gpu_work` and `DKB gpu_pass` data without the log lines): `work` per vertex+fragment or
 compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).

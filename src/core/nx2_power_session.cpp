@@ -20,6 +20,7 @@
 #include "core/core.h"
 #include "core/nx2_power_session.h"
 #include "video_core/auto_shading_rate.h"
+#include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 
@@ -29,7 +30,8 @@ namespace {
 std::mutex last_mutex;
 Nx2PowerSession::GovernorState last_state;
 
-/// EDEN_NX2_POWER_POLICY_FPS, else the target of the shading-rate governor, else 30.
+/// EDEN_NX2_POWER_POLICY_FPS, else the frame budget's target (EDEN_NX2_TARGET_FPS), else the
+/// target of the shading-rate governor, else 30.
 double TargetFps() {
     if (const char* value = std::getenv("EDEN_NX2_POWER_POLICY_FPS")) {
         const double fps = std::strtod(value, nullptr);
@@ -37,6 +39,9 @@ double TargetFps() {
             return fps;
         }
         LOG_WARNING(Core, "EDEN_NX2_POWER_POLICY_FPS: bad target \"{}\"", value);
+    }
+    if (const double budget = VideoCore::FrameBudget::TargetFps(); budget > 0.0) {
+        return budget;
     }
     const double automatic = VideoCore::AutoShadingRate::TargetFps();
     return automatic > 0.0 ? automatic : 30.0;

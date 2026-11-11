@@ -16,6 +16,7 @@
 #include "core/core.h"
 #include "video_core/auto_shading_rate.h"
 #include "video_core/cost_governor.h"
+#include "video_core/frame_budget.h"
 #include "video_core/nx2_debug_control.h"
 
 namespace VideoCore::AutoShadingRate {
@@ -27,6 +28,7 @@ constexpr size_t MaxSmall = 4096;
 struct State {
     std::mutex mutex;
     bool env_read{};
+    bool allowed{true};
     double target_fps{};
     CostGovernor governor;
     CostGovernor::RateTable rates;
@@ -145,6 +147,28 @@ void SetTargetFps(double fps) {
     PublishLocked();
 }
 
+void SetAllowed(bool allowed) {
+    std::scoped_lock lock{state.mutex};
+    if (state.allowed == allowed) {
+        return;
+    }
+    state.allowed = allowed;
+    if (allowed || state.rates.empty()) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan, "VRS auto: drop {} shaders (the frame budget has resolution left)",
+             state.rates.size());
+    state.last_action = "drop all (the frame budget has resolution left)";
+    state.rates.clear();
+    state.governor.Reset();
+    PublishLocked();
+}
+
+bool Coarsening() {
+    std::scoped_lock lock{state.mutex};
+    return !state.rates.empty();
+}
+
 void NoteDepthWriter(u64 fragment_hash) {
     std::scoped_lock lock{state.mutex};
     state.depth_writers.insert(fragment_hash);
@@ -221,8 +245,11 @@ void OnSnapshot(const GpuCostSnapshot& snapshot) {
     }
     ++state.snapshots;
     const double target_ms = 1000.0 / state.target_fps;
-    // Guest presents only: frames the host generates between them never reach this ring.
-    const double frame_ms = Core::Nx2RecentFrameMs();
+    // Guest presents only: frames the host generates between them never reach this ring. With a
+    // frame budget the presents are held to the target, so the headroom only shows in the frame
+    // time without that wait.
+    const double budget_ms = FrameBudget::RecentWorkMs();
+    const double frame_ms = budget_ms > 0.0 ? budget_ms : Core::Nx2RecentFrameMs();
     state.frame_ms = frame_ms;
     state.hold_reason.clear();
 
@@ -259,7 +286,9 @@ void OnSnapshot(const GpuCostSnapshot& snapshot) {
     }
     state.governor.SetConfig(std::move(config));
 
-    if (manual.fallback != Nx2Debug::ShadingRate{}) {
+    if (!state.allowed) {
+        state.hold_reason = "the frame budget has resolution left";
+    } else if (manual.fallback != Nx2Debug::ShadingRate{}) {
         state.hold_reason = "a manual default rate is set";
     } else if (frame_ms <= 0.0) {
         state.hold_reason = "no guest present times in the last second";
@@ -292,6 +321,7 @@ Status GetStatus() {
         .target_fps = state.target_fps,
         .frame_ms = state.frame_ms,
         .target_ms = state.target_fps > 0.0 ? 1000.0 / state.target_fps : 0.0,
+        .allowed = state.allowed,
         .snapshots = state.snapshots,
         .max_level = state.governor.GetConfig().max_level,
         .levels = {state.rates.begin(), state.rates.end()},

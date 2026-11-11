@@ -42,6 +42,7 @@
 #include "core/frontend/framebuffer_layout.h"
 #include "core/perf_stats.h"
 #include "video_core/gpu.h"
+#include "video_core/frame_budget.h"
 #include "video_core/framebuffer_config.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_client_session.h"
@@ -1942,6 +1943,9 @@ private:
         const auto composited = std::chrono::steady_clock::now();
         PaceToVblank(w[12], ctx.GetThread().GetOwnerProcess());
         const auto paced = std::chrono::steady_clock::now();
+        // EDEN_NX2_TARGET_FPS: the frame time without the pacing wait steers the game's dynamic
+        // resolution. One atomic load without a target.
+        VideoCore::FrameBudget::OnGuestPresent(composited, paced);
         if (Common::DkbFrameTrace::Enabled()) {
             const auto ms = [](auto duration) {
                 return std::chrono::duration<double, std::milli>(duration).count();
@@ -2097,7 +2101,10 @@ private:
         const bool timer_paced = Nx2VsyncRateHz() != 60;
         const bool speed_limited = !timer_paced && Settings::values.use_speed_limit.GetValue() &&
                                    Settings::SpeedLimit() != 0;
-        if (!speed_limited && fps_limit == 0) {
+        // EDEN_NX2_TARGET_FPS: presents are held to the target's interval, as by an FPS limit,
+        // so a frame that is done early still takes the whole interval.
+        const std::chrono::nanoseconds budget_interval = VideoCore::FrameBudget::PresentInterval();
+        if (!speed_limited && fps_limit == 0 && budget_interval.count() == 0) {
             return;
         }
         if (timing != std::exchange(m_swap_word, timing)) {
@@ -2110,7 +2117,11 @@ private:
                         : std::chrono::nanoseconds{100'000'000'000LL * swap_interval /
                                                    refresh_rate /
                                                    (speed_limited ? Settings::SpeedLimit() : 100)};
-        const auto interval = PacedInterval(vblank_interval, fps_limit);
+        // A frame budget alone does not bring back the vblank pacing a lifted speed limit took.
+        const std::chrono::nanoseconds limited_interval =
+            (speed_limited || fps_limit != 0) ? PacedInterval(vblank_interval, fps_limit)
+                                              : std::chrono::nanoseconds{0};
+        const auto interval = (std::max)(limited_interval, budget_interval);
         if (trace) {
             m_frame_trace.target_ms = std::chrono::duration<double, std::milli>(interval).count();
         }
