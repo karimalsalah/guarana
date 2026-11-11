@@ -14,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include <fmt/format.h>
@@ -670,6 +671,7 @@ void Scheduler::TraceComputePipeline(u64 hash) {
 
 void Scheduler::ReportWorkTimes() {
     const u32 count = trace_work_count;
+    const u32 dropped = std::exchange(trace_work_dropped, 0);
     trace_work_count = 0;
     if (count == 0) {
         return;
@@ -691,7 +693,7 @@ void Scheduler::ReportWorkTimes() {
         u32 count{};
         std::array<u32, 3> max_size{};
     };
-    std::map<std::pair<u64, u64>, Totals> by_shaders;
+    std::map<std::tuple<u64, u64, char>, Totals> by_shaders;
     double total_ms{};
     for (u32 i = 0; i < count; ++i) {
         if (results[i * 2].available == 0 || results[i * 2 + 1].available == 0) {
@@ -702,7 +704,7 @@ void Scheduler::ReportWorkTimes() {
                               trace_timestamp_bits)) *
                           trace_timestamp_period / 1e6;
         const WorkTrace& item = trace_work_items[i];
-        Totals& totals = by_shaders[{item.hash, item.fragment_hash}];
+        Totals& totals = by_shaders[{item.hash, item.fragment_hash, item.kind}];
         totals.total_ms += ms;
         ++totals.count;
         if (ms > totals.max_ms) {
@@ -711,8 +713,8 @@ void Scheduler::ReportWorkTimes() {
         }
         total_ms += ms;
     }
-    std::vector<std::pair<std::pair<u64, u64>, Totals>> sorted(by_shaders.begin(),
-                                                               by_shaders.end());
+    std::vector<std::pair<std::tuple<u64, u64, char>, Totals>> sorted(by_shaders.begin(),
+                                                                      by_shaders.end());
     std::ranges::sort(sorted, std::greater<>{},
                       [](const auto& entry) { return entry.second.total_ms; });
     if (sorted.size() > 8) {
@@ -720,17 +722,20 @@ void Scheduler::ReportWorkTimes() {
     }
     std::string slowest;
     for (const auto& [shaders, totals] : sorted) {
-        const auto& [hash, fragment_hash] = shaders;
+        const auto& [hash, fragment_hash, kind] = shaders;
         slowest += fragment_hash == 0
                        ? fmt::format(" s6:{:016x}", hash)
                        : fmt::format(" s1:{:016x}+s5:{:016x}", hash, fragment_hash);
+        if (kind != '\0') {
+            slowest += fmt::format("#{}", kind);
+        }
         slowest += fmt::format("={:.3f}ms/{}x(max {:.3f}ms size {}x{}x{})", totals.total_ms,
                                totals.count, totals.max_ms, totals.max_size[0],
                                totals.max_size[1], totals.max_size[2]);
     }
     LOG_INFO(Render_Vulkan,
-             "DKB gpu_work renderer_frame={} timed={} timed_sum_ms={:.3f} slowest:{}",
-             trace_sample_frame, count, total_ms, slowest);
+             "DKB gpu_work renderer_frame={} timed={} dropped={} timed_sum_ms={:.3f} slowest:{}",
+             trace_sample_frame, count, dropped, total_ms, slowest);
 }
 
 void Scheduler::TraceGpuSubmission() {

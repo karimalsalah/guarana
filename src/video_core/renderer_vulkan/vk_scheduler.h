@@ -86,15 +86,21 @@ public:
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
     /// submission. A draw passes its vertex and fragment hashes, a dispatch its compute hash.
+    /// kind tags other draws: m mesh, e emulated mesh, i indirect count, b indirect byte count.
     template <typename Func>
     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
-                      std::array<u32, 3> size, Func&& work) {
-        if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
+                      std::array<u32, 3> size, Func&& work, char kind = '\0') {
+        if (!trace_gpu_recording || !trace_work_pool) {
+            work();
+            return;
+        }
+        if (trace_work_count == TraceMaxWork) {
+            ++trace_work_dropped;
             work();
             return;
         }
         const u32 query = trace_work_count * 2;
-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size};
+        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind};
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
         work();
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
@@ -500,10 +506,12 @@ private:
         u64 fragment_hash{};
         /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
         std::array<u32, 3> size{};
+        char kind{};
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;
     u32 trace_work_count{};
+    u32 trace_work_dropped{};
     Common::DkbFrameTrace::RateLimit trace_gpu_rate;
     u64 trace_gpu_tick{};
     u64 trace_frame_end{};
