@@ -34,6 +34,8 @@ add_library(video_core STATIC
     control/channel_state_cache.h
     control/scheduler.cpp
     control/scheduler.h
+    cost_governor.cpp
+    cost_governor.h
     delayed_destruction_ring.h
     dirty_flags.cpp
     dirty_flags.h
@@ -102,6 +104,7 @@ add_library(video_core STATIC
     fence_manager.h
     gpu.cpp
     gpu.h
+    gpu_costs.h
     gpu_timestamp.h
     gpu_split.cpp
     gpu_split.h

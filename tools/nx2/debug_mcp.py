@@ -277,6 +277,17 @@ TOOLS = [
                 "spin_scale": {"type": "number", "minimum": 0, "maximum": 1},
                 "eco_background": {"type": "boolean"},
                 "idle_spin_us": {"type": "integer", "minimum": -1, "maximum": 100000},
+        "name": "gpu_costs",
+        "description": "Host GPU time of the last sampled frame (one a second): per vertex+fragment "
+                       "or compute shader hash ('work') and per render target ('passes'), slowest "
+                       "first. 'enable' turns the sampling on or off; it is off until asked for "
+                       "unless EDEN_NX2_COST_SAMPLING=1 or EDEN_DKB_FRAME_TRACE=1. 'frame' is 0 "
+                       "until a frame was sampled.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "top": {"type": "integer", "minimum": 0, "maximum": 256, "default": 32},
+                "enable": {"type": "boolean"},
             },
         },
     },

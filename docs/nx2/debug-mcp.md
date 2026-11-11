@@ -237,6 +237,11 @@ texture decoder, ZeroTrim, ColdHint) on EcoQoS on Windows; it only reaches threa
 afterwards, so set the variable to cover a whole session. `idle_spin_us`
 (`EDEN_NX2_IDLE_SPIN_US`) is how long an idle guest core polls before blocking, -1 for the
 per-title default.
+**`gpu_costs`** `{top?, enable?}`. Host GPU time of the last sampled frame (one a second, the
+`DKB gpu_work` and `DKB gpu_pass` data without the log lines): `work` per vertex+fragment or
+compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).
+`enable` turns the sampling on or off (`EDEN_NX2_COST_SAMPLING=1` starts with it on); `frame` is
+0 until a frame was sampled, `age_ms` says how old the sample is.
 
 **`reject_shaders`** `{hashes?, reject?, timeout_s?}`. This is `EDEN_NX2_REJECT_HASH` at
 runtime: the same keys (native program key or shader hash) and the same effect. Pipeline

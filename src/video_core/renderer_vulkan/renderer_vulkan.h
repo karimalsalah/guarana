@@ -79,6 +79,18 @@ public:
         return scheduler.GpuBusyMs();
     }
 
+    bool RequestGpuCostSampling(bool on) override {
+        return scheduler.RequestCostSampling(on);
+    }
+
+    [[nodiscard]] bool IsGpuCostSampling() const override {
+        return scheduler.CostSampling();
+    }
+
+    [[nodiscard]] VideoCore::GpuCostSnapshot GetGpuCosts() const override {
+        return scheduler.GpuCosts();
+    }
+
     // Enhanced platform-specific initialization
     void InitializePlatformSpecific();
 
