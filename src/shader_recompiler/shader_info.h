@@ -372,6 +372,8 @@ struct Info {
     bool uses_rescaling_uniform{};
     bool uses_cbuf_indirect{};
     bool uses_render_area{};
+    /// Mesh program built with the small triangle test (RuntimeInfo::mesh_cull), set by the host
+    bool uses_mesh_cull_viewport{};
 
     IR::Type used_constant_buffer_types{};
     IR::Type used_storage_buffer_types{};

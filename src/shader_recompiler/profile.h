@@ -119,6 +119,8 @@ struct Profile {
     /// Experiment: its loads are single words, also where the shared memory has a vector view
     bool software_matrix_shared_memory_scalar_loads{};
     u32 max_subgroup_size{};
+    /// Experiment (EDEN_NX2_MESH_CULL): culling added to native mesh programs, MESH_CULL_* bits
+    u32 mesh_cull{};
 
     u32 gl_max_compute_smem_size{};
 

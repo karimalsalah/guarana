@@ -380,6 +380,34 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     return info;
 }
 
+/// The culling (Profile::mesh_cull) a native mesh program can add with this pipeline state.
+u32 MeshCullBits(u32 wanted, const FixedPipelineState& state, const Device& device) {
+    using namespace Shader::Backend::SPIRV;
+    if (wanted == 0) {
+        return 0;
+    }
+    // The tests read clip space x, y and w as the program wrote them: only y may be negated.
+    const u32 swizzle{state.viewport_swizzles[0]};
+    const auto component = [swizzle](u32 shift) {
+        return static_cast<Maxwell::ViewportSwizzle>((swizzle >> shift) & 7);
+    };
+    const Maxwell::ViewportSwizzle y{component(4)};
+    if (component(0) != Maxwell::ViewportSwizzle::PositiveX ||
+        (y != Maxwell::ViewportSwizzle::PositiveY && y != Maxwell::ViewportSwizzle::NegativeY) ||
+        component(12) != Maxwell::ViewportSwizzle::PositiveW) {
+        return wanted & MESH_CULL_EMPTY;
+    }
+    // Small triangles: only filled, single-sampled triangles are sampled at pixel centres alone,
+    // and the viewport pushed for the test has to be the whole of the transform after clipping.
+    if (state.msaa_mode.Value() != Tegra::Texture::MsaaMode::Msaa1x1 ||
+        FixedPipelineState::UnpackPolygonMode(state.polygon_mode) != Maxwell::PolygonMode::Fill ||
+        state.conservative_raster_enable != 0 ||
+        (y == Maxwell::ViewportSwizzle::NegativeY && device.IsNvViewportSwizzleSupported())) {
+        wanted &= ~MESH_CULL_SMALL;
+    }
+    return wanted;
+}
+
 /// SPIR-V emission of run-time pipelines: graphics on the GPU thread, graphics on workers and
 /// compute on workers (shader cache v2)
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 3> runtime_spirv_ns{};
@@ -677,6 +705,17 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                  profile.support_software_matrix_shared_memory
                      ? "gather from shared memory"
                      : "keep their shuffles (tensor cores in use, or no full 32-lane subgroups)");
+    }
+    // EDEN_NX2_MESH_CULL=<bits> (experiment): native mesh programs cull their triangles. 1 drops
+    // those outside the frustum, 2 those that cover no pixel centre, 4 emits no outputs for a
+    // workgroup with no triangle left; 7 is all three.
+    static const char* const mesh_cull{std::getenv("EDEN_NX2_MESH_CULL")};
+    if (mesh_cull != nullptr) {
+        using namespace Shader::Backend::SPIRV;
+        profile.mesh_cull = static_cast<u32>(std::strtoul(mesh_cull, nullptr, 0)) &
+                            (MESH_CULL_FRUSTUM | MESH_CULL_SMALL | MESH_CULL_EMPTY);
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_MESH_CULL={}: mesh program culling bits {}", mesh_cull,
+                 profile.mesh_cull);
     }
 
     host_info = Shader::HostTranslateInfo{
@@ -2634,6 +2673,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                     mesh_emulation->has_task ? mesh_emulation->args_binding : ~0U,
                     runtime_info.convert_depth_mode && !profile.support_native_ndc);
             }
+        }
+        if (!mesh_emulation && program.stage == Shader::Stage::Mesh) {
+            runtime_info.mesh_cull = MeshCullBits(profile.mesh_cull, key.state, device);
+            // The pipeline pushes the viewport the small triangle test reads.
+            program.info.uses_mesh_cull_viewport =
+                (runtime_info.mesh_cull & Shader::Backend::SPIRV::MESH_CULL_SMALL) != 0;
         }
         ConvertLegacyToGeneric(program, runtime_info);
         // EDEN_NX2_MESH_EMULATION_DUMP=<dir>: write the emulation's vertex shader for spirv-val.
