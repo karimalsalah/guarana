@@ -52,6 +52,33 @@ for the session or its evaluation fails, No sharpening takes over from the next 
 The game's constants (shader hashes, program keys, the cb0 offset) are in
 `src/video_core/oot_network.h`.
 
+## Other modes
+
+The keys above were captured docked with the Max Resolution add-on. Without it the scene renders
+at a dynamic resolution (864x480 to 1440x810 in handheld), the output pass is another program
+that writes 1920x1080, and the bypass does nothing. What the log says at `*:Info`, while a
+tonemapped image is known:
+
+- `Ocarina of Time: dispatch not bypassed (<reason>): key <native key> hash <shader hash> grid ...
+  block ..., tonemapped WxH drawn WxH, reads ..., stores ...`: once per program and reason, every
+  native compute dispatch left to the game, with the images its cb0 handles read (TEX, TLD, TLD4,
+  TXD) and store (SUST) as `+offset=address WxH format`. The output pass is the one that stores a
+  B10G11R11 (format 0x21) image of the output size.
+- `Ocarina of Time: unexpected network images; not replaced (<reason>: ...)` and
+  `Ocarina of Time: anti-aliasing network bypassed (...)`: when the output pass's outcome changes.
+
+`EDEN_NX2_OOT_BYPASS_ANY=1` (experiment, off by default) makes the bypass cover those modes:
+
+- The output pass is also known by shader hash: the passes the temporal replacement knows
+  (docs/native-dlss-replacement.md) and `03bf0ffc7d2d0bed`, measured writing the 1920x1080 output
+  in handheld. Its image is the program's one image store when it has exactly one, +0xd0 otherwise.
+- `EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...>` and `EDEN_NX2_OOT_BYPASS_SKIP=<hex,...>` add output and
+  skipped passes, as native program keys or shader hashes from the log lines above.
+- The output may be larger than the tonemapped image: up to 4x, same shape within 1/32. The copy
+  is then bilinear. Its source is what the tonemap draw could reach of its target (the surface
+  clip cut by viewport 0 and its scissor), not the whole target, which dynamic resolution may
+  leave partly unused.
+
 ## Results (Ryzen 7 9800X3D, RTX 5090, Kokiri Forest, 1x)
 
 | Mode | fps | Image |

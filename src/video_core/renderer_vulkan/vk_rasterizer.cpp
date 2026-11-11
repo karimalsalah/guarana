@@ -1659,12 +1659,16 @@ void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline)
     if (target.Address() == 0) {
         return;
     }
+    // With dynamic resolution the draw may cover only part of the target.
+    const auto area = VideoCommon::OotNetwork::DrawArea(maxwell3d->regs);
     std::scoped_lock lock{oot_network_bypass.mutex};
     if (oot_network_bypass.tonemapped.Address() != target.Address()) {
-        LOG_INFO(Render_Vulkan, "Ocarina of Time: tonemapped image at {:#x} {}x{}", target.Address(),
-                 target.width, target.height);
+        LOG_INFO(Render_Vulkan,
+                 "Ocarina of Time: tonemapped image at {:#x} {}x{}, drawn {},{} to {},{}",
+                 target.Address(), target.width, target.height, area.x0, area.y0, area.x1, area.y1);
     }
     oot_network_bypass.tonemapped = target;
+    oot_network_bypass.tonemapped_area = area;
 }
 
 void RasterizerVulkan::TraceDrawFailure(std::string_view reason) {
