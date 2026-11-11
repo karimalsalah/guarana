@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <limits>
 
 #include <boost/container/small_vector.hpp>
@@ -56,7 +57,7 @@ public:
     }
 
     [[nodiscard]] bool IsRegionUsed(u64 offset, u64 size) const noexcept {
-        return tracker.IsUsed(offset, size);
+        return tracker.IsUsed(offset, size) || (old_usage && old_tracker.IsUsed(offset, size));
     }
 
     void MarkUsage(u64 offset, u64 size) noexcept;
@@ -65,12 +66,29 @@ public:
         tracker.Reset();
     }
 
+    /// EDEN_NX2_UMA bit 16, once a frame instead of ResetUsageTracking. The ranges used before
+    /// the previous turn are forgotten once the host GPU is past the last of those uses, and
+    /// the ranges used since take their place.
+    void AgeUsageTracking() noexcept;
+
     [[nodiscard]] u64 LastUsageTick() const noexcept {
         return last_usage_tick;
     }
 
+    /// Empty for a buffer mapped only for direct uploads: it is downloaded as an unmapped one.
     [[nodiscard]] std::span<const u8> Mapped() const noexcept {
-        return buffer.IsHostCoherent() ? buffer.Mapped() : std::span<const u8>{};
+        return buffer.IsHostCoherent() && !mapped_for_uploads ? buffer.Mapped()
+                                                              : std::span<const u8>{};
+    }
+
+    /// EDEN_NX2_UMA bit 2: the buffer's memory while uploads may be written straight into it.
+    [[nodiscard]] std::span<u8> DirectUploadSpan() const noexcept {
+        return direct_upload_span;
+    }
+
+    /// For a GPU use the usage tracker cannot follow: uploads go through the GPU from now on.
+    void DisableDirectUploads() noexcept {
+        direct_upload_span = {};
     }
 
     operator VkBuffer() const noexcept {
@@ -90,8 +108,14 @@ private:
     vk::Buffer buffer;
     std::vector<BufferView> views;
     VideoCommon::UsageTracker tracker;
+    VideoCommon::UsageTracker old_tracker; ///< The uses before AgeUsageTracking's last turn
+    std::span<u8> direct_upload_span;
     VkDeviceAddress device_address{};
     u64 last_usage_tick{};
+    u64 old_usage_tick{}; ///< The last use old_tracker holds
+    bool old_usage{};     ///< old_tracker holds uses the host GPU may not have run yet
+    bool new_usage{};     ///< Used since AgeUsageTracking's last turn
+    bool mapped_for_uploads{};
     bool is_null{};
     bool sparse_compatible{};
 };
@@ -169,7 +193,25 @@ public:
 
     [[nodiscard]] StagingBufferRef DownloadStagingBuffer(size_t size, bool deferred = false);
 
-    bool CanReorderUpload(const Buffer& buffer, std::span<const VideoCommon::BufferCopy> copies);
+    /// Called for every staged upload that may be reordered. With direct uploads on, it also
+    /// marks the destination used: the copy is a GPU write still to run.
+    bool CanReorderUpload(Buffer& buffer, std::span<const VideoCommon::BufferCopy> copies);
+
+    /// EDEN_NX2_UMA bit 2. The memory of `buffer` when these copies can be written straight
+    /// into it, null when they have to go through a staging buffer: the buffer is not mapped,
+    /// or work recorded and not yet run by the host GPU uses some of the bytes.
+    [[nodiscard]] u8* DirectUploadTarget(Buffer& buffer,
+                                         std::span<const VideoCommon::BufferCopy> copies);
+
+    /// Zeroes a buffer no command uses yet through its mapping. False when it has none (or is
+    /// too large to fill on this thread): the caller clears it on the GPU.
+    [[nodiscard]] bool ClearNewBufferDirect(Buffer& buffer);
+
+    /// Whether every GPU use of a buffer has to reach its usage tracker: direct uploads go by
+    /// it across submissions, reordered ones only within the command buffer.
+    [[nodiscard]] bool TracksEveryUse() const noexcept {
+        return uma_direct;
+    }
 
     void FreeDeferredStagingBuffer(StagingBufferRef& ref);
 
@@ -319,11 +361,32 @@ private:
     void ReserveNullBuffer();
     vk::Buffer CreateNullBuffer();
 
+    /// EDEN_NX2_UMA: logs the uploads of the last second.
+    void ReportUmaUploads() noexcept;
+
     const Device& device;
     MemoryAllocator& memory_allocator;
     Scheduler& scheduler;
     StagingBufferPool& staging_pool;
     GuestDescriptorQueue& guest_descriptor_queue;
+
+    /// EDEN_NX2_UMA bits, latched when the renderer starts.
+    bool uma_coalesce{};
+    bool uma_direct{};
+    bool uma_generations{};
+    struct UmaUploads {
+        u64 direct{};
+        u64 direct_bytes{};
+        u64 reordered{};
+        u64 reordered_bytes{};
+        u64 in_order{};
+        u64 in_order_bytes{};
+        u64 unmapped{}; ///< Staged because the buffer has no mapping for direct uploads
+        u64 busy{};     ///< Staged because pending GPU work uses the destination
+        u64 frames{};
+    };
+    UmaUploads uma_uploads;
+    std::chrono::steady_clock::time_point uma_report_time{};
 
     std::shared_ptr<QuadArrayIndexBuffer> quad_array_index_buffer;
     std::shared_ptr<QuadStripIndexBuffer> quad_strip_index_buffer;

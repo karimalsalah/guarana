@@ -210,6 +210,10 @@ private:
 
     void FlushWork();
 
+    /// EDEN_NX2_UMA bit 8. Whether the draw budget's submission can wait: the host GPU still has
+    /// submitted work to run, and this submission holds fewer than 512 draws.
+    [[nodiscard]] bool DeferBudgetFlush(u32 budget);
+
     void TraceRenderState(bool is_indexed, const char* outcome, const Framebuffer* framebuffer);
 
     /// Records the copies of the command list pages the work just recorded wrote and submits, so
@@ -372,6 +376,8 @@ private:
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;
     bool pending_native_work{};
+    u64 budget_defer_tick{}; ///< The submission DeferBudgetFlush last deferred
+    u32 budget_deferrals{};  ///< and how many times
     bool deferred_wfi_query_sync{}; ///< WaitForIdle skipped the query sync (EDEN_NX2_DEFER_WFI)
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
     /// The draw being recorded as an alpha-test prepass split (EDEN_NX2_PREPASS_HASHES), if it is

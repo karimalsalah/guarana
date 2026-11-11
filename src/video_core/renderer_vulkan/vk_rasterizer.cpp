@@ -77,6 +77,7 @@
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_uma.h"
 
 namespace Vulkan {
 
@@ -4135,6 +4136,10 @@ void RasterizerVulkan::FlushWork() {
         scheduler.DispatchWork();
         break;
     case SubmissionPolicy::Action::Flush:
+        if (native && !android && DeferBudgetFlush(budget)) {
+            scheduler.DispatchWork();
+            break;
+        }
         scheduler.Flush();
         pending_native_work = false;
         break;
@@ -4142,6 +4147,36 @@ void RasterizerVulkan::FlushWork() {
     if (native && !android) {
         pending_native_work = true;
     }
+}
+
+bool RasterizerVulkan::DeferBudgetFlush(u32 budget) {
+    if (!VideoCommon::Nx2Uma::Has(VideoCommon::Nx2Uma::AdaptiveSubmit)) {
+        return false;
+    }
+    // The budget submits early so the host GPU can start on the frame. While it still has
+    // submitted work to run that buys nothing, and each submission costs a render pass, a full
+    // rebind and the driver's submit. Fences, reads and presents submit on their own. The cap
+    // keeps one tick from holding too much of the stream buffer.
+    static constexpr u32 RecheckDraws = 32;
+    static constexpr u32 MaxDeferrals = 12; // budget + 12 * 32 draws: 512 at the default budget
+    const u64 tick = scheduler.CurrentTick();
+    if (budget_defer_tick != tick) {
+        budget_defer_tick = tick;
+        budget_deferrals = 0;
+    }
+    if (budget_deferrals >= MaxDeferrals) {
+        return false;
+    }
+    auto& master_semaphore = scheduler.GetMasterSemaphore();
+    master_semaphore.Refresh();
+    if (master_semaphore.IsFree(tick - 1)) {
+        // Everything submitted has run: the GPU is waiting for this.
+        return false;
+    }
+    ++budget_deferrals;
+    // Advance reset the counter: ask again after RecheckDraws more draws.
+    draw_counter = budget > RecheckDraws ? budget - RecheckDraws : 0;
+    return true;
 }
 
 AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_cache_,

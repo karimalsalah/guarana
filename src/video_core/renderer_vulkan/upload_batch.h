@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <span>
 #include <vector>
 
@@ -100,6 +101,55 @@ public:
             groups.back().count += count;
         } else {
             groups.push_back({src, dst, first, count});
+        }
+    }
+
+    /// The batch with one group per source and destination pair, and with the copies that
+    /// continue one another in both buffers merged (EDEN_NX2_UMA bit 1). The copies of a batch
+    /// may run in any order (CanAdd), so regrouping and sorting them changes nothing.
+    void Coalesce(std::vector<VkBufferCopy>& out_copies, std::vector<Group>& out_groups) const {
+        out_copies.clear();
+        out_groups.clear();
+        out_copies.reserve(copies.size());
+        for (size_t index = 0; index < groups.size(); ++index) {
+            const Group& group = groups[index];
+            const auto same_pair = [&group](const Group& other) {
+                return other.src == group.src && other.dst == group.dst;
+            };
+            if (std::any_of(groups.begin(), groups.begin() + index, same_pair)) {
+                // Taken with the first group of its pair.
+                continue;
+            }
+            const size_t first = out_copies.size();
+            for (size_t later = index; later < groups.size(); ++later) {
+                const Group& other = groups[later];
+                if (!same_pair(other)) {
+                    continue;
+                }
+                out_copies.insert(out_copies.end(), copies.begin() + other.first,
+                                  copies.begin() + other.first + other.count);
+            }
+            std::sort(out_copies.begin() + first, out_copies.end(),
+                      [](const VkBufferCopy& lhs, const VkBufferCopy& rhs) {
+                          return lhs.dstOffset < rhs.dstOffset;
+                      });
+            size_t count = 0;
+            for (size_t read = first; read < out_copies.size(); ++read) {
+                const VkBufferCopy copy = out_copies[read];
+                if (count != 0) {
+                    VkBufferCopy& last = out_copies[first + count - 1];
+                    if (last.dstOffset + last.size == copy.dstOffset &&
+                        last.srcOffset + last.size == copy.srcOffset) {
+                        last.size += copy.size;
+                        continue;
+                    }
+                }
+                out_copies[first + count] = copy;
+                ++count;
+            }
+            out_copies.resize(first + count);
+            out_groups.push_back({group.src, group.dst, static_cast<u32>(first),
+                                  static_cast<u32>(count)});
         }
     }
 
