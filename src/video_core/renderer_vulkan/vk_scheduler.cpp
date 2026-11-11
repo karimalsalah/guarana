@@ -1012,19 +1012,14 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
     double dispatch_ms{};
     // Draw time by render target, to tell the main scene target from the side ones.
     std::map<PassTrace, double> by_target;
-    std::vector<double> times(count, -1.0);
     for (u32 i = 0; i < count; ++i) {
         const double ms = trace_work_ms[i];
-        if (ms < 0.0) {
+        const WorkTrace& item = trace_work_items[i];
+        if (ms < 0.0 || item.kind == TraceEmuKind) {
             continue;
         }
-        times[i] = static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
-                       results[i * 2].timestamp, results[i * 2 + 1].timestamp,
-                       trace_timestamp_bits)) *
-                   trace_timestamp_period / 1e6;
-        const WorkTrace& item = trace_work_items[i];
         if (item.fragment_hash != 0 && item.pass < trace_pass_count) {
-            by_target[trace_pass_items[item.pass]] += times[i];
+            by_target[trace_pass_items[item.pass]] += ms;
         }
     }
     const u8 no_format = static_cast<u8>(VideoCore::Surface::PixelFormat::Invalid);
@@ -1037,9 +1032,8 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
         }
     }
     costs.has_main_target = main_target != nullptr;
-    double total_ms{};
     for (u32 i = 0; i < count; ++i) {
-        const double ms = times[i];
+        const double ms = trace_work_ms[i];
         if (ms < 0.0) {
             continue;
         }
@@ -1052,13 +1046,12 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
                                 : by_shaders[{item.hash, item.fragment_hash, item.kind}];
         totals.total_ms += ms;
         ++totals.count;
-        if (ms > totals.max_ms || totals.count == 1) {
         totals.small_draws +=
             item.kind == '\0' && item.size[0] != 0 && item.size[0] <= 6 && item.size[1] == 1;
         totals.side_draws += main_target && item.fragment_hash != 0 &&
                              item.pass < trace_pass_count &&
                              trace_pass_items[item.pass] != *main_target;
-        if (ms > totals.max_ms) {
+        if (ms > totals.max_ms || totals.count == 1) {
             totals.max_ms = ms;
             totals.max_size = item.size;
         }
