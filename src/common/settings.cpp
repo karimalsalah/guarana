@@ -10,14 +10,19 @@
 #include <exception>
 #include <stdexcept>
 #endif
+#include <algorithm>
 #include <atomic>
 #include <compare>
 #include <cstddef>
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <mutex>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 #include <fmt/core.h>
 
 #include "common/settings_enums.h"
@@ -270,6 +275,37 @@ AstcRecompression GetAstcRecompression() {
 
 void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression) {
     astc_recompression_override = recompression;
+}
+
+// Written while a game boots, read by the frontend saving a config.
+static std::mutex preset_values_mutex;
+static std::vector<std::pair<BasicSetting*, std::string>> preset_values;
+
+static bool IsHeld(const BasicSetting& setting) {
+    return !setting.UsingGlobal() &&
+           std::ranges::any_of(preset_values, [&setting](const auto& held) {
+               return held.first == &setting && held.second == setting.ToString();
+           });
+}
+
+void HoldPresetValue(BasicSetting& setting) {
+    std::scoped_lock lock{preset_values_mutex};
+    preset_values.emplace_back(&setting, setting.ToString());
+}
+
+bool IsPresetValue(const BasicSetting& setting) {
+    std::scoped_lock lock{preset_values_mutex};
+    return IsHeld(setting);
+}
+
+void ClearPresetValues() {
+    std::scoped_lock lock{preset_values_mutex};
+    for (const auto& held : preset_values) {
+        if (IsHeld(*held.first)) {
+            held.first->SetGlobal(true);
+        }
+    }
+    preset_values.clear();
 }
 
 bool IsDockedMode() {

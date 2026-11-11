@@ -257,6 +257,9 @@ struct Values {
     SwitchableSetting<bool> sync_core_speed{linkage, false, "sync_core_speed", Category::Core,
                                             Specialization::Default};
 
+    // Per-GPU, per-game presets (core/game_presets.h) fill in the settings the user left alone.
+    Setting<bool> auto_presets{linkage, true, "auto_presets", Category::Core};
+
     // Cpu
     SwitchableSetting<CpuBackend, true> cpu_backend{linkage,
 #ifdef HAS_NCE
@@ -1139,6 +1142,13 @@ bool ReactiveFlushing();
 // for the running program (the configuration is left as is). The core clears it on load.
 AstcRecompression GetAstcRecompression();
 void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression);
+
+// Per-game values a game preset gave settings for the running program (core/game_presets.h).
+// They are not the user's: config files leave them out. A value stops being held once it changes.
+void HoldPresetValue(BasicSetting& setting);
+bool IsPresetValue(const BasicSetting& setting);
+/// Returns the held settings to their global values.
+void ClearPresetValues();
 
 bool IsOpenGL();
 
