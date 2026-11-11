@@ -1583,17 +1583,18 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
         }
-        if (set_shading_rate) {
-            cmdbuf.SetFragmentShadingRateKHR(shading_rate,
-                                             {primitive_rate_op,
-                                              VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
-        }
         if (bind_pipeline) {
             scheduler.SetGraphicsPipelineMissing(!pipeline || build->Failed());
             if (!pipeline || build->Failed()) {
                 return;
             }
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
+        }
+        // After the bind: a rate set under a pipeline with a static one does not survive it.
+        if (set_shading_rate) {
+            cmdbuf.SetFragmentShadingRateKHR(shading_rate,
+                                             {primitive_rate_op,
+                                              VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
         }
         const VkShaderStageFlags push_stages =
             mesh_emulation ? VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT
