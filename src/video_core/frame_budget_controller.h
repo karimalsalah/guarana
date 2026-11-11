@@ -73,7 +73,7 @@ public:
     }
     /// Ticks for which lowers still stay above MissScale.
     [[nodiscard]] u32 CooldownLeft() const {
-        return miss_scale > 0.0 && since_miss < cooldown_len ? cooldown_len - since_miss : 0;
+        return miss_scale > 0.0 && since_miss < cooldown_len ? cooldown_len - since_miss : u32{0};
     }
     [[nodiscard]] u32 FastStreak() const {
         return fast_streak;
