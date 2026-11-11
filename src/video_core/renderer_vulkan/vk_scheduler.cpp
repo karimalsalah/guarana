@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <algorithm>
 #include <vector>
@@ -669,7 +670,7 @@ void Scheduler::TraceComputePipeline(u64 hash) {
     });
 }
 
-void Scheduler::ReportWorkTimes() {
+void Scheduler::ReportWorkTimes(double submission_sum_ms) {
     const u32 count = trace_work_count;
     const u32 dropped = std::exchange(trace_work_dropped, 0);
     trace_work_count = 0;
@@ -717,8 +718,8 @@ void Scheduler::ReportWorkTimes() {
                                                                       by_shaders.end());
     std::ranges::sort(sorted, std::greater<>{},
                       [](const auto& entry) { return entry.second.total_ms; });
-    if (sorted.size() > 8) {
-        sorted.resize(8);
+    if (sorted.size() > 24) {
+        sorted.resize(24);
     }
     std::string slowest;
     for (const auto& [shaders, totals] : sorted) {
@@ -734,8 +735,10 @@ void Scheduler::ReportWorkTimes() {
                                totals.max_size[1], totals.max_size[2]);
     }
     LOG_INFO(Render_Vulkan,
-             "DKB gpu_work renderer_frame={} timed={} dropped={} timed_sum_ms={:.3f} slowest:{}",
-             trace_sample_frame, count, dropped, total_ms, slowest);
+             "DKB gpu_work renderer_frame={} timed={} dropped={} timed_sum_ms={:.3f} "
+             "submission_sum_ms={:.3f} untimed_ms={:.3f} slowest:{}",
+             trace_sample_frame, count, dropped, total_ms, submission_sum_ms,
+             submission_sum_ms - total_ms, slowest);
 }
 
 void Scheduler::TraceGpuSubmission() {
@@ -762,7 +765,27 @@ void Scheduler::TraceGpuSubmission() {
             trace_gpu_failed = true;
             return;
         }
+        // A submission can begin before the one ahead of it ends: the shorter way round the
+        // counter gives the sign.
+        const auto signed_ms = [this](u64 begin, u64 end) {
+            const u64 forward =
+                Common::DkbFrameTrace::TimestampDelta(begin, end, trace_timestamp_bits);
+            const u64 backward =
+                Common::DkbFrameTrace::TimestampDelta(end, begin, trace_timestamp_bits);
+            const double ticks = forward <= backward ? static_cast<double>(forward)
+                                                     : -static_cast<double>(backward);
+            return ticks * trace_timestamp_period / 1e6;
+        };
+        static constexpr std::array<double, 6> histogram_limits{0.25, 0.5, 1.0, 2.0, 5.0, 10.0};
+        std::array<u32, 7> histogram{};
+        // Per submission: its GPU time and the gap since the one before it ended.
+        std::vector<std::pair<double, double>> times(trace_gpu_count);
         double total_ms{};
+        double gap_sum_ms{};
+        double gap_max_ms{};
+        double overlap_sum_ms{};
+        u32 gaps{};
+        u32 overlaps{};
         std::array<std::pair<double, u32>, 4> slowest{};
         for (u32 i = 0; i < trace_gpu_count * 2; i += 2) {
             if (results[i].available == 0 || results[i + 1].available == 0) {
@@ -776,6 +799,22 @@ void Scheduler::TraceGpuSubmission() {
                 slowest.back() = {duration_ms, i / 2};
                 std::ranges::sort(slowest, std::greater<>{});
             }
+            u32 bucket = 0;
+            while (bucket < histogram_limits.size() && duration_ms >= histogram_limits[bucket]) {
+                ++bucket;
+            }
+            ++histogram[bucket];
+            const double gap_ms =
+                i == 0 ? 0.0 : signed_ms(results[i - 1].timestamp, results[i].timestamp);
+            if (gap_ms > 0.0) {
+                gap_sum_ms += gap_ms;
+                gap_max_ms = (std::max)(gap_max_ms, gap_ms);
+                ++gaps;
+            } else if (gap_ms < 0.0) {
+                overlap_sum_ms -= gap_ms;
+                ++overlaps;
+            }
+            times[i / 2] = {duration_ms, gap_ms};
         }
         const double span_ms = trace_gpu_skipped == 0
             ? static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
@@ -789,6 +828,34 @@ void Scheduler::TraceGpuSubmission() {
                  "valid_bits={} period_ns={}",
                  trace_sample_frame, trace_gpu_tick, span_ms, total_ms, trace_gpu_count,
                  trace_gpu_skipped, trace_timestamp_bits, trace_timestamp_period);
+        LOG_INFO(Render_Vulkan,
+                 "DKB gpu_hist renderer_frame={} submissions={} lt0.25={} lt0.5={} lt1={} lt2={} "
+                 "lt5={} lt10={} ge10={} idle_gap_sum_ms={:.3f} idle_gaps={} "
+                 "max_idle_gap_ms={:.3f} overlap_sum_ms={:.3f} overlaps={}",
+                 trace_sample_frame, trace_gpu_count, histogram[0], histogram[1], histogram[2],
+                 histogram[3], histogram[4], histogram[5], histogram[6], gap_sum_ms, gaps,
+                 gap_max_ms, overlap_sum_ms, overlaps);
+        static const bool all_submissions = [] {
+            const char* value = std::getenv("EDEN_NX2_TRACE_ALL_SUBMISSIONS");
+            return value && std::strcmp(value, "1") == 0;
+        }();
+        for (u32 index = 0; all_submissions && index < trace_gpu_count; ++index) {
+            const auto& work = trace_submissions[index];
+            const u32 listed = (std::min)(work.num_shaders, u32{4});
+            std::string shaders;
+            for (u32 i = 0; i < listed; ++i) {
+                const auto& shader = work.shaders[i];
+                shaders += fmt::format("{}s{}:{:016x}", shaders.empty() ? "" : ",",
+                                       shader.stage, shader.hash);
+            }
+            LOG_INFO(Render_Vulkan,
+                     "DKB gpu_sub renderer_frame={} index={} tick={} gpu_ms={:.3f} gap_ms={:.3f} "
+                     "draw_attempts={} dispatch_attempts={} shaders={} more_shaders={}",
+                     trace_sample_frame, index, work.tick, times[index].first,
+                     times[index].second, work.draw_attempts, work.dispatch_attempts,
+                     shaders.empty() ? "-" : shaders,
+                     work.num_shaders - listed + work.untracked_uses);
+        }
         for (const auto& [duration_ms, index] : slowest) {
             if (duration_ms < 10.0) {
                 continue;
@@ -806,7 +873,7 @@ void Scheduler::TraceGpuSubmission() {
                      trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
                      work.dispatch_attempts, shaders, work.untracked_uses);
         }
-        ReportWorkTimes();
+        ReportWorkTimes(total_ms);
         trace_gpu_tick = 0;
         trace_gpu_count = 0;
         trace_gpu_skipped = 0;

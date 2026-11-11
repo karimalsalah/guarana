@@ -455,7 +455,7 @@ private:
     void AllocateWorkerCommandBuffer();
 
     void TraceGpuSubmission();
-    void ReportWorkTimes();
+    void ReportWorkTimes(double submission_sum_ms);
     void TraceShader(u64 hash, u32 stage);
 
     u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
