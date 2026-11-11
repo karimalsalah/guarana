@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -238,8 +239,11 @@ enum class NvidiaArchitecture {
 /// Handles data specific to a physical device.
 class Device {
 public:
+    /// on_capabilities runs once the device's capabilities are known, before any setting that
+    /// sizes the device (vram_usage_mode) is read.
     explicit Device(VkInstance instance, vk::PhysicalDevice physical, VkSurfaceKHR surface,
-                    const vk::InstanceDispatch& dld);
+                    const vk::InstanceDispatch& dld,
+                    const std::function<void(const Device&)>& on_capabilities = {});
     ~Device();
 
     /**

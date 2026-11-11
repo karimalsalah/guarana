@@ -948,6 +948,10 @@ void Config::ReadSettingGeneric(Settings::BasicSetting* const setting) {
     bool use_global = true;
     if (setting->Switchable() && !global) {
         use_global = ReadBooleanSetting(std::string(key).append("\\use_global"), std::make_optional(true));
+        if (use_global && Settings::IsPresetValue(*setting)) {
+            // A game preset holds this value for the running game.
+            return;
+        }
         setting->SetGlobal(use_global);
     }
 
@@ -970,7 +974,13 @@ void Config::WriteSettingGeneric(const Settings::BasicSetting* const setting) {
     std::string key = AdjustKey(setting->GetLabel());
     if (setting->Switchable()) {
         if (!global) {
-            WriteBooleanSetting(std::string(key).append("\\use_global"), setting->UsingGlobal());
+            // A game preset's value is not the user's: the file keeps the global one.
+            const bool preset = Settings::IsPresetValue(*setting);
+            WriteBooleanSetting(std::string(key).append("\\use_global"),
+                                setting->UsingGlobal() || preset);
+            if (preset) {
+                return;
+            }
         }
         if (global || !setting->UsingGlobal()) {
             auto value = global ? setting->ToStringGlobal() : setting->ToString();

@@ -20,6 +20,7 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core_timing.h"
+#include "core/game_presets.h"
 #include "core/frontend/graphics_context.h"
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
@@ -142,9 +143,42 @@ VkSurfaceFormatKHR ChooseOutputFormat(const vk::PhysicalDevice& physical, VkSurf
 #endif
 }
 
+// Game presets match on the GPU's capabilities and set values the device and the renderer read
+// while they are built.
+void ApplyGamePresets(const Device& device) {
+    using Core::GameSettings::GPUVendor;
+    GPUVendor vendor = GPUVendor::Unknown;
+    switch (device.GetDriverID()) {
+    case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
+    case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+        vendor = GPUVendor::Intel;
+        break;
+    case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
+        vendor = GPUVendor::Nvidia;
+        break;
+    case VK_DRIVER_ID_AMD_PROPRIETARY:
+    case VK_DRIVER_ID_AMD_OPEN_SOURCE:
+    case VK_DRIVER_ID_MESA_RADV:
+        vendor = GPUVendor::AMD;
+        break;
+    default:
+        break;
+    }
+    Core::GamePresets::Apply(Settings::GetCurrentProgramID(),
+                             Core::GamePresets::GpuInfo{
+                                 .vendor = vendor,
+                                 .integrated = device.IsIntegrated(),
+                                 .software_tensor_math =
+                                     !device.IsCooperativeHmmaSupported() &&
+                                     !device.IsCooperativeHmma16x16x16Supported(),
+                             });
+}
+
 } // Anonymous namespace
 
-Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld, VkSurfaceKHR surface) {
+Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
+                    VkSurfaceKHR surface,
+                    const std::function<void(const Device&)>& on_capabilities) {
     const std::vector<VkPhysicalDevice> devices = instance.EnumeratePhysicalDevices();
     const u32 device_index = Settings::values.vulkan_device.GetValue();
     if (device_index >= u32(devices.size())) {
@@ -152,7 +186,7 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     const vk::PhysicalDevice physical_device(devices[device_index], dld);
-    return Device(*instance, physical_device, surface, dld);
+    return Device(*instance, physical_device, surface, dld, on_capabilities);
 }
 
 RendererVulkan::RendererVulkan(Core::Frontend::EmuWindow& emu_window,
@@ -179,7 +213,7 @@ try
                                                     : vk::DebugUtilsMessenger{})
     // Create surface
     , surface(CreateSurface(instance, render_window.GetWindowInfo()))
-    , device(CreateDevice(instance, dld, *surface))
+    , device(CreateDevice(instance, dld, *surface, ApplyGamePresets))
     , memory_allocator(device)
     , state_tracker()
     , scheduler(device, state_tracker)

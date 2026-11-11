@@ -513,7 +513,8 @@ bool WantsAmdFsr4(VkDriverId driver_id) {
 } // Anonymous namespace
 
 Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR surface,
-               const vk::InstanceDispatch& dld_)
+               const vk::InstanceDispatch& dld_,
+               const std::function<void(const Device&)>& on_capabilities)
     : instance{instance_}, dld{dld_}, physical{physical_},
     format_properties(GetFormatProperties(physical)) {
     // Get suitability and device properties.
@@ -595,6 +596,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 
     supports_conditional_barriers = !is_intel_windows;
 
+    if (on_capabilities) {
+        on_capabilities(*this);
+    }
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
 

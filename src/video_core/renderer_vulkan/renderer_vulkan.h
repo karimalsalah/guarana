@@ -38,7 +38,8 @@ class GPU;
 namespace Vulkan {
 
 Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
-                    VkSurfaceKHR surface);
+                    VkSurfaceKHR surface,
+                    const std::function<void(const Device&)>& on_capabilities = {});
 
 class RendererVulkan final : public VideoCore::RendererBase {
 public:
