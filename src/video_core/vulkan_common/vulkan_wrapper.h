@@ -181,6 +181,7 @@ struct InstanceDispatch {
     PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR
         vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR{};
     PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2{};
+    PFN_vkGetPhysicalDeviceFragmentShadingRatesKHR vkGetPhysicalDeviceFragmentShadingRatesKHR{};
     PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties{};
     PFN_vkGetPhysicalDeviceFormatProperties2 vkGetPhysicalDeviceFormatProperties2{};
     PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties{};
@@ -251,6 +252,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdSetBlendConstants vkCmdSetBlendConstants{};
     PFN_vkCmdSetCullModeEXT vkCmdSetCullModeEXT{};
     PFN_vkCmdSetDepthBias vkCmdSetDepthBias{};
+    PFN_vkCmdSetFragmentShadingRateKHR vkCmdSetFragmentShadingRateKHR{};
     PFN_vkCmdSetDepthBias2EXT vkCmdSetDepthBias2EXT{};
     PFN_vkCmdSetDepthBounds vkCmdSetDepthBounds{};
     PFN_vkCmdSetDepthBoundsTestEnableEXT vkCmdSetDepthBoundsTestEnableEXT{};
@@ -1236,6 +1238,9 @@ public:
     /// Matrix shapes and types of VK_KHR_cooperative_matrix; empty when the driver lacks it.
     std::vector<VkCooperativeMatrixPropertiesKHR> GetCooperativeMatrixPropertiesKHR() const;
 
+    /// Fragment sizes of VK_KHR_fragment_shading_rate; empty when the driver lacks it.
+    std::vector<VkPhysicalDeviceFragmentShadingRateKHR> GetFragmentShadingRatesKHR() const;
+
     bool GetSurfaceSupportKHR(u32 queue_family_index, VkSurfaceKHR) const;
 
     VkSurfaceCapabilitiesKHR GetSurfaceCapabilitiesKHR(VkSurfaceKHR) const;
@@ -1590,6 +1595,12 @@ public:
 
     void SetDepthBias(float constant_factor, float clamp, float slope_factor) const noexcept {
         dld->vkCmdSetDepthBias(handle, constant_factor, clamp, slope_factor);
+    }
+
+    void SetFragmentShadingRateKHR(
+        const VkExtent2D& fragment_size,
+        const std::array<VkFragmentShadingRateCombinerOpKHR, 2>& combiner_ops) const noexcept {
+        dld->vkCmdSetFragmentShadingRateKHR(handle, &fragment_size, combiner_ops.data());
     }
 
     void SetDepthBias(float constant_factor, float clamp, float slope_factor,

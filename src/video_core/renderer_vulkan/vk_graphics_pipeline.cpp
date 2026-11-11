@@ -43,6 +43,7 @@
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
 
@@ -1487,6 +1488,15 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     const bool is_rescaling{texture_cache.IsRescaling()};
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
+    // EDEN_NX2_VRS: the rate is dynamic state of every guest pipeline. It is set again with each
+    // bind, as a pipeline with a static rate (blits, presentation) leaves it undefined.
+    VkExtent2D shading_rate{1, 1};
+    bool set_shading_rate{};
+    if (device.IsKhrFragmentShadingRateSupported()) {
+        const auto wanted{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
+        shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
+        set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
+    }
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
@@ -1510,6 +1520,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
+                      shading_rate, set_shading_rate,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
@@ -1518,6 +1529,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             const VkDescriptorBufferBindingInfoEXT binding_info{
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
+        }
+        if (set_shading_rate) {
+            cmdbuf.SetFragmentShadingRateKHR(shading_rate,
+                                             {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+                                              VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
         }
         if (bind_pipeline) {
             scheduler.SetGraphicsPipelineMissing(!pipeline || build->Failed());
@@ -1905,7 +1921,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .pAttachments = cb_attachments.data(),
         .blendConstants = {}
     };
-    static_vector<VkDynamicState, 34> dynamic_states{
+    static_vector<VkDynamicState, 36> dynamic_states{
         VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_DEPTH_BIAS,         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
         VK_DYNAMIC_STATE_DEPTH_BOUNDS,       VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
@@ -1990,6 +2006,12 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         if (device.SupportsDynamicState3AlphaToOneEnable()) {
             dynamic_states.push_back(VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT);
         }
+    }
+
+    // EDEN_NX2_VRS: on every guest pipeline, so a shader's rate changes without a rebuild.
+    const bool dynamic_shading_rate{device.IsKhrFragmentShadingRateSupported()};
+    if (dynamic_shading_rate) {
+        dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
     }
 
     const bool is_mesh{IsMeshPipeline()};
@@ -2101,8 +2123,12 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     };
+    // Stored driver binaries are checked against the driver's key of this create info; the salt
+    // keeps the builds with the dynamic rate beside the others instead of replacing them.
+    const u64 binary_key{GraphicsRecordKey(key) ^
+                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL)};
     pipeline = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
-                                                           GraphicsRecordKey(key))
+                                                           binary_key)
                         : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
     TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(

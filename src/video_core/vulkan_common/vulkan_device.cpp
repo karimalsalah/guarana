@@ -480,6 +480,17 @@ void Device::RemoveExtensionFeature(bool& extension, Feature& feature,
     feature.pNext = pNext;
 }
 
+VkExtent2D Device::ClampFragmentShadingRate(VkExtent2D wanted) const {
+    VkExtent2D best{1, 1};
+    for (const VkExtent2D rate : fragment_shading_rates) {
+        if (rate.width <= wanted.width && rate.height <= wanted.height &&
+            rate.width * rate.height > best.width * best.height) {
+            best = rate;
+        }
+    }
+    return best;
+}
+
 template <typename Feature>
 void Device::RemoveExtensionFeatureIfUnsuitable(bool is_suitable, Feature& feature,
                                                 const std::string& extension_name) {
@@ -1502,6 +1513,11 @@ bool Device::GetSuitability(bool requires_swapchain) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
         SetNext(next, properties.cooperative_matrix);
     }
+    if (extensions.fragment_shading_rate) {
+        properties.fragment_shading_rate.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
+        SetNext(next, properties.fragment_shading_rate);
+    }
     if (supported_extensions.contains(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME)) {
         properties.integer_dot_product.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES;
@@ -1793,6 +1809,35 @@ void Device::RemoveUnsuitableExtensions() {
     }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+    // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
+    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used.
+    features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
+    features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
+    extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
+                                       features.fragment_shading_rate.pipelineFragmentShadingRate &&
+                                       instance_version >= VK_API_VERSION_1_2 &&
+                                       std::getenv("EDEN_NX2_VRS") != nullptr;
+    fragment_shading_rates.clear();
+    if (extensions.fragment_shading_rate) {
+        std::string rates;
+        for (const VkPhysicalDeviceFragmentShadingRateKHR& rate :
+             physical.GetFragmentShadingRatesKHR()) {
+            if ((rate.sampleCounts & VK_SAMPLE_COUNT_1_BIT) == 0) {
+                continue;
+            }
+            fragment_shading_rates.push_back(rate.fragmentSize);
+            rates += fmt::format(" {}x{}", rate.fragmentSize.width, rate.fragmentSize.height);
+        }
+        const VkExtent2D max_size = properties.fragment_shading_rate.maxFragmentSize;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_VRS: VK_KHR_fragment_shading_rate enabled, rates:{}, max {}x{}", rates,
+                 max_size.width, max_size.height);
+    } else if (loaded_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
+        // Not a warning: the extension is left out unless asked for.
+        RemoveExtensionFeature(extensions.fragment_shading_rate, features.fragment_shading_rate,
+                               VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    }
 
     // VK_KHR_shader_quad_control
     // Quad control depends on maximal reconvergence; advertise neither unless
