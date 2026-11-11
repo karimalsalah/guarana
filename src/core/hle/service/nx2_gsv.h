@@ -30,6 +30,7 @@
 #include "common/div_ceil.h"
 #include "common/dkb_frame_trace.h"
 #include "common/game_presets.h"
+#include "common/power_tuning.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -1563,6 +1564,7 @@ private:
     std::jthread m_cold_hint_thread{[this](std::stop_token stop) {
         Common::SetCurrentThreadName("nx2:ColdHint");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        Common::PowerTuning::TagBackgroundThread();
         while (!stop.stop_requested()) {
             for (int i = 0; i < 30 && !stop.stop_requested(); ++i) {
                 std::this_thread::sleep_for(std::chrono::seconds{1});

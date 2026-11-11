@@ -823,6 +823,21 @@ void SetCurrentThreadToAllCores() {
 #endif
 }
 
+void SetCurrentThreadEcoQoS(bool enable) {
+#if defined(_WIN32) && defined(THREAD_POWER_THROTTLING_CURRENT_VERSION)
+    THREAD_POWER_THROTTLING_STATE state{};
+    state.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+    state.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+    state.StateMask = enable ? THREAD_POWER_THROTTLING_EXECUTION_SPEED : 0;
+    if (!SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &state, sizeof(state))) {
+        LOG_WARNING(Common, "SetThreadInformation(ThreadPowerThrottling) failed: {}",
+                    GetLastError());
+    }
+#else
+    (void)enable;
+#endif
+}
+
 void RefreshThreadPolicies() {
 #if defined(__ANDROID__)
     CpuTopologyState& state = State();

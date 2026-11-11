@@ -22,6 +22,7 @@
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/power_tuning.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/file_sys/nup_container.h"
@@ -213,6 +214,7 @@ private:
     void Work() {
         Common::SetCurrentThreadName("ShaderWarmBuild");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        Common::PowerTuning::TagBackgroundThread();
         for (;;) {
             Job job;
             {

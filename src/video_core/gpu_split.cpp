@@ -20,6 +20,7 @@
 
 #include "common/dkb_cpu_trace.h"
 #include "common/logging.h"
+#include "common/power_tuning.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -187,13 +188,14 @@ void GpuSplit::WaitForSpace(size_t words) {
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(4096U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (write_position + words - consumed_cache <= RingWords) {
             Nx2Profile::AddDrain(DrainSite::RingFull, start);
             return;
         }
-        if (spins < 4096) {
+        if (spins < spin_limit) {
             Pause();
         } else {
             std::this_thread::yield();
@@ -225,6 +227,7 @@ void GpuSplit::Drain(DrainSite site) {
     // Everything consumed is not enough: the back submits deferred work (Scheduler::DeferFlush)
     // from its idle hook afterwards, and the caller may use the scheduler once this returns.
     bool hook_asked = false;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(16384U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {
@@ -238,14 +241,14 @@ void GpuSplit::Drain(DrainSite site) {
                 hook_asked = true;
             }
             // Backoff sleeps only while entries are unconsumed: spin until the hook is done.
-            if (spins < 16384) {
+            if (spins < spin_limit) {
                 Pause();
             } else {
                 std::this_thread::yield();
             }
             continue;
         }
-        Backoff(spins, write_position);
+        Backoff(spins, spin_limit, write_position);
     }
 }
 
@@ -354,6 +357,7 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
     wait_target.store(target, std::memory_order_seq_cst);
     Publish();
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(16384U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache >= target) {
@@ -361,12 +365,12 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
             Nx2Profile::AddDrain(site, start);
             return true;
         }
-        Backoff(spins, target);
+        Backoff(spins, spin_limit, target);
     }
 }
 
-void GpuSplit::Backoff(u32 spins, u64 target) {
-    if (spins < 16384) {
+void GpuSplit::Backoff(u32 spins, u32 spin_limit, u64 target) {
+    if (spins < spin_limit) {
         Pause();
         return;
     }
@@ -563,7 +567,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             const auto spin_start = g_acquire_counting ? std::chrono::steady_clock::now()
                                                        : std::chrono::steady_clock::time_point{};
             // The front usually sends more within microseconds: spin briefly before sleeping.
-            for (u32 spins = 0; spins < 8192 && available == read_position &&
+            const u32 spin_limit = Common::PowerTuning::ScaleSpin(8192U);
+            for (u32 spins = 0; spins < spin_limit && available == read_position &&
                                 !hook_requested.load(std::memory_order_relaxed);
                  ++spins) {
                 Pause();

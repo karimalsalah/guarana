@@ -415,7 +415,7 @@ private:
     bool WaitFor(u64 target, DrainSite site);
 
     /// One step of a front wait for the back to consume `target`.
-    void Backoff(u32 spins, u64 target);
+    void Backoff(u32 spins, u32 spin_limit, u64 target);
     /// After the back stored `consumed`: wakes a front sleeping in Backoff.
     void NotifyFront() {
         if (front_waiting.load(std::memory_order_seq_cst)) {

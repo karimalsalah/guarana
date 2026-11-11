@@ -132,6 +132,9 @@ void SetCurrentThreadToPerformanceCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
+/// Windows: EcoQoS (efficient frequencies, efficiency cores preferred) for this thread, or back
+/// to HighQoS. No-op on other hosts.
+void SetCurrentThreadEcoQoS(bool enable);
 
 enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
 

@@ -222,6 +222,22 @@ not list it.
 (`EDEN_NX2_HOSTTIMING_STATS`) on or off and returns the `previous` and current `stats` state.
 Read the lines with `log_tail` (`contains: "HostTiming wait"`).
 
+**`power`** `{window_ms?}`. Host power from the Windows Energy Meter Interface, averaged over
+`window_ms` (default 1000; 0 means since the previous call): `package_w`, `cpu_w` (cores, the
+`PP0` channel) and `gpu_w` (integrated GPU, `PP1`), with `valid` false when nothing was measured
+and `available` false when the host has no such meter. Also `process_cpu_cores` (the emulator's
+CPU time per wall time), `gpu_busy_ms` of the last sampled frame (null when not measured) and
+the switches below.
+
+**`power_set`** `{spin_scale?, eco_background?, idle_spin_us?}`. Sets the power switches live
+and returns all three. `spin_scale` (0 to 1, `EDEN_NX2_SPIN_SCALE`) scales the busy-wait bounds
+of the GPU front and back threads; 0 blocks at once. `eco_background`
+(`EDEN_NX2_ECO_BACKGROUND=1`) puts the background workers (shader jobs, pipeline serialization,
+texture decoder, ZeroTrim, ColdHint) on EcoQoS on Windows; it only reaches threads that start
+afterwards, so set the variable to cover a whole session. `idle_spin_us`
+(`EDEN_NX2_IDLE_SPIN_US`) is how long an idle guest core polls before blocking, -1 for the
+per-title default.
+
 **`reject_shaders`** `{hashes?, reject?, timeout_s?}`. This is `EDEN_NX2_REJECT_HASH` at
 runtime: the same keys (native program key or shader hash) and the same effect. Pipeline
 invalidation turned out to be tractable:

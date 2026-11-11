@@ -15,6 +15,7 @@
 
 #include "common/assert.h"
 #include "common/dkb_cpu_trace.h"
+#include "common/power_tuning.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -105,7 +106,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     Profile::Scope scope{Profile::Zone::PendingSleep};
                     split.SettleIdleBack();
                     const auto waited = std::chrono::steady_clock::now() - last_progress;
-                    if (waited < std::chrono::microseconds{500}) {
+                    // EDEN_NX2_SPIN_SCALE shortens the polling.
+                    if (waited < Common::PowerTuning::ScaleSpin(std::chrono::microseconds{500})) {
                         std::this_thread::yield();
                     } else if (waited < std::chrono::seconds{2}) {
 #ifdef _WIN32

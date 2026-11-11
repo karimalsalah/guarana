@@ -8,6 +8,7 @@
 #include "common/literals.h"
 #include "common/logging.h"
 #include "common/memory_detect.h"
+#include "common/power_tuning.h"
 #include "common/thread.h"
 #include "video_core/shader_jobs.h"
 
@@ -160,6 +161,7 @@ ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
             Common::SetCurrentThreadName(name.c_str());
             Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
             Common::SetCurrentThreadToBackgroundWork();
+            Common::PowerTuning::TagBackgroundThread();
             Worker(driver);
         });
     }};

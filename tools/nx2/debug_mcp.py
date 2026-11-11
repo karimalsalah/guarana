@@ -252,6 +252,34 @@ TOOLS = [
                        "on or off; read it with log_tail. Returns the previous and current state.",
         "inputSchema": {"type": "object", "properties": {"stats": {"type": "boolean"}}},
     },
+    {
+        "name": "power",
+        "description": "Host power from the Windows energy meter, averaged over window_ms (0: "
+                       "since the previous call): package_w, cpu_w (cores) and gpu_w (integrated "
+                       "GPU), valid false when nothing was measured; process_cpu_cores (CPU time "
+                       "per wall time of the emulator), gpu_busy_ms of the last sampled frame, "
+                       "and the power_set switches.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"window_ms": {"type": "integer", "minimum": 0, "maximum": 10000}},
+        },
+    },
+    {
+        "name": "power_set",
+        "description": "Sets the power switches live and returns them: spin_scale "
+                       "(EDEN_NX2_SPIN_SCALE, scales the GPU threads' busy-wait bounds, 0 blocks "
+                       "at once), eco_background (EDEN_NX2_ECO_BACKGROUND, EcoQoS for background "
+                       "threads that start afterwards) and idle_spin_us (EDEN_NX2_IDLE_SPIN_US, "
+                       "-1 for the default). Without arguments it only reports them.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "spin_scale": {"type": "number", "minimum": 0, "maximum": 1},
+                "eco_background": {"type": "boolean"},
+                "idle_spin_us": {"type": "integer", "minimum": -1, "maximum": 100000},
+            },
+        },
+    },
 ]
 
 TOOL_NAMES = {tool["name"] for tool in TOOLS}
@@ -319,6 +347,8 @@ def default_timeout(name, params):
         return 120
     if name == "frame_times":
         return math.ceil(params.get("seconds", 5)) + 1
+    if name == "power":
+        return math.ceil(params.get("window_ms", 1000) / 1000) + 5
     if name == "sample":
         return int(params.get("seconds", 10)) + 90
     if name in ("input", "input_sequence"):

@@ -20,6 +20,8 @@
 #include "common/scope_exit.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
+#include "common/power_meter.h"
+#include "common/power_tuning.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/stb.h"
@@ -79,6 +81,9 @@ struct ToolState {
     u64 screenshots{};
     u64 samples{};
     u64 gpu_reads{};
+    /// Process CPU time and when it was read, at the previous power call.
+    double power_cpu_seconds{};
+    std::chrono::steady_clock::time_point power_time{};
     std::atomic<bool> stopping{};
 };
 
@@ -506,6 +511,82 @@ json HostTiming(ToolState& state, const json& params) {
     return {{"previous", previous}, {"stats", stats.load()}};
 }
 
+json PowerSwitches() {
+    namespace Tuning = Common::PowerTuning;
+    return {
+        {"spin_scale", Tuning::spin_percent.load(std::memory_order_relaxed) / 100.0},
+        {"eco_background", Tuning::eco_background.load(std::memory_order_relaxed)},
+        {"idle_spin_us", Tuning::idle_spin_us.load(std::memory_order_relaxed)},
+    };
+}
+
+// Host package, CPU core and integrated GPU watts and the cores this process kept busy, averaged
+// over window_ms (0: since the previous call).
+json Power(ToolState& state, const json& params) {
+    const auto window = std::chrono::milliseconds{Param<int>(params, "window_ms", 1000, 0, 10000)};
+    auto& meter = Common::PowerMeter::Instance();
+    VideoCore::RendererBase* const renderer =
+        state.system.IsPoweredOn() ? &state.system.GPU().Renderer() : nullptr;
+    if (renderer != nullptr) {
+        renderer->RequestGpuBusySample();
+    }
+    if (window.count() > 0) {
+        static_cast<void>(meter.Read());
+        state.power_cpu_seconds = Common::ProcessCpuSeconds();
+        state.power_time = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - state.power_time < window &&
+               !state.stopping.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(20ms);
+        }
+    }
+    const Common::PowerMeter::Sample sample = meter.Read();
+    const double cpu_seconds = Common::ProcessCpuSeconds();
+    const auto now = std::chrono::steady_clock::now();
+    const bool first = state.power_time == std::chrono::steady_clock::time_point{};
+    const double seconds = std::chrono::duration<double>(now - state.power_time).count();
+    const double cores =
+        !first && seconds > 0.0 ? (cpu_seconds - state.power_cpu_seconds) / seconds : 0.0;
+    state.power_cpu_seconds = cpu_seconds;
+    state.power_time = now;
+    json result = {
+        {"available", meter.Available()},
+        {"valid", sample.valid},
+        {"package_w", sample.package_w},
+        {"cpu_w", sample.cpu_w},
+        {"gpu_w", sample.gpu_w},
+        {"seconds", first ? 0.0 : seconds},
+        {"process_cpu_cores", cores},
+        {"gpu_busy_ms", nullptr},
+        {"channels", meter.ChannelNames()},
+    };
+    if (renderer != nullptr) {
+        if (const auto busy = renderer->GetGpuBusyMs()) {
+            result["gpu_busy_ms"] = *busy;
+        }
+    }
+    result.update(PowerSwitches());
+    return result;
+}
+
+// Changes the power switches live. eco_background only reaches threads that start afterwards.
+json PowerSet(ToolState&, const json& params) {
+    namespace Tuning = Common::PowerTuning;
+    if (params.contains("spin_scale")) {
+        Tuning::spin_percent.store(Tuning::SpinPercent(params.at("spin_scale").get<double>()),
+                                   std::memory_order_relaxed);
+    }
+    if (params.contains("eco_background")) {
+        Tuning::eco_background.store(params.at("eco_background").get<bool>(),
+                                     std::memory_order_relaxed);
+    }
+    if (params.contains("idle_spin_us")) {
+        Tuning::idle_spin_us.store((std::clamp)(params.at("idle_spin_us").get<s64>(), s64{-1},
+                                                s64{100000}),
+                                   std::memory_order_relaxed);
+    }
+    return PowerSwitches();
+}
+
 json ReadMemory(ToolState& state, const json& params) {
     const u64 address = AddressParam(params, "address");
     const u64 size = ReadSize(params, address);
@@ -702,6 +783,8 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"sample", handler(SampleThreads)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},
+        {"power", handler(Power)},
+        {"power_set", handler(PowerSet)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},
         {"read_gpu_memory", handler(ReadGpuMemory)},

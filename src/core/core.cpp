@@ -15,6 +15,7 @@
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
+#include "common/power_tuning.h"
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -550,6 +551,7 @@ struct System::Impl {
         }
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
+        Common::PowerTuning::LogState();
         return SystemResultStatus::Success;
     }
 

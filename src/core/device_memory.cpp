@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "common/logging.h"
+#include "common/power_tuning.h"
 #include "common/thread.h"
 #endif
 
@@ -40,6 +41,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+    Common::PowerTuning::TagBackgroundThread();
     constexpr size_t Busy = size_t{64} << 20;
     std::mutex mutex;
     std::condition_variable_any wake;
