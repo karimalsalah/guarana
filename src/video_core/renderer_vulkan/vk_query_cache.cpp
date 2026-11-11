@@ -1483,6 +1483,9 @@ void QueryCacheRuntime::HostConditionalRenderingCompareValueImpl(VideoCommon::Lo
         const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
         const auto [buffer, offset] =
             impl->buffer_cache.ObtainCPUBuffer(object.address, 8, sync_info, post_op);
+        // Later passes and submissions begin conditional rendering on this buffer again
+        // (ResumeHostConditionalRendering) without telling its usage tracker.
+        buffer->DisableDirectUploads();
         impl->hcr_buffer = buffer->Handle();
         impl->hcr_offset = offset;
     }

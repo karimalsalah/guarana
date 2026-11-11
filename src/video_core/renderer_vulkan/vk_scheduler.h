@@ -335,6 +335,11 @@ public:
     /// a source depends on a pending copy, or the batch is full. Call outside a render pass.
     void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
 
+    /// EDEN_NX2_UMA bit 1. Uploads that go in the upload command buffer, ahead of everything
+    /// recorded in this submission: they wait for the submission, or for an upload that writes
+    /// the same bytes, and are recorded as one vkCmdCopyBuffer per destination.
+    void RecordReorderedUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
+
     /// Send work to a separate thread.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
@@ -366,7 +371,7 @@ public:
     /// Whether anything was recorded since the last Flush or Finish, or waits to be: batched
     /// uploads and a deferred clear reach the command buffer only at the next record or submit.
     [[nodiscard]] bool RecordedSinceSubmit() const noexcept {
-        return record_serial != submitted_serial || uploads_pending ||
+        return record_serial != submitted_serial || uploads_pending || reorders_pending ||
                deferred_clear.framebuffer != nullptr;
     }
     /// Counts a flush skipped because nothing was recorded (GPU profile).
@@ -684,6 +689,11 @@ private:
     bool uploads_pending{};
     /// Records pending uploads before another command, worker handoff, or submission tick.
     void FlushUploads();
+
+    std::unique_ptr<UploadBatch> reorder_batch; ///< RecordReorderedUpload's pending copies
+    bool reorders_pending{};
+    /// Records the pending reordered uploads in the upload command buffer.
+    void FlushReorderedUploads();
 
     vk::QueryPool trace_query_pool;
     static constexpr u32 TraceMaxSubmissions = 512;

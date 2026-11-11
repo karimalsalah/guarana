@@ -29,6 +29,7 @@
 #include "video_core/auto_shading_rate.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_uma.h"
 #include "video_core/renderer_vulkan/upload_batch.h"
 #include "video_core/renderer_vulkan/vk_command_pool.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
@@ -251,7 +252,8 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
     : device{device_}, state_tracker{state_tracker_},
       master_semaphore{std::make_unique<MasterSemaphore>(device)},
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)},
-      upload_batch{std::make_unique<UploadBatch>()} {
+      upload_batch{std::make_unique<UploadBatch>()},
+      reorder_batch{std::make_unique<UploadBatch>()} {
 
     if (VideoCore::AutoShadingRate::TargetFps() > 0.0 &&
         !device.IsKhrFragmentShadingRateSupported()) {
@@ -527,6 +529,23 @@ void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBuffe
 }
 
 void Scheduler::FlushUploads() {
+    if (VideoCommon::Nx2Uma::Has(VideoCommon::Nx2Uma::Coalesce)) {
+        std::vector<VkBufferCopy> merged_copies;
+        std::vector<UploadBatch::Group> merged_groups;
+        upload_batch->Coalesce(merged_copies, merged_groups);
+        const u32 merged_num_copies = static_cast<u32>(merged_copies.size());
+        const u32 merged_num_groups = static_cast<u32>(merged_groups.size());
+        auto merged_command = [copies = std::move(merged_copies),
+                               groups = std::move(merged_groups)](vk::CommandBuffer cmdbuf) {
+            UploadBatch::Record(cmdbuf, copies, groups);
+        };
+        upload_batch->copies.clear();
+        upload_batch->groups.clear();
+        uploads_pending = false;
+        RecordEmu(TraceCategory::BufferUploadBatch, {merged_num_copies, merged_num_groups, 0},
+                  std::move(merged_command));
+        return;
+    }
     // Copy the vectors so the recording thread retains their capacity while the worker uses them.
     const u32 num_copies = static_cast<u32>(upload_batch->copies.size());
     const u32 num_groups = static_cast<u32>(upload_batch->groups.size());
@@ -536,6 +555,39 @@ void Scheduler::FlushUploads() {
     upload_batch->groups.clear();
     uploads_pending = false;
     RecordEmu(TraceCategory::BufferUploadBatch, {num_copies, num_groups, 0}, std::move(command));
+}
+
+void Scheduler::RecordReorderedUpload(VkBuffer src, VkBuffer dst,
+                                      std::span<const VkBufferCopy> copies) {
+    if (VideoCommon::GpuSplit::check_owner) {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordReorderedUpload");
+    }
+    // As RecordUpload: a region that overwrites a pending one is recorded after it.
+    for (const VkBufferCopy& copy : copies) {
+        const std::span<const VkBufferCopy> region{&copy, 1};
+        if (reorders_pending && !reorder_batch->CanAdd(src, dst, region)) {
+            FlushReorderedUploads();
+        }
+        reorder_batch->Add(src, dst, region);
+        reorders_pending = true;
+    }
+}
+
+void Scheduler::FlushReorderedUploads() {
+    std::vector<VkBufferCopy> merged_copies;
+    std::vector<UploadBatch::Group> merged_groups;
+    reorder_batch->Coalesce(merged_copies, merged_groups);
+    reorder_batch->copies.clear();
+    reorder_batch->groups.clear();
+    reorders_pending = false;
+    RecordWithUploadBuffer([copies = std::move(merged_copies), groups = std::move(merged_groups)](
+                               vk::CommandBuffer, vk::CommandBuffer upload_cmdbuf) {
+        for (const UploadBatch::Group& group : groups) {
+            upload_cmdbuf.CopyBuffer(
+                group.src, group.dst,
+                vk::Span<VkBufferCopy>(copies.data() + group.first, group.count));
+        }
+    });
 }
 
 void Scheduler::RecordEmuBegin(TraceCategory category, std::array<u32, 3> size) {
@@ -1667,6 +1719,10 @@ void Scheduler::TraceGpuSubmission() {
 
 u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                                TraceSite site) {
+    if (reorders_pending) {
+        // The upload command buffer ends with this submission.
+        FlushReorderedUploads();
+    }
     if (uploads_pending) {
         // Keep the copies in the tick that protects their staging regions and buffer lifetimes.
         FlushUploads();
