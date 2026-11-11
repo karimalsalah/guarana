@@ -39,6 +39,7 @@
 #include "core/nx2_power_session.h"
 #include "hid_core/hid_core.h"
 #include "video_core/auto_shading_rate.h"
+#include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_base.h"
@@ -555,6 +556,7 @@ json SetShadingRate(ToolState& state, const json& params) {
         {"target_fps", status.target_fps},
         {"target_ms", status.target_ms},
         {"frame_ms", status.frame_ms},
+        {"allowed", status.allowed},
         {"sampling", renderer.IsGpuCostSampling()},
         {"snapshots", status.snapshots},
         {"max_level", status.max_level},
@@ -798,6 +800,47 @@ json GpuCosts(ToolState& state, const json& params) {
             {"work", std::move(work)},
             {"pass_entries", costs.passes.size()},
             {"passes", std::move(passes)}};
+}
+
+// The frame budget controller (EDEN_NX2_TARGET_FPS): sets the target and the GPU time scale live
+// and reports what the controller measured and decided at its last tick.
+json FrameBudgetTool(ToolState&, const json& params) {
+    namespace Budget = VideoCore::FrameBudget;
+    if (params.contains("target_fps")) {
+        const double fps = params.at("target_fps").get<double>();
+        if (!std::isfinite(fps) || (fps != 0.0 && (fps < 1.0 || fps > 1000.0))) {
+            throw std::runtime_error{"target_fps: want 0 (off) or 1 to 1000"};
+        }
+        Budget::SetTargetFps(fps);
+    }
+    if (params.contains("scale")) {
+        const double scale = params.at("scale").get<double>();
+        if (!std::isfinite(scale) || scale <= 0.0) {
+            throw std::runtime_error{"scale: want a positive number"};
+        }
+        Budget::SetGpuTimeScale(scale);
+    }
+    const Budget::Status status = Budget::GetStatus();
+    return {{"target_fps", status.target_fps},
+            {"target_ms", status.target_ms},
+            {"frame_ms", status.frame_ms},
+            {"work_ms", status.work_ms},
+            {"samples", status.samples},
+            {"scale", status.scale},
+            {"latched_scale", status.latched_scale},
+            {"manual_scale", status.manual_scale},
+            {"min_scale", status.min_scale},
+            {"max_scale", status.max_scale},
+            {"state", status.state},
+            {"ticks", status.ticks},
+            {"raises", status.raises},
+            {"lowers", status.lowers},
+            {"miss_scale", status.miss_scale},
+            {"cooldown_ticks", status.cooldown_ticks},
+            {"fast_streak", status.fast_streak},
+            {"blind_lowers", status.blind_lowers},
+            {"shading_rate_allowed", status.shading_allowed},
+            {"last_change", status.last_change}};
 }
 
 /// Host memory of the process and the system, and what the caches last published
@@ -1052,6 +1095,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"power", handler(Power)},
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},
+        {"frame_budget", handler(FrameBudgetTool)},
         {"memory", handler(MemoryReport)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},

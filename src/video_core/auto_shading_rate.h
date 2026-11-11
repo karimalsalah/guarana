@@ -22,6 +22,13 @@ namespace VideoCore::AutoShadingRate {
 /// cost sampling on (Scheduler::RequestCostSampling), without which no snapshot arrives.
 void SetTargetFps(double fps);
 
+/// Any thread: whether the governor may coarsen, true unless someone says otherwise. The frame
+/// budget controller (VideoCore::FrameBudget) allows it only while the game's own resolution has
+/// nothing left to give; disallowing empties the layer at once.
+void SetAllowed(bool allowed);
+/// Any thread: whether any shader is at a coarser rate through the governor.
+[[nodiscard]] bool Coarsening();
+
 /// Pipeline creation: this fragment shader writes depth, so it is never coarsened.
 void NoteDepthWriter(u64 fragment_hash);
 /// Any thread: fragment shaders the user wants left alone (EDEN_NX2_VRS_AUTO_DENY=<hash>,...).
@@ -43,6 +50,7 @@ struct Status {
     double target_fps{};
     double frame_ms{};  ///< Measured at the last snapshot, 0 when unknown
     double target_ms{};
+    bool allowed{true}; ///< SetAllowed
     u64 snapshots{};    ///< Snapshots the governor ran on
     u8 max_level{};
     std::vector<std::pair<u64, u8>> levels; ///< Fragment hash to level, sorted by hash

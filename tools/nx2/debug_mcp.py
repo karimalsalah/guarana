@@ -338,6 +338,27 @@ TOOLS = [
         },
     },
     {
+        "name": "frame_budget",
+        "description": "The frame budget controller (EDEN_NX2_TARGET_FPS): holds guest presents to "
+                       "the target's interval and moves the GPU time scale a Switch 2 title sees "
+                       "(EDEN_NX2_GPU_TIME_SCALE) so its own dynamic resolution fits the frame "
+                       "into it. target_fps sets the target live (0 turns it off), scale sets "
+                       "the scale by hand (the controller goes on from it). Returns the target, "
+                       "frame_ms (median present interval of the last half second), work_ms (the "
+                       "frame without the pacing wait, 80th percentile: what the controller "
+                       "compares), scale and its limits, state (off, frozen, on_target, slow, "
+                       "saturated, fast, cooldown, no_effect, waiting), the scale that last "
+                       "missed and the cool-down left, and whether the shading-rate governor may "
+                       "act.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target_fps": {"type": "number", "minimum": 0, "maximum": 1000},
+                "scale": {"type": "number", "exclusiveMinimum": 0},
+            },
+        },
+    },
+    {
         "name": "memory",
         "description": "Host memory in bytes: the process (working set, commit, peaks), the system "
                        "(commit against its limit, free RAM), guest memory (resident after the "
