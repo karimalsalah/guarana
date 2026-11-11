@@ -134,6 +134,8 @@ private:
     size_t num_granules{};
     // Windows requires it for kernels whom lack proper support for some functions!
     bool fallback_buffer{false};
+    /// Windows, EDEN_NX2_LAZY_GUEST_COMMIT: the backing is committed as MarkUsed hands it out.
+    bool lazy_commit{false};
 };
 
 } // namespace Common

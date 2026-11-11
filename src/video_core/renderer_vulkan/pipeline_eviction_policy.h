@@ -29,6 +29,16 @@ constexpr size_t KeptPipelinesForMemory(u64 total_memory) {
     return static_cast<size_t>(total_memory / 4 / PipelineBytes);
 }
 
+/// Low memory mode (Common::LowMemoryMode) keeps at most 1 GiB of built pipelines (3,495).
+inline constexpr size_t LowMemoryKeptPipelines =
+    static_cast<size_t>((u64{1} << 30) / PipelineBytes);
+
+/// Low memory mode's budget for the compressed SPIR-V kept of evicted pipelines (~3,800 of them).
+inline constexpr u64 LowMemoryKeptSpirvBytes = u64{96} << 20;
+
+/// Low memory mode's budget of prebuilt pipelines no draw has used, where only those are kept.
+inline constexpr size_t LowMemoryUnusedPrebuiltPipelines = 500;
+
 /// Picks which unused pipelines to destroy so that at most `kept` stay built.
 /// @param last_uses Frame each candidate was last used (0 for a prebuilt one no draw has used).
 ///                  Candidates are built pipelines old enough to evict and not the current one.

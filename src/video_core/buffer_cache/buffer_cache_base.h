@@ -220,6 +220,13 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 512_MiB;
     static constexpr s64 DEFAULT_CRITICAL_MEMORY = 1_GiB;
 
+    /// Buffer bytes from which Switch 2 titles' buffers are collected, and collected in earnest.
+    static constexpr u64 NATIVE_COLLECT_BYTES = 512_MiB;
+    static constexpr u64 NATIVE_CRITICAL_BYTES = 1_GiB;
+    /// The same in low memory mode (Common::LowMemoryMode): still over the ~200 MiB a scene uses.
+    static constexpr u64 LOW_MEMORY_COLLECT_BYTES = 384_MiB;
+    static constexpr u64 LOW_MEMORY_CRITICAL_BYTES = 768_MiB;
+
     // Debug Flags.
 
     static constexpr bool DISABLE_DOWNLOADS = true;

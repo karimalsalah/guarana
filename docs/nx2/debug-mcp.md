@@ -222,6 +222,15 @@ not list it.
 (`EDEN_NX2_HOSTTIMING_STATS`) on or off and returns the `previous` and current `stats` state.
 Read the lines with `log_tail` (`contains: "HostTiming wait"`).
 
+**`memory`**. Host memory in bytes. `process`: working set, private working set, commit and their
+peaks. `system`: commit against its limit, RAM and free RAM. `guest`: the guest memory's size,
+what stayed resident after the last zero-page trim, zero pages trimmed and zero-filled so far, and
+bytes committed on demand (`EDEN_NX2_LAZY_GUEST_COMMIT=1`). `renderer`: device memory in use
+against the texture cache thresholds, buffer cache, staging buffers, mesh arenas, graphics
+pipelines (entries, built, kept limit) and kept SPIR-V; pipeline figures refresh every 600 frames.
+`low_memory_mode` says whether `EDEN_NX2_LOW_MEMORY` or the host's RAM (20 GiB or less) turned
+the smaller cache limits on.
+
 **`reject_shaders`** `{hashes?, reject?, timeout_s?}`. This is `EDEN_NX2_REJECT_HASH` at
 runtime: the same keys (native program key or shader hash) and the same effect. Pipeline
 invalidation turned out to be tractable:
