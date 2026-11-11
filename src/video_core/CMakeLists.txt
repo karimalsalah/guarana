@@ -34,6 +34,8 @@ add_library(video_core STATIC
     control/channel_state_cache.h
     control/scheduler.cpp
     control/scheduler.h
+    auto_shading_rate.cpp
+    auto_shading_rate.h
     cost_governor.cpp
     cost_governor.h
     delayed_destruction_ring.h

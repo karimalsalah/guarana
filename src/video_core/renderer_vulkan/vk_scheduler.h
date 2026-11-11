@@ -664,6 +664,7 @@ private:
         char kind{};
         u32 pass{TraceNoPass}; ///< The traced render pass it ran in
         u32 span_end{};        ///< RecordEmuBegin items: the item count at RecordEmuEnd
+        u32 pass{~u32{0}}; ///< Index of the timed render pass it ran in, TraceNoPass without one
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;

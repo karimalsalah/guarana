@@ -26,6 +26,7 @@
 #include "common/settings.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/thread.h"
+#include "video_core/auto_shading_rate.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/renderer_vulkan/upload_batch.h"
@@ -252,6 +253,11 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)},
       upload_batch{std::make_unique<UploadBatch>()} {
 
+    if (VideoCore::AutoShadingRate::TargetFps() > 0.0 &&
+        !device.IsKhrFragmentShadingRateSupported()) {
+        LOG_WARNING(Render_Vulkan, "EDEN_NX2_VRS_AUTO: the device has no per-draw shading rate");
+        VideoCore::AutoShadingRate::SetTargetFps(0.0);
+    }
     // The submission timestamps also feed the performance overlay's GPU %, so they exist
     // without EDEN_DKB_FRAME_TRACE; nothing is written to them until a sample is asked for.
     const auto physical = device.GetPhysical();
@@ -274,7 +280,9 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
             const char* const cost_env = std::getenv("EDEN_NX2_COST_SAMPLING");
             const bool cost_on = cost_env && std::strcmp(cost_env, "1") == 0;
             const char* const server_env = std::getenv("EDEN_NX2_DEBUG_SERVER");
-            if (Common::DkbFrameTrace::Enabled() || cost_on ||
+            // EDEN_NX2_VRS_AUTO: the governor lives on the snapshots.
+            const bool vrs_auto = VideoCore::AutoShadingRate::TargetFps() > 0.0;
+            if (Common::DkbFrameTrace::Enabled() || cost_on || vrs_auto ||
                 (server_env && *server_env != '\0')) {
                 trace_work_pool = device.GetLogical().CreateQueryPool({
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -298,7 +306,7 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .queryCount = TraceMaxPasses * 4,
                     .pipelineStatistics = 0,
                 });
-                cost_sampling = cost_on;
+                cost_sampling = cost_on || vrs_auto;
             }
         } catch (const vk::Exception& error) {
             LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());
@@ -993,6 +1001,8 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
         double total_ms{};
         double max_ms{};
         u32 count{};
+        u32 small_draws{};
+        u32 side_draws{};
         std::array<u32, 3> max_size{};
     };
     std::map<std::tuple<u64, u64, char>, Totals> by_shaders;
@@ -1000,8 +1010,36 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
     double total_ms{};
     double emu_ms{};
     double dispatch_ms{};
+    // Draw time by render target, to tell the main scene target from the side ones.
+    std::map<PassTrace, double> by_target;
+    std::vector<double> times(count, -1.0);
     for (u32 i = 0; i < count; ++i) {
         const double ms = trace_work_ms[i];
+        if (ms < 0.0) {
+            continue;
+        }
+        times[i] = static_cast<double>(Common::DkbFrameTrace::TimestampDelta(
+                       results[i * 2].timestamp, results[i * 2 + 1].timestamp,
+                       trace_timestamp_bits)) *
+                   trace_timestamp_period / 1e6;
+        const WorkTrace& item = trace_work_items[i];
+        if (item.fragment_hash != 0 && item.pass < trace_pass_count) {
+            by_target[trace_pass_items[item.pass]] += times[i];
+        }
+    }
+    const u8 no_format = static_cast<u8>(VideoCore::Surface::PixelFormat::Invalid);
+    const PassTrace* main_target{};
+    double main_ms{};
+    for (const auto& [target, target_ms] : by_target) {
+        if (target.depth_format != no_format && target.num_colors != 0 && target_ms > main_ms) {
+            main_target = &target;
+            main_ms = target_ms;
+        }
+    }
+    costs.has_main_target = main_target != nullptr;
+    double total_ms{};
+    for (u32 i = 0; i < count; ++i) {
+        const double ms = times[i];
         if (ms < 0.0) {
             continue;
         }
@@ -1015,6 +1053,12 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
         totals.total_ms += ms;
         ++totals.count;
         if (ms > totals.max_ms || totals.count == 1) {
+        totals.small_draws +=
+            item.kind == '\0' && item.size[0] != 0 && item.size[0] <= 6 && item.size[1] == 1;
+        totals.side_draws += main_target && item.fragment_hash != 0 &&
+                             item.pass < trace_pass_count &&
+                             trace_pass_items[item.pass] != *main_target;
+        if (ms > totals.max_ms) {
             totals.max_ms = ms;
             totals.max_size = item.size;
         }
@@ -1058,6 +1102,8 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
             .fragment_hash = std::get<1>(shaders),
             .kind = std::get<2>(shaders),
             .draws = totals.count,
+            .small_draws = totals.small_draws,
+            .side_draws = totals.side_draws,
             .total_ms = totals.total_ms,
             .max_ms = totals.max_ms,
         });
@@ -1449,8 +1495,9 @@ void Scheduler::TraceGpuSubmission() {
         ReportPassTimes(costs);
         if (trace_costs_active) {
             costs.when = std::chrono::steady_clock::now();
-            // integration point: feed VideoCore::CostGovernor from here (worker thread, about
-            // once a second) or from a GpuCosts() reader.
+            // Worker thread, about once a second. The governor only writes the shading-rate
+            // registry, which draws read through a generation counter.
+            VideoCore::AutoShadingRate::OnSnapshot(costs);
             std::scoped_lock lock{gpu_costs_mutex};
             gpu_costs = std::move(costs);
         }

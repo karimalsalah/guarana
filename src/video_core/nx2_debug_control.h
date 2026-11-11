@@ -110,6 +110,9 @@ struct ShadingRateTable {
     ShadingRate fallback{};
     /// Sorted by fragment shader hash.
     std::vector<std::pair<u64, ShadingRate>> rates;
+    /// The automatic governor's layer (EDEN_NX2_VRS_AUTO), sorted by hash. Used only where the
+    /// manual table says nothing: no entry in rates and a 1x1 fallback.
+    std::vector<std::pair<u64, ShadingRate>> auto_rates;
 };
 
 /// "1x1", "2x1", "1x2", "2x2", "4x2", "2x4" or "4x4".
@@ -118,6 +121,9 @@ struct ShadingRateTable {
 /// `all` the rate of every shader not listed. The table starts from EDEN_NX2_VRS_HASHES
 /// (<hash>:<rate>,...) and EDEN_NX2_VRS_DEFAULT (<rate>), and outlives debug sessions.
 void SetShadingRates(std::span<const u64> hashes, ShadingRate rate, bool all);
+/// Any thread: replaces the automatic layer (VideoCore::AutoShadingRate). The manual entries are
+/// never changed by it and win over it.
+void SetAutoShadingRates(std::vector<std::pair<u64, ShadingRate>> rates);
 [[nodiscard]] ShadingRateTable ShadingRates();
 /// Any thread, each draw: the rate wanted for this fragment shader. One atomic load and a search
 /// in a copy the thread keeps; the lock is taken only after the table changed.

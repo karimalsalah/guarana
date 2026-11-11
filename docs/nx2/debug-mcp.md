@@ -227,7 +227,21 @@ Read the lines with `log_tail` (`contains: "HostTiming wait"`).
 `PP0` channel) and `gpu_w` (integrated GPU, `PP1`), with `valid` false when nothing was measured
 and `available` false when the host has no such meter. Also `process_cpu_cores` (the emulator's
 CPU time per wall time), `gpu_busy_ms` of the last sampled frame (null when not measured) and
-the switches below.
+the switches below. `policy` and `governor` report the session power policy.
+
+`EDEN_NX2_POWER_POLICY=igpu` (Windows, integrated GPUs only, off by default) trades CPU power
+for GPU clock on a shared package power limit. At game boot it saves the active power scheme's
+processor performance boost mode and minimum processor state (both core classes, AC and DC),
+writes boost off and a 5% minimum, and writes the saved values back at game stop or exit. The
+saved values sit in `nx2_power_restore.txt` in the config directory meanwhile, so the next start
+restores them after a crash. `policy` has `active`, the `scheme`, each setting's `saved_*` and
+`applied_*` values and a `message` (why it is not active: a host that refuses the calls is left
+alone). While it runs, a governor samples once a second and steps `spin_scale` down
+(1 -> 0.5 -> 0.25 -> 0) when the GPU is busy over 90% of a frame that is slower than the target
+and the cores take over half the package power, and back up when the GPU is busy under 70%.
+`governor` has its `state` (`gpu_bound`, `cpu_bound`, `balanced`, `no_data`), inputs and
+`last_change`. The target is `EDEN_NX2_POWER_POLICY_FPS`, else the `EDEN_NX2_VRS_AUTO` target,
+else 30.
 
 **`power_set`** `{spin_scale?, eco_background?, idle_spin_us?}`. Sets the power switches live
 and returns all three. `spin_scale` (0 to 1, `EDEN_NX2_SPIN_SCALE`) scales the busy-wait bounds
@@ -241,7 +255,10 @@ per-title default.
 `DKB gpu_work` and `DKB gpu_pass` data without the log lines): `work` per vertex+fragment or
 compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).
 `enable` turns the sampling on or off (`EDEN_NX2_COST_SAMPLING=1` starts with it on); `frame` is
-0 until a frame was sampled, `age_ms` says how old the sample is.
+0 until a frame was sampled, `age_ms` says how old the sample is. Each `work` entry also counts
+its `small_draws` (direct draws of at most 6 vertices and one instance) and `side_draws` (draws
+into another target than the main scene target: the one with depth and colour whose draws took
+the most time, `has_main_target`).
 **`set_shading_rate`** `{hashes?, rate?, all?}`. With `EDEN_NX2_VRS` set at launch, every guest
 graphics pipeline takes its fragment shading rate (VK_KHR_fragment_shading_rate) as dynamic
 state. This sets the fragment size (`1x1`, `2x1`, `1x2`, `2x2`, `4x2`, `2x4`, `4x4`; `2x2` when
@@ -249,6 +266,19 @@ omitted) for the draws of the listed fragment shader hashes, from the next draw 
 `all: true` for every shader not listed. `1x1` restores. Without hashes it returns the table.
 `EDEN_NX2_VRS_HASHES=<hash>:<rate>,...` and `EDEN_NX2_VRS_DEFAULT=<rate>` set the same table at
 boot. Rates are clamped to the device's.
+
+`auto: <fps>` starts the automatic governor and `auto: 0` stops it (`EDEN_NX2_VRS_AUTO=<fps>` at
+launch, with `EDEN_NX2_VRS`). It turns cost sampling on and, on each sampled frame, compares the
+median guest present interval of the last second (frames the host generates are not counted)
+with the target: after two slow samples the costliest fragment shader goes one level coarser
+(`2x1`, `2x2`; `EDEN_NX2_VRS_AUTO_MAX=3` allows `4x4`), after four fast ones the last raise is
+taken back. Its table is a layer under the manual one: a hash in `rates` or a non-`1x1` default
+always wins, and the governor never touches them. It leaves alone fragment shaders that write
+depth, that only draw small direct draws (full-screen and UI quads), that only draw into side
+targets, and the hashes of `auto_deny` (`EDEN_NX2_VRS_AUTO_DENY=<hash>,...`; `auto_allow`
+removes them). The reply's `auto` has the target, the measured `frame_ms`, the layer (`rates`,
+`levels`), the `denied` lists, `last_action` and `hold_reason`. A raise or lower logs one
+`VRS auto:` line.
 **`memory`**. Host memory in bytes. `process`: working set, private working set, commit and their
 peaks. `system`: commit against its limit, RAM and free RAM. `guest`: the guest memory's size,
 what stayed resident after the last zero-page trim, zero pages trimmed and zero-filled so far, and

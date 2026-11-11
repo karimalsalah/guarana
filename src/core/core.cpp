@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <optional>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
+#include <vector>
 #include <atomic>
 #include <memory>
 #include <new>
@@ -15,6 +18,7 @@
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
+#include "common/power_policy.h"
 #include "common/power_tuning.h"
 #include "common/adpf.h"
 #include "common/settings.h"
@@ -28,6 +32,7 @@
 #include "core/cpu_manager.h"
 #include "core/debugger/debugger.h"
 #include "core/debugger/nx2_debug_tools.h"
+#include "core/nx2_power_session.h"
 #include "core/device_memory.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
@@ -87,6 +92,39 @@ std::atomic<u64> g_nx2_present_count{};
 static_assert(std::atomic<u64>::is_always_lock_free);
 std::array<std::atomic<u64>, 4096> g_nx2_present_times_ns{};
 std::atomic<u32> g_nx2_present_time_services{};
+
+double Nx2RecentFrameMs() {
+    const u64 capacity = g_nx2_present_times_ns.size();
+    const u64 last = g_nx2_present_count.load(std::memory_order_relaxed);
+    const u64 now = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
+    const u64 window = 1'000'000'000;
+    std::vector<double> intervals;
+    u64 previous = 0;
+    for (u64 frame = last; frame != 0 && last - frame < capacity - 1; --frame) {
+        const u64 timestamp =
+            g_nx2_present_times_ns[frame % capacity].load(std::memory_order_relaxed);
+        if (timestamp > now || now - timestamp > window ||
+            (previous != 0 && timestamp > previous)) {
+            if (frame == last) {
+                // The counter advances before its slot is stored.
+                continue;
+            }
+            break;
+        }
+        if (previous != 0) {
+            intervals.push_back(static_cast<double>(previous - timestamp) / 1'000'000.0);
+        }
+        previous = timestamp;
+    }
+    if (intervals.size() < 3) {
+        return 0.0;
+    }
+    const auto middle = intervals.begin() + intervals.size() / 2;
+    std::ranges::nth_element(intervals, middle);
+    return *middle;
+}
 
 FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
                                          const std::string& path) {
@@ -203,7 +241,10 @@ std::optional<u64> FindSwitch2Program(const FileSys::VirtualFile& file, u64 prog
 struct System::Impl {
     explicit Impl(System& system)
         : kernel{system}, fs_controller{system}, hid_core{kernel}, cpu_manager{system},
-          reporter{system}, applet_manager{system}, frontend_applets{system}, profile_manager{} {}
+          reporter{system}, applet_manager{system}, frontend_applets{system}, profile_manager{} {
+        // A session that crashed with EDEN_NX2_POWER_POLICY left the power scheme changed.
+        Common::PowerPolicy::RecoverStale();
+    }
 
     u64 program_id;
 
@@ -553,10 +594,12 @@ struct System::Impl {
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
         Common::PowerTuning::LogState();
+        power_session = Nx2PowerSession::MaybeStart(system);
         return SystemResultStatus::Success;
     }
 
     void ShutdownMainProcess() {
+        power_session.reset();
         debug_service.reset();
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
@@ -689,6 +732,7 @@ struct System::Impl {
     bool nvdec_active : 1 = false;
     /// EDEN_NX2_DEBUG_SERVER; the last member, so it stops before anything it reads goes away.
     std::unique_ptr<Nx2Debug::Service> debug_service;
+    std::unique_ptr<Nx2PowerSession> power_session;
 
     void EnsureGeneralChannelInitialized(System& system) {
         if (!general_channel_event) {
