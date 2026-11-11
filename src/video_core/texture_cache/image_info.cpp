@@ -160,6 +160,7 @@ ImageInfo::ImageInfo(const Maxwell3D::Regs::RenderTargetConfig& ct,
         ct.tile_mode.is_pitch_linear && !Settings::ReactiveFlushing();
     dma_downloaded = forced_flushed;
     format = VideoCore::Surface::PixelFormatFromRenderTargetFormat(ct.format);
+    render_target = true;
     rescaleable = false;
     if (ct.tile_mode.is_pitch_linear) {
         ASSERT(ct.tile_mode.dim_control ==
@@ -201,6 +202,7 @@ ImageInfo::ImageInfo(const Maxwell3D::Regs::Zeta& zt, const Maxwell3D::Regs::Zet
         zt.tile_mode.is_pitch_linear && !Settings::ReactiveFlushing();
     dma_downloaded = forced_flushed;
     format = VideoCore::Surface::PixelFormatFromDepthFormat(zt.format);
+    render_target = true;
     size.width = zt_size.width;
     size.height = zt_size.height;
     rescaleable = false;

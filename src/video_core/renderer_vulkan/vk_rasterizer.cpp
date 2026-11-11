@@ -2237,7 +2237,7 @@ void RasterizerVulkan::Clear(u32 layer_count) {
                                  !scheduler.IsRenderPassActive() &&
                                  (!use_color || color_full_channels) && ds_deferrable;
     if (!can_defer_clear) {
-        scheduler.RequestRenderpass(framebuffer);
+        scheduler.RequestDrawRenderpass(framebuffer);
     }
 
     query_cache.NotifySegment(true);
