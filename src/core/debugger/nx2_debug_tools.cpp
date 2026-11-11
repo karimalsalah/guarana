@@ -622,6 +622,8 @@ json PowerSet(ToolState&, const json& params) {
                                    std::memory_order_relaxed);
     }
     return PowerSwitches();
+}
+
 // Host GPU time of the last sampled frame by shaders and by render target.
 json GpuCosts(ToolState& state, const json& params) {
     auto& renderer = state.system.GPU().Renderer();
