@@ -679,6 +679,16 @@ u64 KeptGraphicsStages::Bytes() const noexcept {
     return bytes;
 }
 
+void GraphicsPipeline::PushMeshCullViewport(const std::array<f32, 4>& viewport) {
+    scheduler.Record([this, viewport](vk::CommandBuffer cmdbuf) {
+        cmdbuf.PushConstants(*pipeline_layout,
+                             VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT |
+                                 VK_SHADER_STAGE_MESH_BIT_EXT,
+                             Shader::Backend::SPIRV::MESH_CULL_VIEWPORT_OFFSET, sizeof(viewport),
+                             viewport.data());
+    });
+}
+
 KeptGraphicsStages GraphicsPipeline::TakeKeptStages() {
     KeptGraphicsStages kept{
         .spirv = std::move(kept_spirv),

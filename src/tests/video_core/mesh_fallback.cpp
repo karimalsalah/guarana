@@ -132,7 +132,8 @@ Profile MakeProfile() {
 // A one-triangle mesh program (or the task program launching it), as the frontend lowers them.
 // With lane_id the mesh program writes its lane as the vertex's first attribute word.
 std::vector<u32> EmitProgram(Stage stage, bool as_compute, bool with_task,
-                             Profile profile = MakeProfile(), bool lane_id = false) {
+                             Profile profile = MakeProfile(), bool lane_id = false,
+                             u32 mesh_cull = 0) {
     ObjectPool<IR::Inst> pool;
     IR::Block block{pool};
     IR::Program program;
@@ -163,6 +164,7 @@ std::vector<u32> EmitProgram(Stage stage, bool as_compute, bool with_task,
     RuntimeInfo runtime_info;
     runtime_info.mesh_as_compute = as_compute;
     runtime_info.mesh_output_binding = OUTPUT_BINDING;
+    runtime_info.mesh_cull = mesh_cull;
     if (with_task) {
         runtime_info.mesh_task_payload_binding = PAYLOAD_BINDING;
         runtime_info.mesh_task_offsets_binding = OFFSETS_BINDING;
@@ -194,6 +196,57 @@ TEST_CASE("Mesh fallback leaves native task and mesh programs as mesh shaders",
     Dump(task, "native-task");
     REQUIRE(Model(task) == spv::ExecutionModel::TaskEXT);
     REQUIRE(UsesStorageClass(task, spv::StorageClass::TaskPayloadWorkgroupEXT));
+}
+
+TEST_CASE("Native mesh programs cull their triangles when the pipeline asks",
+          "[video_core][spirv][mesh_fallback]") {
+    const auto culls = [](const std::vector<u32>& code) {
+        return std::ranges::any_of(Instructions(code), [](const Instruction& inst) {
+            return inst.op == spv::Op::OpDecorate &&
+                   inst.operands[1] == static_cast<u32>(spv::Decoration::BuiltIn) &&
+                   inst.operands[2] == static_cast<u32>(spv::BuiltIn::CullPrimitiveEXT);
+        });
+    };
+    const auto set_outputs = [](const std::vector<u32>& code) {
+        return std::ranges::count_if(Instructions(code), [](const Instruction& inst) {
+            return inst.op == spv::Op::OpSetMeshOutputsEXT;
+        });
+    };
+    Profile profile{MakeProfile()};
+    profile.unified_descriptor_binding = true; // the viewport is a push constant
+
+    const std::vector<u32> plain{EmitProgram(Stage::Mesh, false, false, profile)};
+    REQUIRE_FALSE(culls(plain));
+    REQUIRE_FALSE(HasVariable(plain, spv::StorageClass::PushConstant));
+    REQUIRE(set_outputs(plain) == 1);
+
+    const std::vector<u32> all{
+        EmitProgram(Stage::Mesh, false, false, profile, false,
+                    SPIRV::MESH_CULL_FRUSTUM | SPIRV::MESH_CULL_SMALL | SPIRV::MESH_CULL_EMPTY)};
+    Dump(all, "native-mesh-cull");
+    REQUIRE(Model(all) == spv::ExecutionModel::MeshEXT);
+    REQUIRE(culls(all));
+    REQUIRE(HasVariable(all, spv::StorageClass::PushConstant));
+    REQUIRE(set_outputs(all) == 1);
+
+    const std::vector<u32> frustum{
+        EmitProgram(Stage::Mesh, false, false, profile, false, SPIRV::MESH_CULL_FRUSTUM)};
+    Dump(frustum, "native-mesh-cull-frustum");
+    REQUIRE(culls(frustum));
+    REQUIRE_FALSE(HasVariable(frustum, spv::StorageClass::PushConstant));
+    REQUIRE(set_outputs(frustum) == 1);
+
+    const std::vector<u32> empty{
+        EmitProgram(Stage::Mesh, false, false, profile, false, SPIRV::MESH_CULL_EMPTY)};
+    Dump(empty, "native-mesh-cull-empty");
+    REQUIRE_FALSE(culls(empty));
+    REQUIRE(set_outputs(empty) == 1);
+
+    // The compute emulation takes no culling.
+    const std::vector<u32> emulated{EmitProgram(Stage::Mesh, true, false, MakeProfile(), false,
+                                                SPIRV::MESH_CULL_FRUSTUM | SPIRV::MESH_CULL_SMALL)};
+    RequireNoMeshShading(emulated);
+    REQUIRE_FALSE(HasVariable(emulated, spv::StorageClass::PushConstant));
 }
 
 TEST_CASE("Mesh fallback emits mesh programs as compute shaders writing storage buffers",

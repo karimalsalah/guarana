@@ -139,6 +139,9 @@ struct RuntimeInfo {
     u32 mesh_task_offsets_binding{~0U};
     u32 mesh_task_args_binding{~0U};
     u32 mesh_task_payload_stride{}; ///< payload buffer words per task workgroup
+    /// Native mesh program: the culling its epilogue adds (MESH_CULL_* bits) for this pipeline's
+    /// state. With MESH_CULL_SMALL the host pushes viewport 0 at MESH_CULL_VIEWPORT_OFFSET.
+    u32 mesh_cull{};
 };
 
 } // namespace Shader
