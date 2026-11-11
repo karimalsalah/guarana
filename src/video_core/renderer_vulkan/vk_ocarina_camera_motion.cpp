@@ -21,6 +21,7 @@
 #include "video_core/host_shaders/ocarina_dlss_bias_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_comp_spv.h"
 #include "video_core/host_shaders/ocarina_extrapolation_guide_comp_spv.h"
+#include "video_core/host_shaders/ocarina_motion_guide_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
@@ -28,6 +29,7 @@
 #endif
 
 #include "video_core/host_shaders/ocarina_camera_motion_comp_spv.h"
+#include "video_core/host_shaders/ocarina_actor_guide_frag_spv.h"
 #include "video_core/host_shaders/ocarina_actor_motion_frag_spv.h"
 #include "video_core/host_shaders/ocarina_actor_motion_vert_spv.h"
 #include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
@@ -157,12 +159,20 @@ vk::Buffer UploadActorData(MemoryAllocator& allocator, std::span<const std::byte
     return buffer;
 }
 
+/// What ActorOverlay draws into: the full-size motion image, or the half-size extrapolation guide.
+struct ActorTarget {
+    VkFormat format{MOTION_FORMAT};
+    std::span<const u32> fragment{OCARINA_ACTOR_MOTION_FRAG_SPV};
+    f32 scale{1.0f}; ///< target pixels per scene pixel
+};
+
 class ActorOverlay {
 public:
     ActorOverlay(const Device& device, MemoryAllocator& allocator, const OcarinaActorMesh& mesh,
                  const ActorTransforms& transforms, VkImageView depth_view, VkSampler sampler,
-                 VkImageView motion_view, VkExtent2D extent_)
-        : extent{extent_}, jitter{transforms.jitter},
+                 VkImageView motion_view, VkExtent2D extent_, const ActorTarget& target = {})
+        : extent{extent_}, fragment_code{target.fragment}, scale{target.scale},
+          scene{transforms.extent}, jitter{transforms.jitter},
           index_count{static_cast<u32>(mesh.indices.size())}, vertex_bytes{mesh.vertices.size()},
           vertices{UploadActorData(allocator, std::as_bytes(std::span{mesh.vertices}),
                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)},
@@ -227,7 +237,7 @@ public:
         });
 
         const VkAttachmentDescription attachment{
-            .format = MOTION_FORMAT, .samples = VK_SAMPLE_COUNT_1_BIT,
+            .format = target.format, .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -289,9 +299,8 @@ public:
         cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *layout, 0, sets[0], {});
         // Offset like the game's jittered draws, so the replay rasterizes the same samples and its
         // depth matches the scene depth (unjittered, the depth test below dropped most of Link).
-        const VkViewport viewport{jitter[0], static_cast<f32>(extent.height) + jitter[1],
-                                  static_cast<f32>(extent.width), -static_cast<f32>(extent.height),
-                                  0, 1};
+        const VkViewport viewport{jitter[0] * scale, (scene[1] + jitter[1]) * scale,
+                                  scene[0] * scale, -scene[1] * scale, 0, 1};
         cmd.SetViewport(0, viewport);
         // Depth matches in the captured replay leveled off at this tolerance.
         constexpr u32 depth_tolerance = 16;
@@ -310,7 +319,7 @@ private:
         });
         const auto fragment = logical.CreateShaderModule({
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = sizeof(OCARINA_ACTOR_MOTION_FRAG_SPV), .pCode = std::data(OCARINA_ACTOR_MOTION_FRAG_SPV),
+            .codeSize = fragment_code.size_bytes(), .pCode = fragment_code.data(),
         });
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -372,7 +381,10 @@ private:
         });
     }
 
-    VkExtent2D extent;
+    VkExtent2D extent; ///< of the target
+    std::span<const u32> fragment_code;
+    f32 scale;
+    std::array<f32, 2> scene; ///< ActorTransforms::extent
     std::array<f32, 2> jitter; ///< ActorTransforms::jitter of the last upload
     u32 index_count;
     size_t vertex_bytes;
@@ -388,9 +400,10 @@ private:
 
 class CameraMotionPass final : public ComputePass {
 public:
-    CameraMotionPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool)
+    CameraMotionPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool,
+                     std::span<const u32> code = OCARINA_CAMERA_MOTION_COMP_SPV)
         : ComputePass(device_, scheduler, pool, BINDINGS, TEMPLATES, BANK, PUSH_CONSTANTS,
-                      OCARINA_CAMERA_MOTION_COMP_SPV) {}
+                      code) {}
 
     /// Fill camera motion from depth, then overwrite visible actor pixels with skinned motion.
     void Record(Scheduler& scheduler, const void* descriptors,
@@ -1185,6 +1198,129 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     state.last_view_projection = current;
     return true;
 }
+
+struct OcarinaMotionGuide::Impl {
+    Impl(const Device& device_, Scheduler& scheduler_, DescriptorPool& pool,
+         ComputePassDescriptorQueue& queue_, MemoryAllocator& allocator_)
+        : device{device_}, scheduler{scheduler_}, queue{queue_}, allocator{allocator_},
+          pass{device, scheduler, pool, OCARINA_MOTION_GUIDE_COMP_SPV},
+          sampler{device.GetLogical().CreateSampler(VkSamplerCreateInfo{
+              .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+              .magFilter = VK_FILTER_NEAREST,
+              .minFilter = VK_FILTER_NEAREST,
+              .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+              .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .maxAnisotropy = 1.0f,
+          })} {}
+
+    /// Link's two poses of one frame; reused once the GPU has drawn them.
+    struct Slot {
+        u64 tick{};
+        std::unique_ptr<ActorOverlay> overlay;
+    };
+
+    const Device& device;
+    Scheduler& scheduler;
+    ComputePassDescriptorQueue& queue;
+    MemoryAllocator& allocator;
+    CameraMotionPass pass;
+    vk::Sampler sampler;
+    vk::Image guide;
+    vk::ImageView guide_view;
+    VkExtent2D guide_extent{};
+    VkExtent2D scene_extent{};
+    std::array<Slot, 4> slots;
+    std::optional<u64> frame;
+    Matrix last_view_projection{};
+    bool cut{};
+};
+
+OcarinaMotionGuide::OcarinaMotionGuide(const Device& device, Scheduler& scheduler,
+                                       DescriptorPool& pool, ComputePassDescriptorQueue& queue,
+                                       MemoryAllocator& allocator)
+    : impl{std::make_unique<Impl>(device, scheduler, pool, queue, allocator)} {}
+
+OcarinaMotionGuide::~OcarinaMotionGuide() = default;
+
+std::optional<ExtrapolationSource> OcarinaMotionGuide::Extrapolation(u64 frame) const {
+    if (impl->frame != frame) {
+        return std::nullopt;
+    }
+    return ExtrapolationSource{.guide = *impl->guide_view, .cut = impl->cut};
+}
+
+bool OcarinaMotionGuide::Record(VkImageView depth, VkExtent2D extent, const Matrix& current,
+                                const Matrix& previous, const OcarinaActorMesh& mesh, u64 frame,
+                                std::array<f32, 2> jitter) {
+    auto& state = *impl;
+    if (state.frame == frame) {
+        return true;
+    }
+    const auto transform = ClipToPreviousClip(current, previous);
+    if (!transform) {
+        return false;
+    }
+    if (!state.guide_view || state.scene_extent.width != extent.width ||
+        state.scene_extent.height != extent.height) {
+        if (state.guide_view) {
+            state.scheduler.Finish(); // a generated frame may still read the old image
+        }
+        state.slots = {};
+        state.frame.reset();
+        state.guide_extent = {(extent.width + 1) / 2, (extent.height + 1) / 2};
+        state.scene_extent = extent;
+        state.guide = CreateOcarinaImage(state.allocator, state.guide_extent, GUIDE_FORMAT,
+                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+        state.guide_view = CreateOcarinaView(state.device, *state.guide, GUIDE_FORMAT);
+    }
+
+    // Without Link's pose, or while the GPU still reads all four, the motion is the camera's.
+    Impl::Slot* slot = nullptr;
+    if (!mesh.indices.empty()) {
+        state.scheduler.GetMasterSemaphore().Refresh();
+        const auto free = std::ranges::find_if(state.slots, [&](const Impl::Slot& entry) {
+            return !entry.overlay || state.scheduler.IsFree(entry.tick);
+        });
+        if (free != state.slots.end()) {
+            slot = &*free;
+            const ActorTransforms transforms{
+                current, previous, mesh.current_origin, mesh.previous_origin,
+                {static_cast<f32>(extent.width), static_cast<f32>(extent.height)}, jitter,
+            };
+            if (!slot->overlay ||
+                !slot->overlay->Update(state.device, mesh, transforms, depth, *state.sampler)) {
+                slot->overlay = std::make_unique<ActorOverlay>(
+                    state.device, state.allocator, mesh, transforms, depth, *state.sampler,
+                    *state.guide_view, state.guide_extent,
+                    ActorTarget{GUIDE_FORMAT, OCARINA_ACTOR_GUIDE_FRAG_SPV, 0.5f});
+            }
+        }
+    }
+
+    state.scheduler.RequestOutsideRenderPassOperationContext();
+    state.queue.Acquire(state.scheduler, 2);
+    state.queue.AddSampledImage(depth, *state.sampler);
+    state.queue.AddImage(*state.guide_view);
+    state.pass.Record(state.scheduler, state.queue.UpdateData(), {*transform, jitter},
+                      *state.guide, state.guide_extent, slot ? slot->overlay.get() : nullptr);
+    if (slot) {
+        slot->tick = state.scheduler.CurrentTick();
+    }
+    state.scheduler.InvalidateState();
+
+    // The game's previous camera is the one the last guide was made with, unless it cut.
+    const bool continues = state.frame &&
+                           std::ranges::equal(previous, state.last_view_projection,
+                                              [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    state.cut = !continues || IsCameraCut(*transform);
+    state.frame = frame;
+    state.last_view_projection = current;
+    return true;
+}
+
 VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device) {
     const char* value = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
     bool dlss_available = false;

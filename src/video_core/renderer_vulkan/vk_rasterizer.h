@@ -166,6 +166,7 @@ public:
                                    std::array<f32, 2> motion_scale, bool use_history,
                                    std::optional<std::array<u32, 2>> render_region) override;
     VideoCommon::OotNetwork::BypassState* OotNetworkBypass() override;
+    void OotNetworkBypassed(u32 output_tic) override;
     Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override;
     void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
                                   std::span<const u8> memory) override;
@@ -181,7 +182,8 @@ public:
                                                             VAddr framebuffer_addr,
                                                             u32 pixel_stride);
     /// Motion and depth of the frame being presented (Ocarina of Time's temporal upscale ran this
-    /// frame and EDEN_NX2_EXTRAPOLATE is set). Call after AccelerateDisplay.
+    /// frame, or its anti-aliasing network was bypassed, and EDEN_NX2_EXTRAPOLATE is set). Call
+    /// after AccelerateDisplay.
     std::optional<ExtrapolationSource> OcarinaExtrapolationSource() const;
 
 private:
@@ -259,6 +261,11 @@ private:
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaTemporalEnabled() const;
+    /// Frame extrapolation wants motion while the anti-aliasing network bypass, not a temporal
+    /// upscaler, handles the game's upscale: only the guide is made (OotNetworkBypassed).
+    bool OcarinaGuideOnly() const;
+    /// The scene camera, depth and Link's pose are captured.
+    bool OcarinaMotionTracked() const;
     void TrackOcarinaCamera();
     /// Offsets the viewport of Ocarina's scene draws (depth-tested, into the scene depth) by a
     /// sub-pixel amount that changes every frame while FSR replaces the game's upscale, so FSR
@@ -328,6 +335,12 @@ private:
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_hud_frame; ///< oot_hud_composite is this frame's image with the HUD
     VkImageView oot_hud_composite{};
+    std::unique_ptr<class OcarinaMotionGuide> oot_guide;
+    bool oot_guide_failed{};
+    const char* oot_guide_reason{}; ///< why the last frame got no guide
+    std::optional<u64> oot_guide_frame;
+    VkImageView oot_guide_scene{}; ///< oot_guide_frame's scene before the HUD (linear colour)
+    VkExtent2D oot_guide_scene_extent{};
     std::optional<u64> oot_effects_frame;
     GPUVAddr oot_effects_address{};
     VkImageView oot_effects_scene{};

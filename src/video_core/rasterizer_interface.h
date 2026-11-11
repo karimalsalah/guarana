@@ -305,6 +305,10 @@ public:
         return nullptr;
     }
 
+    /// The bypass replaced this frame's output pass, the dispatch being launched, by a copy into
+    /// the image of this compute texture descriptor.
+    virtual void OotNetworkBypassed([[maybe_unused]] u32 output_tic) {}
+
     [[nodiscard]] virtual Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() = 0;
 
     virtual void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,

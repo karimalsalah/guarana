@@ -113,6 +113,8 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_effects.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_bias.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_extrapolation_guide.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_motion_guide.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_actor_guide.frag
 )
 
 if (HAIKUOS)

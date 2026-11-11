@@ -72,4 +72,24 @@ private:
     std::unique_ptr<Impl> impl;
 };
 
+/// Motion and depth for frame extrapolation on frames no temporal upscaler replaces (the
+/// anti-aliasing network bypass): the half-size guide alone, straight from the scene depth.
+class OcarinaMotionGuide {
+public:
+    OcarinaMotionGuide(const Device& device, Scheduler& scheduler, DescriptorPool& pool,
+                       ComputePassDescriptorQueue& queue, MemoryAllocator& allocator);
+    ~OcarinaMotionGuide();
+
+    /// Queue the guide of one frame. False when the cameras give no motion.
+    bool Record(VkImageView depth, VkExtent2D extent, const std::array<f32, 16>& current,
+                const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh, u64 frame,
+                std::array<f32, 2> jitter = {});
+    /// Motion and depth of `frame`, when Record made them.
+    std::optional<ExtrapolationSource> Extrapolation(u64 frame) const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
 } // namespace Vulkan

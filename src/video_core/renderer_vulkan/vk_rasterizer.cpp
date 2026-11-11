@@ -1704,6 +1704,101 @@ VideoCommon::OotNetwork::BypassState* RasterizerVulkan::OotNetworkBypass() {
     return &oot_network_bypass;
 }
 
+void RasterizerVulkan::OotNetworkBypassed(u32 output_tic) {
+    if (!OcarinaGuideOnly() || oot_guide_frame == render_trace_frame) {
+        return;
+    }
+    // Logs why a frame has no guide, when the reason changes.
+    const auto fail = [this](const char* reason) {
+        if (std::exchange(oot_guide_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Ocarina motion guide: none for frame {} ({})",
+                     render_trace_frame, reason);
+        }
+    };
+    if (oot_camera_sample_frame != render_trace_frame) {
+        return fail("no scene camera this frame");
+    }
+    if (oot_motion.depth_frame != render_trace_frame) {
+        return fail("no scene depth this frame");
+    }
+    if (oot_motion.camera_channel != gpu_memory || oot_motion.depth_channel != gpu_memory) {
+        return fail("camera and depth from another channel");
+    }
+    using Entry = Tegra::Texture::TICEntry;
+    const auto& table = kepler_compute->regs.tic;
+    const GPUVAddr address = table.Address() + u64{oot_motion.depth_tic} * sizeof(Entry);
+    if (oot_motion.depth_tic > table.limit || output_tic > table.limit ||
+        !gpu_memory->IsFullyMappedRange(address, sizeof(Entry))) {
+        return fail("scene depth descriptor unreadable");
+    }
+    Entry tic{};
+    gpu_memory->ReadBlockUnsafe(address, &tic, sizeof(tic));
+    if (tic.Address() != oot_motion.depth_address || tic.Width() != oot_motion.extent.width ||
+        tic.Height() != oot_motion.extent.height) {
+        return fail("scene depth descriptor changed");
+    }
+
+    std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
+    texture_cache.SynchronizeDescriptors(true);
+    std::array images{VideoCommon::ImageViewInOut{.index = oot_motion.depth_tic},
+                      VideoCommon::ImageViewInOut{.index = output_tic}};
+    texture_cache.FillImageViews(images, true);
+    if (!images[0].id) {
+        return fail("no scene depth image");
+    }
+    auto& depth = texture_cache.GetImageView(images[0].id);
+    const auto* backing = depth.BackingImage();
+    if (!backing || depth.IsRescaled() || depth.format != VideoCore::Surface::PixelFormat::D32_FLOAT ||
+        depth.range != VideoCommon::SubresourceRange{} || backing->info.num_samples != 1) {
+        return fail("unsupported scene depth");
+    }
+    // Without Link's pose the mesh stays empty and the motion comes from the camera alone.
+    static const bool actor_motion = [] {
+        const char* value = std::getenv("EDEN_NX2_EXTRAPOLATE_ACTOR");
+        return !value || *value != '0';
+    }();
+    OcarinaActorMesh mesh{};
+    if (actor_motion) {
+        ReadOcarinaActor(mesh);
+    }
+    try {
+        if (!oot_guide) {
+            oot_guide = std::make_unique<OcarinaMotionGuide>(
+                device, scheduler, descriptor_pool, compute_pass_descriptor_queue, memory_allocator);
+            LOG_INFO(Render_Vulkan,
+                     "Ocarina motion guide: frame extrapolation from the {}x{} scene of bypassed frames",
+                     oot_motion.extent.width, oot_motion.extent.height);
+        }
+        // Nothing offsets the scene draws without FSR; kept for a session that had it on.
+        std::array<f32, 2> jitter{};
+        if (oot_jitter_frame == render_trace_frame) {
+            jitter = oot_jitter_offset;
+        }
+        if (!oot_guide->Record(depth.DepthView(), oot_motion.extent, oot_motion.current,
+                               oot_motion.previous, mesh, render_trace_frame, jitter)) {
+            return fail("cameras give no motion");
+        }
+    } catch (const vk::Exception& error) {
+        LOG_WARNING(Render_Vulkan, "Ocarina motion guide unavailable: {}", error.what());
+        oot_guide_failed = true;
+        return;
+    }
+    oot_guide_frame = render_trace_frame;
+    oot_guide_reason = nullptr;
+    // The copy the game draws its HUD over later, in another image: what tells the HUD apart.
+    oot_guide_scene = VK_NULL_HANDLE;
+    if (images[1].id) {
+        auto& scene = texture_cache.GetImageView(images[1].id);
+        if (scene.BackingImage() && !scene.IsRescaled() &&
+            scene.format == VideoCore::Surface::PixelFormat::B10G11R11_FLOAT &&
+            scene.range == VideoCommon::SubresourceRange{} &&
+            scene.Samples() == VK_SAMPLE_COUNT_1_BIT) {
+            oot_guide_scene = scene.Handle(Shader::TextureType::Color2D);
+            oot_guide_scene_extent = {scene.size.width, scene.size.height};
+        }
+    }
+}
+
 void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline) {
     const auto& hashes = pipeline.ShaderHashes();
     if (std::none_of(hashes.begin(), hashes.end(), VideoCommon::OotNetwork::IsTonemapShader)) {
@@ -3012,11 +3107,21 @@ bool RasterizerVulkan::OcarinaTemporalEnabled() const {
     return *oot_backend != VideoCommon::OcarinaUpscaleBackend::Native;
 }
 
+bool RasterizerVulkan::OcarinaGuideOnly() const {
+    return ExtrapolationRequested() && !oot_guide_failed &&
+           Settings::values.frame_gen.GetValue() &&
+           VideoCommon::OotNetwork::BypassEnabled(program_id) && !OcarinaTemporalEnabled();
+}
+
+bool RasterizerVulkan::OcarinaMotionTracked() const {
+    return OcarinaTemporalEnabled() || OcarinaGuideOnly();
+}
+
 /// Capture the two camera matrices from a draw targeting the scene color and depth. Terrain and
 /// materials draw with several vertex shaders, so any draw into a scene-sized target qualifies;
 /// the camera buffer's contents are checked below.
 void RasterizerVulkan::TrackOcarinaCamera() {
-    if (!OcarinaTemporalEnabled()) {
+    if (!OcarinaMotionTracked()) {
         return;
     }
 
@@ -3107,7 +3212,7 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
 /// Capture the skinning pose of the recognized Link draw for frame-to-frame motion.
 void RasterizerVulkan::TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect) {
     if (shader_hash != 0x28c6e527634f814aULL || !is_indexed || is_indirect ||
-        !OcarinaTemporalEnabled() || oot_actor.frame == render_trace_frame) {
+        !OcarinaMotionTracked() || oot_actor.frame == render_trace_frame) {
         return;
     }
     const auto& draw = maxwell3d->draw_manager.draw_state;
@@ -3206,7 +3311,9 @@ void RasterizerVulkan::ReadOcarinaActor(OcarinaActorMesh& mesh) {
 bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace) {
     constexpr u64 depth_reader = 0x1fc7a0423116281fULL;
     const bool pass_1440p = replace && pipeline.ShaderHash() == ComputePipeline::Ocarina1440pShader;
-    if ((!replace && pipeline.ShaderHash() != depth_reader) || !OcarinaTemporalEnabled()) {
+    // The guide for frame extrapolation needs the depth too; it replaces nothing.
+    if ((!replace && pipeline.ShaderHash() != depth_reader) ||
+        !(replace ? OcarinaTemporalEnabled() : OcarinaMotionTracked())) {
         return false;
     }
     const bool native_resolution =
@@ -3675,10 +3782,28 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
             texture_cache_runtime.ocarina_fsr_failed = true; // samplers drop the FSR LOD bias
         }
     }
+    // The bypassed frame with its HUD, sRGB-encoded as this view reads it.
+    if (oot_guide_frame == render_trace_frame && oot_guide_scene && info.image_view && !scaled &&
+        info.width == oot_guide_scene_extent.width &&
+        info.height == oot_guide_scene_extent.height &&
+        image_view->format == VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM) {
+        oot_hud_composite = info.image_view;
+        oot_hud_frame = render_trace_frame;
+    }
     return info;
 }
 
 std::optional<ExtrapolationSource> RasterizerVulkan::OcarinaExtrapolationSource() const {
+    if (ExtrapolationRequested() && oot_guide && oot_guide_frame == render_trace_frame &&
+        !oot_guide_failed) {
+        auto source = oot_guide->Extrapolation(render_trace_frame);
+        if (source && oot_hud_frame == render_trace_frame && oot_guide_scene) {
+            source->hud_reference = oot_guide_scene;
+            source->hud_composite = oot_hud_composite;
+            source->hud_reference_linear = true;
+        }
+        return source;
+    }
     if (!ExtrapolationRequested() || !oot_live_dlss || oot_dlss_frame != render_trace_frame ||
         oot_live_failed || oot_live_dlss->EvaluationFailed()) {
         return std::nullopt;
