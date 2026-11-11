@@ -257,6 +257,12 @@ public:
     /// dispatch of the game's network is skipped, or its output pass replaced by a copy of the
     /// tonemapped image. Dispatches left to the game are logged with their key and shader hash.
     bool BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_hash);
+    /// EDEN_NX2_OOT_FSR_ANY (experiment, false without it): whether the program being dispatched
+    /// is Ocarina of Time's output pass, its upscale, at any dynamic resolution step. Known as
+    /// BypassOotNetwork knows it with EDEN_NX2_OOT_BYPASS_ANY (shader hashes, and
+    /// EDEN_NX2_OOT_BYPASS_OUTPUT), or by its shape: it reads one image, E5B9G9R9, and stores
+    /// one, B10G11R11 and no smaller.
+    bool IsOotOutputPass(u64 native_key, u64 unique_hash);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by

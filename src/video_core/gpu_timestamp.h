@@ -36,21 +36,35 @@ struct AmpereAnchor {
     }
 };
 
+/// The time since the last present a Switch 2 title sees: divided by the clock's divisor, then
+/// multiplied by `scale` (EDEN_NX2_GPU_TIME_SCALE, 1 without it). Never more than the real time,
+/// so a timestamp stays behind the CPU clock and ahead of the ones before it.
+[[nodiscard]] constexpr u64 AmpereTimeSincePresent(u64 since_present_ns, Settings::GpuClock clock,
+                                                   f64 scale) {
+    const u64 clocked = since_present_ns / AmpereClockDivisor(clock);
+    if (scale == 1.0) {
+        return clocked;
+    }
+    const f64 scaled = static_cast<f64>(clocked) * scale;
+    return scaled >= static_cast<f64>(since_present_ns) ? since_present_ns
+                                                        : static_cast<u64>(scaled);
+}
+
 /// Switch 2 titles read report timestamps as nanoseconds and calibrate them against CPU time, so
 /// Boost and Overclock shrink only the time since the last present: GPU durations within a frame
 /// look shorter, while a timestamp never runs ahead of the CPU clock and trails it by less than
 /// the time since that present. Before the first present the clock is exact. Maxwell scales its
-/// ticks by the current clock.
+/// ticks by the current clock. `ampere_scale` is AmpereTimeSincePresent's.
 template <typename Timing>
 [[nodiscard]] u64 ReadGpuTimestamp(const Timing& timing, bool ampere, Settings::GpuClock clock,
-                                   AmpereAnchor anchor) {
+                                   AmpereAnchor anchor, f64 ampere_scale = 1.0) {
     if (ampere) {
         const u64 now = static_cast<u64>(timing.GetGlobalTimeNs().count());
         const u64 present_ns = anchor.PresentNs();
         if (present_ns == 0 || now <= present_ns) {
             return now;
         }
-        return present_ns + (now - present_ns) / AmpereClockDivisor(anchor.Clock());
+        return present_ns + AmpereTimeSincePresent(now - present_ns, anchor.Clock(), ampere_scale);
     }
     const u64 ticks = timing.GetGPUTicks();
     switch (clock) {

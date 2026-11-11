@@ -112,6 +112,51 @@ the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
   `EDEN_NX2_DLSS_CONTRACT_TRACE=1` logs every FSR evaluation and scheduler writeback;
   otherwise periodic evaluation/writeback messages avoid a per-frame logging cost.
 
+### Every resolution step: `EDEN_NX2_OOT_FSR_ANY=1` (experiment, not compiled or run yet)
+
+Without the Max Resolution add-on the scene follows the game's GPU-time controller: 1440x810,
+1280x720, 1024x576 and 854x480 (drawn into 864x480 images) for the 1920x1080 output, each step
+with its own upscale program. The replacement above takes only the 3/4-scale program, so at the
+lower steps the game's network runs again. With `EDEN_NX2_OOT_FSR_ANY=1` and FSR as the upscaler
+(`ocarina_fsr`, or `EDEN_NX2_DLSS_REPLACEMENT=fsr`; not DLSS):
+
+- The output pass is known as `EDEN_NX2_OOT_BYPASS_ANY` knows it
+  (`KeplerCompute::IsOotOutputPass`): the shader hashes of `oot_network.h`
+  (`OotNetwork::IsOutputShader`), `EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...>`, and otherwise any
+  native program that reads one E5B9G9R9 image and stores one B10G11R11 image no smaller. The
+  log names a program found by its shape once (`output pass known by its shape`).
+- Any scale is taken when the output is not smaller, at most 4x, and of the scene's shape to
+  within a render pixel (`OcarinaUpscaleFits`). The scene is the render area of the scene's
+  draws (the surface clip), not their images: 854x480 of 864x480.
+- FSR 3.1 keeps its render-size images at the largest step (3/4 of the output, more if a larger
+  scene comes) and runs smaller steps in their top-left part, as its SDK does for dynamic
+  resolution (`Fsr3Upscaler::Inputs::max_render_size`). A step neither reallocates them nor
+  resets the history; the history resets on a camera cut, a frame the game upscaled, or a frame
+  over 250 ms, as before. The motion and colour copies, the effects mask and the extrapolation
+  guide are remade at the new size (the last two wait for the GPU once per step).
+- Jitter: the Halton length is 8 x (output / render width)^2 of the last replaced frame (14 at
+  810p, 40 at 480p). The draws offset are those into a depth of the last replaced frame's scene
+  size, so the first frame of another step is drawn without an offset, all of it.
+- Texture LOD bias: log2(render / output) - 1 of the last replaced frame, in quarter LODs
+  (-1.5 at 810p and 720p, -2 at 576p, -2.25 at 480p), in either console mode.
+- A second depth reader (`3456eac1b79ed5b8`, same handle at +0x128) gives the scene depth in
+  frames the first leaves without one.
+- Frame extrapolation (`EDEN_NX2_EXTRAPOLATE`) gets its guide at every step, and the game's
+  output image as the scene before the HUD.
+- The log has `Ocarina temporal: FSR replaces pass ... WxH of WxH -> WxH` at Info for each new
+  pair of sizes, and `Ocarina temporal: the game's upscale draws frame N (reason): pass ...`
+  as a warning when it declines (when the reason changes and every 120th repeat). The reason
+  `no dispatch known as the game's upscale` is a step whose program is neither listed nor of
+  the shape above; its shader hash (the frame's slowest `s6:` entry of `DKB gpu_work`) goes in
+  `EDEN_NX2_OOT_BYPASS_OUTPUT`.
+
+`EDEN_NX2_GPU_TIME_SCALE=<float>` (experiment) multiplies the GPU time a Switch 2 title measures
+with report timestamps, on top of GPU Clocks: the time since the last present is divided by the
+clock's 1, 4 or 16 and then multiplied (`AmpereTimeSincePresent` in `gpu_timestamp.h`, read in
+`GPU::Impl::GetTicks`). It never exceeds the real time, so with GPU Clocks at Normal the useful
+range is 0 to 1. Ocarina sizes its dynamic resolution from that time: a larger value gives a
+lower step. Which value gives which step is not known.
+
 Shader hashes, buffer offsets and Link's mesh shape are taken from the game's current build.
 A game update that changes them disables the replacement and leaves the game's pass in place.
 The "Ocarina of Time anti-aliasing" option (No sharpening, docs/nx2/oot-network-bypass.md)

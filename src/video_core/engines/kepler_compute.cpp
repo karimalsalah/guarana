@@ -1065,6 +1065,8 @@ namespace {
 /// hash and finds its image by the program's one image store, takes more passes from
 /// EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...> and EDEN_NX2_OOT_BYPASS_SKIP=<hex,...> (native program
 /// keys or shader hashes), and scales the tonemapped image to a larger output.
+/// EDEN_NX2_OOT_FSR_ANY=1 knows the output pass the same way (IsOotOutputPass) and reads
+/// EDEN_NX2_OOT_BYPASS_OUTPUT too.
 struct OotBypassSwitches {
     bool any{};
     std::vector<u64> output;
@@ -1076,7 +1078,7 @@ const OotBypassSwitches& OotBypassEnvironment() {
         OotBypassSwitches result;
         const char* const any = std::getenv("EDEN_NX2_OOT_BYPASS_ANY");
         result.any = any != nullptr && any[0] != '\0' && any[0] != '0';
-        if (!result.any) {
+        if (!result.any && !VideoCommon::OotNetwork::FsrAnyStepRequested()) {
             return result;
         }
         const auto list = [](const char* name) {
@@ -1097,6 +1099,13 @@ const OotBypassSwitches& OotBypassEnvironment() {
             return values;
         };
         result.output = list("EDEN_NX2_OOT_BYPASS_OUTPUT");
+        if (!result.any) {
+            // Only the temporal replacement asks: nothing is skipped.
+            LOG_INFO(HW_GPU,
+                     "Ocarina of Time: EDEN_NX2_OOT_FSR_ANY is on, output passes [{:016x}]",
+                     fmt::join(result.output, ","));
+            return result;
+        }
         result.skip = list("EDEN_NX2_OOT_BYPASS_SKIP");
         LOG_INFO(HW_GPU,
                  "Ocarina of Time: EDEN_NX2_OOT_BYPASS_ANY is on, output passes [{:016x}], "
@@ -1106,7 +1115,52 @@ const OotBypassSwitches& OotBypassEnvironment() {
     }();
     return switches;
 }
+
+/// Whether a program is the game's output pass in a mode the switches add: one of the shader
+/// hashes of oot_network.h, or named in EDEN_NX2_OOT_BYPASS_OUTPUT by key or hash.
+bool IsListedOotOutputPass(const OotBypassSwitches& switches, u64 native_key, u64 unique_hash) {
+    const auto& keys = switches.output;
+    return VideoCommon::OotNetwork::IsOutputShader(unique_hash) ||
+           std::find(keys.begin(), keys.end(), native_key) != keys.end() ||
+           std::find(keys.begin(), keys.end(), unique_hash) != keys.end();
+}
 } // Anonymous namespace
+
+bool KeplerCompute::IsOotOutputPass(u64 native_key, u64 unique_hash) {
+    using namespace VideoCommon::OotNetwork;
+    if (!FsrAnyStepRequested()) {
+        return false;
+    }
+    if (native_key == OutputProgramKey ||
+        IsListedOotOutputPass(OotBypassEnvironment(), native_key, unique_hash)) {
+        return true;
+    }
+    // Another resolution step's program is known by its shape, its images found as
+    // BypassOotNetwork finds the output image.
+    const auto handles = NativeImageHandles(regs.code_loc.Address());
+    if (handles.first.size() != 1 || handles.second.size() != 1) {
+        return false;
+    }
+    const auto scene = ConstBuffer0Image(handles.first.front());
+    const auto output = ConstBuffer0Image(handles.second.front());
+    if (!scene || !output || scene->format.Value() != Texture::TextureFormat::E5B9G9R9 ||
+        output->format.Value() != Texture::TextureFormat::B10G11R11 || output->Address() == 0 ||
+        output->Address() == scene->Address() || output->Width() < scene->Width() ||
+        output->Height() < scene->Height()) {
+        return false;
+    }
+    static std::unordered_set<u64> noted;
+    if (noted.size() < 64 && noted.insert(unique_hash).second) {
+        LOG_INFO(HW_GPU,
+                 "Ocarina of Time: output pass known by its shape: key {:016x} hash {:016x} grid "
+                 "{}x{}x{}, reads +{:#x} {}x{}, stores +{:#x} {}x{}",
+                 native_key, unique_hash, launch_description.grid_dim_x.Value(),
+                 launch_description.grid_dim_y.Value(), launch_description.grid_dim_z.Value(),
+                 handles.first.front(), scene->Width(), scene->Height(), handles.second.front(),
+                 output->Width(), output->Height());
+    }
+    return true;
+}
 
 bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_hash) {
     using namespace VideoCommon::OotNetwork;
@@ -1168,15 +1222,15 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
                  launch_description.block_dim_z.Value(), tonemapped.width, tonemapped.height,
                  source_width, source_height, images(handles.first), images(handles.second));
     };
-    // With the switch, passes are also known by shader hash or from the environment (its lists
-    // are empty without it).
+    // With the switch, passes are also known by shader hash or from the environment (the list of
+    // skipped passes is empty without it).
     const auto listed = [&](const std::vector<u64>& keys) {
         return std::find(keys.begin(), keys.end(), native_key) != keys.end() ||
                std::find(keys.begin(), keys.end(), unique_hash) != keys.end();
     };
     const bool output_pass =
         native_key == OutputProgramKey ||
-        (extra.any && (IsOutputShader(unique_hash) || listed(extra.output)));
+        (extra.any && IsListedOotOutputPass(extra, native_key, unique_hash));
     if (native_key == PrepassProgramKey || native_key == NetworkProgramKey ||
         (!output_pass && listed(extra.skip))) {
         const bool skipped = bypass->output_replaced.load(std::memory_order_relaxed);

@@ -130,6 +130,26 @@ TEST_CASE("Ampere GPU Clocks changes apply at the next present and stay monotoni
     }
 }
 
+TEST_CASE("Ampere GPU time scale multiplies the time since the present, up to the real time",
+          "[video_core][gpu_timestamp]") {
+    constexpr u64 PresentNs = 293'036'000'000'000;
+    constexpr u64 SinceNs = 12'000'000;
+    for (const auto clock : Clocks) {
+        CAPTURE(clock);
+        const u64 clocked = SinceNs / Tegra::AmpereClockDivisor(clock);
+        REQUIRE(Tegra::AmpereTimeSincePresent(SinceNs, clock, 1.0) == clocked);
+        REQUIRE(Tegra::AmpereTimeSincePresent(SinceNs, clock, 0.5) == clocked / 2);
+        REQUIRE(Tegra::AmpereTimeSincePresent(SinceNs, clock, 1000.0) == SinceNs);
+        const auto anchor = Tegra::AmpereAnchor::At(PresentNs, clock);
+        REQUIRE(Tegra::ReadGpuTimestamp(At(PresentNs + SinceNs), true, Settings::GpuClock::Normal,
+                                        anchor) == PresentNs + clocked);
+        REQUIRE(Tegra::ReadGpuTimestamp(At(PresentNs + SinceNs), true, Settings::GpuClock::Normal,
+                                        anchor, 0.5) == PresentNs + clocked / 2);
+    }
+    REQUIRE(Tegra::AmpereTimeSincePresent(SinceNs, Settings::GpuClock::Boost, 2.0) == SinceNs / 2);
+    REQUIRE(Tegra::AmpereTimeSincePresent(SinceNs, Settings::GpuClock::Normal, 2.0) == SinceNs);
+}
+
 TEST_CASE("Maxwell retains its tick units and clock scaling", "[video_core][gpu_timestamp]") {
     for (const u64 ticks : {u64{0}, u64{1}, u64{255}, u64{256}, u64{511},
                            u64{512}, u64{614'400'000}, u64{180'041'318'400'000}}) {

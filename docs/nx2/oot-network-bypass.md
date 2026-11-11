@@ -70,8 +70,10 @@ tonemapped image is known:
 `EDEN_NX2_OOT_BYPASS_ANY=1` (experiment, off by default) makes the bypass cover those modes:
 
 - The output pass is also known by shader hash: the passes the temporal replacement knows
-  (docs/native-dlss-replacement.md) and `03bf0ffc7d2d0bed`, measured writing the 1920x1080 output
-  in handheld. Its image is the program's one image store when it has exactly one, +0xd0 otherwise.
+  (docs/native-dlss-replacement.md), and `9302bc0d6d1d9bc1` (from 1024x576) and `03bf0ffc7d2d0bed`
+  (from 854x480), measured writing the 1920x1080 output in handheld. Each resolution step has its
+  own program; the 1280x720 one is not measured. Its image is the program's one image store when
+  it has exactly one, +0xd0 otherwise.
 - `EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...>` and `EDEN_NX2_OOT_BYPASS_SKIP=<hex,...>` add output and
   skipped passes, as native program keys or shader hashes from the log lines above.
 - The output may be larger than the tonemapped image: up to 4x, same shape within 1/32. The copy

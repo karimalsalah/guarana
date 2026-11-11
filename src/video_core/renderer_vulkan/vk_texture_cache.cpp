@@ -4814,6 +4814,7 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const Tegra::Texture::TSCEntry& t
     // size's mips; the bias keeps the output's detail (VideoCommon::OcarinaFsrLodBias).
     f32 lod_bias = tsc.LodBias();
     ocarina_fsr_failed = &runtime.ocarina_fsr_failed;
+    ocarina_fsr_lod_quarters = &runtime.ocarina_fsr_lod_quarters;
     if (const f32 fsr_lod_bias = runtime.OcarinaFsrLodBias();
         fsr_lod_bias != 0.0f && tsc.mipmap_filter != TextureMipmapFilter::None) {
         const f32 biased = std::clamp(lod_bias + fsr_lod_bias, -15.0f, 15.0f);
@@ -4861,9 +4862,16 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
     // the upscaler failed this session (the game's pass runs again).
     if (added_lod_bias != 0.0f) {
         const Image* const image = image_view.BackingImage();
-        key.drop_lod_bias = !VideoCommon::KeepOcarinaFsrLodBias(
-            Settings::IsDockedMode(), *ocarina_fsr_failed,
-            image != nullptr && True(image->flags & ImageFlagBits::GpuModified));
+        const bool gpu_written =
+            image != nullptr && True(image->flags & ImageFlagBits::GpuModified);
+        // EDEN_NX2_OOT_FSR_ANY: once FSR replaced a frame, the bias of its scale, which follows
+        // the game's dynamic resolution, in either console mode.
+        if (*ocarina_fsr_lod_quarters != 0 && !*ocarina_fsr_failed && !gpu_written) {
+            key.lod_bias_quarters = *ocarina_fsr_lod_quarters;
+        } else {
+            key.drop_lod_bias = !VideoCommon::KeepOcarinaFsrLodBias(
+                Settings::IsDockedMode(), *ocarina_fsr_failed, gpu_written);
+        }
     }
     if (needs_swizzle_mapping && !key.drop_custom_border && !image_view.HasIdentitySwizzle()) {
         const VkComponentMapping& mapping = image_view.Swizzle();
@@ -4930,6 +4938,11 @@ VkSampler Sampler::Emplace(VariantKey key) {
     VkSamplerCreateInfo create_info = base_ci;
     if (key.drop_lod_bias) {
         create_info.mipLodBias -= added_lod_bias;
+    } else if (key.lod_bias_quarters != 0) {
+        create_info.mipLodBias =
+            std::clamp(create_info.mipLodBias - added_lod_bias -
+                           0.25f * static_cast<f32>(key.lod_bias_quarters),
+                       -15.0f, 15.0f);
     }
     if (key.drop_compare) {
         create_info.compareEnable = VK_FALSE;

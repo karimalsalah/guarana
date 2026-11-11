@@ -787,6 +787,9 @@ struct OcarinaUpscaler::Impl {
     /// which didn't evaluate it.
     bool output_fsr4{};
     std::optional<std::chrono::steady_clock::time_point> last_evaluation;
+    /// The largest scene FSR 3.1 was asked to keep images for (Record's largest_extent); zero
+    /// while its images follow each frame's extent.
+    VkExtent2D fsr_largest{};
 
     bool UsesFsr4() const {
         return fsr4 && !fsr4->Failed();
@@ -1002,7 +1005,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
                             VkExtent2D output_extent, VkExtent2D target_extent,
                             const Matrix& current, const Matrix& previous,
                             const OcarinaActorMesh& mesh, VkImage depth_image, u64 frame,
-                            std::array<f32, 2> jitter) {
+                            std::array<f32, 2> jitter, VkExtent2D largest_extent) {
     auto& state = *impl;
     if (state.last_frame == frame || state.Failed()) {
         return false;
@@ -1154,6 +1157,14 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             static_cast<f32>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f);
         // Taking over from FSR 4: FSR 3.1 has no history of the frames FSR 4 drew.
         const bool fsr_reset = reset || elapsed > 250.0f || state.output_fsr4;
+        // A scene size that follows the game's dynamic resolution: the largest so far, which
+        // only grows, so a step down and back up reallocates nothing.
+        if (largest_extent.width != 0 && largest_extent.height != 0) {
+            state.fsr_largest = {
+                (std::max)({state.fsr_largest.width, largest_extent.width, extent.width}),
+                (std::max)({state.fsr_largest.height, largest_extent.height, extent.height}),
+            };
+        }
         state.fsr->Upscale({
             .color = *resources.color_view,
             .depth = depth,
@@ -1169,6 +1180,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             .reactive_mask = bias_view,
             .transparency_mask = bias_view,
             .vertical_fov = 2.0f * std::atan(1.0f / projection_y),
+            .max_render_size = state.fsr_largest,
         });
         state.last_evaluation = now;
         static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;

@@ -71,7 +71,10 @@ public:
     static constexpr u64 Ocarina1440pShader = 0x6bd913e1f34e83ebULL;
     /// The same output pass at 1:1, run at 1920x1080 in handheld with the Max Resolution add-on.
     static constexpr u64 OcarinaFullSizeShader = 0xc033c3ddc9f0897bULL;
-    [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
+    /// Whether the temporal upscaler can take this program's dispatch: one of the output passes
+    /// it knows, or with `output_pass` any program the caller found to be the game's output pass
+    /// (EDEN_NX2_OOT_FSR_ANY), and bindings a replacement can stand in for.
+    [[nodiscard]] bool CanReplaceOcarinaUpscale(bool output_pass = false) const;
 
     bool IsBound() const noexcept {
         return static_cast<bool>(pipeline);

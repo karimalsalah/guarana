@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 
 #include "common/common_types.h"
@@ -33,15 +34,27 @@ constexpr u64 OutputProgramKey = 0xda6df3e54c716df2ULL;
 constexpr u32 OutputImageHandleOffset = 0xd0;
 
 /// Shader hashes of the output pass in the game's other modes, used only with
-/// EDEN_NX2_OOT_BYPASS_ANY: those the temporal replacement knows
-/// (ComputePipeline::CanReplaceOcarinaUpscale), and the one measured writing the 1920x1080
-/// output in handheld without Max Resolution.
+/// EDEN_NX2_OOT_BYPASS_ANY and EDEN_NX2_OOT_FSR_ANY: those the temporal replacement knows
+/// (ComputePipeline::CanReplaceOcarinaUpscale), and those measured writing the 1920x1080
+/// output in handheld without Max Resolution. Each dynamic resolution step has its own program.
 constexpr bool IsOutputShader(u64 hash) {
     return hash == 0x6bd913e1f34e83ebULL || // docked, Max Resolution
            hash == 0xc033c3ddc9f0897bULL || // handheld, Max Resolution
            hash == 0xe40f5efb5480e692ULL || // 3/4 scale
            hash == 0xef542df87cacfe9eULL || // 3/4 scale, Linux build
-           hash == 0x03bf0ffc7d2d0bedULL;   // handheld, dynamic resolution
+           hash == 0x9302bc0d6d1d9bc1ULL || // handheld, 1024x576
+           hash == 0x03bf0ffc7d2d0bedULL;   // handheld, 854x480 of 864x480
+}
+
+/// EDEN_NX2_OOT_FSR_ANY=1 (experiment): the FSR 3.1 temporal replacement takes the game's upscale
+/// at every dynamic resolution step, not only the passes and the 4/3 scale it knows
+/// (docs/native-dlss-replacement.md).
+[[nodiscard]] inline bool FsrAnyStepRequested() {
+    static const bool requested = [] {
+        const char* const value = std::getenv("EDEN_NX2_OOT_FSR_ANY");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return requested;
 }
 
 /// Fragment shaders of the game's tonemap passes; render target 0 of their draws is the

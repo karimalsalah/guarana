@@ -261,6 +261,9 @@ private:
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaTemporalEnabled() const;
+    /// EDEN_NX2_OOT_FSR_ANY with FSR as the temporal upscaler: the game's upscale is replaced at
+    /// every dynamic resolution step, at whatever scale it has.
+    bool OcarinaFsrAnyStep() const;
     /// Frame extrapolation wants motion while the anti-aliasing network bypass, not a temporal
     /// upscaler, handles the game's upscale: only the guide is made (OotNetworkBypassed).
     bool OcarinaGuideOnly() const;
@@ -318,7 +321,10 @@ private:
         u64 depth_frame{};
         GPUVAddr depth_address{};
         u32 depth_tic{};
-        VkExtent2D extent{};
+        VkExtent2D extent{}; ///< of the scene's images
+        /// What the game drew of them, from the top left. The same without
+        /// EDEN_NX2_OOT_FSR_ANY; with it a low resolution step may be narrower (854 of 864).
+        VkExtent2D drawn{};
         std::array<f32, 16> current{};
         std::array<f32, 16> previous{};
     } oot_motion;
@@ -331,6 +337,15 @@ private:
     std::array<f32, 2> oot_jitter_offset{};  ///< what oot_jitter_frame's scene draws used
     std::optional<u64> oot_jitter_frame;
     u32 oot_jitter_phases{8}; ///< Halton sequence length for the last FSR frame's scale
+    // EDEN_NX2_OOT_FSR_ANY
+    VkExtent2D oot_fsr_scene{};  ///< size of the scene images of the last frame FSR replaced
+    VkExtent2D oot_fsr_render{}; ///< what the last frame FSR replaced drew of them
+    VkExtent2D oot_fsr_output{}; ///< and what FSR made of it
+    u32 oot_fsr_size_logs{};
+    std::optional<u64> oot_fsr_pass_frame; ///< a dispatch of this frame was the game's upscale
+    std::optional<u64> oot_fsr_hud_frame;  ///< oot_fsr_hud_scene is this frame's
+    VkImageView oot_fsr_hud_scene{};      ///< FSR's frame before the HUD (linear colour)
+    VkExtent2D oot_fsr_hud_extent{};
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_hud_frame; ///< oot_hud_composite is this frame's image with the HUD
