@@ -101,6 +101,17 @@ struct MeshEmulationSetup {
     std::array<u32, 4> position_lines{~0U, ~0U, ~0U, ~0U}; ///< line of PositionX..W
 };
 
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): the fragment program's two other shaders,
+/// emitted with the pipeline's stages. A draw of such a pipeline is recorded as a depth pass with
+/// `depth_only`, then a colour pass at equal depth with `early_test` (PrepassDraw).
+struct PrepassShaders {
+    std::vector<u32> depth_only; ///< no colour outputs: only what decides a discard is left
+    std::vector<u32> early_test; ///< the fragment shader with early fragment tests
+    /// The stages before the fragment one decorate Position as Invariant
+    /// (EDEN_NX2_PREPASS_INVARIANT), which makes them other shaders than without the split.
+    bool invariant_position{};
+};
+
 /// What an evicted graphics pipeline needs to be built again without translating its shaders
 struct KeptGraphicsStages {
     static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
@@ -129,7 +140,8 @@ public:
         const GraphicsPipelineCacheKey& key, std::array<std::vector<u32>, NUM_STAGES> stages,
         const std::array<const Shader::Info*, NUM_STAGES>& infos,
         std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages = {},
-        std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt);
+        std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt,
+        std::shared_ptr<PrepassShaders> prepass_shaders = nullptr);
 
     static std::chrono::nanoseconds TakeHoldTime() noexcept;
 
@@ -170,6 +182,24 @@ public:
 
     bool UsesExtendedDynamicState() const noexcept {
         return key.state.extended_dynamic_state != 0;
+    }
+
+    /// The colour write masks are dynamic state (VK_EXT_extended_dynamic_state3).
+    bool UsesDynamicColorWriteMask() const noexcept {
+        return key.state.extended_dynamic_state_3_blend != 0;
+    }
+
+    /// Made with the shaders of an alpha-test prepass split (PrepassShaders), and once built, with
+    /// the two passes' pipelines: its draws can be recorded as two passes when the draw's state
+    /// allows it too.
+    [[nodiscard]] bool HasPrepassSplit() const noexcept {
+        return prepass_split && (!IsBuilt() || prepass_pipelines[1]);
+    }
+
+    /// Worker thread, once built: the pipelines of the split's depth pass and colour pass. Null
+    /// handles when they could not be built.
+    [[nodiscard]] std::array<VkPipeline, 2> PrepassPipelines() const noexcept {
+        return {*prepass_pipelines[0], *prepass_pipelines[1]};
     }
 
     /// Switch 2 task/mesh pipeline: drawn with vkCmdDrawMeshTasksEXT.
@@ -392,7 +422,20 @@ private:
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
 
-    void MakePipeline(VkRenderPass render_pass);
+    /// The pipeline itself, or one of the two an alpha-test prepass split draws with: the depth
+    /// pass (the depth-only fragment shader, no colour written) and the colour pass (the fragment
+    /// shader with early fragment tests, depth compared for equality and not written).
+    enum class PipelineVariant : u8 {
+        Main,
+        PrepassDepth,
+        PrepassColor,
+    };
+
+    void MakePipeline(VkRenderPass render_pass, PipelineVariant variant = PipelineVariant::Main);
+
+    /// Builds the split's two pipelines after the pipeline itself, from the same modules for the
+    /// stages before the fragment one. A failure leaves the pipeline without them.
+    void MakePrepassPipelines(VkRenderPass render_pass);
 
     void Validate();
 
@@ -490,7 +533,56 @@ private:
     std::array<MeshEmulationBuffer, 4> mesh_task_buffers{};
     u32 mesh_capacity{};
 
+    // Alpha-test prepass split: the shaders until the build has made their modules, and the
+    // pipelines of the depth pass [0] and the colour pass [1].
+    std::shared_ptr<PrepassShaders> prepass_shaders;
+    const bool prepass_split;
+    const bool prepass_invariant;
+    std::array<vk::ShaderModule, 2> prepass_modules;
+    std::array<vk::Pipeline, 2> prepass_pipelines;
+
     std::optional<PipelineBuild> build;
+};
+
+/// One draw of an alpha-test prepass split, captured by the draw's recorded command. Without a
+/// pipeline, or when the split's pipelines could not be built, it is the draw as recorded before.
+struct PrepassDraw {
+    const GraphicsPipeline* pipeline{};
+    bool dynamic_depth{};      ///< depth compare op and write enable are dynamic state
+    bool dynamic_color_mask{}; ///< the colour write masks are dynamic state
+    /// The draw's own colour write masks, set again for the colour pass
+    std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> color_masks{};
+
+    /// Worker thread, with the draw's pipeline, descriptors and dynamic state bound. `draw`
+    /// records the draw call; it is called twice for a split.
+    template <typename Func>
+    void Draw(vk::CommandBuffer cmdbuf, Func&& draw) const {
+        std::array<VkPipeline, 2> passes{};
+        if (pipeline != nullptr) {
+            passes = pipeline->PrepassPipelines();
+        }
+        if (passes[0] == VK_NULL_HANDLE || passes[1] == VK_NULL_HANDLE) {
+            draw();
+            return;
+        }
+        static constexpr std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> no_color{};
+        // Depth pass: the guest's depth test and write, nothing written to the colour targets.
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, passes[0]);
+        if (dynamic_color_mask) {
+            cmdbuf.SetColorWriteMaskEXT(0, no_color);
+        }
+        draw();
+        // Colour pass: only the fragments whose depth the first pass left in the buffer.
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, passes[1]);
+        if (dynamic_color_mask) {
+            cmdbuf.SetColorWriteMaskEXT(0, color_masks);
+        }
+        if (dynamic_depth) {
+            cmdbuf.SetDepthCompareOpEXT(VK_COMPARE_OP_EQUAL);
+            cmdbuf.SetDepthWriteEnableEXT(false);
+        }
+        draw();
+    }
 };
 
 } // namespace Vulkan

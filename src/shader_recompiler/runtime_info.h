@@ -98,6 +98,13 @@ struct RuntimeInfo {
 
     bool convert_depth_mode{};
     bool force_early_z{};
+    /// Fragment stage, depth pass of an alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): no
+    /// colour is output, so only what decides a discard is left to compute. With the alpha test
+    /// on, render target 0 keeps the alpha it reads.
+    bool depth_only_discard{};
+    /// Stages before the fragment one, in a pipeline with that split: Position is decorated
+    /// Invariant (EDEN_NX2_PREPASS_INVARIANT).
+    bool invariant_position{};
 
     TessPrimitive tess_primitive{};
     TessSpacing tess_spacing{};

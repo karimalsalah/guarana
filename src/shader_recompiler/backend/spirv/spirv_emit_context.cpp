@@ -1998,6 +1998,9 @@ void EmitContext::DefineMesh(const IR::Program& program) {
             if (!Sirit::ValidId(output_position)) {
                 output_position = DefineVariable(*this, TypeArray(F32[4], vertex_count),
                                                  spv::BuiltIn::Position, spv::StorageClass::Output);
+                if (runtime_info.invariant_position) {
+                    Decorate(output_position, spv::Decoration::Invariant);
+                }
             }
             return {output_position,
                     static_cast<u32>(attribute) - static_cast<u32>(IR::Attribute::PositionX), true};
@@ -2136,6 +2139,9 @@ void EmitContext::DefineOutputs(const IR::Program& program) {
     if (runtime_info.convert_depth_mode || info.stores.AnyComponent(IR::Attribute::PositionX) ||
         stage == Stage::VertexB) {
         output_position = DefineOutput(*this, F32[4], invocations, spv::BuiltIn::Position);
+        if (runtime_info.invariant_position) {
+            Decorate(output_position, spv::Decoration::Invariant);
+        }
     }
     if (info.stores[IR::Attribute::PointSize] || runtime_info.fixed_state_point_size) {
         if (stage == Stage::Fragment) {
@@ -2210,6 +2216,12 @@ void EmitContext::DefineOutputs(const IR::Program& program) {
             const bool need_dual_source = runtime_info.dual_source_blend && index <= 1;
             if (!need_dual_source && !info.stores_frag_color[index] &&
                 !profile.need_declared_frag_colors) {
+                continue;
+            }
+            // Depth pass of a prepass split: no colour output but the one the alpha test reads.
+            const bool alpha_test = runtime_info.alpha_test_func &&
+                                    *runtime_info.alpha_test_func != CompareFunction::Always;
+            if (runtime_info.depth_only_discard && !(index == 0 && alpha_test)) {
                 continue;
             }
             const Id type{GetAttributeType(*this, runtime_info.color_output_types[index])};

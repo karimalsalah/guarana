@@ -43,6 +43,7 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
@@ -442,6 +443,80 @@ void SetMeshOut(Shader::RuntimeInfo& info, u32 wanted,
     }
 }
 
+/// EDEN_NX2_PREPASS_INVARIANT=1, read once: the stages before the fragment one of a pipeline with
+/// a prepass split decorate Position as Invariant, should the two passes' depths ever differ.
+bool PrepassInvariantPosition() {
+    static const bool invariant = [] {
+        const char* const value = std::getenv("EDEN_NX2_PREPASS_INVARIANT");
+        return value != nullptr && value[0] == '1';
+    }();
+    return invariant;
+}
+
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): whether a pipeline of a listed fragment
+/// shader can draw as a depth pass and a colour pass at equal depth, as far as its key and its
+/// programs say. The draw checks the state the key may lack (RasterizerVulkan::PrepareDraw).
+bool TakesPrepassSplit(const GraphicsPipelineCacheKey& key,
+                       std::span<const Shader::IR::Program> programs) {
+    const u64 fragment_hash{key.unique_hashes[5]};
+    if (fragment_hash == 0 || !VideoCore::Nx2Debug::IsPrepassHash(fragment_hash)) {
+        return false;
+    }
+    const auto writes_storage = [](const Shader::Info& info) {
+        const auto any_written = [](const auto& descriptors) {
+            return std::ranges::any_of(descriptors,
+                                       [](const auto& desc) { return desc.is_written; });
+        };
+        return info.stores_global_memory || any_written(info.storage_buffers_descriptors) ||
+               any_written(info.image_descriptors) || any_written(info.image_buffer_descriptors);
+    };
+    const FixedPipelineState& state{key.state};
+    const Shader::Info& fragment{programs[5].info};
+    const bool alpha_test{
+        MaxwellToCompareFunction(state.UnpackComparisonOp(state.alpha_test_func.Value())) !=
+        Shader::CompareFunction::Always};
+    bool earlier_stage_writes{};
+    for (size_t index = 0; index < 5; ++index) {
+        if (key.unique_hashes[index] != 0 && writes_storage(programs[index].info)) {
+            earlier_stage_writes = true;
+        }
+    }
+    const char* reason{};
+    if (programs[5].stage != Shader::Stage::Fragment) {
+        reason = "it is not a fragment program";
+    } else if (!fragment.uses_demote_to_helper_invocation && !alpha_test) {
+        reason = "it never discards";
+    } else if (fragment.stores_frag_depth || fragment.stores_sample_mask) {
+        reason = "it writes depth or the sample mask";
+    } else if (writes_storage(fragment)) {
+        reason = "it writes storage buffers or images";
+    } else if (earlier_stage_writes && !VideoCore::Nx2Debug::PrepassForced()) {
+        // Such a stage runs for both passes: only writes that can be repeated survive that.
+        reason = "an earlier stage writes storage buffers or images (EDEN_NX2_PREPASS_FORCE=1 "
+                 "lets it write twice)";
+    } else if (state.early_z != 0) {
+        reason = "the guest forces early depth tests";
+    } else if (state.depth_enabled == 0) {
+        reason = "there is no depth buffer";
+    } else if (state.xfb_enabled != 0) {
+        reason = "transform feedback is on";
+    } else if (state.alpha_to_coverage_enabled != 0 || state.alpha_to_one_enabled != 0) {
+        reason = "alpha to coverage or alpha to one is on";
+    } else if (state.attachment0_dual_source_blend != 0) {
+        reason = "it blends";
+    }
+    if (reason == nullptr) {
+        return true;
+    }
+    static std::atomic<u32> logged{};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 64) {
+        LOG_INFO(Render_Vulkan,
+                 "Prepass split: pipeline {:016x} of fragment shader {:016x} draws in one pass: {}",
+                 key.Hash(), fragment_hash, reason);
+    }
+    return false;
+}
+
 /// SPIR-V emission of run-time pipelines: graphics on the GPU thread, graphics on workers and
 /// compute on workers (shader cache v2)
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 3> runtime_spirv_ns{};
@@ -481,6 +556,29 @@ std::vector<u32> EmitStageSpirv(const Device& device, const Shader::Profile& pro
         }
     }
     return code;
+}
+
+/// Emits the fragment program's two other shaders of a prepass split (PrepassShaders), from the
+/// bindings its own emission started with. If either fails to emit, the pipeline gets neither
+/// and draws in one pass.
+void EmitPrepassShaders(const Shader::Profile& profile, const Shader::RuntimeInfo& runtime_info,
+                        Shader::IR::Program& program, const Shader::Backend::Bindings& binding,
+                        PrepassShaders& shaders) try {
+    Shader::RuntimeInfo depth_info = runtime_info;
+    depth_info.depth_only_discard = true;
+    Shader::Backend::Bindings depth_binding = binding;
+    std::vector<u32> depth_only = EmitSPIRV(profile, depth_info, program, depth_binding);
+
+    Shader::RuntimeInfo color_info = runtime_info;
+    color_info.force_early_z = true;
+    Shader::Backend::Bindings color_binding = binding;
+    std::vector<u32> early_test = EmitSPIRV(profile, color_info, program, color_binding);
+
+    shaders.depth_only = std::move(depth_only);
+    shaders.early_test = std::move(early_test);
+} catch (const Shader::Exception& exception) {
+    LOG_WARNING(Render_Vulkan, "Prepass split: its fragment shaders were not emitted: {}",
+                exception.what());
 }
 
 vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& profile,
@@ -529,6 +627,8 @@ struct DeferredStages {
     std::array<Shader::IR::Program, Maxwell::MaxShaderProgram> programs;
     std::array<std::optional<Shader::RuntimeInfo>, Maxwell::MaxShaderStage> runtime_infos;
     std::array<std::vector<u32>, Maxwell::MaxShaderStage> reference_spirv;
+    /// Filled with the fragment stage, for a pipeline with a prepass split
+    std::shared_ptr<PrepassShaders> prepass_shaders;
 };
 
 size_t GetTotalPipelineWorkers() {
@@ -2130,7 +2230,12 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
         }
         if (!pipeline) {
             const auto keep = evicted_pointer_slots.Take(graphics_key.Hash());
-            if (auto kept = kept_stages.Take(graphics_key)) {
+            auto kept = kept_stages.Take(graphics_key);
+            if (kept && VideoCore::Nx2Debug::IsPrepassHash(graphics_key.unique_hashes[5])) {
+                // Translated again: a prepass split takes two more shaders of its fragment program.
+                kept.reset();
+            }
+            if (kept) {
                 pipeline = RebuildGraphicsPipeline(std::move(*kept));
                 ++rebuilt_from_kept;
             } else {
@@ -2161,6 +2266,14 @@ void PipelineCache::TickFrame() {
     ++frame_count;
     native_wait_budget_us =
         static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
+    if (const u64 generation = VideoCore::Nx2Debug::PrepassGeneration();
+        generation != prepass_generation) {
+        // Zero: the first frame, whose pipelines were made with the list as it still is.
+        if (prepass_generation != 0) {
+            DropPipelinesWithoutPrepass();
+        }
+        prepass_generation = generation;
+    }
     while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
         evicted_pipelines.pop_front();
     }
@@ -2183,6 +2296,42 @@ void PipelineCache::TickFrame() {
         counters.kept_spirv_bytes.store(kept_stages.Bytes(), std::memory_order_relaxed);
         EvictUnusedPipelines();
     }
+}
+
+void PipelineCache::DropPipelinesWithoutPrepass() {
+    std::vector<GraphicsPipelineCacheKey> drop;
+    for (const auto& [key, pipeline] : graphics_cache) {
+        if (pipeline != nullptr && pipeline->IsBuilt() && !pipeline->HasPrepassSplit() &&
+            key.unique_hashes[5] != 0 &&
+            VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5])) {
+            drop.push_back(key);
+        }
+    }
+    if (drop.empty()) {
+        return;
+    }
+    // As an eviction, but nothing is kept: the next draw translates the pipeline again.
+    const u64 tick = scheduler.CurrentTick();
+    for (const GraphicsPipelineCacheKey& key : drop) {
+        const auto it = graphics_cache.find(key);
+        if (it->second.get() == current_pipeline) {
+            current_pipeline = nullptr;
+        }
+        if (used_this_session.erase(it->second.get()) != 0) {
+            used_and_evicted.insert(it->first.Hash());
+        }
+        evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
+        evicted_pipelines.emplace_back(tick, std::move(it->second));
+        graphics_cache.erase(it);
+    }
+    for (auto& [key, pipeline] : graphics_cache) {
+        if (pipeline) {
+            pipeline->ClearTransitions();
+        }
+    }
+    LOG_INFO(Render_Vulkan,
+             "Prepass split: {} graphics pipelines of the listed fragment shaders are made again",
+             drop.size());
 }
 
 void PipelineCache::EvictUnusedPipelines() {
@@ -2697,6 +2846,13 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     std::array<std::vector<u32>, Maxwell::MaxShaderStage> stage_spirv;
     std::array<std::optional<Shader::RuntimeInfo>, Maxwell::MaxShaderStage> deferred_runtime_infos;
     std::array<std::vector<u32>, Maxwell::MaxShaderStage> reference_spirv;
+    // EDEN_NX2_PREPASS_HASHES: the fragment program is emitted twice more, for the two passes
+    // the pipeline's draws are split into.
+    std::shared_ptr<PrepassShaders> prepass_shaders;
+    if (!mesh_emulation && TakesPrepassSplit(key, programs)) {
+        prepass_shaders = std::make_shared<PrepassShaders>();
+        prepass_shaders->invariant_position = PrepassInvariantPosition();
+    }
 
     const Shader::IR::Program* previous_stage{};
     Shader::Backend::Bindings binding;
@@ -2743,6 +2899,10 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             program.info.uses_mesh_shading_rate =
                 (runtime_info.mesh_out & Shader::Backend::SPIRV::MESH_OUT_RATE) != 0;
         }
+        if (prepass_shaders && prepass_shaders->invariant_position &&
+            program.stage != Shader::Stage::Fragment) {
+            runtime_info.invariant_position = true;
+        }
         ConvertLegacyToGeneric(program, runtime_info);
         // EDEN_NX2_MESH_EMULATION_DUMP=<dir>: write the emulation's vertex shader for spirv-val.
         // (Emitting the mesh program a second time here to dump its compute shader crashed the
@@ -2763,9 +2923,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             }
         } else {
             const auto begin = std::chrono::steady_clock::now();
+            const Shader::Backend::Bindings stage_binding = binding;
             stage_spirv[stage_index] = EmitStageSpirv(device, profile, runtime_info, program,
                                                       binding, key.unique_hashes[index],
                                                       stage_index);
+            if (prepass_shaders && program.stage == Shader::Stage::Fragment) {
+                EmitPrepassShaders(profile, runtime_info, program, stage_binding,
+                                   *prepass_shaders);
+            }
             if (build_in_parallel) {
                 AddRuntimeSpirvTime(0, begin);
             }
@@ -2782,6 +2947,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         job->programs = std::move(programs);
         job->runtime_infos = std::move(deferred_runtime_infos);
         job->reference_spirv = std::move(reference_spirv);
+        job->prepass_shaders = prepass_shaders;
         for (size_t stage = 0; stage < infos.size(); ++stage) {
             if (infos[stage]) {
                 infos[stage] = &job->programs[stage + 1].info;
@@ -2793,10 +2959,17 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             Shader::Backend::Bindings stage_binding;
             for (size_t stage = 0; stage < spirv.size(); ++stage) {
                 if (job->runtime_infos[stage]) {
+                    const Shader::Backend::Bindings binding_before = stage_binding;
                     spirv[stage] =
                         EmitStageSpirv(device, profile, *job->runtime_infos[stage],
                                        job->programs[stage + 1], stage_binding, hashes[stage + 1],
                                        stage, job->reference_spirv[stage]);
+                    if (job->prepass_shaders &&
+                        job->programs[stage + 1].stage == Shader::Stage::Fragment) {
+                        EmitPrepassShaders(profile, *job->runtime_infos[stage],
+                                           job->programs[stage + 1], binding_before,
+                                           *job->prepass_shaders);
+                    }
                 }
             }
             auto completed_pools = std::move(job->pools);
@@ -2822,7 +2995,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         &shader_notify, device, descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring,
         BuildQueue(build_in_parallel, defer_emission ? deferred_ir_bytes : 0), statistics,
         render_pass_cache, key, std::move(stage_spirv), infos, std::move(emit_stages),
-        std::move(mesh_emulation));
+        std::move(mesh_emulation), std::move(prepass_shaders));
     pipeline->SetMappedPointers(std::move(mapped_pointers));
     return pipeline;
 

@@ -253,6 +253,12 @@ public:
     /// Update the pipeline to the current execution context.
     bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
 
+    /// A recorded draw bound other pipelines than the one UpdateGraphicsPipeline was told of
+    /// (alpha-test prepass split): the next draw binds its pipeline again.
+    void ForgetGraphicsPipeline() {
+        state.graphics_pipeline = nullptr;
+    }
+
     /// Worker thread only: whether the bound graphics pipeline failed to build, so the draws
     /// recorded after it must be dropped instead of reaching the driver without a pipeline.
     void SetGraphicsPipelineMissing(bool missing) {

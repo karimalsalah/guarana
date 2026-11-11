@@ -390,13 +390,16 @@ GraphicsPipeline::GraphicsPipeline(
     const GraphicsPipelineCacheKey& key_, std::array<std::vector<u32>, NUM_STAGES> stages,
     const std::array<const Shader::Info*, NUM_STAGES>& infos,
     std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages,
-    std::optional<MeshEmulationSetup> mesh_emulation_)
+    std::optional<MeshEmulationSetup> mesh_emulation_,
+    std::shared_ptr<PrepassShaders> prepass_shaders_)
     : key{key_}, device{device_}, texture_cache{texture_cache_}, buffer_cache{buffer_cache_},
       pipeline_cache(pipeline_cache_), binaries{binaries_}, scheduler{scheduler_},
       guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, spirv{std::move(stages)},
       worker_only_build{build_queue.jobs && static_cast<bool>(emit_stages)},
-      mesh_emulation{std::move(mesh_emulation_)} {
+      mesh_emulation{std::move(mesh_emulation_)}, prepass_shaders{std::move(prepass_shaders_)},
+      prepass_split{prepass_shaders != nullptr},
+      prepass_invariant{prepass_shaders != nullptr && prepass_shaders->invariant_position} {
     if (shader_notify) {
         shader_notify->MarkShaderBuilding();
     }
@@ -625,6 +628,7 @@ GraphicsPipeline::GraphicsPipeline(
             const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
             Validate();
             MakePipeline(render_pass);
+            MakePrepassPipelines(render_pass);
         } catch (const Shader::Exception& exception) {
             LOG_ERROR(Render_Vulkan, "Graphics pipeline {:016x}: {}", key.Hash(), exception.what());
             throw;
@@ -1610,7 +1614,41 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     return true;
 }
 
-void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+void GraphicsPipeline::MakePrepassPipelines(VkRenderPass render_pass) {
+    if (!prepass_shaders) {
+        return;
+    }
+    // Nothing reads the SPIR-V after this build.
+    const std::shared_ptr<PrepassShaders> shaders{std::move(prepass_shaders)};
+    if (!pipeline || mesh_emulation || !spv_modules[NUM_STAGES - 1] ||
+        shaders->depth_only.empty() || shaders->early_test.empty()) {
+        return;
+    }
+    try {
+        prepass_modules[0] = BuildShader(device, shaders->depth_only);
+        prepass_modules[1] = BuildShader(device, shaders->early_test);
+        MakePipeline(render_pass, PipelineVariant::PrepassDepth);
+        MakePipeline(render_pass, PipelineVariant::PrepassColor);
+        VideoCore::Nx2Debug::CountPrepassPipeline();
+        LOG_INFO(Render_Vulkan,
+                 "Prepass split: graphics pipeline {:016x} (fragment shader {:016x}) has its "
+                 "depth and colour pass pipelines",
+                 key.Hash(), key.unique_hashes[5]);
+    } catch (const std::exception& exception) {
+        LOG_ERROR(Render_Vulkan,
+                  "Prepass split: graphics pipeline {:016x} draws in one pass, the two passes' "
+                  "pipelines failed to build: {}",
+                  key.Hash(), exception.what());
+        for (vk::Pipeline& prepass_pipeline : prepass_pipelines) {
+            prepass_pipeline.reset();
+        }
+    }
+    for (vk::ShaderModule& prepass_module : prepass_modules) {
+        prepass_module.reset();
+    }
+}
+
+void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant variant) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return;
     }
@@ -1885,7 +1923,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .alphaToOneEnable = supports_alpha_output && alpha_to_one_supported &&
                            key.state.alpha_to_one_enabled != 0 ? VK_TRUE : VK_FALSE,
     };
-    const VkPipelineDepthStencilStateCreateInfo depth_stencil_ci{
+    VkPipelineDepthStencilStateCreateInfo depth_stencil_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
@@ -1901,6 +1939,12 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .minDepthBounds = f32(key.state.depth_bounds_min),
         .maxDepthBounds = f32(key.state.depth_bounds_max),
     };
+    if (variant == PipelineVariant::PrepassColor) {
+        // Where this is dynamic state instead, the draw sets the same (PrepassDraw).
+        depth_stencil_ci.depthTestEnable = VK_TRUE;
+        depth_stencil_ci.depthWriteEnable = VK_FALSE;
+        depth_stencil_ci.depthCompareOp = VK_COMPARE_OP_EQUAL;
+    }
     if (dynamic.depth_bounds_enable && !device.IsDepthBoundsSupported()) {
         LOG_WARNING(Render_Vulkan, "Depth bounds is enabled but not supported");
     }
@@ -1920,6 +1964,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             write_mask |= mask[i] ? mask_table[i] : 0;
         }
         write_mask &= ColorOutputMask(index);
+        if (variant == PipelineVariant::PrepassDepth) {
+            write_mask = 0;
+        }
         cb_attachments.push_back({
             .blendEnable = blend.enable != 0,
             .srcColorBlendFactor = MaxwellToVK::BlendFactor(blend.SourceRGBFactor()),
@@ -2080,12 +2127,18 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask;
         const bool force_warp_size = !emulated_vertex && uses_warp_ops && device.IsExtSubgroupSizeControlSupported() &&
                                      device.IsGuestWarpSizeSupported(stage_flag);
+        // A prepass split's pipelines differ in the fragment shader alone.
+        const bool prepass_fragment{variant != PipelineVariant::Main && stage == NUM_STAGES - 1};
+        const VkShaderModule stage_module{
+            emulated_vertex    ? *mesh_vertex_module
+            : prepass_fragment ? *prepass_modules[variant == PipelineVariant::PrepassDepth ? 0 : 1]
+                               : *spv_modules[stage]};
         shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = force_warp_size ? &subgroup_size_ci : nullptr,
             .flags = 0,
             .stage = stage_flag,
-            .module = emulated_vertex ? *mesh_vertex_module : *spv_modules[stage],
+            .module = stage_module,
             .pName = "main",
             .pSpecializationInfo = nullptr,
         });
@@ -2117,7 +2170,10 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
 
     const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
     const auto trace_begin = std::chrono::steady_clock::now();
-    TracePipelineBuild("BEGIN", "graphics", key.Hash(), key.unique_hashes, unoptimized);
+    static constexpr std::array<const char*, 3> trace_kinds{
+        "graphics", "graphics-prepass-depth", "graphics-prepass-color"};
+    const char* const trace_kind{trace_kinds[static_cast<size_t>(variant)]};
+    TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, unoptimized);
     const VkGraphicsPipelineCreateInfo pipeline_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = nullptr,
@@ -2145,12 +2201,21 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     };
     // Stored driver binaries are checked against the driver's key of this create info; the salt
     // keeps the builds with the dynamic rate beside the others instead of replacing them.
+    // So do the salts of a prepass split: its two pipelines are other builds of this key, and so
+    // is the pipeline itself when its stages decorate Position for the split.
+    static constexpr std::array<u64, 3> variant_salts{0ULL, 0x5052455f44455054ULL,
+                                                      0x5052455f434f4c52ULL};
     const u64 binary_key{GraphicsRecordKey(key) ^
-                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL)};
-    pipeline = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
-                                                           binary_key)
-                        : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
-    TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
+                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
+                         variant_salts[static_cast<size_t>(variant)] ^
+                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
+    vk::Pipeline& built =
+        variant == PipelineVariant::Main
+            ? pipeline
+            : prepass_pipelines[variant == PipelineVariant::PrepassDepth ? 0 : 1];
+    built = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, binary_key)
+                     : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
+    TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
