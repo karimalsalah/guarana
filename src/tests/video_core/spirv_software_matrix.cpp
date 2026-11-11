@@ -850,6 +850,13 @@ TEST_CASE("Shared-memory software HMMA shares one helper per depth",
         REQUIRE(unsynchronized.program.info.uses_subgroup_shared_scratch);
         REQUIRE(Instructions(racy, OP_CONTROL_BARRIER).empty());
         REQUIRE(Instructions(racy, 345).empty()); // OpGroupNonUniformShuffle
+
+        TensorProgram scalar{64, depth};
+        scalar.profile.support_software_matrix_shared_memory = true;
+        scalar.profile.support_explicit_workgroup_layout = true;
+        scalar.profile.software_matrix_shared_memory_scalar_loads = true;
+        const Module words{scalar.Emit()};
+        REQUIRE(FindSharedAccesses(words).loads.size() == 16); // Despite the vector view
     }
 }
 

@@ -116,6 +116,8 @@ struct Profile {
     bool support_software_matrix_shared_memory{};
     /// Experiment: the above without its subgroup barriers (a subgroup's lanes run in lockstep)
     bool software_matrix_shared_memory_no_barrier{};
+    /// Experiment: its loads are single words, also where the shared memory has a vector view
+    bool software_matrix_shared_memory_scalar_loads{};
     u32 max_subgroup_size{};
 
     u32 gl_max_compute_smem_size{};

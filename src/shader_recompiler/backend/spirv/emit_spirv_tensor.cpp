@@ -394,7 +394,8 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
         // one load where the shared memory has a vector view.
         const auto load_group = [&](Id word) {
             std::array<Id, 4> words;
-            if (ctx.uses_explicit_workgroup_layout) {
+            if (ctx.uses_explicit_workgroup_layout &&
+                !ctx.profile.software_matrix_shared_memory_scalar_loads) {
                 const Id index = ctx.OpShiftRightLogical(u32ty, word, imm(2));
                 const Id vector = ctx.OpLoad(
                     ctx.U32[4], ctx.OpAccessChain(ctx.shared_u32x4, ctx.shared_memory_u32x4,

@@ -653,12 +653,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     }
     // EDEN_NX2_SW_MATRIX_SHARED=1 (experiment): without tensor cores, guest tensor operations
     // gather their operands from shared memory instead of shuffling them between lanes.
-    // "nobarrier" also leaves out the subgroup barriers around the gather.
+    // Variants, in any combination ("1,nobarrier,scalar"): "nobarrier" leaves out the subgroup
+    // barriers around the gather, "scalar" loads single words even with a vector view.
     static const char* const sw_matrix_shared{std::getenv("EDEN_NX2_SW_MATRIX_SHARED")};
-    const bool sw_matrix_no_barrier{sw_matrix_shared != nullptr &&
-                                    std::strcmp(sw_matrix_shared, "nobarrier") == 0};
-    if (sw_matrix_no_barrier ||
-        (sw_matrix_shared != nullptr && std::strcmp(sw_matrix_shared, "1") == 0)) {
+    if (sw_matrix_shared != nullptr && sw_matrix_shared[0] != '\0' &&
+        sw_matrix_shared[0] != '0') {
         // Subgroups of exactly the guest's 32 lanes, all full, as for the 16x16x16 matrices
         profile.support_software_matrix_shared_memory =
             !profile.support_cooperative_hmma && !profile.support_cooperative_hmma_16x16x16 &&
@@ -666,7 +665,10 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
             device.IsExtSubgroupSizeControlSupported() &&
             device.IsComputeFullSubgroupsSupported() &&
             device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
-        profile.software_matrix_shared_memory_no_barrier = sw_matrix_no_barrier;
+        profile.software_matrix_shared_memory_no_barrier =
+            std::strstr(sw_matrix_shared, "nobarrier") != nullptr;
+        profile.software_matrix_shared_memory_scalar_loads =
+            std::strstr(sw_matrix_shared, "scalar") != nullptr;
         LOG_INFO(Render_Vulkan, "EDEN_NX2_SW_MATRIX_SHARED={}: software tensor operations {}",
                  sw_matrix_shared,
                  profile.support_software_matrix_shared_memory
