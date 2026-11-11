@@ -51,6 +51,32 @@ class UploadBatch;
 
 struct QueryCacheParams;
 
+/// Emulator-issued GPU work timed by the cost tracer (DKB gpu_work "emu:<name>" rows).
+enum class TraceCategory : u8 {
+    ImageCopy,
+    ImageCopyMsaa,
+    ImageReinterpret,
+    ImageBlit,
+    ImageConvert,
+    ImageUpload,
+    ImageDownload,
+    BufferCopy,
+    BufferUploadBatch,
+    UploadCmdbuf, ///< The whole reordered-upload command buffer of a submission
+    ComputeVertexRepack,
+    ComputeUint8Index,
+    ComputeQuadIndex,
+    ComputeCondResolve,
+    ComputeQueryPrefixScan,
+    ComputeAstc,
+    ComputeBcEncode,
+    ComputeUnswizzle3D,
+    QueryCopy,
+    ClearInPass,
+    Present,
+    Count,
+};
+
 /// The scheduler abstracts command buffer and fence management with an interface that's able to do
 /// OpenGL-like operations on Vulkan command buffers.
 class Scheduler {
@@ -134,11 +160,38 @@ public:
             return;
         }
         const u32 query = trace_work_count * 2;
-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind};
+        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind, trace_pass_open};
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
         work();
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
     }
+
+    /// Worker thread, inside a recorded command: times emulator-issued work (kind 'x').
+    template <typename Func>
+    void TraceEmuWork(vk::CommandBuffer cmdbuf, TraceCategory category, std::array<u32, 3> size,
+                      Func&& work) {
+        TraceGpuWork(cmdbuf, static_cast<u64>(category), 0, size, std::forward<Func>(work),
+                     TraceEmuKind);
+    }
+
+    /// Record() whose command is timed as emulator work in sampled frames. Without the cost
+    /// pools (no tracing, sampling or debug server) it is Record().
+    template <typename T>
+        requires std::is_invocable_v<T, vk::CommandBuffer>
+    void RecordEmu(TraceCategory category, std::array<u32, 3> size, T&& c) {
+        if (!trace_work_pool) {
+            Record(std::move(c));
+            return;
+        }
+        Record([this, category, size, command = std::move(c)](vk::CommandBuffer cmdbuf) {
+            TraceEmuWork(cmdbuf, category, size, [&] { command(cmdbuf); });
+        });
+    }
+
+    /// Times everything recorded between the two calls as one emulator work item. Spans do not
+    /// nest and do not cross a submission; items timed inside one are counted in both.
+    void RecordEmuBegin(TraceCategory category, std::array<u32, 3> size);
+    void RecordEmuEnd();
 
     /// Sends currently recorded work to the worker thread.
     void DispatchWork();
@@ -512,7 +565,9 @@ private:
     void AllocateWorkerCommandBuffer();
 
     void TraceGpuSubmission();
-    void ReportWorkTimes(double submission_sum_ms, VideoCore::GpuCostSnapshot& costs);
+    /// Reads the work timestamps into trace_work_ms and trace_pass_*_ms; the item count.
+    u32 FetchWorkTimes();
+    void ReportWorkTimes(u32 count, double submission_sum_ms, VideoCore::GpuCostSnapshot& costs);
     void ReportPassTimes(VideoCore::GpuCostSnapshot& costs);
     /// Recording thread: whether draws and passes are to be timed in sampled frames.
     [[nodiscard]] bool TraceCostsWanted() const {
@@ -520,7 +575,34 @@ private:
     }
     void TraceShader(u64 hash, u32 stage);
 
-    u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
+    /// Where a flush or a render pass end was asked from (static strings; null when unknown).
+    struct TraceSite {
+        const char* file{};
+        const char* function{};
+        u32 line{};
+    };
+    static TraceSite MakeTraceSite(const std::source_location& location) {
+        return {location.file_name(), location.function_name(), location.line()};
+    }
+    enum class PassEnd : u8 {
+        Copy,
+        Wfi,
+        Query,
+        Submit,
+        Switch,
+        Upload,
+        Download,
+        Buffer,
+        Compute,
+        Dispatch,
+        Clear,
+        Other,
+        Count,
+    };
+    static PassEnd ClassifyPassEnd(const TraceSite& site, bool render_pass_request);
+
+    u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
+                        TraceSite site);
 
     void AllocateNewContext();
 
@@ -559,23 +641,39 @@ private:
         u32 num_shaders{};
         u32 untracked_uses{};
         std::array<ShaderUse, 32> shaders{};
+        /// Work and pass items recorded in this submission: [begin, end).
+        u32 work_begin{};
+        u32 work_end{};
+        u32 pass_begin{};
+        u32 pass_end{};
+        const char* flush_file{};
+        const char* flush_function{};
+        u32 flush_line{};
     };
     SubmissionTrace trace_work;
     std::vector<SubmissionTrace> trace_submissions;
-    static constexpr u32 TraceMaxWork = 4096;
+    static constexpr u32 TraceMaxWork = 8192;
+    static constexpr u32 TraceMaxPasses = 2048;
+    static constexpr u32 TraceNoPass = ~u32{0};
+    static constexpr char TraceEmuKind = 'x'; ///< WorkTrace::kind of emulator work
     struct WorkTrace {
-        u64 hash{};
+        u64 hash{}; ///< A TraceCategory for emulator work
         u64 fragment_hash{};
         /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
         std::array<u32, 3> size{};
         char kind{};
+        u32 pass{TraceNoPass}; ///< The traced render pass it ran in
+        u32 span_end{};        ///< RecordEmuBegin items: the item count at RecordEmuEnd
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;
+    std::vector<double> trace_work_ms; ///< Per item, negative when not measured
     u32 trace_work_count{};
     u32 trace_work_dropped{};
-    static constexpr u32 TraceMaxPasses = 2048;
-    static constexpr u32 TraceNoPass = ~u32{0};
+    u32 trace_span_item{TraceNoPass};   ///< Worker: the open RecordEmuBegin item
+    u32 trace_upload_item{TraceNoPass}; ///< Worker: this submission's UploadCmdbuf item
+    u32 trace_sub_work_begin{};         ///< Worker: work and pass counts when this
+    u32 trace_sub_pass_begin{};         ///< submission started
     /// What DKB gpu_pass groups render passes by. Formats are PixelFormat values.
     struct PassTrace {
         auto operator<=>(const PassTrace&) const = default;
@@ -587,11 +685,19 @@ private:
         u8 depth_format{};
         u8 samples{};
     };
-    /// Worker thread: timestamps around a render pass of a sampled submission.
+    /// Worker thread: timestamps around a render pass of a sampled submission. Four per pass:
+    /// before and after vkCmdBeginRenderPass, before vkCmdEndRenderPass and after its barrier.
     void TracePassBegin(vk::CommandBuffer cmdbuf, const PassTrace& pass);
-    void TracePassEnd(vk::CommandBuffer cmdbuf);
+    void TracePassStamp(vk::CommandBuffer cmdbuf, u32 stamp);
+    void TracePassEnd(vk::CommandBuffer cmdbuf, PassEnd reason);
     vk::QueryPool trace_pass_pool;
     std::vector<PassTrace> trace_pass_items;
+    std::vector<PassEnd> trace_pass_reasons;
+    std::vector<double> trace_pass_draw_ms; ///< Guest work timed inside each pass
+    std::vector<double> trace_pass_emu_ms;  ///< Emulator work timed inside each pass
+    /// Recording thread: why the open traced pass is about to end (set by the caller of
+    /// EndRenderPass, Other otherwise).
+    PassEnd pass_end_reason{PassEnd::Other};
     u32 trace_pass_count{};
     u32 trace_pass_dropped{};
     u32 trace_pass_open{TraceNoPass};

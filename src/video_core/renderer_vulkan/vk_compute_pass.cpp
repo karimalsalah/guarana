@@ -356,7 +356,8 @@ std::optional<std::pair<VkBuffer, VkDeviceSize>> VertexRepackPass::Assemble(VkBu
     scheduler.RequestOutsideRenderPassOperationContext();
     LOG_DEBUG(Render_Vulkan, "Vertex repack queued: source_size={}, output_size={}, groups={}",
               size, output_size, parameters->dispatch_groups);
-    scheduler.Record([this, data, bias, size, num_vertices,
+    scheduler.RecordEmu(TraceCategory::ComputeVertexRepack, {num_vertices, 0, 0},
+        [this, data, bias, size, num_vertices,
                       groups = parameters->dispatch_groups](vk::CommandBuffer cmdbuf) {
         const VkMemoryBarrier read_barrier{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -405,7 +406,8 @@ std::pair<VkBuffer, VkDeviceSize> Uint8Pass::Assemble(u32 num_vertices, VkBuffer
     const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, descriptor_data, num_vertices](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordEmu(TraceCategory::ComputeUint8Index, {num_vertices, 0, 0},
+        [this, descriptor_data, num_vertices](vk::CommandBuffer cmdbuf) {
         static constexpr u32 DISPATCH_SIZE = 1024;
         static constexpr VkMemoryBarrier WRITE_BARRIER{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -463,7 +465,8 @@ std::pair<VkBuffer, VkDeviceSize> QuadIndexedPass::Assemble(
     const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, descriptor_data, num_tri_vertices, base_vertex, index_shift,
+    scheduler.RecordEmu(TraceCategory::ComputeQuadIndex, {num_tri_vertices, 0, 0},
+        [this, descriptor_data, num_tri_vertices, base_vertex, index_shift,
                       is_strip](vk::CommandBuffer cmdbuf) {
         static constexpr u32 DISPATCH_SIZE = 1024;
         static constexpr VkMemoryBarrier WRITE_BARRIER{
@@ -508,7 +511,8 @@ void ConditionalRenderingResolvePass::Resolve(VkBuffer dst_buffer, VkBuffer src_
     const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, descriptor_data, compare_to_zero](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordEmu(TraceCategory::ComputeCondResolve, {0, 0, 0},
+        [this, descriptor_data, compare_to_zero](vk::CommandBuffer cmdbuf) {
         static constexpr VkMemoryBarrier read_barrier{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .pNext = nullptr,
@@ -580,7 +584,8 @@ void QueriesPrefixScanPass::Run(VkBuffer accumulation_buffer, VkBuffer dst_buffe
         offset += runs_to_do;
 
         scheduler.RequestOutsideRenderPassOperationContext();
-        scheduler.Record([this, descriptor_data, min_accumulation_limit, max_accumulation_limit,
+        scheduler.RecordEmu(TraceCategory::ComputeQueryPrefixScan, {static_cast<u32>(runs_to_do), 0, 0},
+            [this, descriptor_data, min_accumulation_limit, max_accumulation_limit,
                           runs_to_do, used_offset, conditional_access](vk::CommandBuffer cmdbuf) {
             static constexpr VkMemoryBarrier read_barrier{
                 .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -729,7 +734,8 @@ void ASTCDecoderPass::AssembleInto(const VideoCommon::ImageInfo& info, u32 skip,
             params.layer_stride = input_layer_stride;
             const u32 num_dispatches_x = Common::DivCeil(swizzle.num_tiles.width, 8U);
             const u32 num_dispatches_y = Common::DivCeil(swizzle.num_tiles.height, 8U);
-            scheduler.Record([this, num_dispatches_x, num_dispatches_y, block_dims, params,
+            scheduler.RecordEmu(TraceCategory::ComputeAstc, {num_dispatches_x, num_dispatches_y, 1},
+                [this, num_dispatches_x, num_dispatches_y, block_dims, params,
                               descriptor_data](vk::CommandBuffer cmdbuf) {
                 const AstcPushConstants uniforms{
                     .blocks_dims = block_dims,
@@ -771,7 +777,8 @@ void ASTCDecoderPass::AssembleInto(const VideoCommon::ImageInfo& info, u32 skip,
         ASSERT(params.origin == (std::array<u32, 3>{0, 0, 0}));
         ASSERT(params.destination == (std::array<s32, 3>{0, 0, 0}));
         ASSERT(params.bytes_per_block_log2 == 4);
-        scheduler.Record([this, num_dispatches_x, num_dispatches_y, num_dispatches_z, block_dims,
+        scheduler.RecordEmu(TraceCategory::ComputeAstc, {num_dispatches_x, num_dispatches_y, num_dispatches_z},
+            [this, num_dispatches_x, num_dispatches_y, num_dispatches_z, block_dims,
                           params, descriptor_data](vk::CommandBuffer cmdbuf) {
             const AstcPushConstants uniforms{
                 .blocks_dims = block_dims,
@@ -870,7 +877,8 @@ void BcEncoderPass::Encode(VkImageView source, u32 width, u32 height, u32 layers
         .out_offset = static_cast<u32>(out_offset / 8),
     };
     const VkPipeline vk_pipeline = *pipeline;
-    scheduler.Record([this, vk_pipeline, uniforms, layers, descriptor_data](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordEmu(TraceCategory::ComputeBcEncode, {width, height, layers},
+        [this, vk_pipeline, uniforms, layers, descriptor_data](vk::CommandBuffer cmdbuf) {
         const VkDescriptorSet set = descriptor_allocator.Commit();
         device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptor_data);
         cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline);
@@ -1050,7 +1058,8 @@ void BlockLinearUnswizzle3DPass::UnswizzleChunk(
     const u32 image_width = image.info.size.width;
     const u32 image_height = image.info.size.height;
 
-    scheduler.Record([this, set, descriptor_data, pc, gx, gy, gz, z_start, z_count,
+    scheduler.RecordEmu(TraceCategory::ComputeUnswizzle3D, {gx, gy, gz},
+        [this, set, descriptor_data, pc, gx, gy, gz, z_start, z_count,
                       barrier_size, is_first_chunk, out_buffer, dst_image, aspect,
                       image_width, image_height
                       ](vk::CommandBuffer cmdbuf) {

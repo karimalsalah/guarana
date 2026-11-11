@@ -667,6 +667,13 @@ json GpuCosts(ToolState& state, const json& params) {
         };
         passes.push_back(std::move(item));
     }
+    json emu = json::array();
+    for (const auto& entry : costs.emu) {
+        emu.push_back({{"category", entry.category},
+                       {"count", entry.count},
+                       {"total_ms", entry.total_ms},
+                       {"max_ms", entry.max_ms}});
+    }
     json age = nullptr;
     if (costs.frame != 0) {
         age = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
@@ -680,6 +687,8 @@ json GpuCosts(ToolState& state, const json& params) {
             {"frame_span_ms", costs.frame_span_ms},
             {"submission_sum_ms", costs.submission_sum_ms},
             {"timed_sum_ms", costs.timed_sum_ms},
+            {"emu_sum_ms", costs.emu_sum_ms},
+            {"emu", std::move(emu)},
             {"work_entries", costs.work.size()},
             {"work", std::move(work)},
             {"pass_entries", costs.passes.size()},

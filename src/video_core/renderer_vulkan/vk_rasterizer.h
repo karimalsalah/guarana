@@ -344,6 +344,7 @@ private:
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;
     bool pending_native_work{};
+    bool deferred_wfi_query_sync{}; ///< WaitForIdle skipped the query sync (EDEN_NX2_DEFER_WFI)
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
     /// Fragment output components the dynamic color write mask was last recorded with
     u32 last_color_output_mask{};
