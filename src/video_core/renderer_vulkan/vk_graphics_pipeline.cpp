@@ -1541,7 +1541,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     // bind, as a pipeline with a static rate (blits, presentation) leaves it undefined.
     VkExtent2D shading_rate{1, 1};
     bool set_shading_rate{};
-    if (device.IsKhrFragmentShadingRateSupported()) {
+    if (device.IsKhrFragmentShadingRateSupported() && !IsMeshPipeline()) {
         const auto wanted{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
         shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
         set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
@@ -2106,7 +2106,10 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
     }
 
     // EDEN_NX2_VRS: on every guest pipeline, so a shader's rate changes without a rebuild.
-    const bool dynamic_shading_rate{device.IsKhrFragmentShadingRateSupported()};
+    // Not on mesh pipelines: with the rate dynamic their draws vanish on Intel's driver, so they
+    // take the rate of their fragment shader at build time instead.
+    const bool dynamic_shading_rate{device.IsKhrFragmentShadingRateSupported() &&
+                                    !IsMeshPipeline()};
     if (dynamic_shading_rate) {
         dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
     }
@@ -2207,9 +2210,19 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         "graphics", "graphics-prepass-depth", "graphics-prepass-color"};
     const char* const trace_kind{trace_kinds[static_cast<size_t>(variant)]};
     TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, unoptimized);
+    const bool static_shading_rate{device.IsKhrFragmentShadingRateSupported() && is_mesh};
+    const auto mesh_rate{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
+    const VkPipelineFragmentShadingRateStateCreateInfoKHR static_rate_ci{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
+        .pNext = nullptr,
+        .fragmentSize = device.ClampFragmentShadingRate({mesh_rate.width, mesh_rate.height}),
+        .combinerOps = {UsesMeshShadingRate() ? device.MeshPrimitiveRateCombiner()
+                                              : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+                        VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR},
+    };
     const VkGraphicsPipelineCreateInfo pipeline_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = nullptr,
+        .pNext = static_shading_rate ? &static_rate_ci : nullptr,
         .flags = flags,
         .stageCount = static_cast<u32>(shader_stages.size()),
         .pStages = shader_stages.data(),
