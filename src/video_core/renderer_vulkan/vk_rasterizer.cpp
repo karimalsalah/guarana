@@ -3610,6 +3610,8 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         !oot_live_dlss->EvaluationFailed() && !frame_dump.Capturing()) {
         try {
             oot_live_dlss->Composite4k(info.image_view, render_trace_frame);
+            oot_hud_composite = info.image_view;
+            oot_hud_frame = render_trace_frame;
             info.image = oot_live_dlss->CompositedImage();
             info.image_view = oot_live_dlss->CompositedView();
             info.scaled_width = 3840;
@@ -3622,6 +3624,19 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         }
     }
     return info;
+}
+
+std::optional<ExtrapolationSource> RasterizerVulkan::OcarinaExtrapolationSource() const {
+    if (!ExtrapolationRequested() || !oot_live_dlss || oot_dlss_frame != render_trace_frame ||
+        oot_live_failed || oot_live_dlss->EvaluationFailed()) {
+        return std::nullopt;
+    }
+    auto source = oot_live_dlss->Extrapolation(render_trace_frame);
+    if (source && oot_hud_frame == render_trace_frame) {
+        source->hud_reference = oot_live_dlss->SceneReferenceView();
+        source->hud_composite = oot_hud_composite;
+    }
+    return source;
 }
 
 void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_loading,

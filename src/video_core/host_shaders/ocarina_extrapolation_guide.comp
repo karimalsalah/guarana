@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+
+// Half-size motion and depth for frame extrapolation, keeping the nearest of each 2x2 block.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene_motion; // pixels to the previous frame
+layout(binding = 1) uniform sampler2D scene_depth;
+layout(binding = 2, rgba16f) uniform writeonly image2D guide;
+layout(push_constant) uniform Controls { uint unused; } controls;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(guide);
+    if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+
+    ivec2 size = textureSize(scene_motion, 0);
+    ivec2 limit = size - 1;
+    float nearest = 2.0;
+    vec2 pixels = vec2(0);
+    for (int i = 0; i < 4; ++i) {
+        ivec2 texel = min(pixel * 2 + ivec2(i & 1, i >> 1), limit);
+        float depth = texelFetch(scene_depth, texel, 0).r;
+        if (depth < nearest) {
+            nearest = depth;
+            pixels = texelFetch(scene_motion, texel, 0).rg;
+        }
+    }
+    // 1 - depth keeps its precision in a half float: 0 at the far plane, larger when nearer.
+    float nearness = 1.0 - clamp(nearest, 0.0, 1.0);
+    imageStore(guide, pixel, vec4(pixels / vec2(size), nearness, 1.0));
+}

@@ -210,6 +210,7 @@ add_library(video_core STATIC
     vulkan_common/ffx_runtime.h
     renderer_vulkan/vk_dlss_network_probe.cpp
     renderer_vulkan/vk_dlss_network_probe.h
+    renderer_vulkan/present/extrapolation_source.h
     renderer_vulkan/vk_ocarina_camera_motion.cpp
     renderer_vulkan/vk_ocarina_camera_motion.h
     renderer_vulkan/vk_compute_pipeline.cpp
@@ -379,6 +380,8 @@ if (ENABLE_LSFG)
         frame_gen/lossless_dll.h
         frame_gen/lsfg_translate.cpp
         frame_gen/lsfg_translate.h
+        renderer_vulkan/present/frame_extrapolation.cpp
+        renderer_vulkan/present/frame_extrapolation.h
         renderer_vulkan/present/frame_gen.cpp
         renderer_vulkan/present/frame_gen.h
         renderer_vulkan/present/fsr3_frame_gen.cpp
