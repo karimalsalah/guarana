@@ -381,22 +381,33 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 }
 
 /// The culling (Profile::mesh_cull) a native mesh program can add with this pipeline state.
-u32 MeshCullBits(u32 wanted, const FixedPipelineState& state, const Device& device) {
+u32 MeshCullBits(u32 wanted, const FixedPipelineState& state, const Device& device,
+                 const Shader::MeshInfo& mesh) {
     using namespace Shader::Backend::SPIRV;
     if (wanted == 0) {
         return 0;
     }
-    // The tests read clip space x, y and w as the program wrote them: only y may be negated.
-    const u32 swizzle{state.viewport_swizzles[0]};
-    const auto component = [swizzle](u32 shift) {
-        return static_cast<Maxwell::ViewportSwizzle>((swizzle >> shift) & 7);
+    // The tests read clip space x, y and w as the program wrote them: only y may be negated, in
+    // viewport 0 or, for a program that picks its viewports, in all of them.
+    const auto component = [&state](size_t viewport, u32 shift) {
+        return static_cast<Maxwell::ViewportSwizzle>((state.viewport_swizzles[viewport] >> shift) &
+                                                     7);
     };
-    const Maxwell::ViewportSwizzle y{component(4)};
-    if (component(0) != Maxwell::ViewportSwizzle::PositiveX ||
-        (y != Maxwell::ViewportSwizzle::PositiveY && y != Maxwell::ViewportSwizzle::NegativeY) ||
-        component(12) != Maxwell::ViewportSwizzle::PositiveW) {
-        return wanted & MESH_CULL_EMPTY;
+    const bool picks_viewport{std::ranges::any_of(mesh.primitive_lines, [](u32 line) {
+        return line == static_cast<u32>(Shader::IR::Attribute::ViewportIndex) ||
+               line == static_cast<u32>(Shader::IR::Attribute::ViewportMask);
+    })};
+    const size_t num_viewports{picks_viewport ? state.viewport_swizzles.size() : 1};
+    for (size_t viewport = 0; viewport < num_viewports; ++viewport) {
+        const Maxwell::ViewportSwizzle viewport_y{component(viewport, 4)};
+        if (component(viewport, 0) != Maxwell::ViewportSwizzle::PositiveX ||
+            (viewport_y != Maxwell::ViewportSwizzle::PositiveY &&
+             viewport_y != Maxwell::ViewportSwizzle::NegativeY) ||
+            component(viewport, 12) != Maxwell::ViewportSwizzle::PositiveW) {
+            return wanted & MESH_CULL_EMPTY;
+        }
     }
+    const Maxwell::ViewportSwizzle y{component(0, 4)};
     // Small triangles: only filled, single-sampled triangles are sampled at pixel centres alone,
     // and the viewport pushed for the test has to be the whole of the transform after clipping.
     if (state.msaa_mode.Value() != Tegra::Texture::MsaaMode::Msaa1x1 ||
@@ -2675,7 +2686,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             }
         }
         if (!mesh_emulation && program.stage == Shader::Stage::Mesh) {
-            runtime_info.mesh_cull = MeshCullBits(profile.mesh_cull, key.state, device);
+            runtime_info.mesh_cull = MeshCullBits(profile.mesh_cull, key.state, device, program.mesh);
             // The pipeline pushes the viewport the small triangle test reads.
             program.info.uses_mesh_cull_viewport =
                 (runtime_info.mesh_cull & Shader::Backend::SPIRV::MESH_CULL_SMALL) != 0;
