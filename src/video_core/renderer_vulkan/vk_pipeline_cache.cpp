@@ -867,7 +867,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     if (mesh_out != nullptr) {
         using namespace Shader::Backend::SPIRV;
         profile.mesh_out = static_cast<u32>(std::strtoul(mesh_out, nullptr, 0)) &
-                           (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR);
+                           (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR | MESH_OUT_COUNT);
         if (!device.IsMeshPrimitiveShadingRateSupported()) {
             profile.mesh_out &= ~MESH_OUT_RATE;
         }

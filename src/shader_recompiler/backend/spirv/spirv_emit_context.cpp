@@ -1933,7 +1933,8 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     if (as_compute) {
         return; // the output buffer: DefineMeshEmulationOutput, after the storage buffers
     }
-    mesh_out = runtime_info.mesh_out & (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR);
+    mesh_out = runtime_info.mesh_out &
+               (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR | MESH_OUT_COUNT);
 
     const Id vertex_count{Const(mesh_info.max_vertices)};
     const Id primitive_count{Const(mesh_info.max_primitives)};
@@ -2038,6 +2039,12 @@ void EmitContext::DefineMesh(const IR::Program& program) {
         has_line(mesh_info.primitive_lines, IR::Attribute::ViewportIndex) ||
         has_line(mesh_info.primitive_lines, IR::Attribute::ViewportMask)) {
         mesh_cull &= ~MESH_CULL_SMALL;
+    }
+    if ((mesh_out & MESH_OUT_COUNT) != 0 && mesh_info.PrimitiveVertices() == 3) {
+        mesh_used_vertices =
+            DefineVariable(*this, TypeArray(U32[1], Const((std::max)(mesh_threads, 1U))),
+                           std::nullopt, spv::StorageClass::Workgroup);
+        Name(mesh_used_vertices, "mesh_used_vertices");
     }
     if ((mesh_cull & (MESH_CULL_FRUSTUM | MESH_CULL_SMALL)) != 0) {
         mesh_cull_primitive =

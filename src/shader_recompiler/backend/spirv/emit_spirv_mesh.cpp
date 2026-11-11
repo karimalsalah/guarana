@@ -466,7 +466,8 @@ Id CulledTriangle(EmitContext& ctx, Id primitive, Id count, Id viewport) {
     return ctx.OpLogicalAnd(ctx.U1, tested, culled);
 }
 
-void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const Id> culled);
+void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const Id> culled,
+                     Id vertex_limit);
 
 void MeshEpilogue(EmitContext& ctx) {
     const MeshInfo& mesh{ctx.mesh_info};
@@ -518,25 +519,57 @@ void MeshEpilogue(EmitContext& ctx) {
     } else if ((ctx.mesh_cull & MESH_CULL_EMPTY) != 0) {
         any_left = ctx.OpINotEqual(ctx.U1, count, ctx.u32_zero_value);
     }
+    // MESH_OUT_COUNT: the highest vertex a drawn primitive names, plus one. Each invocation looks
+    // at the primitives it copies; the workgroup takes the largest.
+    Id used_vertices{};
+    if (Sirit::ValidId(ctx.mesh_used_vertices)) {
+        Id own_used{ctx.u32_zero_value};
+        for (u32 first = 0; first < mesh.max_primitives; first += threads) {
+            const Id primitive{ctx.OpIAdd(ctx.U32[1], invocation, ctx.Const(first))};
+            const Id drawn{ctx.OpULessThan(ctx.U1, primitive, count)};
+            const Id byte{ctx.OpIAdd(ctx.U32[1], ctx.OpIMul(ctx.U32[1], primitive, ctx.Const(3U)),
+                                     ctx.Const(4U))};
+            for (u32 element = 0; element < 3; ++element) {
+                const Id address{Clamped(ctx, ctx.OpIAdd(ctx.U32[1], byte, ctx.Const(element)),
+                                         ctx.mesh_map_bytes)};
+                const Id index{ctx.OpLoad(ctx.U32[1], SharedWord(ctx, ctx.mesh_map, address))};
+                own_used = ctx.OpUMax(ctx.U32[1], own_used,
+                                      ctx.OpSelect(ctx.U32[1], drawn,
+                                                   ctx.OpIAdd(ctx.U32[1], index, ctx.Const(1U)),
+                                                   ctx.u32_zero_value));
+            }
+        }
+        ctx.OpStore(SharedWord(ctx, ctx.mesh_used_vertices, invocation), own_used);
+        Barrier(ctx);
+        Id used{ctx.u32_zero_value};
+        for (u32 thread = 0; thread < threads; ++thread) {
+            used = ctx.OpUMax(ctx.U32[1], used,
+                              ctx.OpLoad(ctx.U32[1], SharedWord(ctx, ctx.mesh_used_vertices,
+                                                                ctx.Const(thread))));
+        }
+        used_vertices = ctx.OpUMin(ctx.U32[1], used, max_vertices);
+    }
+    const Id all_vertices{Sirit::ValidId(used_vertices) ? used_vertices : max_vertices};
     const bool early_out{Sirit::ValidId(any_left)};
     const Id set_vertices{early_out
-                              ? ctx.OpSelect(ctx.U32[1], any_left, max_vertices, ctx.u32_zero_value)
-                              : max_vertices};
+                              ? ctx.OpSelect(ctx.U32[1], any_left, all_vertices, ctx.u32_zero_value)
+                              : all_vertices};
     const Id set_primitives{
         early_out ? ctx.OpSelect(ctx.U32[1], any_left, count, ctx.u32_zero_value) : count};
     // Marker for OpSetMeshOutputsEXT vertices, primitives (PatchMeshInstructions).
     ctx.OpStore(set_vertices, set_primitives);
     ctx.mesh_outputs_marker = {set_vertices, set_primitives};
     if (early_out) {
-        If(ctx, any_left, [&] { CopyMeshOutputs(ctx, invocation, count, culled); });
+        If(ctx, any_left, [&] { CopyMeshOutputs(ctx, invocation, count, culled, used_vertices); });
     } else {
-        CopyMeshOutputs(ctx, invocation, count, culled);
+        CopyMeshOutputs(ctx, invocation, count, culled, used_vertices);
     }
 }
 
 // Copies the stage buffer's vertices and its first `count` primitives to the mesh outputs, with
 // `culled` (if any) as the CullPrimitiveEXT of each primitive group of the invocation.
-void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const Id> culled) {
+void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const Id> culled,
+                     Id vertex_limit) {
     const MeshInfo& mesh{ctx.mesh_info};
     const Id max_vertices{ctx.Const(mesh.max_vertices)};
     const u32 threads{ctx.mesh_threads};
@@ -558,7 +591,9 @@ void CopyMeshOutputs(EmitContext& ctx, Id invocation, Id count, std::span<const 
                 ConvertDepth(ctx, vertex);
             }
         };
-        if (first + threads > mesh.max_vertices) {
+        if (Sirit::ValidId(vertex_limit)) {
+            If(ctx, ctx.OpULessThan(ctx.U1, vertex, vertex_limit), copy);
+        } else if (first + threads > mesh.max_vertices) {
             If(ctx, ctx.OpULessThan(ctx.U1, vertex, max_vertices), copy);
         } else {
             copy();

@@ -430,6 +430,7 @@ public:
     u32 mesh_cull{};
     Id mesh_cull_primitive{};
     Id mesh_cull_any{};
+    Id mesh_used_vertices{}; ///< MESH_OUT_COUNT: one word per invocation
     Id mesh_cull_viewport{};
     /// MESH_OUT_* bits in effect, the PrimitiveShadingRateKHR output, the last tested triangle's
     /// "in front of the camera" and bounding box size in pixels (CulledTriangle), and the rate
