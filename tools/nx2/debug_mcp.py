@@ -294,6 +294,10 @@ TOOLS = [
                 "spin_scale": {"type": "number", "minimum": 0, "maximum": 1},
                 "eco_background": {"type": "boolean"},
                 "idle_spin_us": {"type": "integer", "minimum": -1, "maximum": 100000},
+            },
+        },
+    },
+    {
         "name": "gpu_costs",
         "description": "Host GPU time of the last sampled frame (one a second): per vertex+fragment "
                        "or compute shader hash ('work') and per render target ('passes'), slowest "
@@ -307,6 +311,8 @@ TOOLS = [
                 "enable": {"type": "boolean"},
             },
         },
+    },
+    {
         "name": "memory",
         "description": "Host memory in bytes: the process (working set, commit, peaks), the system "
                        "(commit against its limit, free RAM), guest memory (resident after the "
