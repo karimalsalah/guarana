@@ -20,6 +20,7 @@
 #include "video_core/host_shaders/ocarina_dlss_4k_reference_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_bias_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_comp_spv.h"
+#include "video_core/host_shaders/ocarina_extrapolation_guide_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
@@ -82,6 +83,33 @@ std::optional<Matrix> ClipToPreviousClip(const Matrix& current, const Matrix& pr
         return std::nullopt;
     }
     return result;
+}
+
+/// Whether the far plane moves over a quarter of the screen between the two cameras: a cut, not
+/// a movement a predicted frame could continue.
+bool IsCameraCut(const Matrix& clip_to_previous_clip) {
+    static constexpr std::array<std::array<f32, 2>, 5> points{{
+        {0.0f, 0.0f}, {-0.5f, -0.5f}, {0.5f, -0.5f}, {-0.5f, 0.5f}, {0.5f, 0.5f},
+    }};
+    constexpr f32 limit = 0.5f; // clip units
+    for (const auto& point : points) {
+        const std::array<f32, 4> clip{point[0], point[1], 1.0f, 1.0f};
+        std::array<f32, 4> previous{};
+        for (size_t row = 0; row < 4; ++row) {
+            for (size_t col = 0; col < 4; ++col) {
+                previous[row] += clip_to_previous_clip[row * 4 + col] * clip[col];
+            }
+        }
+        if (previous[3] <= 1e-6f) {
+            return true;
+        }
+        const f32 x = previous[0] / previous[3] - point[0];
+        const f32 y = previous[1] / previous[3] - point[1];
+        if (!(std::hypot(x, y) <= limit)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 constexpr VkFormat MOTION_FORMAT = VK_FORMAT_R16G16_SFLOAT;
@@ -622,6 +650,7 @@ constexpr VkFormat LIVE_COLOR_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat EFFECTS_FORMAT = VK_FORMAT_R8_UNORM;
 // Streamline has no R8_UNORM: it rejects such a mask as "undefined format" and DLSS never sees it.
 constexpr VkFormat BIAS_FORMAT = VK_FORMAT_R16_SFLOAT;
+constexpr VkFormat GUIDE_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                             VkImageUsageFlags usage) {
@@ -788,6 +817,33 @@ struct OcarinaUpscaler::Impl {
     std::unique_ptr<OcarinaEffectsPass<1>> effects_base_pass;
     std::unique_ptr<OcarinaEffectsPass<2>> effects_mark_pass;
     std::unique_ptr<OcarinaEffectsPass<3>> effects_bias_pass;
+    /// Half-size motion and depth for frame extrapolation (EDEN_NX2_EXTRAPOLATE).
+    std::unique_ptr<OcarinaEffectsPass<2>> guide_pass;
+    vk::Image guide;
+    vk::ImageView guide_view;
+    VkExtent2D guide_extent{};
+    std::optional<u64> guide_frame;
+    bool guide_cut{};
+
+    void PrepareGuide(VkExtent2D scene) {
+        const VkExtent2D extent{(scene.width + 1) / 2, (scene.height + 1) / 2};
+        if (!guide_pass) {
+            guide_pass = std::make_unique<OcarinaEffectsPass<2>>(
+                device, scheduler, pool, OCARINA_EXTRAPOLATION_GUIDE_COMP_SPV);
+        }
+        if (guide_view && guide_extent.width == extent.width &&
+            guide_extent.height == extent.height) {
+            return;
+        }
+        if (guide_view) {
+            scheduler.Finish(); // a generated frame may still read the old image
+        }
+        guide_frame.reset();
+        guide = CreateOcarinaImage(allocator, extent, GUIDE_FORMAT,
+                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        guide_view = CreateOcarinaView(device, *guide, GUIDE_FORMAT);
+        guide_extent = extent;
+    }
 
     VkSampler LinearSampler() {
         if (!linear_sampler) {
@@ -917,6 +973,18 @@ VkImageView OcarinaUpscaler::CompositedView() const {
     return *impl->composite_view;
 }
 
+VkImageView OcarinaUpscaler::SceneReferenceView() const {
+    return *impl->native_scene_view;
+}
+
+std::optional<ExtrapolationSource> OcarinaUpscaler::Extrapolation(u64 frame) const {
+    const auto& state = *impl;
+    if (state.guide_frame != frame || state.Failed()) {
+        return std::nullopt;
+    }
+    return ExtrapolationSource{.guide = *state.guide_view, .cut = state.guide_cut};
+}
+
 bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                             VkExtent2D output_extent, VkExtent2D target_extent,
                             const Matrix& current, const Matrix& previous,
@@ -930,6 +998,10 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     const f32 projection_y = std::hypot(current[4], current[5], current[6]);
     if (!transform || !std::isfinite(projection_y) || projection_y < 0.01f) {
         return false;
+    }
+    const bool extrapolate = ExtrapolationRequested();
+    if (extrapolate) {
+        state.PrepareGuide(extent); // before anything is queued: a resize waits for the GPU
     }
     state.scheduler.GetMasterSemaphore().Refresh();
     const auto slot = std::ranges::find_if(state.slots, [&](const auto& entry) {
@@ -991,6 +1063,21 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
                        !std::ranges::equal(previous, state.last_view_projection,
                                            [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    if (extrapolate) {
+        state.queue.Acquire(state.scheduler, 3);
+        state.queue.AddSampledImage(*resources.motion_view, sampler);
+        state.queue.AddSampledImage(depth, sampler);
+        state.queue.AddImage(*state.guide_view);
+        state.guide_pass->Record(state.scheduler, state.queue.UpdateData(), *state.guide,
+                                 state.guide_extent);
+        // Unlike `reset`, a frame without a scene before this one is no cut: the game's previous
+        // camera still is the one the last scene was drawn with.
+        const bool continues = state.last_frame &&
+                               std::ranges::equal(previous, state.last_view_projection,
+                                                  [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+        state.guide_cut = !continues || IsCameraCut(*transform);
+        state.guide_frame = frame;
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (state.dlss && !state.dlss->Upscale({
             .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,

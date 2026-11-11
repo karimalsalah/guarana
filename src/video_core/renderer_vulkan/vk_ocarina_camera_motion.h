@@ -5,10 +5,12 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "common/common_types.h"
 #include "video_core/ocarina_upscale.h"
+#include "video_core/renderer_vulkan/present/extrapolation_source.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -53,6 +55,10 @@ public:
     void MarkEffects(VkImageView scene, u64 frame);
     VkImage CompositedImage() const;
     VkImageView CompositedView() const;
+    /// The scene SaveSceneReference kept, null before the first one.
+    VkImageView SceneReferenceView() const;
+    /// Motion and depth of `frame` for frame extrapolation, when Record made them.
+    std::optional<ExtrapolationSource> Extrapolation(u64 frame) const;
 
     /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.

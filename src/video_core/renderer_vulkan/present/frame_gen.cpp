@@ -8,6 +8,7 @@
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -22,6 +23,7 @@ namespace {
 constexpr size_t COLOR_CHANNELS = 4;
 constexpr u64 LSFG_REQUIRED_FRAMES = 2;
 constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
+constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
 
 [[nodiscard]] f32 ManualFlowScale() {
     return static_cast<f32>(Settings::values.frame_gen_flow_scale.GetValue()) / 100.0f;
@@ -194,6 +196,59 @@ FrameGen::FrameGen(MemoryAllocator& memory_allocator_, Scheduler& scheduler_)
 
 FrameGen::~FrameGen() = default;
 
+void FrameGen::SetExtrapolationSource(const std::optional<ExtrapolationSource>& source,
+                                      VkRect2D screen) {
+    extrapolation_source = source;
+    extrapolation_screen = screen;
+    if (source && !extrapolating) {
+        LOG_INFO(Render_Vulkan, "Frame generation: extrapolating from the game's motion vectors");
+        extrapolating = true;
+    }
+}
+
+void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame) {
+    if (chain || fsr3_chain) {
+        scheduler.Finish();
+        chain.reset();
+        fsr3_chain.reset();
+    }
+    frame_count = 0;
+    warm_streak = 0;
+    extrapolation_frame = frame;
+
+    if (!frame->storage_view) {
+        state.store(VideoCore::FrameGenState::UnsupportedSurface, std::memory_order_relaxed);
+        return;
+    }
+    state.store(VideoCore::FrameGenState::Running, std::memory_order_relaxed);
+
+    if (!extrapolation) {
+        extrapolation.emplace(device);
+    }
+
+    // Without motion or across a camera cut the real frame is shown alone.
+    const bool usable = extrapolation_source && !extrapolation_source->cut &&
+                        extrapolation_screen.extent.width != 0 &&
+                        extrapolation_screen.extent.height != 0;
+    extrapolation_missing += extrapolation_source ? 0 : 1;
+    extrapolation_cuts += extrapolation_source && extrapolation_source->cut ? 1 : 0;
+
+    last_generations = plan.generations;
+    generated = usable && plan.warm && plan.generations > 0;
+    generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
+
+    if (++extrapolation_frames % EXTRAPOLATION_LOG_INTERVAL == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Frame extrapolation: {} frames, {} without motion, {} camera cuts, {} planned "
+                 "per frame, HUD kept {}",
+                 EXTRAPOLATION_LOG_INTERVAL, extrapolation_missing, extrapolation_cuts,
+                 plan.generations,
+                 extrapolation_source && extrapolation_source->hud_reference != VK_NULL_HANDLE);
+        extrapolation_missing = 0;
+        extrapolation_cuts = 0;
+    }
+}
+
 void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                        VkExtent2D guest_extent) {
     generated = false;
@@ -212,7 +267,17 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         return;
     }
 
+    if (extrapolating) {
+        ProcessExtrapolated(device, frame);
+        return;
+    }
+
     if (!shaders->IsValid() && Settings::values.frame_gen_type.GetValue() != Settings::FrameGenType::Fsr3) {
+        if (ExtrapolationRequested()) {
+            // Extrapolation needs no Lossless Scaling shaders; wait for the game's motion data.
+            warm_streak = 0;
+            return;
+        }
         unavailable = true;
         state.store(shaders->IsDeviceSupported() ? VideoCore::FrameGenState::MissingLosslessDll
                                                  : VideoCore::FrameGenState::UnsupportedGpu,
@@ -279,6 +344,7 @@ void FrameGen::Pause() {
     last_generations = 0;
     warm_streak = 0;
     generated = false;
+    extrapolation_source.reset();
 }
 
 size_t FrameGen::WantedGenerations(size_t capacity) {
@@ -295,6 +361,23 @@ size_t FrameGen::GeneratedFrameCount() const {
 }
 
 void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t generation) {
+    if (extrapolating) {
+        if (!extrapolation || !extrapolation_source || !extrapolation_frame ||
+            !destination->storage_view) {
+            return;
+        }
+        const f32 advance =
+            static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
+        const VkExtent2D extent{.width = destination->width, .height = destination->height};
+
+        scheduler.RequestOutsideRenderPassOperationContext();
+        // The storage view has the image's own format, so reads and writes encode alike.
+        extrapolation->Generate(device, scheduler, *extrapolation_source,
+                                *extrapolation_frame->storage_view, *destination->image,
+                                *destination->storage_view, extent, extrapolation_screen, advance);
+        return;
+    }
+
     const bool use_fsr3 = Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::Fsr3;
 
     if (use_fsr3 && fsr3_chain) {

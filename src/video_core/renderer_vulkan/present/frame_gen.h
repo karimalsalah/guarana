@@ -8,6 +8,7 @@
 
 #include "common/common_types.h"
 #include "video_core/renderer_base.h"
+#include "video_core/renderer_vulkan/present/frame_extrapolation.h"
 #include "video_core/renderer_vulkan/present/frame_gen_pacer.h"
 #include "video_core/renderer_vulkan/present/lsfg_chain.h"
 #include "video_core/renderer_vulkan/present/lsfg_shaders.h"
@@ -24,6 +25,16 @@ class FrameGen {
 public:
     explicit FrameGen(MemoryAllocator& memory_allocator, Scheduler& scheduler);
     ~FrameGen();
+
+    /// Motion data of the frame Process is called with next and the rectangle of the frame the
+    /// scene covers. Once a frame had any, generated frames are predicted after the real frame
+    /// instead of interpolated before it (EDEN_NX2_EXTRAPOLATE).
+    void SetExtrapolationSource(const std::optional<ExtrapolationSource>& source, VkRect2D screen);
+
+    /// Generated frames follow the real frame: present it first.
+    [[nodiscard]] bool Extrapolating() const {
+        return extrapolating;
+    }
 
     void Process(const Device& device, Frame* frame, VkFormat format, VkExtent2D guest_extent);
 
@@ -42,6 +53,7 @@ public:
     }
 
 private:
+    void ProcessExtrapolated(const Device& device, Frame* frame);
     void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale);
     void DumpDebugImages(u64 count);
 
@@ -51,6 +63,14 @@ private:
     std::optional<LsfgShaders> shaders;
     std::optional<LsfgChain> chain;
     std::optional<Fsr3FrameGen> fsr3_chain;
+    std::optional<FrameExtrapolation> extrapolation;
+    std::optional<ExtrapolationSource> extrapolation_source;
+    VkRect2D extrapolation_screen{};
+    Frame* extrapolation_frame{}; ///< the real frame of this composite
+    u64 extrapolation_cuts{};
+    u64 extrapolation_missing{};
+    u64 extrapolation_frames{};
+    bool extrapolating{};
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};

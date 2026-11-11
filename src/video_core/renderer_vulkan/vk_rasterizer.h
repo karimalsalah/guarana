@@ -22,6 +22,7 @@
 #include "video_core/ocarina_upscale.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/blit_image.h"
+#include "video_core/renderer_vulkan/present/extrapolation_source.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -179,6 +180,9 @@ public:
     std::optional<FramebufferTextureInfo> AccelerateDisplay(const Tegra::FramebufferConfig& config,
                                                             VAddr framebuffer_addr,
                                                             u32 pixel_stride);
+    /// Motion and depth of the frame being presented (Ocarina of Time's temporal upscale ran this
+    /// frame and EDEN_NX2_EXTRAPOLATE is set). Call after AccelerateDisplay.
+    std::optional<ExtrapolationSource> OcarinaExtrapolationSource() const;
 
 private:
     static constexpr const u64 NEEDS_D24[] = {
@@ -322,6 +326,8 @@ private:
     u32 oot_jitter_phases{8}; ///< Halton sequence length for the last FSR frame's scale
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
+    std::optional<u64> oot_hud_frame; ///< oot_hud_composite is this frame's image with the HUD
+    VkImageView oot_hud_composite{};
     std::optional<u64> oot_effects_frame;
     GPUVAddr oot_effects_address{};
     VkImageView oot_effects_scene{};
