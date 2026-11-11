@@ -206,11 +206,23 @@ attributed to guest shader hashes. The duration belongs to the whole submission,
 each listed shader.
 
 The same sampled submissions also time each direct and indirect draw and dispatch with a
-pair of timestamps. `DKB gpu_work` lists the eight shader combinations with the most GPU
+pair of timestamps. `DKB gpu_work` lists the 24 shader combinations with the most GPU
 time: `s6:<hash>` for compute, `s1:<vertex>+s5:<fragment>` for draws, then the total, the
 number of calls, the slowest call and its grid or vertex and instance counts (zero when
-indirect). The timestamps wait for earlier work, so draws in a sampled frame do not overlap
-and their sum exceeds the submission time. Use it to rank work, not to measure the frame.
+indirect). `#m`, `#e`, `#i` and `#b` after the hashes mark mesh, emulated mesh, indirect
+count and indirect byte count draws. The timestamps wait for earlier work, so draws in a
+sampled frame do not overlap and their sum exceeds the submission time. Use it to rank work,
+not to measure the frame. `untimed_ms` is `submission_sum_ms` minus the timed sum: uploads,
+copies, clears, barriers, emulator passes and gaps inside submissions. `dropped` counts work
+past the 4096 timed per frame.
+
+`DKB gpu_hist` counts the frame's submissions by GPU time and sums the gaps between one
+submission's end and the next one's begin (`idle_gap_sum_ms`); a begin before the previous
+end counts as an overlap instead. `EDEN_NX2_TRACE_ALL_SUBMISSIONS=1` adds a `DKB gpu_sub`
+line per submission with its first four shaders. `DKB gpu_pass` times each render pass the
+scheduler begins and lists the 12 targets with the most time as
+`<width>x<height>/<first color format>/<color targets>/<depth format>/<samples>`. Presentation
+passes are not included.
 
 ## Frame dump
 

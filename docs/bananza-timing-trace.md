@@ -185,6 +185,10 @@ A query-read error disables further GPU timing and logs the error once. Missing 
 records are not zero-duration frames. Startup, shutdown, a hidden window, an incomplete
 frame, unavailable results, or an unsupported device can leave no completed sample.
 
+`DKB gpu_hist`, `DKB gpu_sub` (with `EDEN_NX2_TRACE_ALL_SUBMISSIONS=1`), `DKB gpu_work` and
+`DKB gpu_pass` break the same sampled frame down by submission, shader and render pass; see
+`docs/kirby-white-world.md`.
+
 ## Existing controls
 
 - `EDEN_NX2_SWAP_INTERVAL=<n>` forces a nonzero guest interval. It is not a trace switch
