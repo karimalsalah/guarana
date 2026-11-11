@@ -2238,29 +2238,24 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
     static constexpr std::array<u64, 3> variant_salts{0ULL, 0x5052455f44455054ULL,
                                                       0x5052455f434f4c52ULL};
     const u64 binary_key{GraphicsRecordKey(key) ^
-                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL)};
+                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
+                         variant_salts[static_cast<size_t>(variant)] ^
+                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
     // A build that captures for EDEN_NX2_PIPELINE_STATS takes no driver pipeline cache, so that
     // its statistics come from a compile (the binary store is not opened then: PipelineCache).
     const VkPipelineCache driver_cache{capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE}
                                                           : *pipeline_cache};
-    pipeline = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
-                                                           binary_key)
-                        : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
-    TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
-                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
-                         variant_salts[static_cast<size_t>(variant)] ^
-                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
     vk::Pipeline& built =
         variant == PipelineVariant::Main
             ? pipeline
             : prepass_pipelines[variant == PipelineVariant::PrepassDepth ? 0 : 1];
     built = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, binary_key)
-                     : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
+                     : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
     TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
-    if (capture_flags != 0 && pipeline) {
+    if (capture_flags != 0 && variant == PipelineVariant::Main && pipeline) {
         PipelineExecutableDump::Record(device, *pipeline,
                                        {
                                            .kind = "graphics",
