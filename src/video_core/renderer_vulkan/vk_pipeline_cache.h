@@ -285,6 +285,10 @@ private:
 
     /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
     void EvictUnusedPipelines();
+    /// EDEN_NX2_PREPASS_HASHES, after the list changed: drops the built pipelines of listed
+    /// fragment shaders that have no prepass split, so that their next draw makes them with one.
+    void DropPipelinesWithoutPrepass();
+    u64 prepass_generation{}; ///< VideoCore::Nx2Debug::PrepassGeneration at the last frame end
     u64 frame_count{};
     /// Wait budget of native draws for unbuilt pipelines left in this frame, in microseconds
     /// (native_async_draws = Bounded). Only touched on the GPU thread; reset in TickFrame.

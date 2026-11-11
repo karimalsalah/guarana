@@ -573,6 +573,26 @@ json SetShadingRate(ToolState& state, const json& params) {
     return result;
 }
 
+json SetPrepass(ToolState&, const json& params) {
+    if (!IsVulkan()) {
+        throw std::runtime_error{"the prepass split needs the Vulkan renderer"};
+    }
+    std::vector<u64> hashes;
+    for (const json& hash : params.value("hashes", json::array())) {
+        hashes.push_back(ParseShaderHash(hash.get<std::string>()));
+    }
+    if (!hashes.empty()) {
+        VideoCore::Nx2Debug::SetPrepassHashes(hashes, params.value("on", true));
+    }
+    const VideoCore::Nx2Debug::PrepassCounts counts = VideoCore::Nx2Debug::PrepassCountsSoFar();
+    return {
+        {"hashes", HexList(VideoCore::Nx2Debug::PrepassHashes().hashes)},
+        {"pipelines", counts.pipelines},
+        {"split_draws", counts.split_draws},
+        {"plain_draws", counts.plain_draws},
+    };
+}
+
 json SampleThreads(ToolState& state, const json& params) {
     const std::string threads = params.value("threads", std::string{"GPU,GPUBack"});
     const double seconds = Param<double>(params, "seconds", 10.0, 1.0, 60.0);
@@ -1025,6 +1045,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"capture_frame", handler(CaptureFrame)},
         {"reject_shaders", handler(RejectShaders)},
         {"set_shading_rate", handler(SetShadingRate)},
+        {"set_prepass", handler(SetPrepass)},
         {"sample", handler(SampleThreads)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},

@@ -129,6 +129,91 @@ struct DrawParams {
     bool is_indexed;
 };
 
+/// The colour write masks of a draw: the guest's, without the components the fragment shader
+/// doesn't output (4 bits per render target).
+std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> ColorWriteMasks(
+    const Maxwell& regs, u32 color_output_mask) {
+    std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> masks{};
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
+        const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
+        auto& current = masks[index];
+        if (mask.R) {
+            current |= VK_COLOR_COMPONENT_R_BIT;
+        }
+        if (mask.G) {
+            current |= VK_COLOR_COMPONENT_G_BIT;
+        }
+        if (mask.B) {
+            current |= VK_COLOR_COMPONENT_B_BIT;
+        }
+        if (mask.A) {
+            current |= VK_COLOR_COMPONENT_A_BIT;
+        }
+        current &= (color_output_mask >> (index * 4)) & 0xF;
+    }
+    return masks;
+}
+
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): whether the state of the draw gives the
+/// same image as a depth pass followed by a colour pass at equal depth. The pipeline's key and
+/// programs were checked when it was made (GraphicsPipeline::HasPrepassSplit).
+bool PrepassSplitAllowed(const Maxwell& regs) {
+    // Opaque, with a depth test that settles on one fragment per pixel and no other test that
+    // would see the fragments twice.
+    if (regs.zeta_enable == 0 || regs.depth_test_enable == 0 || regs.depth_write_enabled == 0 ||
+        regs.stencil_enable != 0 || regs.logic_op.enable != 0 ||
+        regs.transform_feedback_enabled != 0) {
+        return false;
+    }
+    // The samples-passed counter would count the visible fragments once more.
+    if (regs.zpass_pixel_count_enable != 0 && !VideoCore::Nx2Debug::PrepassForced()) {
+        return false;
+    }
+    switch (regs.depth_test_func) {
+    case Maxwell::ComparisonOp::Less_D3D:
+    case Maxwell::ComparisonOp::Less_GL:
+    case Maxwell::ComparisonOp::LessEqual_D3D:
+    case Maxwell::ComparisonOp::LessEqual_GL:
+    case Maxwell::ComparisonOp::Greater_D3D:
+    case Maxwell::ComparisonOp::Greater_GL:
+    case Maxwell::ComparisonOp::GreaterEqual_D3D:
+    case Maxwell::ComparisonOp::GreaterEqual_GL:
+        break;
+    default:
+        return false;
+    }
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
+        if (regs.rt[index].format != Tegra::RenderTargetFormat::NONE &&
+            regs.blend.enable[index] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The state PrepassSplitAllowed refused, for the first few draws it refuses.
+void LogPrepassRefusal(const Maxwell& regs, u64 fragment_hash) {
+    static u32 logged{};
+    if (logged >= 16) {
+        return;
+    }
+    ++logged;
+    u32 blended{};
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
+        if (regs.rt[index].format != Tegra::RenderTargetFormat::NONE &&
+            regs.blend.enable[index] != 0) {
+            blended |= 1U << index;
+        }
+    }
+    LOG_INFO(Render_Vulkan,
+             "Prepass split: a draw of fragment shader {:016x} stays one pass: depth buffer {}, "
+             "test {}, write {}, func {:#x}; stencil {}, logic op {}, transform feedback {}, "
+             "samples-passed counter {}, blended targets {:#x}",
+             fragment_hash, regs.zeta_enable, regs.depth_test_enable, regs.depth_write_enabled,
+             static_cast<u32>(regs.depth_test_func), regs.stencil_enable, regs.logic_op.enable,
+             regs.transform_feedback_enabled, regs.zpass_pixel_count_enable, blended);
+}
+
 VkViewport GetViewportState(const Device& device, const Maxwell& regs, size_t index, float scale) {
     const auto& src = regs.viewport_transform[index];
     const auto conv = [scale](float value) {
@@ -1170,7 +1255,32 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         Profile::Scope scope{Profile::Zone::DrawRecord};
         scheduler.TraceGraphicsPipeline(pipeline->ShaderHashes());
         trace_draw_hashes = {pipeline->ShaderHashes()[1], pipeline->ShaderHashes()[5]};
+        // EDEN_NX2_PREPASS_HASHES: a listed fragment shader's draw as a depth pass and a colour
+        // pass at equal depth, which shades a pixel once instead of once for every layer.
+        prepass_draw = PrepassDraw{};
+        if (pipeline->HasPrepassSplit() && !(is_indirect && mesh_draw) &&
+            VideoCore::Nx2Debug::IsPrepassHash(pipeline->ShaderHashes()[5])) {
+            const bool split{PrepassSplitAllowed(maxwell3d->regs)};
+            VideoCore::Nx2Debug::CountPrepassDraw(split);
+            if (!split) {
+                LogPrepassRefusal(maxwell3d->regs, pipeline->ShaderHashes()[5]);
+            } else {
+                prepass_draw = PrepassDraw{
+                    .pipeline = pipeline,
+                    .dynamic_depth = pipeline->UsesExtendedDynamicState(),
+                    .dynamic_color_mask = pipeline->UsesDynamicColorWriteMask(),
+                    .color_masks = ColorWriteMasks(maxwell3d->regs, pipeline->ColorOutputMask()),
+                };
+            }
+        }
         draw_func();
+        if (prepass_draw.pipeline != nullptr) {
+            // The colour pass left its pipeline bound, and its depth state where that is dynamic.
+            scheduler.ForgetGraphicsPipeline();
+            if (prepass_draw.dynamic_depth) {
+                state_tracker.InvalidatePrepassDepthState();
+            }
+        }
     }
     submitted = true;
     buffer_cache.NoteWorkRecorded(false);
@@ -1543,32 +1653,38 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
             });
             return;
         }
+        // Both passes of a prepass split are timed as the one draw they replace.
         if (mesh_draw) {
-            scheduler.Record([this, groups = draw_params.num_vertices,
-                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, groups = draw_params.num_vertices, hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
-                                       [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }, 'm');
+                scheduler.TraceGpuWork(
+                    cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
+                    [&] { split.Draw(cmdbuf, [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }); },
+                    'm');
             });
             return;
         }
-        scheduler.Record([this, draw_params, hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+        scheduler.Record([this, draw_params, hashes = trace_draw_hashes,
+                          split = prepass_draw](vk::CommandBuffer cmdbuf) {
             if (scheduler.GraphicsPipelineMissing()) {
                 return;
             }
             scheduler.TraceGpuWork(
                 cmdbuf, hashes.first, hashes.second,
                 {draw_params.num_vertices, draw_params.num_instances, 0}, [&] {
-                    if (draw_params.is_indexed) {
-                        cmdbuf.DrawIndexed(draw_params.num_vertices, draw_params.num_instances,
-                                           draw_params.first_index, draw_params.base_vertex,
-                                           draw_params.base_instance);
-                    } else {
-                        cmdbuf.Draw(draw_params.num_vertices, draw_params.num_instances,
-                                    draw_params.base_vertex, draw_params.base_instance);
-                    }
+                    split.Draw(cmdbuf, [&] {
+                        if (draw_params.is_indexed) {
+                            cmdbuf.DrawIndexed(draw_params.num_vertices, draw_params.num_instances,
+                                               draw_params.first_index, draw_params.base_vertex,
+                                               draw_params.base_instance);
+                        } else {
+                            cmdbuf.Draw(draw_params.num_vertices, draw_params.num_instances,
+                                        draw_params.base_vertex, draw_params.base_instance);
+                        }
+                    });
                 });
         });
 
@@ -1618,15 +1734,18 @@ void RasterizerVulkan::DrawIndirect() {
         const auto& offset = indirect_buffer.second;
         if (params.is_byte_count) {
             scheduler.Record([this, buffer_obj = buffer->Handle(), offset, stride = params.stride,
-                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                              hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
                 scheduler.TraceGpuWork(
                     cmdbuf, hashes.first, hashes.second, {},
                     [&] {
-                        cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
-                                                        static_cast<u32>(stride));
+                        split.Draw(cmdbuf, [&] {
+                            cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
+                                                            static_cast<u32>(stride));
+                        });
                     },
                     'b');
             });
@@ -1638,44 +1757,50 @@ void RasterizerVulkan::DrawIndirect() {
             const auto& offset_base = count.second;
             scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(),
                               buffer_obj = buffer->Handle(), offset_base, offset, params,
-                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                              hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
                 scheduler.TraceGpuWork(
                     cmdbuf, hashes.first, hashes.second, {},
                     [&] {
-                        if (params.is_indexed) {
-                            cmdbuf.DrawIndexedIndirectCount(
-                                buffer_obj, offset, draw_buffer_obj, offset_base,
-                                static_cast<u32>(params.max_draw_counts),
-                                static_cast<u32>(params.stride));
-                        } else {
-                            cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj,
-                                                     offset_base,
-                                                     static_cast<u32>(params.max_draw_counts),
-                                                     static_cast<u32>(params.stride));
-                        }
+                        split.Draw(cmdbuf, [&] {
+                            if (params.is_indexed) {
+                                cmdbuf.DrawIndexedIndirectCount(
+                                    buffer_obj, offset, draw_buffer_obj, offset_base,
+                                    static_cast<u32>(params.max_draw_counts),
+                                    static_cast<u32>(params.stride));
+                            } else {
+                                cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj,
+                                                         offset_base,
+                                                         static_cast<u32>(params.max_draw_counts),
+                                                         static_cast<u32>(params.stride));
+                            }
+                        });
                     },
                     'i');
             });
             return;
         }
         scheduler.Record([this, buffer_obj = buffer->Handle(), offset, params,
-                          hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                          hashes = trace_draw_hashes,
+                          split = prepass_draw](vk::CommandBuffer cmdbuf) {
             if (scheduler.GraphicsPipelineMissing()) {
                 return;
             }
             scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
-                if (params.is_indexed) {
-                    cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
-                                               static_cast<u32>(params.max_draw_counts),
-                                               static_cast<u32>(params.stride));
-                } else {
-                    cmdbuf.DrawIndirect(buffer_obj, offset,
-                                        static_cast<u32>(params.max_draw_counts),
-                                        static_cast<u32>(params.stride));
-                }
+                split.Draw(cmdbuf, [&] {
+                    if (params.is_indexed) {
+                        cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
+                                                   static_cast<u32>(params.max_draw_counts),
+                                                   static_cast<u32>(params.stride));
+                    } else {
+                        cmdbuf.DrawIndirect(buffer_obj, offset,
+                                            static_cast<u32>(params.max_draw_counts),
+                                            static_cast<u32>(params.stride));
+                    }
+                });
             });
         });
 
@@ -4678,24 +4803,7 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs,
 
     if (state_tracker.TouchColorMask() || color_output_changed) {
         last_color_output_mask = color_output_mask;
-        std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
-        for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
-            const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
-            auto& current = setup_masks[index];
-            if (mask.R) {
-                current |= VK_COLOR_COMPONENT_R_BIT;
-            }
-            if (mask.G) {
-                current |= VK_COLOR_COMPONENT_G_BIT;
-            }
-            if (mask.B) {
-                current |= VK_COLOR_COMPONENT_B_BIT;
-            }
-            if (mask.A) {
-                current |= VK_COLOR_COMPONENT_A_BIT;
-            }
-            current &= (color_output_mask >> (index * 4)) & 0xF;
-        }
+        auto setup_masks = ColorWriteMasks(regs, color_output_mask);
         scheduler.Record([setup_masks](vk::CommandBuffer cmdbuf) {
             cmdbuf.SetColorWriteMaskEXT(0, setup_masks);
         });

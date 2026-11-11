@@ -99,8 +99,8 @@ class AdapterTest(unittest.TestCase):
         names = [tool["name"] for tool in self.adapter.handle({"id": 2, "method": "tools/list"})
                  ["result"]["tools"]]
         self.assertEqual(names, ["status", "frame_times", "screenshot", "log_tail", "log_filter", "capture_frame",
-                                 "capture_image", "reject_shaders", "set_shading_rate", "sample",
-                                 "read_memory",
+                                 "capture_image", "reject_shaders", "set_shading_rate", "set_prepass",
+                                 "sample", "read_memory",
                                  "search_memory", "read_gpu_memory", "input",
                                  "input_sequence", "host_timing", "power", "power_set",
                                  "gpu_costs", "memory"])

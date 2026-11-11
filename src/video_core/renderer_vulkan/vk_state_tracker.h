@@ -111,6 +111,14 @@ public:
         (*flags)[Dirty::StateEnable] = true;
     }
 
+    /// A recorded draw set its own depth compare op and write enable (alpha-test prepass split):
+    /// the next draw sets the guest's again.
+    void InvalidatePrepassDepthState() {
+        (*flags)[Dirty::DepthCompareOp] = true;
+        (*flags)[Dirty::DepthWriteEnable] = true;
+        (*flags)[Dirty::StateEnable] = true;
+    }
+
     bool TouchViewports() {
         const bool dirty_viewports = Exchange(Dirty::Viewports, false);
         const bool rescale_viewports = Exchange(VideoCommon::Dirty::RescaleViewports, false);

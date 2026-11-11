@@ -121,6 +121,66 @@ void ReadShadingRateEnvLocked() {
     }
 }
 
+struct PrepassState {
+    std::mutex mutex;
+    PrepassTable table;
+    bool env_read{};
+};
+
+PrepassState prepass;
+/// Starts above the zero a thread's empty copy has, so the first lookup reads the table.
+std::atomic<u64> prepass_generation{1};
+std::atomic<u64> prepass_pipelines{};
+std::atomic<u64> prepass_split_draws{};
+std::atomic<u64> prepass_plain_draws{};
+
+/// Caller holds prepass.mutex.
+void LogPrepassHashesLocked(std::string_view source) {
+    std::string list;
+    for (const u64 hash : prepass.table.hashes) {
+        list += fmt::format(" {:016x}", hash);
+    }
+    LOG_INFO(Render_Vulkan, "Prepass split ({}): {} fragment shaders:{}", source,
+             prepass.table.hashes.size(), list);
+}
+
+/// Caller holds prepass.mutex.
+void ReadPrepassEnvLocked() {
+    if (prepass.env_read) {
+        return;
+    }
+    prepass.env_read = true;
+    const char* const value = std::getenv("EDEN_NX2_PREPASS_HASHES");
+    if (value == nullptr) {
+        return;
+    }
+    auto& hashes = prepass.table.hashes;
+    std::string_view rest{value};
+    while (!rest.empty()) {
+        const size_t comma = rest.find(',');
+        const std::string_view item = rest.substr(0, comma);
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+        if (item.empty()) {
+            continue;
+        }
+        u64 hash = 0;
+        const auto [end, error] =
+            std::from_chars(item.data(), item.data() + item.size(), hash, 16);
+        if (item.size() != 16 || error != std::errc{} || end != item.data() + item.size()) {
+            LOG_WARNING(Render_Vulkan, "EDEN_NX2_PREPASS_HASHES: bad entry \"{}\" (want 16 hex)",
+                        item);
+            continue;
+        }
+        const auto it = std::ranges::lower_bound(hashes, hash);
+        if (it == hashes.end() || *it != hash) {
+            hashes.insert(it, hash);
+        }
+    }
+    if (!hashes.empty()) {
+        LogPrepassHashesLocked("environment");
+    }
+}
+
 void UpdatePending() {
     pending.store(!state.captures.empty() || !state.gpu_reads.empty() || state.reject_pending, std::memory_order_relaxed);
 }
@@ -390,6 +450,74 @@ ShadingRate ShadingRateFor(u64 fragment_hash) {
     return automatic != table.auto_rates.end() && automatic->first == fragment_hash
                ? automatic->second
                : table.fallback;
+}
+
+void SetPrepassHashes(std::span<const u64> hashes, bool on) {
+    std::scoped_lock lock{prepass.mutex};
+    ReadPrepassEnvLocked();
+    auto& listed = prepass.table.hashes;
+    bool changed = false;
+    for (const u64 hash : hashes) {
+        const auto it = std::ranges::lower_bound(listed, hash);
+        const bool found = it != listed.end() && *it == hash;
+        if (on && !found) {
+            listed.insert(it, hash);
+            changed = true;
+        } else if (!on && found) {
+            listed.erase(it);
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    LogPrepassHashesLocked("debug server");
+    prepass_generation.fetch_add(1, std::memory_order_release);
+}
+
+PrepassTable PrepassHashes() {
+    std::scoped_lock lock{prepass.mutex};
+    ReadPrepassEnvLocked();
+    PrepassTable table = prepass.table;
+    // Read under the lock, which every change holds: the copy is the table of this generation.
+    table.generation = prepass_generation.load(std::memory_order_acquire);
+    return table;
+}
+
+u64 PrepassGeneration() noexcept {
+    return prepass_generation.load(std::memory_order_acquire);
+}
+
+bool IsPrepassHash(u64 fragment_hash) {
+    thread_local PrepassTable table;
+    if (table.generation != prepass_generation.load(std::memory_order_acquire)) {
+        table = PrepassHashes();
+    }
+    return std::ranges::binary_search(table.hashes, fragment_hash);
+}
+
+bool PrepassForced() {
+    static const bool forced = [] {
+        const char* const value = std::getenv("EDEN_NX2_PREPASS_FORCE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return forced;
+}
+
+void CountPrepassPipeline() noexcept {
+    prepass_pipelines.fetch_add(1, std::memory_order_relaxed);
+}
+
+void CountPrepassDraw(bool split) noexcept {
+    (split ? prepass_split_draws : prepass_plain_draws).fetch_add(1, std::memory_order_relaxed);
+}
+
+PrepassCounts PrepassCountsSoFar() noexcept {
+    return {
+        .pipelines = prepass_pipelines.load(std::memory_order_relaxed),
+        .split_draws = prepass_split_draws.load(std::memory_order_relaxed),
+        .plain_draws = prepass_plain_draws.load(std::memory_order_relaxed),
+    };
 }
 
 } // namespace VideoCore::Nx2Debug

@@ -296,6 +296,28 @@ targets, and the hashes of `auto_deny` (`EDEN_NX2_VRS_AUTO_DENY=<hash>,...`; `au
 removes them). The reply's `auto` has the target, the measured `frame_ms`, the layer (`rates`,
 `levels`), the `denied` lists, `last_action` and `hold_reason`. A raise or lower logs one
 `VRS auto:` line.
+**`set_prepass`** `{hashes?, on?}`. Experiment (`EDEN_NX2_PREPASS_HASHES=<hash>,...` at boot):
+the draws of the listed fragment shader hashes are drawn twice, first with a depth-only form of
+the fragment shader that keeps only what decides its discards, then with the fragment shader
+itself, early fragment tests on, depth compared for equality and not written. The shader then
+runs once for each visible pixel instead of once for each layer of alpha-tested geometry. A
+pipeline takes the split when its fragment shader discards (or the alpha test is on), writes no
+depth, sample mask or storage, no earlier stage writes storage, and there is a depth buffer, no
+forced early depth test, transform feedback, alpha to coverage or alpha to one. A draw is split
+when depth test and write are on with a less, less-equal, greater or greater-equal compare, and
+stencil test, blending of every bound colour target, logic op, transform feedback and the
+samples-passed counter are off. `Prepass split:` log lines name the pipelines refused and why,
+and the state of the first draws refused. `EDEN_NX2_PREPASS_FORCE=1` at launch takes the split
+with an earlier stage that writes storage (it then writes twice) and with the counter on (it
+counts the visible fragments once more). `on: false` takes the hashes off the list, from the
+next draw on; listing some drops their built pipelines at the next frame end, to be made again
+with the split when next drawn (pipelines still building then, or prebuilt and not yet drawn,
+keep drawing in one pass: take the hash off and list it again). Without hashes it returns the
+list. The reply counts
+the `pipelines` built with the split and their `split_draws` and `plain_draws` (state refused).
+Both passes use the same shader modules before the fragment stage; should their depths still
+differ (holes in the geometry), `EDEN_NX2_PREPASS_INVARIANT=1` at launch decorates Position as
+invariant in those pipelines.
 **`memory`**. Host memory in bytes. `process`: working set, private working set, commit and their
 peaks. `system`: commit against its limit, RAM and free RAM. `guest`: the guest memory's size,
 what stayed resident after the last zero-page trim, zero pages trimmed and zero-filled so far, and

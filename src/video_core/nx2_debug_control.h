@@ -129,4 +129,36 @@ void SetAutoShadingRates(std::vector<std::pair<u64, ShadingRate>> rates);
 /// in a copy the thread keeps; the lock is taken only after the table changed.
 [[nodiscard]] ShadingRate ShadingRateFor(u64 fragment_hash);
 
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): the draws of the listed fragment shaders
+/// are drawn as a depth pass and a colour pass at equal depth, where the pipeline and the draw's
+/// state allow it (PipelineCache, RasterizerVulkan::PrepareDraw).
+struct PrepassTable {
+    u64 generation{};
+    /// Sorted fragment shader hashes.
+    std::vector<u64> hashes;
+};
+
+struct PrepassCounts {
+    u64 pipelines;   ///< graphics pipelines built with the two passes' pipelines
+    u64 split_draws; ///< draws recorded as two passes
+    u64 plain_draws; ///< draws of those pipelines whose state did not allow it
+};
+
+/// Any thread: lists these fragment shader hashes or takes them off the list. The list starts
+/// from EDEN_NX2_PREPASS_HASHES (<hash>,...) and outlives debug sessions.
+void SetPrepassHashes(std::span<const u64> hashes, bool on);
+[[nodiscard]] PrepassTable PrepassHashes();
+/// Any thread: changes whenever the list does. One atomic load.
+[[nodiscard]] u64 PrepassGeneration() noexcept;
+/// Any thread: whether the fragment shader is listed. One atomic load and a search in a copy
+/// the thread keeps; the lock is taken only after the list changed.
+[[nodiscard]] bool IsPrepassHash(u64 fragment_hash);
+/// EDEN_NX2_PREPASS_FORCE=1, read once: the split is also taken where work other than shading
+/// then happens twice (a stage before the fragment one that writes storage, the samples-passed
+/// counter).
+[[nodiscard]] bool PrepassForced();
+void CountPrepassPipeline() noexcept;
+void CountPrepassDraw(bool split) noexcept;
+[[nodiscard]] PrepassCounts PrepassCountsSoFar() noexcept;
+
 } // namespace VideoCore::Nx2Debug

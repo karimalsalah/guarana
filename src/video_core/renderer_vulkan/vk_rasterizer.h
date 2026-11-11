@@ -359,6 +359,8 @@ private:
     bool pending_native_work{};
     bool deferred_wfi_query_sync{}; ///< WaitForIdle skipped the query sync (EDEN_NX2_DEFER_WFI)
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
+    /// The draw being recorded as an alpha-test prepass split (EDEN_NX2_PREPASS_HASHES), if it is
+    PrepassDraw prepass_draw;
     /// Fragment output components the dynamic color write mask was last recorded with
     u32 last_color_output_mask{};
     VideoCommon::OotNetwork::BypassState oot_network_bypass;

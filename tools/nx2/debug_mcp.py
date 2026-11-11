@@ -161,6 +161,23 @@ TOOLS = [
         },
     },
     {
+        "name": "set_prepass",
+        "description": "EDEN_NX2_PREPASS_HASHES at runtime (experiment): draws of these fragment "
+                       "shader hashes (frame dump 'shaders') are drawn as a depth pass and a "
+                       "colour pass at equal depth, where the shader discards, the draw is opaque "
+                       "and its depth test is a less or greater one; on=false takes the hashes "
+                       "off. Their built pipelines are made again at the next frame end. With no "
+                       "hashes, lists them. The reply counts the pipelines with the split and the "
+                       "draws split and left alone.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "hashes": {"type": "array", "items": {"type": "string"}},
+                "on": {"type": "boolean"},
+            },
+        },
+    },
+    {
         "name": "sample",
         "description": "Sampling profiler: pauses the named host threads about 1000 times a second "
                        "for the given seconds and returns where they were (self, self <- caller, "
