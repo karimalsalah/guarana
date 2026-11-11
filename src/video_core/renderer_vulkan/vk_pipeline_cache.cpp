@@ -472,7 +472,7 @@ bool TakesPrepassSplit(const GraphicsPipelineCacheKey& key,
     };
     const FixedPipelineState& state{key.state};
     const Shader::Info& fragment{programs[5].info};
-    const bool alpha_test{
+    [[maybe_unused]] const bool alpha_test{
         MaxwellToCompareFunction(state.UnpackComparisonOp(state.alpha_test_func.Value())) !=
         Shader::CompareFunction::Always};
     bool earlier_stage_writes{};
