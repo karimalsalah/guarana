@@ -29,6 +29,7 @@
 #include "common/logging.h"
 #include "common/polyfill_thread.h"
 #include "common/settings.h"
+#include "video_core/gpu_costs.h"
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/fragment_barrier_state.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
@@ -87,7 +88,8 @@ public:
 
     enum class FrameMark : u8 { None, Start, End, Both };
     /// GPU thread, once per present: the frame-end mark this present gets. EDEN_DKB_FRAME_TRACE
-    /// marks every present; otherwise only the two presents after RequestGpuBusySample.
+    /// and cost sampling mark every present; otherwise only the two presents after
+    /// RequestGpuBusySample.
     [[nodiscard]] FrameMark NextFrameMark();
     void MarkFrameEnd(u64 frame, FrameMark mark);
     /// Any thread: asks for one host GPU timestamp sample of the frame after the next present.
@@ -96,6 +98,24 @@ public:
     }
     /// Host GPU busy time of the last sampled frame, nullopt when none was taken in 3 s.
     [[nodiscard]] std::optional<double> GpuBusyMs() const;
+    /// Any thread: turns the per-draw and per-pass timing of one frame a second on or off
+    /// without the DKB log lines. False when the query pools were not created at startup
+    /// (EDEN_NX2_COST_SAMPLING=1, EDEN_NX2_DEBUG_SERVER or EDEN_DKB_FRAME_TRACE=1).
+    bool RequestCostSampling(bool on) {
+        if (!trace_work_pool) {
+            return false;
+        }
+        if (cost_sampling.exchange(on, std::memory_order_relaxed) && !on) {
+            // One more frame-end mark closes the sample in flight.
+            gpu_busy_marks.store(1, std::memory_order_relaxed);
+        }
+        return true;
+    }
+    [[nodiscard]] bool CostSampling() const {
+        return cost_sampling.load(std::memory_order_relaxed);
+    }
+    /// Costs of the last sampled frame; frame is 0 when none was taken.
+    [[nodiscard]] VideoCore::GpuCostSnapshot GpuCosts() const;
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
@@ -104,7 +124,7 @@ public:
     template <typename Func>
     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
                       std::array<u32, 3> size, Func&& work, char kind = '\0') {
-        if (!trace_gpu_recording || !trace_work_pool) {
+        if (!trace_gpu_recording || !trace_costs_active) {
             work();
             return;
         }
@@ -481,8 +501,12 @@ private:
     void AllocateWorkerCommandBuffer();
 
     void TraceGpuSubmission();
-    void ReportWorkTimes(double submission_sum_ms);
-    void ReportPassTimes();
+    void ReportWorkTimes(double submission_sum_ms, VideoCore::GpuCostSnapshot& costs);
+    void ReportPassTimes(VideoCore::GpuCostSnapshot& costs);
+    /// Recording thread: whether draws and passes are to be timed in sampled frames.
+    [[nodiscard]] bool TraceCostsWanted() const {
+        return Common::DkbFrameTrace::Enabled() || cost_sampling.load(std::memory_order_relaxed);
+    }
     void TraceShader(u64 hash, u32 stage);
 
     u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
@@ -560,6 +584,7 @@ private:
     u32 trace_pass_count{};
     u32 trace_pass_dropped{};
     u32 trace_pass_open{TraceNoPass};
+    bool trace_pass_begun{}; ///< Recording thread: the open render pass recorded TracePassBegin
     Common::DkbFrameTrace::RateLimit trace_gpu_rate;
     u64 trace_gpu_tick{};
     u64 trace_frame_end{};
@@ -575,6 +600,12 @@ private:
     FrameMark trace_frame_mark{};
     /// The pending sample covers exactly one frame, so its busy time can be shown.
     bool trace_gpu_publish{};
+    /// Worker thread: the sample in flight times draws and passes (latched when it starts).
+    bool trace_costs_active{};
+
+    std::atomic<bool> cost_sampling{};
+    mutable std::mutex gpu_costs_mutex;
+    VideoCore::GpuCostSnapshot gpu_costs;
 
     std::atomic<u32> gpu_busy_marks{};
     struct GpuBusySample {

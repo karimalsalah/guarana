@@ -252,6 +252,21 @@ TOOLS = [
                        "on or off; read it with log_tail. Returns the previous and current state.",
         "inputSchema": {"type": "object", "properties": {"stats": {"type": "boolean"}}},
     },
+    {
+        "name": "gpu_costs",
+        "description": "Host GPU time of the last sampled frame (one a second): per vertex+fragment "
+                       "or compute shader hash ('work') and per render target ('passes'), slowest "
+                       "first. 'enable' turns the sampling on or off; it is off until asked for "
+                       "unless EDEN_NX2_COST_SAMPLING=1 or EDEN_DKB_FRAME_TRACE=1. 'frame' is 0 "
+                       "until a frame was sampled.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "top": {"type": "integer", "minimum": 0, "maximum": 256, "default": 32},
+                "enable": {"type": "boolean"},
+            },
+        },
+    },
 ]
 
 TOOL_NAMES = {tool["name"] for tool in TOOLS}

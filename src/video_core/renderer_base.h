@@ -17,6 +17,7 @@
 #include "common/settings_enums.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_costs.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Core::Frontend {
@@ -99,6 +100,21 @@ public:
     /// Host GPU busy time of the last sampled frame, nullopt when it isn't measured
     [[nodiscard]] virtual std::optional<double> GetGpuBusyMs() const {
         return std::nullopt;
+    }
+
+    /// Turns per-draw host GPU cost sampling on or off; false when the renderer cannot sample
+    virtual bool RequestGpuCostSampling([[maybe_unused]] bool on) {
+        return false;
+    }
+
+    [[nodiscard]] virtual bool IsGpuCostSampling() const {
+        return false;
+    }
+
+    /// Host GPU time of the last sampled frame by shaders and by render target; frame 0 when
+    /// none was sampled
+    [[nodiscard]] virtual GpuCostSnapshot GetGpuCosts() const {
+        return {};
     }
 
     [[nodiscard]] const RendererDeviceInfo& GetDeviceInfo() const {

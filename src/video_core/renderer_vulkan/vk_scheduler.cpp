@@ -137,7 +137,13 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                 .pipelineStatistics = 0,
             });
             trace_submissions.resize(TraceMaxSubmissions);
-            if (Common::DkbFrameTrace::Enabled()) {
+            // The per-draw pools are made here or never: the recording thread tests them
+            // unlocked. The debug server gets them so gpu_costs can start sampling live.
+            const char* const cost_env = std::getenv("EDEN_NX2_COST_SAMPLING");
+            const bool cost_on = cost_env && std::strcmp(cost_env, "1") == 0;
+            const char* const server_env = std::getenv("EDEN_NX2_DEBUG_SERVER");
+            if (Common::DkbFrameTrace::Enabled() || cost_on ||
+                (server_env && *server_env != '\0')) {
                 trace_work_pool = device.GetLogical().CreateQueryPool({
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                     .pNext = nullptr,
@@ -156,6 +162,7 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .queryCount = TraceMaxPasses * 2,
                     .pipelineStatistics = 0,
                 });
+                cost_sampling = cost_on;
             }
         } catch (const vk::Exception& error) {
             LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());
@@ -301,7 +308,7 @@ void Scheduler::WaitWorker() {
 }
 
 Scheduler::FrameMark Scheduler::NextFrameMark() {
-    if (Common::DkbFrameTrace::Enabled()) {
+    if (TraceCostsWanted()) {
         return FrameMark::Both;
     }
     u32 marks = gpu_busy_marks.load(std::memory_order_relaxed);
@@ -325,6 +332,11 @@ std::optional<double> Scheduler::GpuBusyMs() const {
         return std::nullopt;
     }
     return gpu_busy->ms;
+}
+
+VideoCore::GpuCostSnapshot Scheduler::GpuCosts() const {
+    std::scoped_lock lock{gpu_costs_mutex};
+    return gpu_costs;
 }
 
 void Scheduler::DispatchWork() {
@@ -400,7 +412,8 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
     for (u32 i = 0; i < clear_value_count && i < values.size(); ++i) {
         values[i] = clear_values[i];
     }
-    if (trace_pass_pool) {
+    if (trace_pass_pool && TraceCostsWanted()) {
+        trace_pass_begun = true;
         const RenderPassKey& key = framebuffer->RenderPassKeyBase();
         PassTrace pass{
             .width = render_area.width,
@@ -706,7 +719,8 @@ void Scheduler::TraceShader(u64 hash, u32 stage) {
 }
 
 void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
-    if (!trace_work_pool) {
+    // Shader lists per submission only feed the DKB log lines.
+    if (!trace_work_pool || !Common::DkbFrameTrace::Enabled()) {
         return;
     }
     Record([this, hashes](vk::CommandBuffer) {
@@ -721,7 +735,7 @@ void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
 }
 
 void Scheduler::TraceComputePipeline(u64 hash) {
-    if (!trace_work_pool) {
+    if (!trace_work_pool || !Common::DkbFrameTrace::Enabled()) {
         return;
     }
     Record([this, hash](vk::CommandBuffer) {
@@ -733,7 +747,7 @@ void Scheduler::TraceComputePipeline(u64 hash) {
     });
 }
 
-void Scheduler::ReportWorkTimes(double submission_sum_ms) {
+void Scheduler::ReportWorkTimes(double submission_sum_ms, VideoCore::GpuCostSnapshot& costs) {
     const u32 count = trace_work_count;
     const u32 dropped = std::exchange(trace_work_dropped, 0);
     trace_work_count = 0;
@@ -781,6 +795,23 @@ void Scheduler::ReportWorkTimes(double submission_sum_ms) {
                                                                       by_shaders.end());
     std::ranges::sort(sorted, std::greater<>{},
                       [](const auto& entry) { return entry.second.total_ms; });
+    costs.timed_sum_ms = total_ms;
+    for (const auto& [shaders, totals] : sorted) {
+        if (costs.work.size() == VideoCore::GpuCostSnapshot::MaxWork) {
+            break;
+        }
+        costs.work.push_back({
+            .vertex_hash = std::get<0>(shaders),
+            .fragment_hash = std::get<1>(shaders),
+            .kind = std::get<2>(shaders),
+            .draws = totals.count,
+            .total_ms = totals.total_ms,
+            .max_ms = totals.max_ms,
+        });
+    }
+    if (!Common::DkbFrameTrace::Enabled()) {
+        return;
+    }
     if (sorted.size() > 24) {
         sorted.resize(24);
     }
@@ -805,7 +836,7 @@ void Scheduler::ReportWorkTimes(double submission_sum_ms) {
 }
 
 void Scheduler::TracePassBegin(vk::CommandBuffer cmdbuf, const PassTrace& pass) {
-    if (!trace_gpu_recording) {
+    if (!trace_gpu_recording || !trace_costs_active) {
         return;
     }
     if (trace_pass_count == TraceMaxPasses) {
@@ -827,7 +858,7 @@ void Scheduler::TracePassEnd(vk::CommandBuffer cmdbuf) {
     trace_pass_open = TraceNoPass;
 }
 
-void Scheduler::ReportPassTimes() {
+void Scheduler::ReportPassTimes(VideoCore::GpuCostSnapshot& costs) {
     const u32 count = std::exchange(trace_pass_count, 0);
     const u32 dropped = std::exchange(trace_pass_dropped, 0);
     if (count == 0) {
@@ -871,15 +902,34 @@ void Scheduler::ReportPassTimes() {
     std::ranges::sort(sorted, std::greater<>{},
                       [](const auto& entry) { return entry.second.total_ms; });
     const size_t targets = sorted.size();
-    if (sorted.size() > 12) {
-        sorted.resize(12);
-    }
     const auto format_name = [](u8 format) {
         const auto pixel_format = static_cast<VideoCore::Surface::PixelFormat>(format);
         return pixel_format == VideoCore::Surface::PixelFormat::Invalid
                    ? std::string{"-"}
                    : fmt::format("{}", pixel_format);
     };
+    for (const auto& [pass, totals] : sorted) {
+        if (costs.passes.size() == VideoCore::GpuCostSnapshot::MaxPasses) {
+            break;
+        }
+        costs.passes.push_back({
+            .width = pass.width,
+            .height = pass.height,
+            .color_format = format_name(pass.color_format),
+            .num_colors = pass.num_colors,
+            .depth_format = format_name(pass.depth_format),
+            .samples = pass.samples,
+            .passes = totals.count,
+            .total_ms = totals.total_ms,
+            .max_ms = totals.max_ms,
+        });
+    }
+    if (!Common::DkbFrameTrace::Enabled()) {
+        return;
+    }
+    if (sorted.size() > 12) {
+        sorted.resize(12);
+    }
     std::string top;
     for (const auto& [pass, totals] : sorted) {
         top += fmt::format(" {}x{}/{}/{}/{}/{}={:.3f}ms/{}x(max {:.3f}ms)", pass.width,
@@ -1053,8 +1103,19 @@ void Scheduler::TraceGpuSubmission() {
                      trace_sample_frame, work.tick, duration_ms, work.draw_attempts,
                      work.dispatch_attempts, shaders, work.untracked_uses);
         }
-        ReportWorkTimes(total_ms);
-        ReportPassTimes();
+        VideoCore::GpuCostSnapshot costs;
+        costs.frame = trace_sample_frame;
+        costs.frame_span_ms = span_ms;
+        costs.submission_sum_ms = total_ms;
+        ReportWorkTimes(total_ms, costs);
+        ReportPassTimes(costs);
+        if (trace_costs_active) {
+            costs.when = std::chrono::steady_clock::now();
+            // integration point: feed VideoCore::CostGovernor from here (worker thread, about
+            // once a second) or from a GpuCosts() reader.
+            std::scoped_lock lock{gpu_costs_mutex};
+            gpu_costs = std::move(costs);
+        }
         trace_gpu_tick = 0;
         trace_gpu_count = 0;
         trace_gpu_skipped = 0;
@@ -1065,11 +1126,11 @@ void Scheduler::TraceGpuSubmission() {
         return;
     }
     current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
-    if (trace_gpu_count == 0 && trace_work_pool) {
+    if (trace_gpu_count == 0 && trace_work_pool && trace_costs_active) {
         // Draws are timed inside render passes, where queries cannot be reset.
         current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
     }
-    if (trace_gpu_count == 0 && trace_pass_pool) {
+    if (trace_gpu_count == 0 && trace_pass_pool && trace_costs_active) {
         current_upload_cmdbuf.ResetQueryPool(*trace_pass_pool, 0, TraceMaxPasses * 2);
     }
     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
@@ -1152,6 +1213,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
                 trace_gpu_rate.Ready(std::chrono::steady_clock::now())) {
                 trace_sample_frame = trace_frame_end + 1;
                 trace_gpu_sampling = true;
+                trace_costs_active = trace_work_pool && TraceCostsWanted();
             }
             trace_frame_end = 0;
         }
@@ -1258,7 +1320,7 @@ void Scheduler::EndRenderPass()
                                        0, XFB_OUTPUT_BARRIER);
             }
         });
-        if (trace_pass_pool) {
+        if (std::exchange(trace_pass_begun, false)) {
             Record([this](vk::CommandBuffer cmdbuf) { TracePassEnd(cmdbuf); });
         }
 

@@ -506,6 +506,68 @@ json HostTiming(ToolState& state, const json& params) {
     return {{"previous", previous}, {"stats", stats.load()}};
 }
 
+// Host GPU time of the last sampled frame by shaders and by render target.
+json GpuCosts(ToolState& state, const json& params) {
+    auto& renderer = state.system.GPU().Renderer();
+    const bool previous = renderer.IsGpuCostSampling();
+    if (params.contains("enable")) {
+        const bool enable = params.at("enable").get<bool>();
+        if (!renderer.RequestGpuCostSampling(enable) && enable) {
+            throw std::runtime_error{"cost sampling is unavailable: it needs the Vulkan renderer "
+                                     "with timestamp queries"};
+        }
+    }
+    const u32 top = Param<u32>(params, "top", 32, 0, 256);
+    const VideoCore::GpuCostSnapshot costs = renderer.GetGpuCosts();
+    json work = json::array();
+    for (size_t i = 0; i < costs.work.size() && i < top; ++i) {
+        const auto& entry = costs.work[i];
+        json item = {
+            {"vertex_hash", Hex(entry.vertex_hash)},
+            {"fragment_hash", Hex(entry.fragment_hash)},
+            {"kind", entry.kind == '\0' ? std::string{} : std::string(1, entry.kind)},
+            {"compute", entry.IsCompute()},
+            {"draws", entry.draws},
+            {"total_ms", entry.total_ms},
+            {"max_ms", entry.max_ms},
+        };
+        work.push_back(std::move(item));
+    }
+    json passes = json::array();
+    for (size_t i = 0; i < costs.passes.size() && i < top; ++i) {
+        const auto& pass = costs.passes[i];
+        json item = {
+            {"width", pass.width},
+            {"height", pass.height},
+            {"color_format", pass.color_format},
+            {"num_colors", pass.num_colors},
+            {"depth_format", pass.depth_format},
+            {"samples", pass.samples},
+            {"passes", pass.passes},
+            {"total_ms", pass.total_ms},
+            {"max_ms", pass.max_ms},
+        };
+        passes.push_back(std::move(item));
+    }
+    json age = nullptr;
+    if (costs.frame != 0) {
+        age = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                        costs.when)
+                  .count();
+    }
+    return {{"previous", previous},
+            {"sampling", renderer.IsGpuCostSampling()},
+            {"frame", costs.frame},
+            {"age_ms", std::move(age)},
+            {"frame_span_ms", costs.frame_span_ms},
+            {"submission_sum_ms", costs.submission_sum_ms},
+            {"timed_sum_ms", costs.timed_sum_ms},
+            {"work_entries", costs.work.size()},
+            {"work", std::move(work)},
+            {"pass_entries", costs.passes.size()},
+            {"passes", std::move(passes)}};
+}
+
 json ReadMemory(ToolState& state, const json& params) {
     const u64 address = AddressParam(params, "address");
     const u64 size = ReadSize(params, address);
@@ -702,6 +764,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"sample", handler(SampleThreads)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},
+        {"gpu_costs", handler(GpuCosts)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},
         {"read_gpu_memory", handler(ReadGpuMemory)},
