@@ -259,6 +259,23 @@ compute shader hash and `passes` per render target, slowest first, `top` of each
 its `small_draws` (direct draws of at most 6 vertices and one instance) and `side_draws` (draws
 into another target than the main scene target: the one with depth and colour whose draws took
 the most time, `has_main_target`).
+What the driver's compiler made of those shaders is a launch option, not a tool:
+`EDEN_NX2_PIPELINE_STATS=<dir>` enables VK_KHR_pipeline_executable_properties, builds every guest
+graphics and compute pipeline with `VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR` and appends one
+JSON line per build to `<dir>/pipeline_stats.jsonl`: `kind` (`graphics` or `compute`), `pipeline`
+(the key's hash), `hashes` (the six stage hashes, or the compute hash), `shader` (fragment or
+compute hash), `mesh`, `flags` (the create flags) and `executables`, each with `index`, `name`,
+`description`, `stages` (a `VkShaderStageFlags` mask), `subgroup_size` and `statistics` (`name`,
+`description`, `format`, `value`). `EDEN_NX2_PIPELINE_STATS_IR=1` adds the capture of internal
+representations: each executable gets `representations` (`name`, `description`, `text`, `bytes`,
+`file`) and the text ones are written as `<dir>/<shader>_<index>_<name>.txt`, once per file name.
+Such a session leaves the driver blob store closed, passes no driver pipeline cache to its builds
+and marks nothing as precached, so it compiles everything again and its frame times mean nothing;
+the shader cache's own records are used and written as usual. Save a `gpu_costs` reply from a
+normal session, then `python3 -I tools/nx2/pipeline_stats.py <dir> --costs <reply.json>` (or a log
+with `DKB gpu_work` lines) prints the executables of the costliest shaders, with the statistics
+named after spills, fills, scratch space, SIMD or dispatch width, instructions, sends, cycles and
+loops marked.
 **`set_shading_rate`** `{hashes?, rate?, all?}`. With `EDEN_NX2_VRS` set at launch, every guest
 graphics pipeline takes its fragment shading rate (VK_KHR_fragment_shading_rate) as dynamic
 state. This sets the fragment size (`1x1`, `2x1`, `1x2`, `2x2`, `4x2`, `2x4`, `4x4`; `2x2` when

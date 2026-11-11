@@ -237,6 +237,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetPipelineBinaryDataKHR);
     X(vkReleaseCapturedPipelineDataKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
+    X(vkGetPipelineExecutableInternalRepresentationsKHR);
     X(vkGetSemaphoreCounterValue);
     X(vkMapMemory);
     X(vkQueueBindSparse);
@@ -936,6 +937,42 @@ std::vector<VkPipelineExecutableStatisticKHR> Device::GetPipelineExecutableStati
     Check(dld->vkGetPipelineExecutableStatisticsKHR(handle, &executable_info, &num,
                                                     statistics.data()));
     return statistics;
+}
+
+std::vector<VkPipelineExecutableInternalRepresentationKHR>
+Device::GetPipelineExecutableInternalRepresentationsKHR(
+    VkPipeline pipeline, u32 executable_index, std::vector<std::vector<char>>& storage) const {
+    storage.clear();
+    if (!dld->vkGetPipelineExecutableInternalRepresentationsKHR) {
+        return {};
+    }
+    const VkPipelineExecutableInfoKHR executable_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR,
+        .pNext = nullptr,
+        .pipeline = pipeline,
+        .executableIndex = executable_index,
+    };
+    u32 num{};
+    dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                           nullptr);
+    std::vector<VkPipelineExecutableInternalRepresentationKHR> representations(num);
+    for (auto& representation : representations) {
+        representation.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR;
+    }
+    // Without pData the driver writes each one's dataSize.
+    Check(dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                                 representations.data()));
+    representations.resize(num);
+    storage.resize(representations.size());
+    for (size_t index = 0; index < representations.size(); ++index) {
+        storage[index].resize(representations[index].dataSize);
+        representations[index].pData = storage[index].data();
+    }
+    // VK_INCOMPLETE leaves what fitted.
+    Filter(dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                                  representations.data()));
+    representations.resize(num);
+    return representations;
 }
 
 void Device::UpdateDescriptorSets(Span<VkWriteDescriptorSet> writes,

@@ -1179,7 +1179,14 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     }
     cache_v2 = std::make_unique<CacheV2::Cache>(pipeline_cache_filename);
     shader_cache_v2 = cache_v2.get();
-    pipeline_binaries = PipelineBinaries::Open(device, base_dir);
+    // EDEN_NX2_PIPELINE_STATS builds every pipeline with capture flags, which are part of the
+    // create info a stored binary is checked against: the store is left closed, neither read nor
+    // written.
+    if (PipelineExecutableDump::Enabled(device)) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_PIPELINE_STATS: driver blobs are not used this session");
+    } else {
+        pipeline_binaries = PipelineBinaries::Open(device, base_dir);
+    }
     // Without the lock: another emulator's appends are complete records or a cut-off tail.
     // The payload hashes are checked on the shader job workers.
     auto log_v2 = std::make_shared<CacheV2::LogFile>(CacheV2::ReadLogFile(
@@ -1350,7 +1357,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         std::vector<std::pair<u64, VideoCommon::PipelineRecord>> incomplete_graphics;
         std::vector<VideoCommon::PipelineRecord> copies;
     } state;
-    if (device.IsKhrPipelineExecutablePropertiesEnabled()) {
+    // The setting's averages; EDEN_NX2_PIPELINE_STATS enables the extension for its own lines.
+    if (device.IsKhrPipelineExecutablePropertiesEnabled() &&
+        Settings::values.renderer_shader_feedback.GetValue()) {
         state.statistics = std::make_unique<PipelineStatistics>(device);
     }
     // Under state.mutex
@@ -1911,7 +1920,10 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
         batch.Wait();
     }
     const size_t total_built = static_cast<size_t>(std::count(built.begin(), built.end(), u8{1}));
-    if (compute_pending && !skipped) {
+    // Builds that capture for EDEN_NX2_PIPELINE_STATS are not the ones the driver's cache is
+    // meant to hold: nothing is marked as precached.
+    const bool marks_precached = !PipelineExecutableDump::Enabled(device);
+    if (compute_pending && !skipped && marks_precached) {
         if (const auto stamp_done = stamp(file_entries)) {
             ShaderWarm::WriteWarmMarker(warm_file, *stamp_done);
         }
@@ -1922,7 +1934,7 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
             precached.insert(jobs[index].graphics_hash);
         }
     }
-    if (precached.size() != precached_before) {
+    if (precached.size() != precached_before && marks_precached) {
         ShaderWarm::WritePrecachedPipelines(
             ShaderWarm::PrecachedPipelinesPath(title_id),
             {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION}, precached);

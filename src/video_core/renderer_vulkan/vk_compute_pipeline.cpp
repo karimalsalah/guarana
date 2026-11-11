@@ -278,6 +278,9 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         if (BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
             flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
         }
+        // EDEN_NX2_PIPELINE_STATS: the driver keeps what its compiler reports for this build.
+        const VkPipelineCreateFlags capture_flags{PipelineExecutableDump::CaptureFlags(device)};
+        flags |= capture_flags;
         const VkComputePipelineCreateInfo compute_ci{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .pNext = nullptr,
@@ -306,10 +309,14 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
             const auto trace_begin = std::chrono::steady_clock::now();
             TracePipelineBuild("BEGIN", "compute", shader_hash, traced, unoptimized);
+            // A capturing build takes no driver pipeline cache, so that its statistics come
+            // from a compile (the binary store is not opened then: PipelineCache).
+            const VkPipelineCache driver_cache{
+                capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE} : *pipeline_cache};
             pipeline = binaries ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache,
                                                                   binary_key)
                                 : device.GetLogical().CreateComputePipeline(compute_ci,
-                                                                            *pipeline_cache);
+                                                                            driver_cache);
             TracePipelineBuild("END", "compute", shader_hash, traced, unoptimized,
                                std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - trace_begin)
@@ -336,6 +343,18 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
 
         if (pipeline_statistics) {
             pipeline_statistics->Collect(device, *pipeline);
+        }
+        if (capture_flags != 0 && pipeline) {
+            const std::array<u64, 1> stage_hashes{shader_hash};
+            PipelineExecutableDump::Record(device, *pipeline,
+                                           {
+                                               .kind = "compute",
+                                               .key_hash = binary_key,
+                                               .stage_hashes = stage_hashes,
+                                               .shader_hash = shader_hash,
+                                               .is_mesh = false,
+                                               .flags = flags,
+                                           });
         }
         // Nothing reads the module once the pipeline exists; the driver keeps its SPIR-V while it
         // lives.

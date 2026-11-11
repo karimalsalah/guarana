@@ -355,6 +355,8 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetPipelineBinaryDataKHR vkGetPipelineBinaryDataKHR{};
     PFN_vkReleaseCapturedPipelineDataKHR vkReleaseCapturedPipelineDataKHR{};
     PFN_vkGetPipelineExecutableStatisticsKHR vkGetPipelineExecutableStatisticsKHR{};
+    PFN_vkGetPipelineExecutableInternalRepresentationsKHR
+        vkGetPipelineExecutableInternalRepresentationsKHR{};
     PFN_vkGetQueryPoolResults vkGetQueryPoolResults{};
     PFN_vkGetSemaphoreCounterValue vkGetSemaphoreCounterValue{};
     PFN_vkMapMemory vkMapMemory{};
@@ -1142,6 +1144,12 @@ public:
 
     std::vector<VkPipelineExecutableStatisticKHR> GetPipelineExecutableStatisticsKHR(
         VkPipeline pipeline, u32 executable_index) const;
+
+    /// The internal representations of an executable of a pipeline created with
+    /// VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR. Each pData points into storage.
+    std::vector<VkPipelineExecutableInternalRepresentationKHR>
+    GetPipelineExecutableInternalRepresentationsKHR(VkPipeline pipeline, u32 executable_index,
+                                                    std::vector<std::vector<char>>& storage) const;
 
     void UpdateDescriptorSets(Span<VkWriteDescriptorSet> writes,
                               Span<VkCopyDescriptorSet> copies) const noexcept;

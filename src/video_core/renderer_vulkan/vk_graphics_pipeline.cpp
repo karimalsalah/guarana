@@ -2114,6 +2114,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (uses_descriptor_buffer) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
+    // EDEN_NX2_PIPELINE_STATS: the driver keeps what its compiler reports for this build.
+    const VkPipelineCreateFlags capture_flags{PipelineExecutableDump::CaptureFlags(device)};
+    flags |= capture_flags;
 
     const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
     const auto trace_begin = std::chrono::steady_clock::now();
@@ -2147,13 +2150,28 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     // keeps the builds with the dynamic rate beside the others instead of replacing them.
     const u64 binary_key{GraphicsRecordKey(key) ^
                          (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL)};
+    // A build that captures for EDEN_NX2_PIPELINE_STATS takes no driver pipeline cache, so that
+    // its statistics come from a compile (the binary store is not opened then: PipelineCache).
+    const VkPipelineCache driver_cache{capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE}
+                                                          : *pipeline_cache};
     pipeline = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
                                                            binary_key)
-                        : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
+                        : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
     TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
+    if (capture_flags != 0 && pipeline) {
+        PipelineExecutableDump::Record(device, *pipeline,
+                                       {
+                                           .kind = "graphics",
+                                           .key_hash = key.Hash(),
+                                           .stage_hashes = key.unique_hashes,
+                                           .shader_hash = key.unique_hashes[5],
+                                           .is_mesh = is_mesh,
+                                           .flags = flags,
+                                       });
+    }
 
     // Log graphics pipeline creation
     if (GPU::Logging::IsActive()) {

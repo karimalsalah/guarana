@@ -1786,13 +1786,21 @@ void Device::RemoveUnsuitableExtensions() {
                                        features.vertex_input_dynamic_state,
                                        VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
 
-    // VK_KHR_pipeline_executable_properties
-    if (Settings::values.renderer_shader_feedback.GetValue()) {
+    // VK_KHR_pipeline_executable_properties: with the shader feedback setting, or for
+    // EDEN_NX2_PIPELINE_STATS=<dir> (PipelineExecutableDump).
+    const char* const pipeline_stats_env{std::getenv("EDEN_NX2_PIPELINE_STATS")};
+    const bool pipeline_stats{pipeline_stats_env != nullptr && *pipeline_stats_env != '\0'};
+    if (Settings::values.renderer_shader_feedback.GetValue() || pipeline_stats) {
         extensions.pipeline_executable_properties =
             features.pipeline_executable_properties.pipelineExecutableInfo;
         RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_executable_properties,
                                            features.pipeline_executable_properties,
                                            VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        if (pipeline_stats) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_PIPELINE_STATS: VK_KHR_pipeline_executable_properties {}",
+                     extensions.pipeline_executable_properties ? "enabled" : "not available");
+        }
     } else {
         RemoveExtensionFeature(extensions.pipeline_executable_properties,
                                features.pipeline_executable_properties,
