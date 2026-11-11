@@ -679,11 +679,12 @@ void Scheduler::RealizeDeferredClear() {
         dc.framebuffer->DiscardsMsaaColor() ? dc.color_clear_mask : 0u;
     const bool depth_stencil_discard =
         dc.depth_stencil && dc.framebuffer->DiscardsMsaaDepthStencil();
-    const VkRenderPass renderpass = dc.framebuffer->RenderPassVariant(
-        dc.color_clear_mask, dc.depth_stencil, color_discard_mask, depth_stencil_discard);
     // No pass is open while a clear is parked: keep the caller's reason for the pass begun here.
     const PassEnd reason = pass_end_reason;
     EndRenderPass();
+    const VkRenderPass renderpass = dc.framebuffer->RenderPassVariant(
+        dc.color_clear_mask, dc.depth_stencil, color_discard_mask, depth_stencil_discard,
+        PickDepthLayout(dc.framebuffer));
     BeginRenderPassImpl(dc.framebuffer, renderpass, clear_values.data(), count);
     pass_end_reason = reason;
 }
@@ -730,9 +731,13 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_lo
         RealizeDeferredClear();
         return;
     }
-    const VkRenderPass renderpass = framebuffer->RenderPass();
     const VkFramebuffer framebuffer_handle = framebuffer->Handle();
     const VkExtent2D render_area = framebuffer->RenderArea();
+    // The active pass can't go on with its depth attachment in the attachment layout once a draw
+    // samples it, nor may a pass that didn't check what it samples leave a resting depth image.
+    const bool depth_restart =
+        (pass_depth_image != VK_NULL_HANDLE && framebuffer->DepthSampledInPass()) ||
+        (resting_depth_image != VK_NULL_HANDLE && !keep_resting_depth);
     // A draw continues the active pass whenever the same framebuffer and area are bound. The
     // render-pass *variant* (a deferred clear's loadOp=CLEAR form) is only meaningful at begin -
     // loadOps are applied once, and the base/variant passes are render-pass-compatible (only
@@ -742,7 +747,7 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_lo
     // so it is the correct identity to compare.
     if (state.renderpass && framebuffer_handle == state.framebuffer &&
         render_area.width == state.render_area.width &&
-        render_area.height == state.render_area.height) {
+        render_area.height == state.render_area.height && !depth_restart) {
         return;
     }
     if (state.renderpass) {
@@ -753,10 +758,124 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_lo
     }
     // Ends any active pass and realizes a deferred clear
     EndRenderPass();
+    const VkRenderPass renderpass =
+        framebuffer->RenderPassVariant(0, false, 0, false, PickDepthLayout(framebuffer));
     BeginRenderPassImpl(framebuffer, renderpass, nullptr, 0);
 }
 
-void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location location) {
+void Scheduler::RequestDrawRenderpass(const Framebuffer* framebuffer,
+                                      std::source_location location) {
+    keep_resting_depth = true;
+    RequestRenderpass(framebuffer, location);
+    keep_resting_depth = false;
+}
+
+u32 Scheduler::DepthOptimalMode() {
+    static const u32 mode = [] {
+        const char* value = std::getenv("EDEN_NX2_DEPTH_OPTIMAL");
+        const u32 result = value != nullptr ? static_cast<u32>(std::atoi(value)) : u32{0};
+        if (result != 0) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_DEPTH_OPTIMAL={}: depth attachments use "
+                                    "DEPTH_STENCIL_ATTACHMENT_OPTIMAL{}",
+                     result, result >= 2 ? " and rest in it between passes" : " in their passes");
+        }
+        return result;
+    }();
+    return mode;
+}
+
+u8 Scheduler::PickDepthLayout(const Framebuffer* framebuffer) {
+    const u32 mode = DepthOptimalMode();
+    if (mode == 0) {
+        return 0;
+    }
+    const VkImage depth_image = framebuffer->DepthImage();
+    const bool optimal = depth_image != VK_NULL_HANDLE &&
+                         framebuffer->Samples() == VK_SAMPLE_COUNT_1_BIT &&
+                         !framebuffer->DepthSampledInPass();
+    bool resumes = false;
+    if (resting_depth_image != VK_NULL_HANDLE) {
+        if (optimal && depth_image == resting_depth_image) {
+            const VkImageSubresourceRange& range = framebuffer->DepthImageRange();
+            resumes = range.aspectMask == resting_depth_range.aspectMask &&
+                      range.baseMipLevel == resting_depth_range.baseMipLevel &&
+                      range.levelCount == resting_depth_range.levelCount &&
+                      range.baseArrayLayer == resting_depth_range.baseArrayLayer &&
+                      range.layerCount == resting_depth_range.layerCount;
+        }
+        if (resumes) {
+            resting_depth_image = VK_NULL_HANDLE;
+        } else {
+            // Only one image rests at a time, and none that this pass has as an attachment.
+            const std::array<VkImage, 9>& attachments = framebuffer->Images();
+            bool is_attachment = false;
+            for (u32 index = 0; index < framebuffer->NumImages(); ++index) {
+                is_attachment |= attachments[index] == resting_depth_image;
+            }
+            if (optimal || is_attachment || !keep_resting_depth) {
+                ReleaseRestingDepth();
+            }
+        }
+    }
+    if (!optimal) {
+        return 0;
+    }
+    pass_depth_image = depth_image;
+    pass_depth_range = framebuffer->DepthImageRange();
+    pass_depth_final_layout = mode >= 2 ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                        : VK_IMAGE_LAYOUT_GENERAL;
+    if (resumes) {
+        return u8{3};
+    }
+    return mode >= 2 ? u8{2} : u8{1};
+}
+
+void Scheduler::ReleaseRestingDepth(VkImage image) {
+    if (resting_depth_image == VK_NULL_HANDLE ||
+        (image != VK_NULL_HANDLE && image != resting_depth_image)) {
+        return;
+    }
+    if (state.renderpass) {
+        // The active pass has no depth attachment in the attachment layout (PickDepthLayout),
+        // so ending it leaves the resting image as it is.
+        EndRenderPass();
+    }
+    Record([resting = resting_depth_image,
+            resting_range = resting_depth_range](vk::CommandBuffer cmdbuf) {
+        const VkImageMemoryBarrier barrier{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                             VK_ACCESS_TRANSFER_WRITE_BIT |
+                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = resting,
+            .subresourceRange = resting_range,
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier);
+    });
+    resting_depth_image = VK_NULL_HANDLE;
+}
+
+void Scheduler::ReleaseDepthForSampling(VkImage image) {
+    if (image == VK_NULL_HANDLE) {
+        return;
+    }
+    if (image == pass_depth_image && state.renderpass) {
+        EndRenderPass();
+    }
+    ReleaseRestingDepth(image);
+}
+
+void Scheduler::EndRenderPassForOutsideWork(const std::source_location& location) {
     if (state.renderpass) {
         CountRenderPassEnd(location.file_name(), location.line());
         if (trace_pass_begun) {
@@ -764,6 +883,21 @@ void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location lo
         }
     }
     EndRenderPass();
+}
+
+void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location location) {
+    EndRenderPassForOutsideWork(location);
+    ReleaseRestingDepth();
+}
+
+void Scheduler::RequestOutsideRenderPassBufferContext(std::source_location location) {
+    EndRenderPassForOutsideWork(location);
+}
+
+void Scheduler::RequestOutsideRenderPassImageContext(VkImage image,
+                                                     std::source_location location) {
+    EndRenderPassForOutsideWork(location);
+    ReleaseRestingDepth(image);
 }
 
 bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
@@ -1648,6 +1782,8 @@ void Scheduler::EndPendingOperations() {
     // and resetting here would drop the samples counted so far (the report then reads too low).
     query_cache->CounterClose(VideoCommon::QueryType::ZPassPixelCount64);
     EndRenderPass();
+    // No image rests across a submission: the texture cache may free it once this one is done.
+    ReleaseRestingDepth();
 }
 
 void Scheduler::EndRenderPass()
@@ -1680,6 +1816,7 @@ void Scheduler::EndRenderPass()
         Record([num_images = num_renderpass_images,
                        images = renderpass_images,
                        ranges = renderpass_image_ranges,
+                       depth_layout = pass_depth_final_layout,
                        has_transform_feedback = device.IsExtTransformFeedbackSupported()](
                           vk::CommandBuffer cmdbuf) {
             std::array<VkImageMemoryBarrier, 9> barriers;
@@ -1700,6 +1837,9 @@ void Scheduler::EndRenderPass()
                     src_access |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
                                   | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+                // The pass leaves its depth attachment in depth_layout (EDEN_NX2_DEPTH_OPTIMAL).
+                const VkImageLayout layout =
+                    !is_color && is_depth_stencil ? depth_layout : VK_IMAGE_LAYOUT_GENERAL;
                 barriers[i] = VkImageMemoryBarrier{
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                         .pNext = nullptr,
@@ -1709,8 +1849,8 @@ void Scheduler::EndRenderPass()
                                          | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
                                          | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
                                          | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .oldLayout = layout,
+                        .newLayout = layout,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .image = images[i],
@@ -1741,6 +1881,14 @@ void Scheduler::EndRenderPass()
 
         state.renderpass = VkRenderPass{};
         num_renderpass_images = 0;
+        if (pass_depth_image != VK_NULL_HANDLE) {
+            if (pass_depth_final_layout != VK_IMAGE_LAYOUT_GENERAL) {
+                resting_depth_image = pass_depth_image;
+                resting_depth_range = pass_depth_range;
+            }
+            pass_depth_image = VK_NULL_HANDLE;
+            pass_depth_final_layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
     }
 
 
