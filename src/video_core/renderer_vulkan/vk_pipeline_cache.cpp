@@ -482,10 +482,10 @@ bool TakesPrepassSplit(const GraphicsPipelineCacheKey& key,
         }
     }
     const char* reason{};
+    // A shader that never discards splits as well: overlapping opaque layers drawn back to front
+    // each pass the depth test, and the split shades only the nearest one.
     if (programs[5].stage != Shader::Stage::Fragment) {
         reason = "it is not a fragment program";
-    } else if (!fragment.uses_demote_to_helper_invocation && !alpha_test) {
-        reason = "it never discards";
     } else if (fragment.stores_frag_depth || fragment.stores_sample_mask) {
         reason = "it writes depth or the sample mask";
     } else if (writes_storage(fragment)) {
