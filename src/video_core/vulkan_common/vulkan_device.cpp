@@ -1547,7 +1547,21 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Disable VertexInputDynamicState on old Intel Windows drivers
     if (extensions.vertex_input_dynamic_state) {
         const u32 version = (properties.properties.driverVersion << 3) >> 3;
-        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && version < VK_MAKE_API_VERSION(27, 20, 100, 0))
+        // EDEN_NX2_INTEL_VIDS=1: Intel Windows packs driverVersion as (major << 14) | minor
+        // (101.9175 is 1663959), below the 0x65064000 it is compared with on every driver, so
+        // all of them lose the extension. With the switch only drivers before 101.x do.
+        static const bool intel_vids = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_VIDS");
+            return value && std::string_view{value} == "1";
+        }();
+        const bool intel_broken = intel_vids
+                                      ? (properties.properties.driverVersion >> 14) < 101
+                                      : version < VK_MAKE_API_VERSION(27, 20, 100, 0);
+        if (intel_vids && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && !intel_broken) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_VIDS: keeping VK_EXT_vertex_input_dynamic_state");
+        }
+        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && intel_broken)
         || (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY && properties.properties.driverVersion < NvidiaDriverVersion(580, 119, 2))) {
             LOG_WARNING(Render_Vulkan, "Disabling broken VK_EXT_vertex_input_dynamic_state");
             RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
