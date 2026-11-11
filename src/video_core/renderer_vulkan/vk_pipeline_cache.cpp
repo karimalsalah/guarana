@@ -3381,9 +3381,11 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     if (reused) {
         VerifyReusedShaders(*reused, defer_emission ? reference_spirv : stage_spirv, hash);
     }
-    // Mesh emulation is built from the programs on every pipeline, so those are not reused.
+    // Mesh emulation is built from the programs on every pipeline, and code past the cached range
+    // is in no unique hash (nor in the disk records of the pipelines that would reuse it).
     std::shared_ptr<ReusableShaders> reusable;
-    if (reuse_shaders && !mesh_emulation) {
+    if (reuse_shaders && !mesh_emulation &&
+        std::ranges::none_of(envs, &Shader::Environment::ReadUnboundInstructions)) {
         reusable = std::make_shared<ReusableShaders>();
         for (size_t stage = 0; stage < infos.size(); ++stage) {
             if (infos[stage]) {
