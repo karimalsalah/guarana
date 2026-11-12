@@ -21,6 +21,7 @@ add_executable(tests
     core/nx2_video_ready.cpp
     core/nx2_debug_server.cpp
     core/nx2_present_pacer.cpp
+    core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
     core/game_presets.cpp
     common/display_hdr.cpp
@@ -167,8 +168,10 @@ add_executable(tests
     common/host_memory_test_access.h
     core/host_memory_failure.cpp
     common/multi_level_page_table.cpp
+    common/nextendo.cpp
     common/page_table.cpp
     common/param_package.cpp
+    common/poll_window.cpp
     common/range_map.cpp
     common/ring_buffer.cpp
     common/scratch_buffer.cpp
@@ -178,6 +181,7 @@ add_executable(tests
     common/unique_function.cpp
     common/zstd_compression.cpp
     core/core_timing.cpp
+    core/nextendo_redirect.cpp
     core/thread_startup_policy.cpp
     core/nup_writer.cpp
     core/nup_metadata.cpp
