@@ -881,6 +881,19 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                  "EDEN_NX2_MESH_OUT={}: mesh program output bits {}, 2x2 under {} pixels",
                  mesh_out, profile.mesh_out, profile.mesh_rate_pixels);
     }
+    // EDEN_NX2_GM=<bits> (experiment): cheaper run-time routing of global memory accesses that
+    // stay global. 1 computes the buffer base addresses once per invocation instead of in every
+    // access (programs that cannot change them), 2 makes a native load search only the loaded
+    // pointer buffers its address is built on, 8 (with 2) returns zero below those instead of
+    // searching every buffer. (4 is reserved.)
+    static const char* const global_memory{std::getenv("EDEN_NX2_GM")};
+    if (global_memory != nullptr) {
+        using namespace Shader::Backend::SPIRV;
+        profile.global_memory_opt = static_cast<u32>(std::strtoul(global_memory, nullptr, 0)) &
+                                    (GM_HOIST | GM_NARROW | GM_NARROW_NO_FALLBACK);
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_GM={}: global memory routing bits {}", global_memory,
+                 profile.global_memory_opt);
+    }
 
     host_info = Shader::HostTranslateInfo{
         .min_ssbo_alignment = device.GetStorageBufferAlignment(),
@@ -908,6 +921,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .support_conditional_barrier = device.SupportsConditionalBarriers(),
         .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
         .support_byte_addressed_r16 = true,
+        .narrow_global_candidates =
+            (profile.global_memory_opt & Shader::Backend::SPIRV::GM_NARROW) != 0,
     };
     host_info.ApplyDescriptorLimitPolicy();
 

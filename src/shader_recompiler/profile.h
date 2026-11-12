@@ -127,6 +127,8 @@ struct Profile {
     /// the bounding box size in pixels under which MESH_OUT_RATE shades a triangle 2x2
     u32 mesh_out{};
     f32 mesh_rate_pixels{4.0f};
+    /// Experiment (EDEN_NX2_GM): cheaper run-time routing of global memory accesses, GM_* bits
+    u32 global_memory_opt{};
 
     u32 gl_max_compute_smem_size{};
 

@@ -10,9 +10,12 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <span>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <boost/container/flat_set.hpp>
 #include <boost/container/small_vector.hpp>
@@ -105,6 +108,10 @@ struct StorageInfo {
     StorageBufferSet unbounded_writes;
     /// A store or atomic stayed global without a buffer: it may land in any written buffer
     bool untracked_writes{};
+    /// HostTranslateInfo::narrow_global_candidates, and the loads that stayed global whose
+    /// address is built on one of these pointers on every path (see NarrowCandidates).
+    bool narrow{};
+    std::vector<std::pair<IR::Inst*, small_vector<StorageBufferAddr, 4>>> narrowed;
 };
 
 /// Returns true when the instruction is a global memory instruction
@@ -1328,6 +1335,180 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
     return candidates;
 }
 
+/// The pointers a low address is built on, when every path to it adds exactly one of
+/// `candidates` (what NativePointerCandidates found): then the address can only be in one of
+/// their buffers. Empty when a path's pointer is not known: a phi or select with an input that
+/// holds no candidate, a pointer loaded from somewhere else, a constant buffer word read at a
+/// dynamic offset. Offsets may come from anywhere. Asks the environment nothing.
+class NarrowCandidates {
+public:
+    explicit NarrowCandidates(std::span<const StorageBufferAddr> candidates_)
+        : candidates{candidates_} {}
+
+    small_vector<StorageBufferAddr, 4> Find(const IR::Value& low_addr) {
+        Result result{Classify(low_addr, 0)};
+        if (result.kind != Kind::Pointers || budget == 0) {
+            result.pointers.clear();
+        }
+        return result.pointers;
+    }
+
+private:
+    enum class Kind { Offset, Pointers, Unknown, Cycle };
+    struct Result {
+        Kind kind{Kind::Offset};
+        small_vector<StorageBufferAddr, 4> pointers;
+    };
+    static constexpr u32 MAX_DEPTH = 256;
+    static constexpr size_t MAX_POINTERS = 4;
+
+    Result Pointer(const StorageBufferAddr& pointer, Kind otherwise) const {
+        if (std::ranges::find(candidates, pointer) == candidates.end()) {
+            return Result{.kind = otherwise, .pointers = {}};
+        }
+        return Result{.kind = Kind::Pointers, .pointers = {pointer}};
+    }
+
+    /// One of several values (a phi or select)
+    void Merge(Result& merged, bool& first, const Result& input) const {
+        if (input.kind == Kind::Cycle) {
+            // The value itself, around a loop: nothing new
+            return;
+        }
+        if (first) {
+            merged = input;
+            first = false;
+            return;
+        }
+        if (merged.kind != input.kind || merged.kind == Kind::Unknown) {
+            merged = Result{.kind = Kind::Unknown, .pointers = {}};
+            return;
+        }
+        for (const StorageBufferAddr& pointer : input.pointers) {
+            if (std::ranges::find(merged.pointers, pointer) == merged.pointers.end()) {
+                merged.pointers.push_back(pointer);
+            }
+        }
+        if (merged.pointers.size() > MAX_POINTERS) {
+            merged = Result{.kind = Kind::Unknown, .pointers = {}};
+        }
+    }
+
+    Result Classify(const IR::Value& value, u32 depth) {
+        if (value.IsImmediate()) {
+            return {};
+        }
+        const IR::Inst* const inst{value.InstRecursive()};
+        if (const auto it{done.find(inst)}; it != done.end()) {
+            return it->second;
+        }
+        if (depth > MAX_DEPTH || budget == 0) {
+            budget = 0;
+            return Result{.kind = Kind::Unknown, .pointers = {}};
+        }
+        --budget;
+        if (!active.insert(inst).second) {
+            ++cycles;
+            return Result{.kind = Kind::Cycle, .pointers = {}};
+        }
+        const size_t cycles_before{cycles};
+        Result result{Compute(inst, depth)};
+        active.erase(inst);
+        if (cycles == cycles_before) {
+            // Final: it met no value that is still open around a loop.
+            done.emplace(inst, result);
+        }
+        return result;
+    }
+
+    Result Compute(const IR::Inst* inst, u32 depth) {
+        const Result unknown{.kind = Kind::Unknown, .pointers = {}};
+        switch (inst->GetOpcode()) {
+        case IR::Opcode::GetCbufU32:
+        case IR::Opcode::GetCbufU32x2:
+            if (!inst->Arg(0).IsImmediate() || !inst->Arg(1).IsImmediate()) {
+                return unknown;
+            }
+            return Pointer({.index = inst->Arg(0).U32(), .offset = inst->Arg(1).U32()},
+                           Kind::Offset);
+        case IR::Opcode::IAdd32: {
+            const Result a{Classify(inst->Arg(0), depth + 1)};
+            const Result b{Classify(inst->Arg(1), depth + 1)};
+            if (a.kind == Kind::Pointers && b.kind == Kind::Pointers) {
+                return unknown;
+            }
+            if (a.kind == Kind::Pointers || b.kind == Kind::Pointers) {
+                const Kind other{a.kind == Kind::Pointers ? b.kind : a.kind};
+                if (other == Kind::Cycle) {
+                    return unknown;
+                }
+                return a.kind == Kind::Pointers ? a : b;
+            }
+            if (a.kind == Kind::Unknown || b.kind == Kind::Unknown) {
+                return unknown;
+            }
+            return a.kind == Kind::Cycle ? a : b;
+        }
+        case IR::Opcode::Phi:
+        case IR::Opcode::SelectU32: {
+            const bool select{inst->GetOpcode() == IR::Opcode::SelectU32};
+            Result merged{.kind = Kind::Cycle, .pointers = {}};
+            bool first{true};
+            for (size_t arg = select ? 1 : 0; arg < inst->NumArgs(); ++arg) {
+                Merge(merged, first, Classify(inst->Arg(arg), depth + 1));
+            }
+            return merged;
+        }
+        case IR::Opcode::ShuffleIndex:
+            return Classify(inst->Arg(0), depth + 1);
+        case IR::Opcode::CompositeExtractU32x2:
+            if (inst->Arg(1).IsImmediate() && inst->Arg(1).U32() == 0) {
+                return Classify(inst->Arg(0), depth + 1);
+            }
+            return unknown;
+        case IR::Opcode::LoadGlobal64: {
+            // A pointer loaded from the memory one constant buffer pointer points to
+            const auto holder_addr{TrackLowAddress(const_cast<IR::Inst*>(inst))};
+            if (!holder_addr || holder_addr->value.IsImmediate() || holder_addr->imm_offset < 0 ||
+                !Common::IsAligned(holder_addr->imm_offset, 8)) {
+                return unknown;
+            }
+            const IR::Inst* holder{holder_addr->value.InstRecursive()};
+            while (holder->GetOpcode() == IR::Opcode::CompositeExtractU32x2 &&
+                   holder->Arg(1).IsImmediate() && holder->Arg(1).U32() == 0 &&
+                   !holder->Arg(0).IsImmediate()) {
+                holder = holder->Arg(0).InstRecursive();
+            }
+            if ((holder->GetOpcode() != IR::Opcode::GetCbufU32 &&
+                 holder->GetOpcode() != IR::Opcode::GetCbufU32x2) ||
+                !holder->Arg(0).IsImmediate() || !holder->Arg(1).IsImmediate()) {
+                return unknown;
+            }
+            return Pointer({.index = holder->Arg(0).U32(),
+                            .offset = holder->Arg(1).U32(),
+                            .indirect = static_cast<u32>(holder_addr->imm_offset)},
+                           Kind::Unknown);
+        }
+        case IR::Opcode::LoadGlobalS8:
+        case IR::Opcode::LoadGlobalU8:
+        case IR::Opcode::LoadGlobalS16:
+        case IR::Opcode::LoadGlobalU16:
+        case IR::Opcode::LoadGlobal32:
+        case IR::Opcode::LoadGlobal128:
+            return unknown;
+        default:
+            // Arithmetic that is not an addition makes an offset, not a pointer.
+            return {};
+        }
+    }
+
+    std::span<const StorageBufferAddr> candidates;
+    std::unordered_map<const IR::Inst*, Result> done;
+    std::unordered_set<const IR::Inst*> active;
+    size_t budget{4096};
+    size_t cycles{};
+};
+
 /// Collects the storage buffer used by a global memory instruction and the instruction itself.
 /// Returns false when the access stays global without a buffer.
 bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, Environment& env,
@@ -1424,6 +1605,19 @@ bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
             }
             if (accepted) {
                 info.native_runtime_bounds = true;
+                if (info.narrow && !paired_found && !IsGlobalMemoryWrite(inst) &&
+                    (inst.GetOpcode() == IR::Opcode::LoadGlobal32 ||
+                     inst.GetOpcode() == IR::Opcode::LoadGlobal64 ||
+                     inst.GetOpcode() == IR::Opcode::LoadGlobal128)) {
+                    auto pointers{NarrowCandidates{candidates}.Find(low_addr)};
+                    // Not a candidate that found no free binding above
+                    if (!pointers.empty() &&
+                        std::ranges::all_of(pointers, [&info](const StorageBufferAddr& pointer) {
+                            return info.set.find(pointer) != info.set.end();
+                        })) {
+                        info.narrowed.emplace_back(&inst, std::move(pointers));
+                    }
+                }
                 return true;
             }
             // Only table entries, and no free binding for them: as if none had been found.
@@ -2091,6 +2285,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
     const size_t max_ssbos{StorageBufferLimit(host_info)};
     TrackingConditions conditions{program};
     StorageInfo info;
+    info.narrow = host_info.narrow_global_candidates;
     // Without 64-bit integers the backend cannot route global accesses among bound buffers.
     info.bind_competing_loaded = host_info.support_int64;
     info.iterator_words = CollectIteratorWords(program);
@@ -2115,6 +2310,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         paired.iterator_words = std::move(info.iterator_words);
         paired.atomic_pointers = std::move(info.atomic_pointers);
         paired.bind_competing_loaded = false;
+        paired.narrow = info.narrow;
         info = std::move(paired);
         collect();
     }
@@ -2125,6 +2321,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         with_tables.atomic_pointers = info.atomic_pointers;
         with_tables.bind_competing_loaded = info.bind_competing_loaded;
         with_tables.tables_enabled = true;
+        with_tables.narrow = info.narrow;
         with_tables.table_budget = max_ssbos - info.set.size();
         with_tables.counted = info.set;
         std::swap(info, with_tables);
@@ -2176,6 +2373,27 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
             .write_extent = is_written && extent != extents.end() ? extent->second
                                                                   : StorageWriteExtent{},
         });
+    }
+    // EDEN_NX2_GM bit 2: a load that stayed global names, in its flags, the descriptors its
+    // address can only be in (a byte each, index + 1, zero after the last), for the backend to
+    // search only those. Only read-only buffers of loaded pointers: those are bound from the
+    // pointer to the end of its mapping, so they hold every address above the pointer that a
+    // search of all the buffers would find in another one.
+    for (auto& [inst, pointers] : info.narrowed) {
+        u32 flags{};
+        u32 shift{};
+        for (const StorageBufferAddr& pointer : pointers) {
+            const auto it{info.set.find(pointer)};
+            const size_t index{it == info.set.end() ? ~size_t{0} : info.set.index_of(it)};
+            if (index >= 0xff || pointer.indirect == ~0U || info.writes.contains(pointer) ||
+                shift >= 32) {
+                flags = 0;
+                break;
+            }
+            flags |= static_cast<u32>(index + 1) << shift;
+            shift += 8;
+        }
+        inst->SetFlags(flags);
     }
     for (const StorageInst& storage_inst : info.to_replace) {
         const StorageBufferAddr storage_buffer{storage_inst.storage_buffer};

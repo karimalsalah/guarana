@@ -8,7 +8,10 @@
 
 #include <array>
 #include <bit>
+#include <map>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <sirit/sirit.h>
 #include "common/container/unordered_map.h"
@@ -367,6 +370,15 @@ public:
     };
     std::array<Id, static_cast<size_t>(GlobalAtomic::Count)> global_atomic_funcs{};
     Id atomic_cas_global_func_u32{};
+    /// GM_HOIST: per storage buffer descriptor, the private variable holding its base address
+    /// (stored by EmitGlobalMemoryPrologue); empty when the program is not hoisted.
+    std::vector<Id> global_bases;
+    const Info* global_bases_info{};
+    void EmitGlobalMemoryPrologue();
+    /// GM_NARROW: the load function for a word shift (2, 3, 4) and a LoadGlobal's flags, or an
+    /// invalid id when the load searches every buffer.
+    [[nodiscard]] Id NarrowGlobalLoad(u32 shift, u32 flags) const;
+    std::map<std::pair<u32, u32>, Id> narrow_load_funcs;
 
     bool need_input_position_indirect{};
     Id input_position{};
@@ -497,6 +509,9 @@ private:
     void DefineAttributeMemAccess(const Info& info);
     void DefineWriteStorageCasLoopFunction(const Info& info);
     void DefineGlobalMemoryFunctions(const IR::Program& program);
+    using GlobalBaseWords = std::map<std::pair<u32, u32>, Id>;
+    /// The base address (u64) of a storage buffer descriptor, read from its pointer.
+    Id GlobalBufferBase(const Info& info, size_t index, GlobalBaseWords* cbuf_words);
     void DefineRescalingInput(const Info& info);
     void DefineRescalingInputPushConstant();
     void DefineRescalingInputUniformConstant();

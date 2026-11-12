@@ -48,6 +48,12 @@ constexpr u32 MESH_OUT_RATE = 2;   ///< 2x2 shading rate for the triangles MESH_
 constexpr u32 MESH_OUT_VECTOR = 8; ///< one store per output vector instead of one per component
 constexpr u32 MESH_OUT_COUNT = 16; ///< only as many vertices as the primitives use, not max_vertices
 
+/// Cheaper run-time routing of global memory accesses (Profile::global_memory_opt).
+constexpr u32 GM_HOIST = 1;  ///< buffer base addresses are computed once, at the start of main
+constexpr u32 GM_NARROW = 2; ///< a load searches only the buffers the storage buffer pass named
+/// 4 is reserved for rebasing single-pointer accesses at compile time (not implemented).
+constexpr u32 GM_NARROW_NO_FALLBACK = 8; ///< with GM_NARROW: zero, not the full search, below them
+
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
 [[nodiscard]] inline std::vector<u32> EmitSPIRV(const Profile& profile, IR::Program& program) {
     Bindings binding;
