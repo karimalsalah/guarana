@@ -18,6 +18,8 @@ struct ExtrapolationSource {
     VkImageView hud_composite{};
     /// hud_reference holds linear colour while hud_composite is sRGB-encoded.
     bool hud_reference_linear{};
+    /// Both hold linear colour and are the same pixels wherever the game drew no HUD.
+    bool hud_exact{};
     /// The camera jumped: the motion describes no movement to continue.
     bool cut{};
 };

@@ -360,6 +360,10 @@ private:
     std::optional<u64> oot_guide_frame;
     VkImageView oot_guide_scene{}; ///< oot_guide_frame's scene before the HUD (linear colour)
     VkExtent2D oot_guide_scene_extent{};
+    VkImageView oot_guide_reference{}; ///< the tonemapped image oot_guide_scene was copied from
+    std::optional<u64> oot_tonemapped_frame; ///< oot_tonemapped_view is this frame's, drawn whole
+    VkImageView oot_tonemapped_view{};
+    VkExtent2D oot_tonemapped_extent{};
     std::optional<u64> oot_effects_frame;
     GPUVAddr oot_effects_address{};
     VkImageView oot_effects_scene{};

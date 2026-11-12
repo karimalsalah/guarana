@@ -1399,6 +1399,23 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             }
         }
     }
+    // The bypass copies this image and the game draws its HUD over the copy: kept to tell the HUD
+    // apart when frames are extrapolated.
+    if (OcarinaGuideOnly() && std::ranges::any_of(hashes, VideoCommon::OotNetwork::IsTonemapShader)) {
+        const auto tonemapped_id = texture_cache.GetRenderTargets().color_buffer_ids[0];
+        const auto area = VideoCommon::OotNetwork::DrawArea(maxwell3d->regs);
+        if (tonemapped_id) {
+            const auto& tonemapped = texture_cache.GetImageView(tonemapped_id);
+            if (tonemapped.format == VideoCore::Surface::PixelFormat::B10G11R11_FLOAT &&
+                !tonemapped.IsRescaled() && tonemapped.range == VideoCommon::SubresourceRange{} &&
+                tonemapped.Samples() == VK_SAMPLE_COUNT_1_BIT && area.x0 == 0 && area.y0 == 0 &&
+                area.x1 == tonemapped.size.width && area.y1 == tonemapped.size.height) {
+                oot_tonemapped_view = tonemapped.Handle(Shader::TextureType::Color2D);
+                oot_tonemapped_extent = {tonemapped.size.width, tonemapped.size.height};
+                oot_tonemapped_frame = render_trace_frame;
+            }
+        }
+    }
     // The game draws Navi's glow, fireflies and dust right after the fog. They write no depth and
     // move on their own, so FSR must not take them from its history. DLSS doesn't use the mask.
     constexpr u64 fog_fragment = 0x3ddfb1d7a854c849ULL;
@@ -2027,6 +2044,11 @@ void RasterizerVulkan::OotNetworkBypassed(u32 output_tic) {
             oot_guide_scene_extent = {scene.size.width, scene.size.height};
         }
     }
+    const bool same_pixels = oot_guide_scene && oot_tonemapped_frame == render_trace_frame &&
+                             oot_tonemapped_view != oot_guide_scene &&
+                             oot_tonemapped_extent.width == oot_guide_scene_extent.width &&
+                             oot_tonemapped_extent.height == oot_guide_scene_extent.height;
+    oot_guide_reference = same_pixels ? oot_tonemapped_view : VkImageView{};
 }
 
 void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline) {
@@ -4164,7 +4186,12 @@ std::optional<ExtrapolationSource> RasterizerVulkan::OcarinaExtrapolationSource(
     if (ExtrapolationRequested() && oot_guide && oot_guide_frame == render_trace_frame &&
         !oot_guide_failed) {
         auto source = oot_guide->Extrapolation(render_trace_frame);
-        if (source && oot_hud_frame == render_trace_frame && oot_guide_scene) {
+        if (source && oot_guide_reference) {
+            // The game drew its HUD over the copy itself.
+            source->hud_reference = oot_guide_reference;
+            source->hud_composite = oot_guide_scene;
+            source->hud_exact = true;
+        } else if (source && oot_hud_frame == render_trace_frame && oot_guide_scene) {
             source->hud_reference = oot_guide_scene;
             source->hud_composite = oot_hud_composite;
             source->hud_reference_linear = true;

@@ -23,6 +23,7 @@ layout(push_constant) uniform Parameters {
 const uint FLAG_HUD = 1u;
 const uint FLAG_DEBUG = 2u;
 const uint FLAG_HUD_LINEAR = 4u; // hud_reference is linear, hud_composite sRGB-encoded
+const uint FLAG_HUD_EXACT = 8u;  // both are linear and equal wherever there is no HUD
 
 const float CONVERGED_PIXELS = 2.0;
 const float MAX_TRAVEL = 0.25; // of the screen; anything longer is not a prediction
@@ -48,16 +49,25 @@ Solution Solve(vec2 target, vec3 start) {
     return Solution(after, before, sampled.z, length((after - before) * params.screen_size));
 }
 
+vec3 Encode(vec3 linear) {
+    linear = clamp(linear, 0.0, 1.0);
+    return mix(1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055, 12.92 * linear,
+               lessThan(linear, vec3(0.0031308)));
+}
+
 bool IsHud(vec2 uv) {
     vec3 reference = textureLod(hud_reference, uv, 0.0).rgb;
-    if ((params.flags & FLAG_HUD_LINEAR) != 0u) {
-        reference = clamp(reference, 0.0, 1.0);
-        reference = mix(1.055 * pow(reference, vec3(1.0 / 2.4)) - 0.055, 12.92 * reference,
-                        lessThan(reference, vec3(0.0031308)));
+    vec3 composite = textureLod(hud_composite, uv, 0.0).rgb;
+    float limit = 0.07;
+    if ((params.flags & FLAG_HUD_EXACT) != 0u) {
+        reference = Encode(reference);
+        composite = Encode(composite);
+        limit = 0.02;
+    } else if ((params.flags & FLAG_HUD_LINEAR) != 0u) {
+        reference = Encode(reference);
     }
-    vec3 overlay = textureLod(hud_composite, uv, 0.0).rgb - reference;
-    float difference = max(max(abs(overlay.r), abs(overlay.g)), abs(overlay.b));
-    return difference > 0.07;
+    vec3 overlay = abs(composite - reference);
+    return max(max(overlay.r, overlay.g), overlay.b) > limit;
 }
 
 void Store(ivec2 pixel, vec3 color, vec3 tint) {
