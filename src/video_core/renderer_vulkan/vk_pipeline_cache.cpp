@@ -913,15 +913,19 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     // stay global. 1 computes the buffer base addresses once per invocation instead of in every
     // access (programs that cannot change them), 2 makes a native load search only the loaded
     // pointer buffers its address is built on, 8 (with 2) returns zero below those instead of
-    // searching every buffer. (4 is reserved.)
+    // searching every buffer, 4 (with 2 and 8) has a load built on one such pointer read that
+    // pointer's buffer at an offset computed at compile time, without a search.
     static const char* const global_memory{std::getenv("EDEN_NX2_GM")};
     if (global_memory != nullptr) {
         using namespace Shader::Backend::SPIRV;
         profile.global_memory_opt = static_cast<u32>(std::strtoul(global_memory, nullptr, 0)) &
-                                    (GM_HOIST | GM_NARROW | GM_NARROW_NO_FALLBACK);
+                                    (GM_HOIST | GM_NARROW | GM_REBASE | GM_NARROW_NO_FALLBACK);
         LOG_INFO(Render_Vulkan, "EDEN_NX2_GM={}: global memory routing bits {}", global_memory,
                  profile.global_memory_opt);
     }
+    constexpr u32 rebase_bits{Shader::Backend::SPIRV::GM_NARROW |
+                              Shader::Backend::SPIRV::GM_REBASE |
+                              Shader::Backend::SPIRV::GM_NARROW_NO_FALLBACK};
 
     host_info = Shader::HostTranslateInfo{
         .min_ssbo_alignment = device.GetStorageBufferAlignment(),
@@ -952,6 +956,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .support_byte_addressed_r16 = true,
         .narrow_global_candidates =
             (profile.global_memory_opt & Shader::Backend::SPIRV::GM_NARROW) != 0,
+        .rebase_loaded_pointers = (profile.global_memory_opt & rebase_bits) == rebase_bits,
         // The arrays are indexed per invocation, which needs nonuniform indexing to be defined.
         .support_handle_table_arrays = device.IsSampledImageArrayNonUniformIndexingSupported(),
     };

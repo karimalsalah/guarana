@@ -50,7 +50,9 @@ constexpr u32 MESH_OUT_COUNT = 16; ///< only as many vertices as the primitives 
 /// Cheaper run-time routing of global memory accesses (Profile::global_memory_opt).
 constexpr u32 GM_HOIST = 1;  ///< buffer base addresses are computed once, at the start of main
 constexpr u32 GM_NARROW = 2; ///< a load searches only the buffers the storage buffer pass named
-/// 4 is reserved for rebasing single-pointer accesses at compile time (not implemented).
+/// With GM_NARROW and GM_NARROW_NO_FALLBACK: a load built on one loaded pointer reads that
+/// pointer's buffer at an offset the storage buffer pass computes, without a search
+constexpr u32 GM_REBASE = 4;
 constexpr u32 GM_NARROW_NO_FALLBACK = 8; ///< with GM_NARROW: zero, not the full search, below them
 
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
