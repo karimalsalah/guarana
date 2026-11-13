@@ -86,7 +86,7 @@ Point an agent at an issue and it finds everything it needs here: one rulebook, 
 | Tool | One command in your clone |
 |---|---|
 | **Claude Code** | `claude "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` (`CLAUDE.md` imports `AGENTS.md`) |
-| **OpenAI Codex CLI** | `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` |
+| **OpenAI Codex CLI** | `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` (trust the folder so `.codex/config.toml` lifts Codex's 32 KiB cap on `AGENTS.md`, or add `-c project_doc_max_bytes=65536`) |
 | **Gemini CLI** | `gemini`, then paste the sentence (`GEMINI.md` imports `AGENTS.md`) |
 | **Cursor** | `agent "Read AGENTS.md, then fix ..."`, or open the folder (`.cursor/rules/guarana.mdc` is always on) |
 | **GitHub Copilot** | Agent mode in your editor, or the coding agent from your fork; paste the sentence |
