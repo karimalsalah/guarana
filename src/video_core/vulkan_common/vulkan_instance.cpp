@@ -7,6 +7,7 @@
 #include <future>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "common/boot_timing.h"
@@ -120,6 +121,10 @@ namespace {
 }
 
 void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const char*>& layers) {
+    if (layers.empty()) {
+        // Listing the layers makes the loader read every layer manifest again.
+        return;
+    }
     const std::optional layer_properties = vk::EnumerateInstanceLayerProperties(dld);
     if (!layer_properties) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties, disabling layers");
@@ -136,6 +141,17 @@ void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const 
         }
         return false;
     });
+}
+
+[[nodiscard]] std::string JoinNames(std::span<const char* const> names) {
+    std::string text;
+    for (const char* name : names) {
+        if (!text.empty()) {
+            text += ", ";
+        }
+        text += name;
+    }
+    return text.empty() ? std::string{"none"} : text;
 }
 } // Anonymous namespace
 
@@ -181,6 +197,10 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         throw vk::Exception(VK_ERROR_INCOMPATIBLE_DRIVER);
     }
     Common::BootTiming::Mark("vulkan: instance extensions and layers listed", listing_start);
+    // All the emulator decides about the instance; the creation time below is the driver's.
+    LOG_INFO(Render_Vulkan, "Vulkan instance: loader {}.{}.{}, extensions: {}; layers: {}",
+             VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version),
+             VK_VERSION_PATCH(available_version), JoinNames(extensions), JoinNames(layers));
     const double create_start = Common::BootTiming::Now();
     vk::Instance instance =
         std::async([&] {

@@ -66,4 +66,8 @@ void Mark(std::string_view phase, double start) {
              since_last, now - start);
 }
 
+void Span(std::string_view phase, double start, double end) {
+    LOG_INFO(Common, "Boot timing: {} at {:.1f} ms, took {:.1f} ms", phase, end, end - start);
+}
+
 } // namespace Common::BootTiming

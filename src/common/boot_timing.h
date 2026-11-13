@@ -17,4 +17,8 @@ void Mark(std::string_view phase);
 /// As Mark, with how long the phase took since `start` (a Now() value).
 void Mark(std::string_view phase, double start);
 
+/// Logs a phase that ran before logging started, from `start` to `end` (Now() values). The next
+/// Mark still counts from the previous mark.
+void Span(std::string_view phase, double start, double end);
+
 } // namespace Common::BootTiming

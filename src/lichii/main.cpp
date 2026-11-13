@@ -209,12 +209,19 @@ int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "C");
 
     try {
-        MainWindow main_window{has_broken_vulkan};
-        main_window.show();
-        app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
-                    &MainWindow::OnAppFocusStateChanged);
-        return app.exec();
+        int result{};
+        {
+            MainWindow main_window{has_broken_vulkan};
+            main_window.show();
+            app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
+                        &MainWindow::OnAppFocusStateChanged);
+            result = app.exec();
+        }
+        // Ended without a crash: the next start may skip the Vulkan check.
+        EndVulkanCheckSession();
+        return result;
     } catch (const std::exception& exception) {
+        EndVulkanCheckSession();
         QMessageBox::critical(nullptr, QObject::tr("Lichii startup stopped"),
                               QString::fromUtf8(exception.what()));
         return EXIT_FAILURE;

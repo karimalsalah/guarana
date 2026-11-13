@@ -362,6 +362,7 @@ private slots:
     void OnMenuReportCompatibility();
     void OnOpenModsPage();
     void OnOpenUserHandbook();
+    void OnReportProblem();
 
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path, u64 program_id);
@@ -500,6 +501,10 @@ private:
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
+    /// Lists the Vulkan devices for the settings dialogs, unless that was done (or Vulkan is
+    /// broken). A direct game launch leaves it to the first dialog: it needs an instance of its
+    /// own, which costs as much as the renderer's.
+    void ListVulkanDevices(bool for_dialog);
     void OpenPerGameConfiguration(u64 title_id, const std::string& file_name);
     bool CheckFirmwarePresence();
     void SetFirmwareVersion();
@@ -555,6 +560,7 @@ private:
     GameListPlaceholder* game_list_placeholder = nullptr;
 
     std::vector<VkDeviceInfo::Record> vk_device_records;
+    bool vk_device_records_listed = false;
 
     // Status bar elements
     QLabel* message_label = nullptr;
