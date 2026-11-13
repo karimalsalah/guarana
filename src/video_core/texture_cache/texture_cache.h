@@ -209,6 +209,13 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         if (num_iterations == 0) {
             return true;
         }
+        // Queued for a download by an earlier pass of this collection: deleted when its batch is
+        // flushed, never reached by the immediate delete below.
+        for (const PendingEviction& entry : evictions) {
+            if (entry.image_id == image_id) {
+                return false;
+            }
+        }
         --num_iterations;
         auto& image = slot_images[image_id];
         if (True(image.flags & ImageFlagBits::IsDecoding)) {
@@ -220,12 +227,6 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             return false;
         }
         if (must_download && batch_downloads) {
-            // Queued by an earlier pass of this collection: deleted when the batch is flushed.
-            for (const PendingEviction& entry : evictions) {
-                if (entry.image_id == image_id) {
-                    return false;
-                }
-            }
             auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
             auto copies = FullDownloadCopies(image.info);
             MarkStaleTransfer(image);

@@ -628,10 +628,10 @@ void BufferCacheRuntime::Finish(std::source_location location) {
     scheduler.Finish({}, {}, location);
 }
 
-void BufferCacheRuntime::FinishForHostRead() {
+void BufferCacheRuntime::FinishForHostRead(std::source_location location) {
     scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.Record(HostReadBarrier);
-    scheduler.Finish();
+    scheduler.Finish({}, {}, location);
 }
 
 u64 BufferCacheRuntime::SubmitForHostRead() {

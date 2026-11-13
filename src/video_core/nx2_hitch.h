@@ -39,10 +39,13 @@ namespace VideoCommon::Hitch {
 
 /// EDEN_NX2_HITCH_UMA_BUDGET_MIB=<n> (experiment): the share of system memory an integrated GPU's
 /// device budget may reach, in MiB, instead of 4 GiB (6 GiB with aggressive VRAM use). 0: unset.
+/// At most 16 GiB: a budget of 20 GiB or more would also keep ASTC textures uncompressed
+/// (UseBc3ForSwitch2OnSmallCards).
 [[nodiscard]] inline u64 UmaBudgetMiB() {
     static const u64 value = [] {
         const char* const text = std::getenv("EDEN_NX2_HITCH_UMA_BUDGET_MIB");
-        return text != nullptr ? static_cast<u64>(std::strtoull(text, nullptr, 10)) : u64{0};
+        const u64 mib = text != nullptr ? static_cast<u64>(std::strtoull(text, nullptr, 10)) : u64{0};
+        return mib < u64{16384} ? mib : u64{16384};
     }();
     return value;
 }
