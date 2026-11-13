@@ -30,6 +30,8 @@ add_library(
     atomic_ops.h
     bit_field.h
     bit_util.h
+    boot_timing.cpp
+    boot_timing.h
     bounded_threadsafe_queue.h
     cityhash.cpp
     cityhash.h

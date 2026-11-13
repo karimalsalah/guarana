@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <atomic>
+#include <memory>
+
+#include <fmt/format.h>
 #include <qdebug.h>
+#include "common/boot_timing.h"
 #include "core/core.h"
 #include "core/cpu_manager.h"
 #include "emu_thread.h"
@@ -28,11 +33,21 @@ void EmuThread::run() {
 
     emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
     if (Settings::values.use_disk_shader_cache.GetValue()) {
+        // The guest starts only once this returns: the boot pipeline builds and the driver cache
+        // save are in it.
+        Common::BootTiming::Mark("shaders: disk cache load started");
+        auto building = std::make_shared<std::atomic_bool>(false);
         QtCommon::system->Renderer().ReadRasterizer()->LoadDiskResources(
             QtCommon::system->GetApplicationProcessProgramID(), stop_token,
-            [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+            [this, building](VideoCore::LoadCallbackStage stage, std::size_t value,
+                             std::size_t total) {
+                if (stage == VideoCore::LoadCallbackStage::Build && !building->exchange(true)) {
+                    Common::BootTiming::Mark(fmt::format(
+                        "shaders: disk cache read, {} of {} pipelines built so far", value, total));
+                }
                 emit LoadProgress(stage, value, total);
             });
+        Common::BootTiming::Mark("shaders: disk cache load done");
     }
     emit LoadProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);
 
@@ -44,6 +59,7 @@ void EmuThread::run() {
     // its applet manager locked) blocked the next boot. Stopped, the core threads just leave.
     if (!stop_token.stop_requested()) {
         QtCommon::system->GetCpuManager().OnGpuReady();
+        Common::BootTiming::Mark("guest: GPU started, guest cores released");
     }
 
     if (QtCommon::system->DebuggerEnabled()) {
