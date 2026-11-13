@@ -124,8 +124,6 @@ struct Profile {
     /// Experiment: its loads are single words, also where the shared memory has a vector view
     bool software_matrix_shared_memory_scalar_loads{};
     u32 max_subgroup_size{};
-    /// Experiment (EDEN_NX2_MESH_CULL): culling added to native mesh programs, MESH_CULL_* bits
-    u32 mesh_cull{};
     /// EDEN_NX2_TASK_DENSITY: percent of the mesh workgroups a native task program asks for.
     u32 mesh_task_percent{100};
     /// Experiment (EDEN_NX2_GM): cheaper run-time routing of global memory accesses, GM_* bits

@@ -365,23 +365,6 @@ VkViewport GetViewportState(const Device& device, const Maxwell& regs, size_t in
     return viewport;
 }
 
-/// Viewport 0 as UpdateViewportsState sets it, before the jitter: x, y, width, height.
-std::array<f32, 4> GetMeshCullViewport(const Device& device, const Maxwell& regs, float scale) {
-    if (regs.viewport_scale_offset_enabled) {
-        const VkViewport viewport{GetViewportState(device, regs, 0, scale)};
-        return {viewport.x, viewport.y, viewport.width, viewport.height};
-    }
-    const float x = static_cast<float>(regs.surface_clip.x);
-    float y = static_cast<float>(regs.surface_clip.y);
-    const float width = (std::max)(1.0f, static_cast<float>(regs.surface_clip.width));
-    float height = (std::max)(1.0f, static_cast<float>(regs.surface_clip.height));
-    if (regs.window_origin.mode != Maxwell::WindowOrigin::Mode::UpperLeft) {
-        y += height;
-        height = -height;
-    }
-    return {x, y, width, height};
-}
-
 VkRect2D GetScissorState(const Maxwell& regs, size_t index, u32 up_scale = 1, u32 down_shift = 0) {
     const auto& src = regs.scissor_test[index];
     VkRect2D scissor{};
@@ -1503,14 +1486,6 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         Profile::Scope scope{Profile::Zone::DynamicState};
         UpdateOcarinaJitter();
         UpdateDynamicStates(pipeline);
-        if (mesh_draw && pipeline->UsesMeshCullViewport()) {
-            const float scale =
-                texture_cache.IsRescaling() ? Settings::values.resolution_info.up_factor : 1.0f;
-            std::array<f32, 4> viewport{GetMeshCullViewport(device, maxwell3d->regs, scale)};
-            viewport[0] += oot_jitter_applied[0];
-            viewport[1] += oot_jitter_applied[1];
-            pipeline->PushMeshCullViewport(viewport);
-        }
         verify_vertex_input = false;
     }
 
