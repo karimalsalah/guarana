@@ -258,6 +258,13 @@ class FakeEmulator:
                     stream.flush()
 
     def close(self):
+        # On Linux close() alone does not wake the accept() in serve(), and the port answers one
+        # more connection: shut the socket down first. Windows refuses that for a listener, and
+        # its close() does wake accept().
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.listener.close()
 
 
