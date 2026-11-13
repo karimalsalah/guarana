@@ -135,6 +135,14 @@ public:
         return *render_semaphores[image_index];
     }
 
+    /// The last Present: nanoseconds waiting for the submit lock, then in vkQueuePresentKHR.
+    s64 LastPresentLockNs() const {
+        return last_present_lock_ns;
+    }
+    s64 LastPresentCallNs() const {
+        return last_present_call_ns;
+    }
+
     u32 GetWidth() const {
         return width;
     }
@@ -174,6 +182,8 @@ private:
 
     u32 image_index{};
     u32 frame_index{};
+    s64 last_present_lock_ns{};
+    s64 last_present_call_ns{};
 
     VkFormat image_view_format{};
     VkExtent2D extent{};

@@ -364,6 +364,16 @@ private:
         f64 age_ms{};
         f64 latency_ms{};
         u64 latency_samples{};
+        // Where the present thread's time goes, in ms: sums and maxima over `presents`.
+        u64 presents{};
+        f64 acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        f64 copy_wait_ms{}, copy_wait_max_ms{};
+        f64 lock_ms{}, lock_max_ms{};
+        f64 call_ms{}, call_max_ms{};
+        // How long before its slot's vblank each slot present returned; negative after it.
+        f64 margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
     } fluid_stats;
 };
 

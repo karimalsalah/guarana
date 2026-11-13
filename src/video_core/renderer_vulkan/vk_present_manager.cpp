@@ -1154,6 +1154,14 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
     fluid_stats.age_ms +=
         std::chrono::duration<f64, std::milli>(slot_time - best->fluid_recorded).count();
     FluidShow(best, slot);
+    const f64 margin =
+        std::chrono::duration<f64, std::milli>(slot_time - std::chrono::steady_clock::now())
+            .count();
+    fluid_stats.margin_min_ms =
+        fluid_stats.margin_samples == 0 ? margin : (std::min)(fluid_stats.margin_min_ms, margin);
+    fluid_stats.margin_ms += margin;
+    ++fluid_stats.margin_samples;
+    fluid_stats.after_vblank += margin < 0.0 ? 1 : 0;
 }
 
 void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
@@ -1234,6 +1242,16 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              stats.rolled, stats.spare, stats.stale, fluid_batches.exchange(0),
              fluid_unpredictable.exchange(0), fluid_cut_short.exchange(0),
              fluid_capped.exchange(0));
+    LOG_INFO(Render_Vulkan,
+             "Fluid presenter (10 s): present thread: {} presents; acquire {:.2f} ms mean, {:.2f} "
+             "max; copy wait {:.2f} ms mean, {:.2f} max, {} of {} timed out; submit lock {:.2f} ms "
+             "mean, {:.2f} max; present call {:.2f} ms mean, {:.2f} max; slot presents returned "
+             "{:.2f} ms before their vblank on average, {:.2f} at the least, {} after it",
+             stats.presents, mean(stats.acquire_ms, stats.presents), stats.acquire_max_ms,
+             mean(stats.copy_wait_ms, stats.copy_waits), stats.copy_wait_max_ms,
+             stats.copy_wait_timeouts, stats.copy_waits, mean(stats.lock_ms, stats.presents),
+             stats.lock_max_ms, mean(stats.call_ms, stats.presents), stats.call_max_ms,
+             mean(stats.margin_ms, stats.margin_samples), stats.margin_min_ms, stats.after_vblank);
     stats = {.since = now};
 }
 
@@ -1499,10 +1517,22 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
 
     // The FLUID present thread times its presents itself (not after its watchdog fell back).
     const bool pace = !Fluid();
+    static const bool shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    const bool timed = shown_stats && Fluid();
+    const auto ms_since = [](std::chrono::steady_clock::time_point from) {
+        return std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - from)
+            .count();
+    };
+    const auto acquire_start = std::chrono::steady_clock::now();
     while (swapchain.AcquireNextImage(!use_present_thread, pace)) {
         if (!RecreateSwapchain(frame)) {
             return;
         }
+    }
+    if (timed) {
+        const f64 acquire = ms_since(acquire_start);
+        fluid_stats.acquire_ms += acquire;
+        fluid_stats.acquire_max_ms = (std::max)(fluid_stats.acquire_max_ms, acquire);
     }
 
     const VkImage image{swapchain.CurrentImage()};
@@ -1512,7 +1542,15 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
         if (FluidQueueHostWait()) {
             // A copy still running after this long is late anyway: present and move on.
-            void(frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())));
+            const auto wait_start = std::chrono::steady_clock::now();
+            const bool copied = frame->present_done.Wait(FluidHostWaitNs(FluidShownRate()));
+            if (timed) {
+                const f64 waited = ms_since(wait_start);
+                ++fluid_stats.copy_waits;
+                fluid_stats.copy_wait_timeouts += copied ? 0 : 1;
+                fluid_stats.copy_wait_ms += waited;
+                fluid_stats.copy_wait_max_ms = (std::max)(fluid_stats.copy_wait_max_ms, waited);
+            }
         }
     } else {
         const vk::CommandBuffer cmdbuf{frame->cmdbuf};
@@ -1670,6 +1708,15 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     }
 #endif
     swapchain.Present(render_semaphore);
+    if (timed) {
+        const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
+        const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
+        ++fluid_stats.presents;
+        fluid_stats.lock_ms += lock;
+        fluid_stats.lock_max_ms = (std::max)(fluid_stats.lock_max_ms, lock);
+        fluid_stats.call_ms += call;
+        fluid_stats.call_max_ms = (std::max)(fluid_stats.call_max_ms, call);
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (frame->frame_gen) {
         Streamline::FrameGenAfterPresent(frame->frame_gen_frame.index);
