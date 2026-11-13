@@ -1422,7 +1422,8 @@ void MainWindow::InitializeHotkeys() {
                        QStringLiteral("Toggle Performance Overlay"));
     LinkActionShortcut(ui->action_Fullscreen, QStringLiteral("Fullscreen"));
     LinkActionShortcut(ui->action_Capture_Screenshot, QStringLiteral("Capture Screenshot"));
-    LinkActionShortcut(ui->action_Report_Bug, QStringLiteral("Report a Bug"));
+    // Report a Bug stays off the menu and its hotkey until Guarana has a private route for
+    // its bundle; Help > Report a Problem is the fork's way to report.
     LinkActionShortcut(ui->action_TAS_Start, QStringLiteral("TAS Start/Stop"), true);
     LinkActionShortcut(ui->action_TAS_Record, QStringLiteral("TAS Record"), true);
     LinkActionShortcut(ui->action_TAS_Reset, QStringLiteral("TAS Reset"), true);

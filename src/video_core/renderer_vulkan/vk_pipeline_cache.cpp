@@ -2199,11 +2199,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         std::vector<u8> payload;
     };
     std::vector<PrebuildRecord> prebuild;
-    // Without a kept limit, low memory mode keeps fewer prebuilt pipelines no draw has used
-    // (EvictUnusedPipelines): more than that would be built to be destroyed.
-    const size_t prebuild_limit = kept_pipelines == 0 && Common::LowMemoryMode()
-                                      ? LowMemoryUnusedPrebuiltPipelines
-                                      : PrebuildLimit(kept_pipelines, queued_graphics);
+    const size_t prebuild_limit = PrebuildLimit(kept_pipelines, queued_graphics);
     for (const auto& [index, key] : NewestFirst(std::move(skipped_graphics), prebuild_limit)) {
         const CacheV2::LogRecord& record = *records[index];
         prebuild.push_back({
@@ -2484,14 +2480,15 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         LOG_INFO(
             Render_Vulkan,
             "Shader cache v2 boot load{}: {:.1f} s, {} of {} compute and {} of {} graphics "
-            "pipelines built ({}{}), {} cached graphics pipelines skipped at boot, {} admitted "
+            "pipelines built{} ({}{}), {} cached graphics pipelines skipped at boot, {} admitted "
             "for background prebuild (newest first), {} left for their first draw (prebuild "
             "limit {})",
             stop_loading.stop_requested() ? " stopped" : "",
             std::chrono::duration<double>(std::chrono::steady_clock::now() - load_begin).count(),
             state.compute_built, state.total - (async_boot ? size_t{0} : queued_graphics),
             state.graphics_built,
-            queued_graphics, chosen,
+            queued_graphics,
+            async_boot ? fmt::format(", {} queued for the background", async_graphics) : "", chosen,
             build_all ? fmt::format(", {} more by build_all_cached_shaders", queued_spare) : "",
             skipped_pipelines, deferred_pipelines, skipped_pipelines - deferred_pipelines,
             prebuild_limit);

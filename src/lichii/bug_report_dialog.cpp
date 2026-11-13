@@ -41,8 +41,8 @@ BugReportDialog::BugReportDialog(Core::System& system, QWidget* parent)
     layout->addWidget(description, 1);
 
     auto* const privacy = new QLabel(
-        tr("<b>Send this report privately to the Guarana maintainers</b> (the log bot's /bug "
-           "command or a direct message), not to a public channel or issue. It holds the "
+        tr("<b>Keep this report private</b>: do not post it to a public channel or issue. It "
+           "holds the "
            "game's textures and shaders from one frame. Your user name is removed from paths "
            "and online service settings are left out."));
     privacy->setWordWrap(true);

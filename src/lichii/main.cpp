@@ -87,10 +87,10 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 }
 
 #if defined(__unix__) && !defined(__APPLE__) && !defined(__ANDROID__)
-/// On NVIDIA, Lichii keeps no driver pipeline cache of its own (DriverCachesPipelines) and relies on
+/// On NVIDIA, Guarana keeps no driver pipeline cache of its own (DriverCachesPipelines) and uses
 /// the driver's disk cache, whose default limit is 1 GiB for the whole cache folder. A large Ocarina
 /// of Time cache (~20,000 pipelines) fills it, and every boot then compiles the pipelines that no
-/// longer fit again. Before anything loads the driver, give Lichii its own cache folder, so another
+/// longer fit again. Before anything loads the driver, give Guarana its own cache folder so another
 /// application running with the default limit can't trim it, and raise the limit to 10 GiB. A value
 /// the user set for either variable is kept. Other drivers ignore both.
 static void SetUpNvidiaShaderDiskCache() {

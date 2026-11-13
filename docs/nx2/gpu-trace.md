@@ -5,7 +5,7 @@ A GPU trace (`.lxtrace`) holds what the emulated GPU consumed over a window, in 
 ## Replay
 
 ```sh
-eden-cli --replay <trace> --out <dir> [--frames N] [--device N]
+guarana-cli --replay <trace> --out <dir> [--frames N] [--device N]
 ```
 
 The replay needs no game, no window and no keys. It brings up the GPU on a bare `Core::System` (`System::InitializeForGpuReplay`: kernel, Host1x and the GPU, no process, audio or services), restores the snapshot and feeds the records through the GPU in order. It writes per present:
@@ -15,7 +15,7 @@ The replay needs no game, no window and no keys. It brings up the GPU on a bare 
 
 The window is a `VK_EXT_headless_surface` surface (`WindowSystemType::Headless`), so any Vulkan driver with that extension works, Mesa's lavapipe included.
 
-`eden-cli --gpu-trace-sample <trace>` writes a synthetic trace that needs no game: one Switch 2 channel whose four frames are two CPU-written images and two sets of 3D engine clears (whole and scissored). The unit tests read it back (`[gpu_trace]`).
+`guarana-cli --gpu-trace-sample <trace>` writes a synthetic trace that needs no game: one Switch 2 channel whose four frames are two CPU-written images and two sets of 3D engine clears (whole and scissored). The unit tests read it back (`[gpu_trace]`).
 
 ## File format
 

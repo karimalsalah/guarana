@@ -629,8 +629,8 @@ static bool WarmPipelines(SdlState& state, const Core::LaunchParams& lp) {
 }
 
 /// GPU trace replay (docs/nx2/gpu-trace.md):
-///   eden-cli --replay <trace> --out <dir> [--frames N] [--device N]
-///   eden-cli --gpu-trace-sample <trace>: writes the synthetic trace.
+///   guarana-cli --replay <trace> --out <dir> [--frames N] [--device N]
+///   guarana-cli --gpu-trace-sample <trace>: writes the synthetic trace.
 static bool ReplayGpuTrace(Core::System& system, int argc, char** argv) {
     namespace GpuTrace = VideoCommon::GpuTrace;
     if (std::string_view{argv[1]} == "--gpu-trace-sample") {

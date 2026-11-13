@@ -9,6 +9,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <unordered_set>
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
