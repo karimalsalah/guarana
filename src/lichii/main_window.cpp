@@ -145,6 +145,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
+#include "lichii/configuration/controller_auto_configure.h"
 #include "common/memory_detect.h"
 #include "common/nextendo.h"
 #include "common/scm_rev.h"
@@ -517,6 +518,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     mouse_hide_timer.setInterval(default_mouse_hide_timeout);
     connect(&mouse_hide_timer, &QTimer::timeout, this, &MainWindow::HideMouseCursor);
     connect(ui->menubar, &QMenuBar::hovered, this, &MainWindow::ShowMouseCursor);
+
+    // Auto-map player 1 to a connected gamepad (on first pump and on every hotplug)
+    ControllerAutoConfigure::Install(*input_subsystem, QtCommon::system->HIDCore(),
+                                     [this] { config->SaveAllValues(); });
 
     update_input_timer.setInterval(default_input_update_timeout);
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);

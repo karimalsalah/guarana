@@ -56,6 +56,18 @@ public:
 
     std::vector<Common::ParamPackage> GetInputDevices() const override;
 
+    /// Incremented every time a gamepad is attached (or re-attached). Safe from any thread.
+    u32 GetDeviceAddedCounter() const {
+        return device_added_counter.load(std::memory_order_acquire);
+    }
+
+    /// Device params (engine, guid, port, display) of the most recently attached gamepad that is
+    /// still connected, or an empty package.
+    Common::ParamPackage GetMostRecentDevice() const;
+
+    /// True when the connected device with these params has a usable gyroscope.
+    bool DeviceHasMotion(const Common::ParamPackage& params);
+
     ButtonMapping GetButtonMappingForDevice(const Common::ParamPackage& params) override;
     AnalogMapping GetAnalogMappingForDevice(const Common::ParamPackage& params) override;
     MotionMapping GetMotionMappingForDevice(const Common::ParamPackage& params) override;
@@ -75,6 +87,7 @@ public:
 private:
     void InitJoystick(SDL_JoystickID joystick_id);
     void CloseJoystick(SDL_Joystick* sdl_joystick);
+    void NoteDeviceAdded(const Common::UUID& guid, int port);
 
     /// Needs to be called before SDL_QuitSubSystem.
     void CloseJoysticks();
@@ -118,8 +131,13 @@ private:
 
     /// Map of GUID of a list of corresponding virtual Joysticks
     ::Common::unordered_map<Common::UUID, std::vector<std::shared_ptr<SDLJoystick>>> joystick_map;
-    std::mutex joystick_map_mutex;
+    mutable std::mutex joystick_map_mutex;
     std::chrono::steady_clock::time_point last_motion_stall_check{};
+
+    std::atomic<u32> device_added_counter{0};
+    Common::UUID last_added_guid{};
+    int last_added_port = 0;
+    bool has_last_added = false;
 
     std::atomic<bool> initialized = false;
     bool start_thread;
