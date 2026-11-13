@@ -31,6 +31,11 @@ inline std::atomic<bool> g_nx2_ampere{false};
 // known). Frame generation plans against it (FrameGenPacer).
 inline std::atomic<u64> g_nx2_guest_frame_interval_ns{0};
 
+// EDEN_NX2_FLUID with EDEN_NX2_CADENCE: how far nx2:vi2 moves its next present deadlines, in ns,
+// so that real frames are done just before their vblank slot. The renderer adds to it, the
+// present pacer takes it.
+inline std::atomic<s64> g_nx2_present_phase_shift_ns{0};
+
 // GPU VA that nx2:gpu GetVaRange and GetUserPartition report to NVN. The in-process
 // allocator hands out addresses in [Nx2GpuVaStart, Nx2GpuVaEnd). NvRm's AllocAsEx range
 // can be smaller; the GMMU page tables still have to cover this one.

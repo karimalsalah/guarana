@@ -2487,6 +2487,14 @@ private:
             m_frame_trace.target_ms = std::chrono::duration<double, std::milli>(interval).count();
         }
         const auto now = std::chrono::steady_clock::now();
+        // EDEN_NX2_FLUID with EDEN_NX2_CADENCE: the renderer moves the deadlines a little at a
+        // time so that real frames are done just before their vblank slot.
+        if (const s64 shift =
+                Tegra::g_nx2_present_phase_shift_ns.exchange(0, std::memory_order_relaxed);
+            shift != 0 && budget_interval.count() != 0) {
+            m_present_pacer.Shift(
+                std::chrono::nanoseconds{std::clamp<s64>(shift, -2'000'000, 2'000'000)});
+        }
         const auto pacing = m_present_pacer.Advance(now, interval);
         if (trace) {
             m_frame_trace.deadline_reset = pacing.reset;

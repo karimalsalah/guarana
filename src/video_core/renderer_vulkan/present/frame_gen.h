@@ -70,6 +70,11 @@ public:
     /// EDEN_NX2_FLUID: counts predicted frames for the status bar.
     void NoteFluidGenerated(size_t count);
 
+    /// EDEN_NX2_CADENCE holds real frames to a share of the target rate.
+    [[nodiscard]] bool CadenceActive() const {
+        return cadence_divisor != 0;
+    }
+
     /// Generates nothing until Process runs again, and gives back a cadence's frame rate cap
     /// (HDR output: extrapolation writes SDR only).
     void Pause();
