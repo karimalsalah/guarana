@@ -18,7 +18,8 @@ enum class Mode { Custom, Smooth, Quality, Battery };
 
 /// The EDEN_NX2_* switches a mode puts in the user's nx2_switches.txt. Empty for Custom and
 /// Quality: nothing steers the GPU, power or presentation.
-///   Smooth:  EDEN_NX2_AUTOPILOT=1 (steers the presentation to the display), EDEN_NX2_CADENCE=1
+///   Smooth:  EDEN_NX2_FLUID=1, EDEN_NX2_EXTRAPOLATE=1, EDEN_NX2_GPL=1, EDEN_NX2_EARLY_SUBMIT=1,
+///            EDEN_NX2_EARLY_PAGES=256, EDEN_NX2_EARLY_AFTER=1 (the measured play configuration)
 ///   Battery: EDEN_NX2_POWER_POLICY=igpu, EDEN_NX2_ECO_BACKGROUND=1, EDEN_NX2_AUTOPILOT=1
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> ModeSwitches(Mode mode);
 

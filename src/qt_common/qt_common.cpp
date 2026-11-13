@@ -243,7 +243,7 @@ void Init(QWidget* root) {
     const auto build_id = std::string(Common::g_build_id);
 
     const auto lichii_build =
-        fmt::format("Lichii Development Build | {}-{}", branch_name, description);
+        fmt::format("Guarana Development Build | {}-{}", branch_name, description);
     const auto override_build =
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
     const auto lichii_build_version = override_build.empty() ? lichii_build : override_build;

@@ -246,8 +246,9 @@ void ConfigureGuarana::UpdateModeHelp() {
     mode_buttons[2]->setChecked(shown_mode == Mode::Battery);
     switch (shown_mode) {
     case Mode::Smooth:
-        mode_help->setText(tr("Even frames over a high number: Guarana steers frame timing to "
-                              "your display and sets frame pacing to Auto."));
+        mode_help->setText(tr("Even frames over a high number: every frame lands on your "
+                              "display's refresh, extra frames are predicted from the game's "
+                              "motion, and frame pacing is set to Auto."));
         break;
     case Mode::Quality:
         mode_help->setText(tr("Nothing holds the graphics back. Best on power, with a higher "
