@@ -7,4 +7,6 @@ usually looks like.
 
 - Pick a task from the issues labelled `agent-ready` (without `needs-triage`), or start from
   [docs/AI-QUICKSTART.md](../docs/AI-QUICKSTART.md).
+- An issue assigned to you is yours; any other needs a `/claim` comment first. The claim rules and
+  the CI gates are in [docs/agents/README.md](../docs/agents/README.md).
 - Disclose the AI's part with an `Assisted-by:` trailer ([docs/AI_POLICY.md](../docs/AI_POLICY.md)).

@@ -17,6 +17,9 @@
 - name: needs-triage
   color: "ededed"
   description: "Not looked at by a maintainer yet"
+- name: claimed
+  color: "bfdadc"
+  description: "Someone is on it: /claim and /unclaim (docs/agents/README.md); released after 72 h without a PR"
 - name: needs-device-data
   color: "fbca04"
   description: "Needs measurements from hardware the maintainers do not have"
