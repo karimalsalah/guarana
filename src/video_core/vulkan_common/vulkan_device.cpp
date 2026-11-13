@@ -2425,7 +2425,7 @@ u64 Device::GetDeviceMemoryBudget() const {
         // An integrated GPU's device-local heap is system memory (a Radeon 780M reported a 21 GB
         // budget): following it let the texture cache fill that much RAM before collecting, and
         // kept ASTC uncompressed. Its budget is at most the share CollectPhysicalMemoryInfo
-        // gives it (4 GiB, 6 GiB with aggressive VRAM use, or EDEN_NX2_IGPU_VRAM_MIB).
+        // gives it (4 GiB, 6 GiB with aggressive VRAM use).
         result = (std::min)(result, device_access_memory);
     }
     return result;
@@ -2483,20 +2483,7 @@ void Device::CollectPhysicalMemoryInfo() {
     main_heap_size = limit(mem_properties.memoryHeaps[main_heap].size);
     if (is_integrated) {
         const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
-        u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
-        // EDEN_NX2_IGPU_VRAM_MIB=<n>: n MiB instead, still within what the heaps allow below.
-        if (const char* value = std::getenv("EDEN_NX2_IGPU_VRAM_MIB")) {
-            // At most 1 TiB, so the signed arithmetic below cannot overflow.
-            const u64 size = std::min<u64>(std::strtoull(value, nullptr, 10), 1u << 20) << 20;
-            if (size != 0) {
-                memory_size = size;
-                LOG_INFO(Render_Vulkan, "EDEN_NX2_IGPU_VRAM_MIB: integrated GPU share {} MiB",
-                         size >> 20);
-            } else {
-                LOG_WARNING(Render_Vulkan,
-                            "EDEN_NX2_IGPU_VRAM_MIB={} is not a size in MiB, ignored", value);
-            }
-        }
+        const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
         device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
     } else {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
