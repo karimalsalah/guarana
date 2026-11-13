@@ -20,7 +20,7 @@ TEST_CASE("Guarana modes round trip through their names", "[guarana_modes]") {
 TEST_CASE("Guarana modes only switch on opt-in steering", "[guarana_modes]") {
     REQUIRE(ModeSwitches(Mode::Custom).empty());
     REQUIRE(ModeSwitches(Mode::Quality).empty());
-    REQUIRE(ModeSwitches(Mode::Smooth).size() == 6);
+    REQUIRE(ModeSwitches(Mode::Smooth).size() == 7);
     REQUIRE(ModeSwitches(Mode::Smooth).front().first == "EDEN_NX2_FLUID");
     const auto battery = ModeSwitches(Mode::Battery);
     REQUIRE(battery.front().first == "EDEN_NX2_POWER_POLICY");
@@ -32,7 +32,8 @@ TEST_CASE("Guarana block is added at the top and replaced in place", "[guarana_m
     const auto smooth = ReplaceManagedBlock(user, ModeSwitches(Mode::Smooth));
     REQUIRE(smooth.starts_with("# >>> Guarana mode"));
     REQUIRE(smooth.ends_with(user));
-    REQUIRE(smooth.find("EDEN_NX2_FLUID=1") != std::string::npos);
+    REQUIRE(smooth.find("EDEN_NX2_FLUID=2") != std::string::npos);
+    REQUIRE(smooth.find("EDEN_NX2_CADENCE=3") != std::string::npos);
 
     const auto battery = ReplaceManagedBlock(smooth, ModeSwitches(Mode::Battery));
     REQUIRE(battery.find("EDEN_NX2_FLUID") == std::string::npos);

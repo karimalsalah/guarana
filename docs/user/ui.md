@@ -48,7 +48,7 @@ Settings > Guarana holds what players change most, in plain words. Every other s
 
 | Control | What it does |
 |---|---|
-| Play mode: Smooth | The configuration measured smoothest in Ocarina of Time on an Arc 140T: the vblank-locked presenter with predicted frames (`EDEN_NX2_FLUID`, `EDEN_NX2_EXTRAPOLATE`), pipeline library links (`EDEN_NX2_GPL`) and early read-backs (`EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES=256`, `EDEN_NX2_EARLY_AFTER=1`). Sets Frame pacing to Auto. |
+| Play mode: Smooth | The pacing measured best in Ocarina of Time on an Arc 140T: the vblank-locked presenter predicting from when a frame can be shown (`EDEN_NX2_FLUID=2`), real frames held to 20 per second, one per game tick (`EDEN_NX2_CADENCE=3`), predicted frames (`EDEN_NX2_EXTRAPOLATE`), pipeline library links (`EDEN_NX2_GPL`) and early read-backs (`EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES=256`, `EDEN_NX2_EARLY_AFTER=1`). In Hyrule Field, slots shown on time went from 72% to 89% and evenly paced frames from 62% to 88% (one paired session). Sets Frame pacing to Auto. |
 | Play mode: Quality | Nothing steers or holds the graphics back; removes the switches the other modes wrote. Pair it with a higher resolution. |
 | Play mode: Battery | Turns processor boost off while a game runs so the graphics get the power, quiets background workers, steers frame timing (`EDEN_NX2_POWER_POLICY=igpu`, `EDEN_NX2_ECO_BACKGROUND`, `EDEN_NX2_AUTOPILOT`). |
 | Frame generation | The same switch as the status bar button and Graphics > Frame generation. |

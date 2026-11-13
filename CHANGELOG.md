@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Added
 
 - Guarana window and play mode: Guarana Dark theme (new default), a Guarana settings page (play mode, frame generation, resolution, controller, report a problem), a compact brand performance overlay, per-monitor window memory, a menu hint when a game goes fullscreen, a clean release window title and icon, and a first-run panel on the empty game list. Settings: `guarana_remember_window`, `guarana_play_toast`, `guarana_overlay_compact`, `guarana_mode`. See `docs/user/ui.md`.
+- Smooth mode is the pacing measured best in Ocarina of Time: `EDEN_NX2_FLUID=2` (predictions as of when a frame can be shown, so the real frame is shown and predictions reach under one frame interval ahead) with `EDEN_NX2_CADENCE=3` (20 real frames per second, one per 20 Hz game tick). Hyrule Field on the Arc 140T, one paired session against `EDEN_NX2_FLUID=1`: slots shown on time 430 to 536 of 600, evenly paced frames (within 2 ms of the median) 62% to 88%, screen copies stuck behind rendering 100 to 45 per 10 s.
 
 - Launcher: after a session with at least a minute of gameplay, a card offers to share your numbers (game fps, frame pacing, device, driver) as a prefilled device report you review and submit yourself; a setting stops it asking.
 
