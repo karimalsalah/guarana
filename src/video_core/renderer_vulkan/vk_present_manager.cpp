@@ -44,6 +44,32 @@ namespace Vulkan {
 namespace {
 
 constexpr size_t MAX_FRAMES_IN_FLIGHT = 7;
+/// EDEN_NX2_FLUID at a shown rate over 75: a real frame and a prediction for each slot until the
+/// next one (six at 120 for 20 real frames), while the last real frame's predictions still wait
+/// for their slots. Only extrapolated frames use the frames past MAX_FRAMES_IN_FLIGHT; Lossless
+/// Scaling's generation targets stop there (FrameGen::GenerateInto).
+constexpr size_t FLUID_HIGH_RATE_FRAMES = 16;
+constexpr size_t FLUID_MAX_FRAMES = 16;
+
+/// The rate EDEN_NX2_FLUID shows frames at: EDEN_NX2_SHOWN_RATE=<hz> (30 to 240) if set, else the
+/// frame generation target rate, else 60.
+[[nodiscard]] f64 FluidShownRate() {
+    if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
+        return static_cast<f64>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
+    }
+    const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
+    return rate != 0 ? static_cast<f64>(rate) : 60.0;
+}
+
+/// EDEN_NX2_FLUID_FRAMES=<n> (7 to 16): the FLUID presenter's frame pool, by default 7, or 12 when
+/// frames are shown at over 75 a second.
+[[nodiscard]] size_t FluidFrameCount() {
+    if (const char* value = std::getenv("EDEN_NX2_FLUID_FRAMES")) {
+        return std::clamp<size_t>(std::strtoul(value, nullptr, 10), MAX_FRAMES_IN_FLIGHT,
+                                  FLUID_MAX_FRAMES);
+    }
+    return FluidShownRate() > 75.0 ? FLUID_HIGH_RATE_FRAMES : MAX_FRAMES_IN_FLIGHT;
+}
 constexpr u32 MAX_PRESENT_ATTEMPTS = 3;
 #ifdef HAS_LSFG
 static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
@@ -66,8 +92,61 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
 }
 
 /// EDEN_NX2_FLUID: a slot's frame is presented this long after the vblank before the slot, so a
-/// present a few ms early or late still lands on the slot's vblank.
-constexpr std::chrono::nanoseconds FluidPresentOffset{3'500'000};
+/// present a few ms early or late still lands on the slot's vblank. EDEN_NX2_FLUID_OFFSET_US=<us>
+/// (500 to 8000) moves it: with the DXGI vblank wait the wake already follows the vblank, so about
+/// 1000 gives the screen copy 7.3 ms before its flip at 120 Hz instead of 4.8.
+[[nodiscard]] std::chrono::nanoseconds FluidPresentOffsetFor() {
+    static const std::chrono::nanoseconds offset = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_OFFSET_US");
+        if (value == nullptr) {
+            return std::chrono::nanoseconds{3'500'000};
+        }
+        const long us = std::clamp(std::strtol(value, nullptr, 10), 500L, 8000L);
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_OFFSET_US={}: slot frames go out {} us after the vblank before them", us, us);
+        return std::chrono::nanoseconds{static_cast<s64>(us) * 1000};
+    }();
+    return offset;
+}
+
+/// EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1: with the screen copy on its own queue (EDEN_NX2_FLUID_QUEUE
+/// 3 or 5), the present thread waits on the copy's fence before presenting on the graphics queue,
+/// so the present's wait on the copy's semaphore is already met and cannot hold the graphics
+/// queue's later work.
+[[nodiscard]] bool FluidQueueHostWait() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_QUEUE_HOST_WAIT");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
+/// EDEN_NX2_FLUID_COPY_AHEAD=1: with the screen copy on its own queue, each slot's frame is copied
+/// at the wake one slot before and presented at its own slot's wake, so the copy has about a slot
+/// and a half before its flip instead of half a slot (4.8 ms at 120 Hz), at one slot of latency.
+[[nodiscard]] bool FluidCopyAhead() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_COPY_AHEAD");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
+/// EDEN_NX2_FLUID_HOST_WAIT_US=<us> (500 to 16000): how long that wait lasts at most, by default
+/// 12000 at 60 shown frames a second and 4000 above 75 (at 120 a slot is 8.3 ms: a longer wait makes
+/// the present thread sleep through the next slot).
+[[nodiscard]] u64 FluidHostWaitNs(f64 shown_rate) {
+    static const u64 limit = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_HOST_WAIT_US");
+        return value == nullptr
+                   ? u64{0}
+                   : static_cast<u64>(std::clamp(std::strtol(value, nullptr, 10), 500L, 16000L)) *
+                         1000;
+    }();
+    if (limit != 0) {
+        return limit;
+    }
+    return shown_rate > 75.0 ? 4'000'000 : 12'000'000;
+}
 /// Real frames whose GPU work is watched at once.
 constexpr size_t FluidWatches = 8;
 /// The watchdog: frames came and none was shown for this long.
@@ -260,6 +339,26 @@ PresentManager::PresentManager(const vk::Instance& instance_,
             .queueFamilyIndex = device.GetFluidFamily(),
         });
         fluid_cmdbuffers = fluid_cmdpool.Allocate(image_count);
+        // Timestamps need a family that can reset queries in a command buffer (not transfer only).
+        const auto families = device.GetPhysical().GetQueueFamilyProperties();
+        const u32 fluid_family = device.GetFluidFamily();
+        if (std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr && fluid_family < families.size() &&
+            (families[fluid_family].queueFlags &
+             (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0 &&
+            families[fluid_family].timestampValidBits != 0) {
+            fluid_copy_queries = dld.CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = 2 * 32,
+                .pipelineStatistics = 0,
+            });
+            fluid_timestamp_ns =
+                static_cast<f64>(device.GetPhysical().GetProperties().limits.timestampPeriod);
+            const u32 bits = families[fluid_family].timestampValidBits;
+            fluid_timestamp_mask = bits >= 64 ? ~u64{0} : (u64{1} << bits) - 1;
+        }
     }
 
     frames.resize(image_count);
@@ -685,7 +784,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         }
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
         VideoCore::AutopilotFeed::SetRefreshPeriod(period);
-        const auto offset = (std::min)(FluidPresentOffset, period * 42 / 100);
+        const auto offset = (std::min)(FluidPresentOffsetFor(), period * 42 / 100);
         {
             std::scoped_lock lock{fluid_clock_mutex};
             fluid_clock = FluidClock{
@@ -693,7 +792,9 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                 .vblank_index = fluid.vblank,
                 .refresh = period,
                 .divisor = fluid.divisor,
-                .lead = period - offset,
+                .lead = FluidCopyAhead() && device.IsFluidQueueActive()
+                            ? period * static_cast<s64>(1 + fluid.divisor) - offset
+                            : period - offset,
                 .latency = std::chrono::nanoseconds{static_cast<s64>(fluid.latency_ns)},
             };
         }
@@ -709,7 +810,13 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                 FluidTakeFrames(now);
                 FluidRelease(now);
             }
-            FluidPresentSlot(fluid.vblank + 1, wake + period, !shown);
+            if (FluidCopyAhead() && device.IsFluidQueueActive()) {
+                FluidPresentAhead();
+                FluidPresentSlot(fluid.vblank + 1 + fluid.divisor,
+                                 wake + period * static_cast<s64>(1 + fluid.divisor), !shown);
+            } else {
+                FluidPresentSlot(fluid.vblank + 1, wake + period, !shown);
+            }
         }
         const auto now = std::chrono::steady_clock::now();
         FluidLogStats(now, Common::VblankClock::SourceName(source), period);
@@ -730,6 +837,12 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
             FluidFallBack(now);
             return false;
         }
+    }
+    if (fluid_ahead_pending) {
+        std::scoped_lock swapchain_lock{swapchain_mutex};
+        fluid_ahead_pending = false;
+        fluid_ahead_frame = nullptr;
+        swapchain.Present(fluid_ahead_semaphore);
     }
     // Nothing is presented from here on: answer WaitPresent.
     {
@@ -819,10 +932,11 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
     }
     fluid.vblank += static_cast<u64>(elapsed);
     fluid.last_wake = wake;
-    // Slots of about 16.7 ms: every round(refresh / 60) vblanks, or of the shown rate the
-    // autopilot steers towards (EDEN_NX2_AUTOPILOT).
+    // Slots of the frame generation target rate (16.7 ms at 60, a refresh each at 120 on a 120 Hz
+    // display): every round(refresh / rate) vblanks, or of the shown rate the autopilot steers
+    // towards (EDEN_NX2_AUTOPILOT).
     const f64 slot_rate = VideoCore::AutopilotFeed::SlotRate();
-    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : 60.0) *
+    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : FluidShownRate()) *
                                   static_cast<f64>(period.count()));
     fluid.divisor =
         static_cast<u64>(std::clamp<s64>(static_cast<s64>(std::llround(per_slot)), 1, 8));
@@ -922,6 +1036,7 @@ void PresentManager::FluidRelease(std::chrono::steady_clock::time_point now) {
     // vblank, it was shown late.
     if (fluid.showing != nullptr) {
         if (FrameDone(fluid.showing)) {
+            FluidNoteCopyTime(fluid.showing);
             ReturnFrame(fluid.showing);
             fluid.showing = nullptr;
         } else if (!fluid.showing_late && fluid.vblank >= fluid.showing_vblank) {
@@ -1084,7 +1199,17 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
     fluid_stats.spare += best->fluid_batch < fluid.newest_batch ? 1 : 0;
     fluid_stats.age_ms +=
         std::chrono::duration<f64, std::milli>(slot_time - best->fluid_recorded).count();
+    fluid_copy_ahead_request = FluidCopyAhead() && device.IsFluidQueueActive();
     FluidShow(best, slot);
+    fluid_copy_ahead_request = false;
+    const f64 margin =
+        std::chrono::duration<f64, std::milli>(slot_time - std::chrono::steady_clock::now())
+            .count();
+    fluid_stats.margin_min_ms =
+        fluid_stats.margin_samples == 0 ? margin : (std::min)(fluid_stats.margin_min_ms, margin);
+    fluid_stats.margin_ms += margin;
+    ++fluid_stats.margin_samples;
+    fluid_stats.after_vblank += margin < 0.0 ? 1 : 0;
 }
 
 void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
@@ -1106,6 +1231,68 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     }
     fluid.last_shown_vblank = shown_vblank;
     NoteShownFrame();
+}
+
+void PresentManager::FluidPresentAhead() {
+    if (!fluid_ahead_pending) {
+        return;
+    }
+    std::scoped_lock swapchain_lock{swapchain_mutex};
+    static const bool shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    if (fluid.showing != nullptr && fluid.showing == fluid_ahead_frame) {
+        // Its copy had a slot; a copy still running is late anyway.
+        const auto wait_start = std::chrono::steady_clock::now();
+        const bool copied = fluid_ahead_frame->present_done.Wait(
+                                FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+        if (shown_stats) {
+            const f64 waited = std::chrono::duration<f64, std::milli>(
+                                   std::chrono::steady_clock::now() - wait_start)
+                                   .count();
+            ++fluid_stats.copy_waits;
+            fluid_stats.copy_wait_timeouts += copied ? 0 : 1;
+            fluid_stats.copy_wait_ms += waited;
+            fluid_stats.copy_wait_max_ms = (std::max)(fluid_stats.copy_wait_max_ms, waited);
+        }
+    }
+    fluid_ahead_pending = false;
+    fluid_ahead_frame = nullptr;
+    swapchain.Present(fluid_ahead_semaphore);
+    if (shown_stats) {
+        const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
+        const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
+        ++fluid_stats.presents;
+        fluid_stats.lock_ms += lock;
+        fluid_stats.lock_max_ms = (std::max)(fluid_stats.lock_max_ms, lock);
+        fluid_stats.call_ms += call;
+        fluid_stats.call_max_ms = (std::max)(fluid_stats.call_max_ms, call);
+    }
+    // The copy is done (or late): give the frame back now rather than at the next wake.
+    if (fluid.showing != nullptr && FrameDone(fluid.showing)) {
+        FluidNoteCopyTime(fluid.showing);
+        ReturnFrame(fluid.showing);
+        fluid.showing = nullptr;
+    }
+}
+
+void PresentManager::FluidNoteCopyTime(Frame* frame) {
+    if (!frame->copy_timed) {
+        return;
+    }
+    frame->copy_timed = false;
+    std::array<u64, 2> stamps{};
+    if (device.GetLogical().GetQueryResults(*fluid_copy_queries, 2 * frame->index, 2,
+                                            sizeof(stamps), stamps.data(), sizeof(u64),
+                                            VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
+        return;
+    }
+    const u64 ticks = (stamps[1] - stamps[0]) & fluid_timestamp_mask;
+    const f64 ms = static_cast<f64>(ticks) * fluid_timestamp_ns * 1.0e-6;
+    if (ms < 0.0 || ms > 1000.0) {
+        return;
+    }
+    ++fluid_stats.copy_gpu_samples;
+    fluid_stats.copy_gpu_ms += ms;
+    fluid_stats.copy_gpu_max_ms = (std::max)(fluid_stats.copy_gpu_max_ms, ms);
 }
 
 void PresentManager::FluidDiscard(Frame* frame) {
@@ -1165,6 +1352,19 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              stats.rolled, stats.spare, stats.stale, fluid_batches.exchange(0),
              fluid_unpredictable.exchange(0), fluid_cut_short.exchange(0),
              fluid_capped.exchange(0));
+    LOG_INFO(Render_Vulkan,
+             "Fluid presenter (10 s): present thread: {} presents; acquire {:.2f} ms mean, {:.2f} "
+             "max; copy wait {:.2f} ms mean, {:.2f} max, {} of {} timed out; submit lock {:.2f} ms "
+             "mean, {:.2f} max; present call {:.2f} ms mean, {:.2f} max; slot presents returned "
+             "{:.2f} ms before their vblank on average, {:.2f} at the least, {} after it; the copy "
+             "ran {:.2f} ms on the GPU once started on average, {:.2f} at most ({} timed)",
+             stats.presents, mean(stats.acquire_ms, stats.presents), stats.acquire_max_ms,
+             mean(stats.copy_wait_ms, stats.copy_waits), stats.copy_wait_max_ms,
+             stats.copy_wait_timeouts, stats.copy_waits, mean(stats.lock_ms, stats.presents),
+             stats.lock_max_ms, mean(stats.call_ms, stats.presents), stats.call_max_ms,
+             mean(stats.margin_ms, stats.margin_samples), stats.margin_min_ms, stats.after_vblank,
+             mean(stats.copy_gpu_ms, stats.copy_gpu_samples), stats.copy_gpu_max_ms,
+             stats.copy_gpu_samples);
     stats = {.since = now};
 }
 
@@ -1221,7 +1421,7 @@ void PresentManager::SetImageCount() {
     if (fluid_presenter) {
         // A real frame and a prediction for each slot until the next one is due, while the last
         // real frame's predictions still wait for their slots.
-        image_count = MAX_FRAMES_IN_FLIGHT;
+        image_count = FluidFrameCount();
     } else {
         const size_t generations = Settings::FrameGenMaxGenerations();
         const size_t queued_composites = Settings::values.frame_gen_queue_target.GetValue() + 1;
@@ -1357,6 +1557,13 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
         .image = image,
         .subresourceRange = range,
     };
+    const bool timed = fluid_copy_queries && frame->index < 32;
+    if (timed) {
+        cmdbuf.ResetQueryPool(*fluid_copy_queries, 2 * frame->index, 2);
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index);
+    }
+    frame->copy_timed = timed;
     // Only stages every queue family supports: the family may be compute or transfer only.
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, {},
                            {}, {}, to_destination);
@@ -1365,6 +1572,10 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
                      MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                            {}, {}, {}, to_present);
+    if (timed) {
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index + 1);
+    }
     cmdbuf.End();
 
     const std::array wait_semaphores = {swapchain.CurrentPresentSemaphore(), *frame->render_ready};
@@ -1398,6 +1609,12 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
 }
 
 void PresentManager::CopyToSwapchainImpl(Frame* frame) {
+    if (fluid_ahead_pending) {
+        // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
+        fluid_ahead_pending = false;
+        fluid_ahead_frame = nullptr;
+        swapchain.Present(fluid_ahead_semaphore);
+    }
 
     // Recreate for size changes, SDR/HDR10/scRGB transitions, or a suboptimal swapchain.
     const bool is_suboptimal = swapchain.NeedsRecreation() || swapchain.IsOutDated();
@@ -1430,10 +1647,22 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
 
     // The FLUID present thread times its presents itself (not after its watchdog fell back).
     const bool pace = !Fluid();
+    static const bool shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    const bool timed = shown_stats && Fluid();
+    const auto ms_since = [](std::chrono::steady_clock::time_point from) {
+        return std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - from)
+            .count();
+    };
+    const auto acquire_start = std::chrono::steady_clock::now();
     while (swapchain.AcquireNextImage(!use_present_thread, pace)) {
         if (!RecreateSwapchain(frame)) {
             return;
         }
+    }
+    if (timed) {
+        const f64 acquire = ms_since(acquire_start);
+        fluid_stats.acquire_ms += acquire;
+        fluid_stats.acquire_max_ms = (std::max)(fluid_stats.acquire_max_ms, acquire);
     }
 
     const VkImage image{swapchain.CurrentImage()};
@@ -1441,6 +1670,30 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     if (UseFluidQueue(frame, extent)) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
+        bool streamline_frame = false;
+#ifdef EGLANTINE_STREAMLINE
+        streamline_frame = frame->frame_gen;
+#endif
+        if (fluid_copy_ahead_request && !streamline_frame) {
+            // Presented at the next slot's wake (FluidPresentAhead).
+            fluid_ahead_pending = true;
+            fluid_ahead_frame = frame;
+            fluid_ahead_semaphore = render_semaphore;
+            return;
+        }
+        if (FluidQueueHostWait()) {
+            // A copy still running after this long is late anyway: present and move on.
+            const auto wait_start = std::chrono::steady_clock::now();
+            const bool copied =
+                frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+            if (timed) {
+                const f64 waited = ms_since(wait_start);
+                ++fluid_stats.copy_waits;
+                fluid_stats.copy_wait_timeouts += copied ? 0 : 1;
+                fluid_stats.copy_wait_ms += waited;
+                fluid_stats.copy_wait_max_ms = (std::max)(fluid_stats.copy_wait_max_ms, waited);
+            }
+        }
     } else {
         const vk::CommandBuffer cmdbuf{frame->cmdbuf};
         cmdbuf.Begin({
@@ -1597,6 +1850,15 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     }
 #endif
     swapchain.Present(render_semaphore);
+    if (timed) {
+        const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
+        const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
+        ++fluid_stats.presents;
+        fluid_stats.lock_ms += lock;
+        fluid_stats.lock_max_ms = (std::max)(fluid_stats.lock_max_ms, lock);
+        fluid_stats.call_ms += call;
+        fluid_stats.call_max_ms = (std::max)(fluid_stats.call_max_ms, call);
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (frame->frame_gen) {
         Streamline::FrameGenAfterPresent(frame->frame_gen_frame.index);

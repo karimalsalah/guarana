@@ -582,7 +582,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     // Set a screensaver inhibition reason string. Currently passed to DBus by SDL and visible to
     // the user through their desktop environment.
-    //: TRANSLATORS: This string is shown to the user to explain why Lichii needs to prevent the
+    //: TRANSLATORS: This string is shown to the user to explain why Guarana needs to prevent the
     //: computer from sleeping
     QByteArray wakelock_reason = tr("Running a game").toUtf8();
     SDL_SetHint(SDL_HINT_SCREENSAVER_INHIBIT_ACTIVITY_NAME, wakelock_reason.data());
@@ -2075,7 +2075,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
                 this, tr("An error occurred initializing the video core."),
                 tr("This is usually caused by outdated GPU drivers. "
                    "Please see the log for more details. See: "
-                   "<a href='https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md'>"
+                   "<a href='https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log'>"
                    "How to access log files</a>."));
             break;
         default:
@@ -3745,7 +3745,7 @@ void MainWindow::OnOpenModsPage() {
 }
 
 void MainWindow::OnOpenUserHandbook() {
-    OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
+    OpenURL(QUrl(QStringLiteral("https://github.com/karimalsalah/guarana/blob/main/docs/user/README.md")));
 }
 
 void MainWindow::OnReportProblem() {
@@ -3794,8 +3794,12 @@ void MainWindow::ShowFullscreen() {
         window->hide();
         window->setWindowFlags(window->windowFlags() | Qt::FramelessWindowHint);
         const auto screen_geometry = GuessCurrentScreen(window)->geometry();
+        // One row taller keeps an OpenGL window composed. A Vulkan window that covers the screen
+        // exactly can get independent flip: no desktop composition, up to a refresh less latency.
+        const bool vulkan =
+            Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
         window->setGeometry(screen_geometry.x(), screen_geometry.y(), screen_geometry.width(),
-                            screen_geometry.height() + 1);
+                            screen_geometry.height() + (vulkan ? 0 : 1));
         window->raise();
         window->showNormal();
     };

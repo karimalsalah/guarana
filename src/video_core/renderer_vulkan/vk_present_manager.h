@@ -55,6 +55,8 @@ struct Frame {
     vk::CommandBuffer fluid_cmdbuf;
     vk::Semaphore render_ready;
     vk::Fence present_done;
+    /// EDEN_NX2_SHOWN_STATS: the screen copy wrote GPU timestamps (queries 2 index and 2 index + 1).
+    bool copy_timed{};
     bool storage_capable{};
     /// Time the present thread leaves before presenting the next frame. Frame generation sets it
     /// on generated frames, so they share the screen time evenly with the real ones.
@@ -215,6 +217,8 @@ private:
     /// Copies the frame to the swapchain; it stays the frame showing until its copy is done.
     /// Holds swapchain_mutex.
     void FluidShow(Frame* frame, u64 shown_vblank);
+    /// EDEN_NX2_FLUID_COPY_AHEAD: presents the frame copied at the last slot's wake, if any.
+    void FluidPresentAhead();
 
     /// Frees a frame that is not shown. Holds swapchain_mutex.
     void FluidDiscard(Frame* frame);
@@ -266,6 +270,10 @@ private:
     vk::SurfaceKHR& surface;
     vk::CommandPool cmdpool;
     vk::CommandPool fluid_cmdpool; ///< EDEN_NX2_FLUID_QUEUE: pool of the dedicated queue family
+    /// EDEN_NX2_SHOWN_STATS with the dedicated queue: timestamps around each screen copy.
+    vk::QueryPool fluid_copy_queries;
+    f64 fluid_timestamp_ns{};
+    u64 fluid_timestamp_mask{};
     bool fluid_queue_mismatch_logged{};
     std::vector<Frame> frames;
     std::vector<f32> shown_intervals; ///< EDEN_NX2_SHOWN_STATS, present thread only
@@ -364,7 +372,27 @@ private:
         f64 age_ms{};
         f64 latency_ms{};
         u64 latency_samples{};
+        // Where the present thread's time goes, in ms: sums and maxima over `presents`.
+        u64 presents{};
+        f64 acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        f64 copy_wait_ms{}, copy_wait_max_ms{};
+        f64 lock_ms{}, lock_max_ms{};
+        f64 call_ms{}, call_max_ms{};
+        // How long before its slot's vblank each slot present returned; negative after it.
+        f64 margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        // GPU time the screen copy ran for once it started (its timestamps), in ms.
+        u64 copy_gpu_samples{};
+        f64 copy_gpu_ms{}, copy_gpu_max_ms{};
     } fluid_stats;
+    void FluidNoteCopyTime(Frame* frame);
+    /// EDEN_NX2_FLUID_COPY_AHEAD: the next copy is for the slot after next and is presented at the
+    /// next slot's wake; a copy is pending presentation.
+    bool fluid_copy_ahead_request{};
+    bool fluid_ahead_pending{};
+    Frame* fluid_ahead_frame{};
+    VkSemaphore fluid_ahead_semaphore{};
 };
 
 } // namespace Vulkan

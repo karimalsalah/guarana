@@ -54,6 +54,12 @@ pub fn state_file() -> PathBuf {
     install_dir().join("launcher-state.json")
 }
 
+/// The Game Booster's journal: every system change it makes, so a crash or "Undo all" can restore
+/// them. Written only by the unelevated launcher (never the elevated helper).
+pub fn booster_journal() -> PathBuf {
+    install_dir().join("booster-journal.json")
+}
+
 pub fn launcher_log() -> PathBuf {
     install_dir().join("launcher.log")
 }

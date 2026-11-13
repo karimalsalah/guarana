@@ -186,6 +186,19 @@ export interface GameExited {
   seconds: number;
 }
 
+/** take_launch_request: a game file Explorer opened with Guarana, or a guarana:// link. */
+export interface LaunchRequest {
+  source: "file" | "link";
+  /** Checked by the backend; start it with launch_game and its path. */
+  game: Game | null;
+  /** Why it cannot start (missing file, a link outside the game folders...). */
+  error: string | null;
+}
+
+export interface Notifications {
+  enabled: boolean;
+}
+
 /** Payload of warm://progress (warm_shaders, and the automatic run after a GPU driver change). */
 export interface WarmProgress {
   title_id: string;
@@ -277,6 +290,28 @@ export interface StopResult {
   title_id: string | null;
   stopped: boolean;
   message: string;
+}
+
+// ---- Game Booster -------------------------------------------------------------------------------------
+
+/** One booster level as the picker shows it, with the exact changes it makes on this PC. */
+export interface BoosterLevelInfo {
+  level: number;
+  title: string;
+  summary: string;
+  /** True when the level shows one Windows permission (UAC) prompt. */
+  elevated: boolean;
+  changes: string[];
+}
+
+export interface BoosterStatus {
+  /** The chosen level: 0 = Off (default), 1, 2 or 3. */
+  level: number;
+  /** A boosted session is running now. */
+  active: boolean;
+  /** Off..3, for the picker and the "what it changes" list. */
+  levels: BoosterLevelInfo[];
+  note: string | null;
 }
 
 export type AiService = "claude" | "chatgpt";

@@ -114,8 +114,33 @@ double Percentile(std::vector<double>& values, size_t percent) {
     return *place;
 }
 
+/// EDEN_NX2_BUDGET_CEILING=<x> (1 to 16): the highest GPU time scale the budget may set, below the
+/// GPU clock setting's divisor. 1 keeps the guest's GPU time real: a game whose resolution a patch
+/// fixes (Ocarina of Time's "Max Resolution") cannot answer a higher scale by drawing less, and the
+/// scale a few slow frames after a load raise stays up under EDEN_NX2_BUDGET_HOLD_RES.
+[[nodiscard]] double CeilingOverride() {
+    static const double ceiling = [] {
+        const char* value = std::getenv("EDEN_NX2_BUDGET_CEILING");
+        if (value == nullptr || value[0] == '\0') {
+            return 0.0;
+        }
+        const double parsed = std::strtod(value, nullptr);
+        if (!std::isfinite(parsed) || parsed < 1.0) {
+            return 0.0;
+        }
+        const double clamped = (std::min)(parsed, 16.0);
+        LOG_INFO(HW_GPU, "EDEN_NX2_BUDGET_CEILING: the GPU time scale stays at or below {:.2f}",
+                 clamped);
+        return clamped;
+    }();
+    return ceiling;
+}
+
 double Ceiling() {
-    return static_cast<double>(Tegra::AmpereClockDivisor(Settings::values.gpu_clock.GetValue()));
+    const double divisor =
+        static_cast<double>(Tegra::AmpereClockDivisor(Settings::values.gpu_clock.GetValue()));
+    const double ceiling = CeilingOverride();
+    return ceiling > 0.0 ? (std::min)(ceiling, divisor) : divisor;
 }
 
 /// Caller holds session.mutex. A new target starts from nothing but the scale.
@@ -131,6 +156,17 @@ void ResetLocked(Session& session) {
     session.state = State::Off;
     session.recent_work_ms.store(0.0, std::memory_order_relaxed);
     session.logged_scale = session.scale.load(std::memory_order_relaxed);
+}
+
+/// EDEN_NX2_BUDGET_HOLD_RES=1: the budget only lowers the resolution, never gives it back. Under
+/// EDEN_NX2_CADENCE frames finish well inside the paced interval, and raising the resolution into
+/// that headroom keeps the GPU queue deep, which makes the presenter's copies late.
+[[nodiscard]] bool HoldResolution() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_BUDGET_HOLD_RES");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
 }
 
 /// Caller holds session.mutex. One tick over the presents gathered up to `now`.
@@ -160,7 +196,8 @@ void TickLocked(Session& session, double target_fps, TimePoint now) {
         .target_ms = target_ms,
         .ceiling = Ceiling(),
         // The governor gives its coarse rates back before the resolution goes up again.
-        .hold_lower = was_allowed && shading_fps > 0.0 && AutoShadingRate::Coarsening(),
+        .hold_lower = HoldResolution() ||
+                      (was_allowed && shading_fps > 0.0 && AutoShadingRate::Coarsening()),
     };
     const FrameBudgetController::Decision decision = session.controller.Update(input, before);
     session.state = decision.state;

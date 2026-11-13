@@ -162,13 +162,33 @@ pub fn launch(
     if let Some(gp) = &game_path {
         cmd.arg("-f").arg("-g").arg(gp);
     }
-    let mut child = cmd.spawn().ctx("Could not start Guarana")?;
+
+    // Game Booster (Off by default). The GPU preference must be set before the emulator starts, so
+    // it and the journal go down now; priority and throttling come after the process exists, and the
+    // one elevated step after the game-watch thread does. It never fails the launch.
+    let booster_level = crate::booster::level_of(&persisted);
+    let booster_prep = crate::booster::apply_before_spawn(&exe, booster_level);
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            if booster_prep.is_some() {
+                crate::booster::restore_after_session(app);
+            }
+            return Err(format!("Could not start Guarana: {e}"));
+        }
+    };
     let pid = child.id();
     log::info!(
         "Started Guarana {} (pid {pid}){}",
         current.version,
         game_path.as_ref().map(|p| format!(" with {}", p.display())).unwrap_or_default()
     );
+    if booster_prep.is_some() {
+        use std::os::windows::io::AsRawHandle;
+        crate::booster::apply_after_spawn(app, child.as_raw_handle(), pid, booster_level);
+    }
+
     let app2 = app.clone();
     let started = Instant::now();
     let session_tid = tid.as_ref().map(|t| t.to_ascii_uppercase());
@@ -185,8 +205,18 @@ pub fn launch(
                 crate::share::after_session(&app2, &info);
                 autopilot::after_session(&app2, info);
             }
+            // Take the booster's changes back now the game has exited.
+            if booster_level >= 1 {
+                crate::booster::restore_after_session(&app2);
+            }
             warm::resume_if_interrupted(&app2);
         })
         .ctx("Could not watch the game")?;
+
+    // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on
+    // its own thread: the prompt never holds up the launch or competes with the game before it is up.
+    if let Some(prep) = booster_prep {
+        crate::booster::launch_helper_async(app, pid, booster_level, prep);
+    }
     Ok(LaunchResult { pid })
 }

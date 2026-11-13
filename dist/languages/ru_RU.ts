@@ -6057,8 +6057,8 @@ Drag points to change position, or double-click table cells to edit values.</sou
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="32"/>
-        <source>Creating a room failed. Please retry. Restarting Eden might be necessary.</source>
-        <translation>Не удалось создать комнату. Пожалуйста, повторите попытку. Возможно, потребуется перезапуск Eden.</translation>
+        <source>Creating a room failed. Please retry. Restarting Guarana might be necessary.</source>
+        <translation>Не удалось создать комнату. Пожалуйста, повторите попытку. Возможно, потребуется перезапуск Guarana.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="34"/>
@@ -6067,8 +6067,8 @@ Drag points to change position, or double-click table cells to edit values.</sou
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="37"/>
-        <source>Version mismatch! Please update to the latest version of Eden. If the problem persists, contact the room host and ask them to update the server.</source>
-        <translation>Несоответствие версий! Пожалуйста, обновите Eden до последней версии. Если проблема сохраняется, свяжитесь с хостом комнаты и попросите его обновить сервер.</translation>
+        <source>Version mismatch! Please update to the latest version of Guarana. If the problem persists, contact the room host and ask them to update the server.</source>
+        <translation>Несоответствие версий! Пожалуйста, обновите Guarana до последней версии. Если проблема сохраняется, свяжитесь с хостом комнаты и попросите его обновить сервер.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="39"/>
@@ -6539,9 +6539,9 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/host_room.cpp" line="187"/>
-        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Eden account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
+        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Guarana account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
 Debug Message: </source>
-        <translation>Не удалось объявить комнату в публичном лобби. Чтобы хостить публичную комнату, у вас должна быть действующая учетная запись Eden, настроенная в Эмуляция -&gt; Параметры -&gt; Сеть. Если вы не хотите объявлять комнату в публичном лобби, выберите скрытый тип при создании комнаты.
+        <translation>Не удалось объявить комнату в публичном лобби. Чтобы хостить публичную комнату, у вас должна быть действующая учетная запись Guarana, настроенная в Эмуляция -&gt; Параметры -&gt; Сеть. Если вы не хотите объявлять комнату в публичном лобби, выберите скрытый тип при создании комнаты.
 Сообщение отладки: </translation>
     </message>
 </context>
@@ -6909,8 +6909,8 @@ Debug Message: </source>
     <name>MainWindow</name>
     <message>
         <location filename="../../src/lichii/main.ui" line="14"/>
-        <source>Lichii</source>
-        <translation>Lichii</translation>
+        <source>Guarana</source>
+        <translation>Guarana</translation>
     </message>
     <message>
         <location filename="../../src/lichii/main.ui" line="53"/>
@@ -7464,7 +7464,7 @@ Debug Message: </source>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1839"/>
-        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;How to access log files&lt;/a&gt;.</source>
+        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;How to access log files&lt;/a&gt;.</source>
         <translation type="unfinished"/>
     </message>
     <message>
@@ -9456,8 +9456,8 @@ p, li { white-space: pre-wrap; }
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="328"/>
-        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Eden has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
-        <translation>МОГУТ ПРОИЗОЙТИ НЕПРЕДВИДЕННЫЕ ПРОБЛЕМЫ, ЕСЛИ ВЫ НЕ ПРОЧИТАЕТЕ ЭТО!&lt;br&gt;Eden обнаружил следующие папки сохранений без привязанного профиля:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;Найдены следующие корректные профили:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Нажмите «OK», чтобы открыть папку сохранений и исправить профили.&lt;br&gt;Совет: скопируйте содержимое самой большой или последней измененной папки в другое место, удалите все «сиротские» профили и переместите скопированные данные в правильный профиль.&lt;br&gt;&lt;br&gt;Если есть вопросы, прочитайте &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;справку&lt;/a&gt;.&lt;br&gt;</translation>
+        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Guarana has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
+        <translation>МОГУТ ПРОИЗОЙТИ НЕПРЕДВИДЕННЫЕ ПРОБЛЕМЫ, ЕСЛИ ВЫ НЕ ПРОЧИТАЕТЕ ЭТО!&lt;br&gt;Guarana обнаружил следующие папки сохранений без привязанного профиля:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;Найдены следующие корректные профили:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Нажмите «OK», чтобы открыть папку сохранений и исправить профили.&lt;br&gt;Совет: скопируйте содержимое самой большой или последней измененной папки в другое место, удалите все «сиротские» профили и переместите скопированные данные в правильный профиль.&lt;br&gt;&lt;br&gt;Если есть вопросы, прочитайте &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;справку&lt;/a&gt;.&lt;br&gt;</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="347"/>
@@ -9605,8 +9605,8 @@ Only do this if you&apos;re 100% sure you want to delete this data.</source>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="501"/>
-        <source>Install decryption keys and restart Eden before attempting to install firmware.</source>
-        <translation>Установите ключи дешифрования и перезапустите Eden перед установкой прошивки.</translation>
+        <source>Install decryption keys and restart Guarana before attempting to install firmware.</source>
+        <translation>Установите ключи дешифрования и перезапустите Guarana перед установкой прошивки.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="513"/>
@@ -10095,8 +10095,8 @@ Most mods are RomFS mods, but patches (.pchtxt) are typically ExeFS mods.</sourc
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="96"/>
-        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Eden or re-install firmware.</source>
-        <translation>Установка прошивки отменена. Возможно, прошивка повреждена или находится в некорректном состоянии. Перезапустите Eden или переустановите прошивку.</translation>
+        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Guarana or re-install firmware.</source>
+        <translation>Установка прошивки отменена. Возможно, прошивка повреждена или находится в некорректном состоянии. Перезапустите Guarana или переустановите прошивку.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="101"/>

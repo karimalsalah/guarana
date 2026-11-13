@@ -22,6 +22,8 @@ const screen: ScreenDef = {
   render(ctx) {
     const game = ctx.params.game as Game | undefined;
     const profileId = (ctx.params.profileId as string | null | undefined) ?? undefined;
+    // A file opened from Explorer or a guarana:// link: started by its path, which may be outside the library.
+    const byPath = ctx.params.byPath === true;
     const art = heroArt({ cls: "launch-art" });
     const title = h("h1", { class: "launch-title", text: game?.title ?? "Game" });
     if (ctx.params.morph === true) {
@@ -72,7 +74,7 @@ const screen: ScreenDef = {
       const early = phase === "starting" || phase === "handoff" || e.seconds < 10;
       setPaused("game", false);
       setPadSuspended(false);
-      recordSession(game.title_id, e.seconds);
+      if (game.title_id) recordSession(game.title_id, e.seconds);
       if (e.code !== 0 && early) {
         fail(`${game.title} closed while starting (exit code ${exitCode(e.code)}). The log is in the report.`);
         return;
@@ -96,7 +98,11 @@ const screen: ScreenDef = {
       }
       setPadSuspended(true);
       try {
-        await api.launchGame({ title_id: game.title_id, profile_id: profileId });
+        await api.launchGame(
+          byPath
+            ? { title_id: game.title_id || undefined, path: game.path, profile_id: profileId }
+            : { title_id: game.title_id, profile_id: profileId },
+        );
       } catch (e) {
         await entered;
         fail(errorText(e));

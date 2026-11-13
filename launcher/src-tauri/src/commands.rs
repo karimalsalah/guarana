@@ -15,7 +15,10 @@ use crate::types::{
 };
 use crate::util::CmdResult;
 use crate::warm::WarmResult;
-use crate::{autopilot, community, credits, doctor, install, keys, launch, locate, modes, profiles, report, share, util, warm};
+use crate::{
+    autopilot, booster, community, credits, doctor, install, keys, launch, locate, modes, notify,
+    open, profiles, report, share, util, warm,
+};
 
 const LOCATE_EVENT: &str = "locate://progress";
 
@@ -218,7 +221,12 @@ pub async fn list_controllers(app: AppHandle) -> CmdResult<Vec<Controller>> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn warm_shaders(app: AppHandle, title_id: String) -> CmdResult<WarmResult> {
-    blocking(&app, move |app| warm::run(app, &title_id, false)).await?
+    blocking(&app, move |app| {
+        let result = warm::run(app, &title_id, false)?;
+        notify::warm_finished(app, &result);
+        Ok(result)
+    })
+    .await?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -320,4 +328,40 @@ pub async fn share_dismiss(app: AppHandle) -> CmdResult<share::ShareStatus> {
 #[tauri::command(rename_all = "snake_case")]
 pub async fn share_set_prompt(app: AppHandle, enabled: bool) -> CmdResult<share::ShareStatus> {
     blocking(&app, move |app| share::set_prompt(app, enabled)).await?
+}
+
+/// The game a file opened in Explorer or a `guarana://` link asked for, once (`launch://request`).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn take_launch_request(app: AppHandle) -> CmdResult<Option<open::LaunchRequest>> {
+    Ok(open::take(&app))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_notifications(app: AppHandle) -> CmdResult<notify::Notifications> {
+    blocking(&app, notify::status).await
+}
+
+/// Windows notifications when shaders are ready or an update is installed.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_notifications(app: AppHandle, enabled: bool) -> CmdResult<notify::Notifications> {
+    blocking(&app, move |app| notify::set_enabled(app, enabled)).await?
+}
+
+/// The Game Booster: the chosen level, whether a session is active, and every level with what it
+/// changes on this PC (so the UI never drifts from what the backend does).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_booster(app: AppHandle) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, |app| booster::status(app, None)).await
+}
+
+/// Picks the booster level (0 = Off … 3). Saved and used at the next launch.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_booster_level(app: AppHandle, level: u8) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, move |app| booster::set_level(app, level)).await?
+}
+
+/// "Undo all": restores every change the booster made right now.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn booster_undo_all(app: AppHandle) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, |app| booster::undo_all(app)).await?
 }

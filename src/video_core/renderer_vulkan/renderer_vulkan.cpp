@@ -16,11 +16,13 @@
 #include <fmt/ranges.h>
 
 #include "common/boot_timing.h"
+#include "common/device_profile.h"
 #include "common/display_hdr.h"
 #include "common/logging.h"
 #include <ranges>
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/vblank_clock.h"
 #include "core/core_timing.h"
 #include "core/game_presets.h"
 #include "core/frontend/graphics_context.h"
@@ -72,7 +74,10 @@ constexpr VkExtent2D CaptureImageSize{
 constexpr f64 FLUID_REAL_ADVANCE = 0.1;
 /// Predictions reach at most this many frame intervals ahead.
 constexpr f64 FLUID_MAX_ADVANCE = 3.0;
-constexpr size_t FLUID_MAX_PREDICTIONS = 6;
+/// Predictions per real frame: about 100 ms of slots, 6 at 60 shown frames a second and 12 at 120,
+/// so a real frame that comes late still finds its slots covered.
+constexpr size_t FLUID_MIN_PREDICTIONS = 6;
+constexpr size_t FLUID_MAX_PREDICTIONS = 12;
 /// EDEN_NX2_CADENCE: real frames are paced to be done this long before their slot's present.
 constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
 
@@ -80,6 +85,17 @@ constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
 /// expected for (default 0), so a real frame later than that leaves no slot with nothing to show.
 /// Each costs one frame dispatch and one of the presenter's frames, and reaches at most
 /// FLUID_MAX_ADVANCE frame intervals ahead.
+/// EDEN_NX2_FLUID_SPLIT_SUBMIT=1: the real frame is submitted before its predictions are recorded,
+/// and each prediction in its own submission in slot order, so a frame is done when its own work is
+/// rather than when the whole batch is.
+[[nodiscard]] bool FluidSplitSubmit() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_SPLIT_SUBMIT");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 [[nodiscard]] u32 FluidSpareSlots() {
     static const u32 spare = [] {
         const char* value = std::getenv("EDEN_NX2_FLUID_SPARE");
@@ -179,6 +195,57 @@ VkSurfaceFormatKHR ChooseOutputFormat(const vk::PhysicalDevice& physical, VkSurf
 #endif
 }
 
+Common::GpuKind GpuKindOf(VkPhysicalDeviceType type) {
+    switch (type) {
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        return Common::GpuKind::Integrated;
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        return Common::GpuKind::Discrete;
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+        return Common::GpuKind::Virtual;
+    case VK_PHYSICAL_DEVICE_TYPE_CPU:
+        return Common::GpuKind::Cpu;
+    default:
+        return Common::GpuKind::Unknown;
+    }
+}
+
+// The machine as the device profile records it: the host's part, and the GPU as the physical
+// device reports it. The memory is read from the heaps, as the device collects its own figures
+// after its capability callback, and those are budgets. The driver version and the display are
+// left to the caller.
+Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
+    Common::DeviceProfile profile = Common::DetectHostProfile();
+    const VkPhysicalDeviceProperties properties = physical.GetProperties();
+    const VkPhysicalDeviceMemoryProperties memory =
+        physical.GetMemoryProperties().memoryProperties;
+    profile.gpu.vendor_id = properties.vendorID;
+    profile.gpu.model = properties.deviceName;
+    profile.gpu.kind = GpuKindOf(properties.deviceType);
+    u32 local_heaps = 0;
+    for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+            ++local_heaps;
+            profile.gpu.local_memory =
+                (std::max)(profile.gpu.local_memory, memory.memoryHeaps[heap].size);
+        }
+    }
+    profile.gpu.uma =
+        Common::IsUnifiedMemory(profile.gpu.kind, memory.memoryHeapCount, local_heaps);
+    return profile;
+}
+
+Common::DeviceClass DeviceClassOf(const vk::PhysicalDevice& physical) {
+    return Common::Classify(DeviceProfileOf(physical)).device_class;
+}
+
+// The refresh rate of the display the window is on, where the host says (Windows); 0 elsewhere.
+double DisplayRefreshHz(void* window) {
+    const Common::VblankClock display{window};
+    const auto period = display.ReportedPeriod().count();
+    return period > 0 ? 1.0e9 / static_cast<double>(period) : 0.0;
+}
+
 // Game presets match on the GPU's capabilities and set values the device and the renderer read
 // while they are built.
 void ApplyGamePresets(const Device& device) {
@@ -206,6 +273,7 @@ void ApplyGamePresets(const Device& device) {
         .integrated = device.IsIntegrated(),
         .software_tensor_math =
             !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
+        .device_class = DeviceClassOf(device.GetPhysical()),
     };
     const std::string summary = Core::GamePresets::Apply(program_id, gpu);
     Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
@@ -237,7 +305,8 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         void(Core::GamePresets::ApplySwitchDefaults(
             Settings::GetCurrentProgramID(),
             {.vendor = vendor,
-             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU}));
+             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
+             .device_class = DeviceClassOf(physical_device)}));
     }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {
@@ -393,11 +462,12 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // Frames predicted from this one (EDEN_NX2_EXTRAPOLATE): presented after it, unlike
     // interpolated frames. The extrapolation pass writes SDR, so HDR output pauses it.
     std::vector<Frame*> predicted_frames;
+    bool real_flushed = false;
     const bool fluid = present_manager.Fluid();
     if (output.IsHdr() && ExtrapolationRequested()) {
         frame_gen.Pause();
         if (fluid) {
-            RecordFluidFrames(frame, output, predicted_frames);
+            RecordFluidFrames(frame, output, predicted_frames, real_flushed);
         }
     } else {
         if (!output.IsHdr()) {
@@ -417,7 +487,10 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         const bool predict = frame_gen.Extrapolating();
         if (fluid && (predict || generated_frames == 0)) {
             // EDEN_NX2_FLUID: the present thread shows each frame at its vblank slot.
-            RecordFluidFrames(frame, output, predicted_frames);
+            RecordFluidFrames(frame, output, predicted_frames, real_flushed);
+        } else if (fluid && FrameGen::FluidInterpolation()) {
+            // EDEN_NX2_FLUID_INTERP: interpolated frames on the vblank slots before the real one.
+            RecordFluidInterpolated(frame, output, generated_frames, predicted_frames);
         } else {
             // Each generated frame keeps the screen for an equal share of the real frame
             // interval (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh
@@ -460,10 +533,12 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     }
 #endif
 
-    if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
-        scheduler.MarkFrameEnd(++trace_frame, mark);
+    if (!real_flushed) {
+        if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
+            scheduler.MarkFrameEnd(++trace_frame, mark);
+        }
+        frame->gpu_tick = scheduler.Flush(*frame->render_ready);
     }
-    frame->gpu_tick = scheduler.Flush(*frame->render_ready);
 #ifdef EGLANTINE_STREAMLINE
     {
         const Streamline::FrameGenFrame ended = Streamline::FrameGenEndFrame();
@@ -487,7 +562,9 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                                  : std::chrono::steady_clock::time_point{};
 #ifdef HAS_LSFG
     for (Frame* predicted : predicted_frames) {
-        predicted->gpu_tick = scheduler.Flush(*predicted->render_ready);
+        if (!real_flushed) {
+            predicted->gpu_tick = scheduler.Flush(*predicted->render_ready);
+        }
         present_manager.Present(predicted);
     }
     scheduler.DispatchWork();
@@ -520,7 +597,8 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
 #ifdef HAS_LSFG
 void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
-                                       std::vector<Frame*>& predicted_frames) {
+                                       std::vector<Frame*>& predicted_frames,
+                                       bool& real_flushed) {
     using std::chrono::duration_cast;
     using std::chrono::nanoseconds;
     const auto recorded = std::chrono::steady_clock::now();
@@ -577,6 +655,9 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     }
     const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
     const nanoseconds slot_period = slots.refresh * static_cast<s64>(slots.divisor);
+    const size_t max_predictions = std::clamp<size_t>(
+        static_cast<size_t>(std::llround(100.0e6 / static_cast<f64>((std::max)(slot_period.count(), s64{1})))),
+        FLUID_MIN_PREDICTIONS, FLUID_MAX_PREDICTIONS);
     // Real frames at least as fast as the slots fill them: the first slot shows the frame as
     // drawn, not a prediction of the latency ahead (EDEN_NX2_FLUID=1).
     const bool filled = FluidMode() == 1 && !FluidPredictAll() &&
@@ -589,15 +670,16 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
         const nanoseconds cover{predictor.Cover(real_interval.count())};
         last = predictor.PlanSlots(frame->fluid_batch, first, last,
                                    slots.FirstSlotPresentedAfter(recorded + slots.latency + cover),
-                                   slots.divisor, FLUID_MAX_PREDICTIONS);
+                                   slots.divisor, max_predictions);
     }
     // EDEN_NX2_FLUID=2: each prediction is as of its slot less the latency a real frame can be
     // shown at.
     const nanoseconds behind = FluidMode() == 2 ? slots.latency + slots.lead : nanoseconds{};
     size_t predicted = 0;
     bool cut_short = false;
+    const bool split = FluidSplitSubmit();
     u64 slot = first;
-    for (; slot <= last && predicted < FLUID_MAX_PREDICTIONS; slot += slots.divisor) {
+    for (; slot <= last && predicted < max_predictions; slot += slots.divisor) {
         const nanoseconds ahead =
             duration_cast<nanoseconds>(slots.SlotTime(slot) - recorded - behind);
         const f64 advance =
@@ -605,6 +687,14 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
         if (slot == first && (advance <= FLUID_REAL_ADVANCE || filled)) {
             // The real frame is on time for its slot.
             continue;
+        }
+        if (split && !real_flushed) {
+            // EDEN_NX2_FLUID_SPLIT_SUBMIT: the real frame goes to the GPU before its predictions.
+            if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
+                scheduler.MarkFrameEnd(++trace_frame, mark);
+            }
+            frame->gpu_tick = scheduler.Flush(*frame->render_ready);
+            real_flushed = true;
         }
         // Never waits: with no frame to spare the batch ends here.
         Frame* const generated = present_manager.TryGetRenderFrame();
@@ -627,10 +717,68 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
             ++predicted;
         }
         predicted_frames.push_back(generated);
+        if (real_flushed) {
+            generated->gpu_tick = scheduler.Flush(*generated->render_ready);
+        }
     }
     frame_gen.NoteFluidGenerated(predicted);
     present_manager.NoteFluidBatch(true, cut_short,
-                                   !cut_short && slot <= last && predicted >= FLUID_MAX_PREDICTIONS);
+                                   !cut_short && slot <= last && predicted >= max_predictions);
+}
+#endif
+
+#ifdef HAS_LSFG
+void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& output,
+                                             size_t generations,
+                                             std::vector<Frame*>& interpolated_frames) {
+    using std::chrono::duration_cast;
+    using std::chrono::nanoseconds;
+    const auto recorded = std::chrono::steady_clock::now();
+    frame->fluid_batch = ++fluid_batch;
+    frame->fluid_recorded = recorded;
+    const PresentManager::FluidClock slots = present_manager.GetFluidClock();
+    u64 first = 0;
+    if (slots.Valid()) {
+        // The first slot the batch's GPU work can be done for.
+        first = slots.FirstSlotPresentedAfter(recorded + slots.latency);
+        const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                              std::memory_order_relaxed)) *
+                          1.0e-9f;
+        if (frame_gen.CadenceActive() && paced > 0.0f &&
+            std::abs(frame_gen.FrameInterval() - paced) <= paced * 0.05f) {
+            // As RecordFluidFrames: move the guest's paced presents towards batches whose GPU
+            // work is done just before their first slot.
+            const s64 slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+            const s64 slack = duration_cast<nanoseconds>(slots.SlotTime(first) - slots.lead -
+                                                         (recorded + slots.latency))
+                                  .count();
+            s64 error = slack - FLUID_PHASE_MARGIN_NS;
+            if (error > slot_ns / 2) {
+                error -= slot_ns;
+            }
+            Tegra::g_nx2_present_phase_shift_ns.fetch_add(
+                std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
+        }
+    }
+    size_t made = 0;
+    for (size_t generation = 0; generation < generations; ++generation) {
+        // Never waits: with no frame to spare the real frame comes sooner.
+        Frame* const generated = present_manager.TryGetRenderFrame();
+        if (generated == nullptr) {
+            break;
+        }
+        generated->color_space = output.color_space;
+        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        frame_gen.GenerateInto(device, generated, generation);
+        generated->fluid_batch = frame->fluid_batch;
+        generated->fluid_recorded = recorded;
+        generated->fluid_slot = first != 0 ? first + generation * slots.divisor : 0;
+        interpolated_frames.push_back(generated);
+        ++made;
+    }
+    frame->fluid_slot = first != 0 ? first + made * slots.divisor : 0;
+    frame_gen.NoteFluidGenerated(made);
+    present_manager.NoteFluidBatch(true, made < generations, false);
 }
 #endif
 
@@ -712,6 +860,12 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
+    // What the machine is, in one line (docs/DEVICES.md).
+    Common::DeviceProfile machine = DeviceProfileOf(device.GetPhysical());
+    machine.gpu.driver = GetDriverVersion(device);
+    machine.refresh_hz = DisplayRefreshHz(render_window.GetWindowInfo().render_surface);
+    LOG_INFO(Render_Vulkan, "Device profile: {}",
+             Common::DescribeDeviceProfile(machine, Common::Classify(machine)));
     if (VideoCommon::RenderTrace::Enabled()) {
         LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                  Settings::values.log_filter.GetValue());

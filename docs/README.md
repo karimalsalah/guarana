@@ -14,6 +14,10 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [TESTING.md](TESTING.md) | The 10-minute test protocol: install, Hyrule Field, what to send, no debugging |
 | [BENCHMARKING.md](BENCHMARKING.md) | How to measure your device so your numbers can be compared |
 | [switches.md](switches.md) | The registry of every `EDEN_NX2_*` switch Guarana adds or relies on |
+| [SIGNING.md](SIGNING.md) | How release files are signed and attested, how to check a download, and how to turn signing on |
+| [frame-generation.md](frame-generation.md) | How frame generation predicts frames and the FLUID presenter paces them: the pipeline, known limits, how to test |
+| [warm-up.md](warm-up.md) | Headless shader warm-up: `guarana-cli --warm-pipelines` builds a game's cached pipelines ahead of time |
+| [user/ui.md](user/ui.md) | The window, play modes (Smooth, Quality, Battery), the performance overlay and shortcuts |
 | [Options.md](Options.md) | CMake build options |
 | [compatibility-report.md](compatibility-report.md) | Opt-in desktop compatibility reports |
 | [overwolf-vulkan.md](overwolf-vulkan.md) | Overwolf Vulkan start-up protection |
@@ -27,6 +31,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [AI_POLICY.md](AI_POLICY.md) | What AI assistance is welcome and what you must disclose |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Map of the code, including frame generation and pacing |
 | [LANES.md](LANES.md) | Long-lived branches, what lands where, and release steps |
+| [FEEDBACK.md](FEEDBACK.md) | How a player's report becomes a measured fix in a release |
 | [Build.md](Build.md) | General build instructions |
 | [Deps.md](Deps.md) | Dependencies |
 | [CrossCompile.md](CrossCompile.md) | Cross compiling |
@@ -39,7 +44,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [Development.md](Development.md) | Development guidelines |
 | [Debug.md](Debug.md) | Debugging guidelines, including RenderDoc |
 | [Fuzzing.md](Fuzzing.md) | Fuzzing the game-file parsers |
-| [CODEOWNERS](CODEOWNERS) | Review ownership |
+| [../.github/CODEOWNERS](../.github/CODEOWNERS) | Review ownership |
 | [../ROADMAP.md](../ROADMAP.md) | What is being worked on, with a definition of done for each item |
 | [../CHANGELOG.md](../CHANGELOG.md) | What shipped in each version |
 
@@ -47,6 +52,8 @@ those names; where a page and the project README disagree, the README and [AGENT
 
 | Doc | What it is |
 |---|---|
+| [AI-QUICKSTART.md](AI-QUICKSTART.md) | One command per AI tool, from zero to a pull request |
+| [AGENTS-INVITE.md](AGENTS-INVITE.md) | The invitation and the contract for autonomous agents: picking, claiming and proving a task |
 | [nx2/debug-mcp.md](nx2/debug-mcp.md) | The debug server and its MCP adapter: screenshots, frame times, logs, input |
 | [nx2/amd.md](nx2/amd.md) | AMD GPUs and Switch 2 titles: differences found and how they are handled |
 | [nx2/async-native-pipelines.md](nx2/async-native-pipelines.md) | Native graphics pipeline worker emission |
@@ -65,6 +72,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [Settings.md](Settings.md) | How settings are defined and stored |
 | [NvidiaGpu.md](NvidiaGpu.md) | The NVIDIA SM86 GPU instruction set that Switch 2 shaders target |
 | [DriverBugs.md](DriverBugs.md) | Known GPU driver bugs and workarounds |
+| [autopilot.md](autopilot.md) | The experimental closed-loop autopilot (`EDEN_NX2_AUTOPILOT`) and its measurement plan |
 | [native-dlss-replacement.md](native-dlss-replacement.md) | Replacing the game's DLSS networks |
 | [dynarmic/README.md](dynarmic/README.md) | Dynarmic, the ARM JIT |
 | [dynarmic/Design.md](dynarmic/Design.md) | Dynarmic design documentation |
@@ -88,6 +96,7 @@ Working notes from specific games and sweeps. Useful as history and as templates
 | [bananza-upstream-comparison.md](bananza-upstream-comparison.md) | Bananza shader comparison with upstream |
 | [duskbloods-bindless-surfaces.md](duskbloods-bindless-surfaces.md) | Duskbloods register-handle image instructions |
 | [duskbloods-uniform-immediate-shift.md](duskbloods-uniform-immediate-shift.md) | Duskbloods uniform shift with an immediate high word |
+| [hitches.md](hitches.md) | Root-cause notes on the remaining Hyrule Field hitches on the Arc 140T |
 | [kirby-white-world.md](kirby-white-world.md) | Kirby Air Riders white-world investigation |
 | [FE_UPSCALE_STANDIN.md](FE_UPSCALE_STANDIN.md) | Fire Emblem: Fortune's Weave spatial upscale candidate |
 | [STARFOX_UPSCALE_STANDIN.md](STARFOX_UPSCALE_STANDIN.md) | Star Fox spatial upscale candidate |
@@ -145,8 +154,16 @@ instead of `eden`; [Troubleshoot.md](user/Troubleshoot.md) and [Controllers.md](
 
 | Doc | What it is |
 |---|---|
-| [i18n/README.es.md](i18n/README.es.md) | The project README in Spanish |
+| [i18n/README.md](i18n/README.md) | The translations, their status, and how to keep them in sync or add one |
 | [i18n/README.zh-CN.md](i18n/README.zh-CN.md) | The project README in Simplified Chinese |
+| [i18n/README.es.md](i18n/README.es.md) | The project README in Spanish |
+| [i18n/README.pt-BR.md](i18n/README.pt-BR.md) | The project README in Brazilian Portuguese |
+| [i18n/README.ja.md](i18n/README.ja.md) | The project README in Japanese |
+| [i18n/README.ko.md](i18n/README.ko.md) | The project README in Korean |
+| [i18n/README.fr.md](i18n/README.fr.md) | The project README in French |
+| [i18n/README.de.md](i18n/README.de.md) | The project README in German |
+| [i18n/README.ru.md](i18n/README.ru.md) | The project README in Russian |
+| [i18n/README.ar.md](i18n/README.ar.md) | The project README in Arabic |
 
 ## Elsewhere in the repository
 

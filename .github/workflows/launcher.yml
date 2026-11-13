@@ -3,16 +3,24 @@ name: launcher
 # Builds the Guarana Launcher (launcher/, Tauri 2): the per-user NSIS installer
 # Guarana-Setup-<version>.exe, with the current Windows emulator build bundled as
 # launcher/src-tauri/resources/emulator.zip so the first run works offline.
-# - push to main or feat/** touching launcher/**: workflow artifact only;
+# - push to main or feat/** touching launcher/**, and pull requests that touch it (Dependabot's
+#   included): workflow artifact only;
 # - by hand: workflow artifact; with release_tag (or run on a tag) also attached to that release;
 # - workflow_call (after the release is published): attached to the caller's tag, or to
 #   release_tag, with its SHA-256 added to the release's SHA256SUMS.txt. The calling job must
-#   grant `contents: write`.
+#   grant `contents: write`, `id-token: write` and `attestations: write`, and pass the signing
+#   secrets (`secrets: inherit`).
+# An installer for a release is Authenticode-signed when the signing secrets are set, and the
+# attach job attests it and the SHA256SUMS.txt that lists it (docs/SIGNING.md).
 on:
   push:
     branches:
       - main
       - "feat/**"
+    paths:
+      - "launcher/**"
+      - .github/workflows/launcher.yml
+  pull_request:
     paths:
       - "launcher/**"
       - .github/workflows/launcher.yml
@@ -44,7 +52,7 @@ permissions:
 
 concurrency:
   group: launcher-${{ github.ref }}-${{ inputs.release_tag || 'none' }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -270,6 +278,66 @@ jobs:
           (cd dist && sha256sum -- "$name")
           echo "setup_name=$name" >> "$GITHUB_OUTPUT"
 
+      # Authenticode signing of an installer that goes to a release (docs/SIGNING.md), before the
+      # attach job adds its SHA-256 and attests it. It needs all six signing secrets: with none set
+      # it is skipped with a notice, with only some set it is skipped with a warning.
+      - name: Check the signing secrets
+        id: signing
+        if: steps.plan.outputs.release_tag != ''
+        shell: pwsh
+        env:
+          # Whether each secret is set; the values themselves never reach this step.
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_ARTIFACT_SIGNING_PROFILE: ${{ secrets.ARTIFACT_SIGNING_PROFILE != '' }}
+          SETUP: ${{ steps.package.outputs.setup_name }}
+        run: |
+          $names = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE'
+          $missing = @($names | Where-Object { [Environment]::GetEnvironmentVariable("HAS_$_") -ne 'true' })
+          if ($missing.Count -eq $names.Count) {
+            Write-Output '::notice::Authenticode signing is off: no signing secrets are set (docs/SIGNING.md)'
+            exit 0
+          }
+          if ($missing.Count -gt 0) {
+            Write-Output "::warning::Authenticode signing is off: $($missing -join ', ') not set (docs/SIGNING.md)"
+            exit 0
+          }
+          $file = (Resolve-Path "dist/$env:SETUP").Path
+          'enabled=true' | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "files=$file" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # Azure Artifact Signing, formerly Trusted Signing: this action was azure/trusted-signing-action.
+      # Pinned to a commit, and the only step that gets the secrets.
+      - name: Sign the installer
+        if: steps.signing.outputs.enabled == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.signing.outputs.files }}
+          description: Guarana Setup
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+
+      - name: Check the signature
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          FILES: ${{ steps.signing.outputs.files }}
+        run: |
+          foreach ($file in $env:FILES -split ',') {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            Write-Output "$($signature.Status)  $sha  $file"
+            if ($signature.Status -ne 'Valid') { throw "$file is not validly signed: $($signature.StatusMessage)" }
+          }
+
       - name: Upload the installer
         uses: actions/upload-artifact@v7
         with:
@@ -286,6 +354,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      # Build provenance (docs/SIGNING.md): the run's Sigstore certificate and the attestation.
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -298,7 +369,7 @@ jobs:
           name: Guarana-Setup
           path: dist
 
-      - name: Upload it and its checksum
+      - name: Add its checksum
         shell: bash
         run: |
           set -euo pipefail
@@ -316,5 +387,19 @@ jobs:
           grep -v -F "  $SETUP" SHA256SUMS.txt > SHA256SUMS.new || true
           sha256sum -- "$SETUP" >> SHA256SUMS.new
           mv SHA256SUMS.new SHA256SUMS.txt
-          gh release upload "$TAG" "$SETUP" SHA256SUMS.txt --clobber
           cat SHA256SUMS.txt
+
+      # The installer, and SHA256SUMS.txt now that it lists the installer.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/${{ needs.build.outputs.setup_name }}
+            dist/SHA256SUMS.txt
+
+      - name: Upload it and its checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          gh release upload "$TAG" "$SETUP" SHA256SUMS.txt --clobber

@@ -12,7 +12,7 @@ The long-lived branches of karimalsalah/guarana, what may land on each, and what
 
 ## main
 
-- Always green: `build-check` (Linux GCC and Windows clang-cl, `-Werror`, unit and Python tests) passes on every commit. Protect it: require the two build jobs and a review, and allow merges only through pull requests.
+- Always green: `build-check` (Linux GCC and Windows clang-cl, `-Werror`, unit and Python tests) passes on every commit. Protect it: require the two build jobs and a review, and allow merges only through pull requests. [`.github/CODEOWNERS`](../.github/CODEOWNERS) asks the owner to review every pull request.
 - Experiments may land here, off by default, each with a row in [switches.md](switches.md). A switch that shows a measured gain on a verified scene can become the default behaviour in a later pull request, with the measurement. A disproven one is removed, or stays off with the result written in its row.
 - `nightly.yml` builds `main` every day at 03:23 UTC if it moved since the last nightly and replaces the rolling [`nightly` pre-release](https://github.com/karimalsalah/guarana/releases/tag/nightly), files and tag. Run it by hand (Actions > nightly > Run workflow, with "force") to rebuild without a new commit. GitHub turns off schedules in a repository without activity for 60 days; the Actions page then has a button to turn them back on.
 
@@ -30,12 +30,28 @@ Versions are `vX.Y.Z`; release candidates and other pre-releases are `vX.Y.Z-rcN
    ```
 
    Tags pushed by a workflow with the repository's token would not start the release workflow, so tags are pushed by people.
-4. `release-binaries.yml` checks the notes first: a tag without a non-empty section fails within a minute, before anything is built. Then it builds every platform (Windows clang-cl ThinLTO, with and without PGO; Linux x86_64 and aarch64 AppImage and tar.gz, with and without PGO; macOS arm64) and publishes the GitHub release with all the files and `SHA256SUMS.txt`. Files are named `guarana-<version>-<platform>.<ext>`, for example `guarana-0.2.0-windows-x86_64-pgo.zip`. A tag with a pre-release suffix is published as a pre-release.
+4. `release-binaries.yml` checks the notes first: a tag without a non-empty section fails within a minute, before anything is built. Then it builds every platform (Windows clang-cl ThinLTO, with and without PGO; Linux x86_64 and aarch64 AppImage and tar.gz, with and without PGO; macOS arm64) and publishes the GitHub release with all the files, `SHA256SUMS.txt` and a build provenance attestation for every file; with the signing secrets set, the Windows programs and the installer are Authenticode-signed first ([SIGNING.md](SIGNING.md)). Files are named `guarana-<version>-<platform>.<ext>`, for example `guarana-0.2.0-windows-x86_64-pgo.zip`. A tag with a pre-release suffix is published as a pre-release.
 5. Merge the release branch's `CHANGELOG.md` change back into `main`.
 
 To rebuild a published tag (a runner failure, a packaging fix that is not in the tag), run Actions > release-binaries > Run workflow with the tag: its release gets the new files and notes. To fix the notes, change `CHANGELOG.md`, move the tag (`git tag -f -a vX.Y.Z`, `git push -f origin vX.Y.Z`) before anyone downloads it, or publish the next patch version. Run from a branch without a tag, the workflow builds artifacts only and publishes nothing.
 
 The release builds run with the update checker off: it asks zortos293/Lichii for releases and only understands upstream's `build-N` tags, so it could offer upstream's builds to this fork's users. `LICHII_BUILD_TAG` is the tag, and the build reports the tag as its version.
+
+## Rapid releases
+
+`main` is always green, so a version need not wait for a release branch: tag `main` itself while it holds only what the version should ship, and cut `release/vX.Y` (above) when `main` has to move on meanwhile. `tools/ci/bump-version.sh` keeps `VERSION` and the `CHANGELOG.md` headings in step; the workflow takes the version from the tag and never reads `VERSION`.
+
+- **A patch straight from `main`**, on a branch from it:
+
+  ```sh
+  bash tools/ci/bump-version.sh patch        # VERSION 20.2.0 -> 20.2.1-rc1; [Unreleased] moves under ## [20.2.1]
+  bash tools/ci/bump-version.sh release      # VERSION 20.2.1; that heading gets today's date
+  bash tools/ci/changelog-section.sh 20.2.1  # the notes the release will use; an empty section fails it
+  ```
+
+  Commit the two files as `release: v20.2.1`, merge the pull request, then tag the commit it made on `main` and push the tag as in step 3 above.
+- **Release candidates** are `vX.Y.Z-rcN` tags, published as pre-releases, so GitHub's latest release (the README's download link) stays on the last final version. `bump-version.sh minor` (or `major`, or `patch`) starts `X.Y.Z-rc1` and moves `[Unreleased]` under `## [X.Y.Z]`; tag `vX.Y.Z-rc1` and the pre-release gets that section as its notes (a `## [X.Y.Z-rcN]` section, if you write one, wins). A fix for the candidate adds its line to `## [X.Y.Z]`, not to `[Unreleased]`. `bump-version.sh rc` moves `VERSION` to the next `-rcN` for the next tag; `bump-version.sh release` dates the section for the final `vX.Y.Z`.
+- Every tag, candidate or final, gets the same files: all platforms, `SHA256SUMS.txt`, a build provenance attestation for each file and, once the signing secrets are set, signed Windows programs and installer ([SIGNING.md](SIGNING.md)).
 
 ## Hotfixes
 
@@ -79,7 +95,7 @@ To merge it:
   git push origin FETCH_HEAD:refs/heads/upstream
   ```
 
-  or add the optional `UPSTREAM_SYNC_TOKEN` secret: a fine-grained token, or a GitHub App's, with Contents, Pull requests and Workflows write on this repository. With it the sync also pushes workflow changes, and its pull requests start CI on their own. Nothing else needs a secret.
+  or add the optional `UPSTREAM_SYNC_TOKEN` secret: a fine-grained token, or a GitHub App's, with Contents, Pull requests and Workflows write on this repository. With it the sync also pushes workflow changes, and its pull requests start CI on their own. Nothing else needs a secret but the optional release signing ([SIGNING.md](SIGNING.md)).
 - **"The upstream branch did not fast-forward"**: upstream rewrote `nx2`, or someone committed to `upstream`. Look at both before you overwrite anything; then reset the mirror with `git push --force origin FETCH_HEAD:refs/heads/upstream` after the fetch above.
 - **"Could not open the pull request"**: allow GitHub Actions to create pull requests (Settings > Actions > General > Workflow permissions), or set `UPSTREAM_SYNC_TOKEN`.
 
@@ -95,6 +111,7 @@ To merge it:
 - `ingest-reports.yml` turns `device-report` issues into `site/data/community.json` (the community leaderboard on the benchmarks page) through one bot pull request on `bot/community-reports`, and comments on each report with its parsed row. See [FEEDBACK.md](FEEDBACK.md).
 - `triage.yml` labels new issues by game, GPU and symptom, asks once for a log when a crash or bug report has none, and adds `agent-ready` to agent tasks whose acceptance test is checkable. It never closes, locks or removes anything.
 - `promo-render.yml` renders the 20-second promo in `site/promo/` to MP4 and GIF artifacts.
+- Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) opens one pull request a week per ecosystem with the minor and patch updates of the workflows' actions, the launcher's crates and its npm packages, and one per major update, each at least a week after its release. `launcher.yml` builds the installer for pull requests that change `launcher/`.
 - No workflow closes or marks issues as stale.
 
 ## Repository settings these need
@@ -104,3 +121,4 @@ To merge it:
 - Settings > General > Features: Discussions on (the issue forms link to them).
 - Settings > Security: "Private vulnerability reporting" on (SECURITY.md and CODE_OF_CONDUCT.md rely on it).
 - Branch protection or rulesets: `main` and `release/*` require the `build-check` jobs and a review. Tags `v*` may be created only by maintainers. Nobody but the sync workflow pushes `upstream`.
+- Settings > Secrets and variables > Actions: the six signing secrets, once releases should be Authenticode-signed ([SIGNING.md](SIGNING.md), "Turn signing on"). Builds and provenance need no secret.

@@ -123,6 +123,30 @@ void MasterSemaphore::Wait(u64 tick) {
     Refresh();
 }
 
+bool MasterSemaphore::WaitFor(u64 tick, std::chrono::nanoseconds timeout) {
+    if (IsFree(tick)) {
+        return true;
+    }
+    Refresh();
+    if (IsFree(tick)) {
+        return true;
+    }
+    const VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::GpuWait};
+    if (!semaphore) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (gpu_tick.load(std::memory_order_acquire) < tick) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds{100});
+        }
+        return true;
+    }
+    const bool reached = semaphore.Wait(tick, static_cast<u64>(timeout.count()));
+    Refresh();
+    return reached || IsFree(tick);
+}
+
 VkResult MasterSemaphore::SubmitQueue(vk::CommandBuffer& cmdbuf, vk::CommandBuffer& upload_cmdbuf,
                                       VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                                       u64 host_tick) {

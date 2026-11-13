@@ -75,6 +75,9 @@ public:
         return cadence_divisor != 0;
     }
 
+    /// EDEN_NX2_FLUID_INTERP: interpolated frames go to the FLUID presenter's vblank slots.
+    [[nodiscard]] static bool FluidInterpolation();
+
     /// Generates nothing until Process runs again, and gives back a cadence's frame rate cap
     /// (HDR output: extrapolation writes SDR only).
     void Pause();

@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::state::{self, AppState};
 use crate::types::{InstallResult, InstalledVersion, LauncherState, Progress, UpdateInfo};
 use crate::util::{self, CmdResult, Context};
-use crate::paths;
+use crate::{notify, paths, taskbar};
 
 const API: &str = "https://api.github.com/repos/karimalsalah/guarana";
 const DOWNLOAD_PREFIX: &str = "https://github.com/karimalsalah/guarana/releases/download/";
@@ -80,6 +80,13 @@ pub struct GhAsset {
 }
 
 fn emit(app: &AppHandle, stage: &str, done: u64, total: u64, message: Option<String>) {
+    match stage {
+        "done" => taskbar::clear(app, taskbar::Job::Install),
+        "download" | "extract" if total > 0 => {
+            taskbar::set(app, taskbar::Job::Install, Some(done.saturating_mul(100) / total))
+        }
+        _ => taskbar::set(app, taskbar::Job::Install, None),
+    }
     let _ = app.emit(EVENT, Progress::new(stage, done, total, message));
 }
 
@@ -347,7 +354,15 @@ pub async fn install_version(app: &AppHandle, version: &str, channel: &str) -> C
     let started = Instant::now();
     let st = app.state::<AppState>();
     let _guard = st.install_lock.try_lock().map_err(|_| "Another install is already running".to_string())?;
+    let _taskbar = taskbar::Guard::new(app, taskbar::Job::Install);
+    let result = install_locked(app, version, channel, started).await;
+    if let Ok(r) = &result {
+        notify::update_installed(app, &r.version);
+    }
+    result
+}
 
+async fn install_locked(app: &AppHandle, version: &str, channel: Channel, started: Instant) -> CmdResult<InstallResult> {
     // The build the installer carries needs no download.
     if let Some(b) = bundled(app) {
         if b.channel == channel && !version.trim().is_empty() && util::sanitize_component(version.trim()) == b.version {
@@ -588,6 +603,7 @@ pub async fn ensure_bundled(app: &AppHandle) {
     let Ok(_install) = st.install_lock.try_lock() else {
         return;
     };
+    let _taskbar = taskbar::Guard::new(app, taskbar::Job::Install);
     let app2 = app.clone();
     match tauri::async_runtime::spawn_blocking(move || install_bundled(&app2, &b)).await {
         Ok(Ok(r)) => log::info!("First run: installed the bundled build {}", r.version),

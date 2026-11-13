@@ -23,6 +23,7 @@ constexpr u32 FLAG_HUD_LINEAR = 4;
 constexpr u32 FLAG_HUD_EXACT = 8;
 constexpr u32 FLAG_DEBUG_MOVED = 16;
 constexpr u32 FLAG_HUD_DILATE = 32;
+constexpr u32 FLAG_HUD_FILL = 64;
 constexpr u32 SAMPLED_BINDINGS = 4;
 constexpr u32 OUTPUT_BINDING = 4;
 constexpr u32 GROUP_SIZE = 8;
@@ -115,6 +116,9 @@ void FrameExtrapolation::Generate(const Device& device, Scheduler& scheduler,
         return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
     }();
     static const bool dilate_hud = EnvironmentFlag("EDEN_NX2_EXTRAPOLATE_HUD_DILATE", true);
+    // EDEN_NX2_EXTRAPOLATE_HUD_FILL=1: a scene pixel whose motion comes from under the HUD takes the
+    // scene there (the frame without the HUD) instead of staying where it was.
+    static const bool fill_hud = EnvironmentFlag("EDEN_NX2_EXTRAPOLATE_HUD_FILL", false);
     static const bool keep_hud = EnvironmentFlag("EDEN_NX2_EXTRAPOLATE_HUD", true);
 
     if (!descriptor_pool) {
@@ -161,7 +165,8 @@ void FrameExtrapolation::Generate(const Device& device, Scheduler& scheduler,
         .flags = (has_hud ? FLAG_HUD : 0) | (debug != 0 ? FLAG_DEBUG : 0) |
                  (debug >= 2 ? FLAG_DEBUG_MOVED : 0) | (has_hud && dilate_hud ? FLAG_HUD_DILATE : 0) |
                  (has_hud && source.hud_reference_linear ? FLAG_HUD_LINEAR : 0) |
-                 (has_hud && source.hud_exact ? FLAG_HUD_EXACT : 0),
+                 (has_hud && source.hud_exact ? FLAG_HUD_EXACT : 0) |
+                 (has_hud && fill_hud ? FLAG_HUD_FILL : 0),
     };
 
     scheduler.Record([this, constants, set, destination, extent](vk::CommandBuffer cmdbuf) {

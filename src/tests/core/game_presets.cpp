@@ -187,6 +187,8 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
     CHECK(intel.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
     CHECK(intel.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
     CHECK(intel.find("EDEN_NX2_GPL=1 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_FLUID_QUEUE=5 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_BUDGET_HOLD_RES=1 ") != std::string::npos);
     const std::string amd = names(SwitchDefaults(
         OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));
     CHECK(amd.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
@@ -198,6 +200,23 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
     CHECK(SwitchDefaults(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}).empty());
     CHECK(SwitchDefaults(OcarinaTitleId, {.vendor = GPUVendor::Intel, .integrated = false}).empty());
     CHECK(SwitchDefaults(0x0100152000022000, Arc140T).empty());
+}
+
+TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {
+    using Common::DeviceClass;
+    const Preset* const preset = Find(Presets(), OcarinaTitleId, Arc140T);
+    const std::span<const SwitchValue> switches = SwitchDefaults(OcarinaTitleId, Arc140T);
+    for (const DeviceClass device_class :
+         {DeviceClass::Unknown, DeviceClass::IntegratedLowPower, DeviceClass::Integrated,
+          DeviceClass::DiscreteEntry, DeviceClass::DiscreteHigh}) {
+        GpuInfo gpu = Arc140T;
+        gpu.device_class = device_class;
+        CHECK(Find(Presets(), OcarinaTitleId, gpu) == preset);
+        const std::span<const SwitchValue> with_class = SwitchDefaults(OcarinaTitleId, gpu);
+        CHECK(with_class.data() == switches.data());
+        CHECK(with_class.size() == switches.size());
+        CHECK(ReportsFirstBoot(OcarinaTitleId, gpu));
+    }
 }
 
 TEST_CASE("Ocarina of Time's first boot on an integrated GPU is reported", "[core][game_presets]") {

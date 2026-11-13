@@ -45,6 +45,12 @@
       "icons/icon.ico"
     ],
     "resources": ["resources/*"],
+    "fileAssociations": [
+      { "ext": ["nsp"], "name": "Guarana.nsp", "description": "NSP game package" },
+      { "ext": ["xci"], "name": "Guarana.xci", "description": "XCI game card image" },
+      { "ext": ["nup"], "name": "Guarana.nup", "description": "NUP game package" },
+      { "ext": ["nca"], "name": "Guarana.nca", "description": "NCA content archive" }
+    ],
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper",
@@ -54,7 +60,15 @@
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "startMenuFolder": "Guarana"
+        "startMenuFolder": "Guarana",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["guarana"]
       }
     }
   }

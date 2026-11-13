@@ -51,6 +51,12 @@ Hard rules (legal and trust):
 | `share_open` | – | `ShareLink` `{ url, url_chars, level: "full" \| "short" \| "clipboard", text }`. The `device-report.yml` form prefilled by field id, text fields only (`device`, `cpu`, `driver`, `ram`, `os`, `power_mode`, `build`, `settings`, `results`, `notes`); the scene, the screenshot and the choices are left to the user. At most 7000 characters (`full`); else the essentials in at most 2000 (`short`); else an empty form (`clipboard`). The UI copies `text` to the clipboard for `short` and `clipboard`, then opens `url`. User name, profile folder and host name are scrubbed like reports. Nothing is sent |
 | `share_dismiss` | – | `ShareStatus` ("Not now", and after Share): drops the offer |
 | `share_set_prompt` | `{ enabled: boolean }` | `ShareStatus`. The setting to stop asking (Home → Advanced); off also drops the offer |
+| `take_launch_request` | – | `LaunchRequest \| null`, once: the game a file opened from Explorer or a `guarana://` link asked for (see "Opening games from Windows"). The UI calls it after its first screen and on every `launch://request` |
+| `get_notifications` | – | `Notifications` `{ enabled }` |
+| `set_notifications` | `{ enabled: boolean }` | `Notifications`. Windows notifications (Home → Advanced), off by default: shader warm-up finished, update installed. Turning them on shows one right away |
+| `get_booster` | – | `BoosterStatus` (the Game Booster: chosen level, whether a session is active, and every level with what it changes on this PC) |
+| `set_booster_level` | `{ level: number }` (0 = Off … 3) | `BoosterStatus`. Saves the level; it takes effect at the next launch |
+| `booster_undo_all` | – | `BoosterStatus`. Restores every change the booster made right now |
 
 Argument keys are snake_case exactly as written (`invoke("apply_profile", { profile_id, overrides })`):
 the commands are declared with `rename_all = "snake_case"`. Errors reject the promise with a
@@ -138,6 +144,18 @@ interface AutopilotChange { id: number; at: string; mode: string; kind: "change"
   title_id?: string | null; undone: boolean; }
 interface StopResult { was_running: boolean; title_id: string | null; stopped: boolean; message: string; }
 interface AskAi { service: "claude" | "chatgpt"; url: string; prompt: string; url_chars: number; }
+interface LaunchRequest { source: "file" | "link";  // Explorer, a shortcut or a second start; or guarana://
+  game: Game | null;                  // checked; `container` is "other" and `title_id` may be "" for an .nca
+  error: string | null; }             // why it can't start, to show as is
+interface Notifications { enabled: boolean; }
+
+interface BoosterLevelInfo { level: number; title: string; summary: string;
+  elevated: boolean;                   // true when the level shows one Windows permission (UAC) prompt
+  changes: string[]; }                 // the exact changes the level makes on this PC, in order
+interface BoosterStatus { level: number;   // chosen level: 0 = Off (default) … 3
+  active: boolean;                      // a boosted session is running now
+  levels: BoosterLevelInfo[];           // Off..3, for the picker and the "what it changes" list
+  note: string | null; }
 
 Progress events carry `{ stage: string, done: number, total: number, message?: string }`.
 
@@ -145,7 +163,49 @@ Events: `install://progress` (stages `resolve`, `download`, `verify`, `extract`,
 `download`, files for `extract`), `locate://progress` (`scan` with done/total = roots, then `done`),
 `doctor://progress` (stage = the check id being run, then `done`), `game://exited`
 (`{ code, seconds }`), `controller://changed` (`Controller[]`), `warm://progress` (`WarmProgress`), `autopilot://changed`
-(`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed).
+(`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed),
+`launch://request` (no payload: a `LaunchRequest` waits for `take_launch_request`),
+`booster://changed` (`BoosterStatus`, after the booster applies for a session, restores it, or the level changes).
+
+## Opening games from Windows
+
+The launcher is a single instance (tauri-plugin-single-instance): a second start brings the running
+window to the front and hands over its command line, so every way in below reaches the running
+launcher.
+
+- **File associations.** The installer registers `.nsp`, `.xci`, `.nup` and `.nca` (`bundle >
+  fileAssociations`, ProgIDs `Guarana.nsp` …) for the current user, plus `OpenWithProgids` entries
+  (`src-tauri/windows/installer-hooks.nsh`). Explorer starts `guarana-launcher.exe "<file>"`.
+  `args.rs` takes the first argument with one of those extensions (made absolute against the
+  starting folder; flags and `guarana:` arguments are skipped); `open.rs` checks it is a file and
+  names it from the library entry with the same path, else from its header or file name (an `.nca`
+  keeps its file name: the library scan leaves `.nca` to firmware).
+- **`guarana://` links** (tauri-plugin-deep-link, scheme `guarana` in `plugins > deep-link`). Windows
+  starts the launcher with the link as its only argument; a running launcher gets it through the
+  single-instance plugin's `deep-link` feature, a new one reads it at start. Accepted, nothing else:
+  - `guarana://launch/<title id>` or `guarana://launch?title_id=<title id>`: 16 hex digits (`0x`
+    allowed), a game of the library whose file is still there.
+  - `guarana://launch?path=<percent-encoded full path>`: checked as text first, then on disk. A
+    drive-letter path (`/` taken as `\`), no network or device path (`\\server\…`, `\\?\`, `\\.\`), no
+    `.` or `..` segment, no second `:`, no `< > " | ? *`, control character or reserved device name
+    (`CON`, `NUL`, `COM1` …), extension `.nsp` `.xci` `.nup` or `.nca`; it must sit inside one of the
+    game folders the user added, and only then is the disk read: a regular file, not a link to one.
+    `%20` is a space and `+` stays a plus.
+  - Refused: any other scheme, action or parameter, a user name, password, port or fragment, repeated
+    parameters, both or neither of a title id and a path, links over 2048 characters. A link only
+    ever picks a game for `launch_game`; it never names a program, an argument or a setting.
+- **The UI** takes the request with `take_launch_request` and opens the launch screen, which calls
+  `launch_game` with the `path` (and `title_id` when known), the same start as a library game. It
+  shows `error` instead, and does not navigate while a game starts or runs, before the first run is
+  finished or without keys.
+- **Notifications** (tauri-plugin-notification) are only sent when `set_notifications` turned them on
+  and the launcher is not the active window: a `warm_shaders` or autopilot warm-up that ended
+  `done`, `incomplete`, `nothing built` or `failed` (one per game), the automatic warm-up after a GPU
+  driver change (one for all games), and a successful `install_version` (also the doctor's
+  `install_update`; not the first-run install of the bundled build).
+- **Taskbar progress** (Tauri's `set_progress_bar`) follows `install://progress` (download and extract
+  as percentages, the other stages pulsing; the first-run install too) and `warm://progress`
+  (`percent`), and clears when the job ends, however it ends. An install shows over a warm-up.
 
 ## Modes, community data and the autopilot
 
@@ -193,6 +253,32 @@ is not lower, else turned off and not tried for 30 days; resolution one step up 
 at 58 fps or more with even frames. History (50 entries) with the reason, `autopilot_undo`, and
 "Autopilot changed X because Y" on Home. State is in `launcher-state.json`; the only files it
 causes to be written are the ones `apply_profile` writes.
+
+## Game Booster
+
+A separate, opt-in setting (`booster.rs`), Off by default, saved as `booster_level` (0–3) in
+`launcher-state.json`. While a game started from the launcher runs it tunes Windows for speed, and
+puts everything back when the game exits, when the launcher starts after a crash (from
+`booster-journal.json`), or from the UI's **Undo all**. The levels are cumulative:
+
+| Level | Admin | Adds |
+|---|---|---|
+| 1 | no | the emulator at **Above Normal** priority; power throttling (**EcoQoS**) off for it (`SetProcessInformation(ProcessPowerThrottling)`); the **high-performance GPU** asked for `guarana.exe` (`HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, `GpuPreference=2;`, other tokens kept and the previous value restored) |
+| 2 | one UAC prompt | the active **power plan** switched to Ultimate Performance (if installed) or High performance for the session, then the previous one restored |
+| 3 | one UAC prompt | as 2, but the emulator at **High** priority, and **SysMain** and **Windows Search** paused while you play (only if running) and restarted after |
+
+The two things that need administrator rights — the power-plan switch and the services — are done by a
+small elevated helper (the launcher re-run with `--booster-helper`, started with `ShellExecuteEx`
+"runas" on its own thread, so the prompt never holds up the launch), so a whole session costs one
+prompt: the helper applies them, waits for the emulator to exit, and restores them. When a level has
+nothing that needs admin on this PC (the plan is already active or none is installed, and no listed
+service is running), no prompt appears, and `BoosterStatus.levels[].elevated` is then false.
+Everything else is set by the launcher without elevation (the GPU preference before the emulator
+starts, so Windows reads it for the run; priority and EcoQoS on the process once it exists). Every change is
+written to `booster-journal.json` before it is made and is undone from it. **Security settings are
+never touched** (Defender, firewall, VBS/HVCI/Memory Integrity, SmartScreen, UAC, Windows Update,
+BitLocker), and nothing under `HKLM` is written except what `powercfg` itself does. The UI (Home)
+shows the picker and, for each level, exactly what it changes and whether it needs the prompt.
 
 ## Profiles (first set)
 

@@ -34,6 +34,9 @@ pub struct Persisted {
     pub mode: Option<String>,
     #[serde(default)]
     pub autopilot: crate::autopilot::AutopilotState,
+    /// Game Booster level: 0 = Off (default), 1, 2 or 3.
+    #[serde(default)]
+    pub booster_level: u8,
     /// "Share my numbers": the session Home offers to share (until Share or Not now).
     #[serde(default)]
     pub share_offer: Option<crate::share::ShareOffer>,
@@ -43,6 +46,9 @@ pub struct Persisted {
     /// `mtime:len` of the last log session looked at, so one session is offered once.
     #[serde(default)]
     pub share_session_key: Option<String>,
+    /// Windows notifications when shaders are ready or an update is installed (off by default).
+    #[serde(default)]
+    pub notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +68,8 @@ pub struct AppState {
     pub controllers: Arc<Mutex<Vec<Controller>>>,
     pub system_cache: Mutex<Option<(Instant, SystemInfo)>>,
     pub warm: Mutex<crate::warm::WarmState>,
+    /// A game Explorer or a `guarana://` link asked for, until the UI takes it.
+    pub launch_request: Mutex<Option<crate::open::LaunchRequest>>,
 }
 
 impl AppState {
@@ -73,6 +81,7 @@ impl AppState {
             controllers: Arc::new(Mutex::new(Vec::new())),
             system_cache: Mutex::new(None),
             warm: Mutex::new(crate::warm::WarmState::default()),
+            launch_request: Mutex::new(None),
         }
     }
 

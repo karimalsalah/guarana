@@ -6047,7 +6047,7 @@ Drag points to change position, or double-click table cells to edit values.</sou
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="32"/>
-        <source>Creating a room failed. Please retry. Restarting Eden might be necessary.</source>
+        <source>Creating a room failed. Please retry. Restarting Guarana might be necessary.</source>
         <translation>فشل إنشاء الغرفة. يرجى المحاولة مرة أخرى. قد يكون من الضروري إعادة تشغيل إيدن.</translation>
     </message>
     <message>
@@ -6057,7 +6057,7 @@ Drag points to change position, or double-click table cells to edit values.</sou
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="37"/>
-        <source>Version mismatch! Please update to the latest version of Eden. If the problem persists, contact the room host and ask them to update the server.</source>
+        <source>Version mismatch! Please update to the latest version of Guarana. If the problem persists, contact the room host and ask them to update the server.</source>
         <translation>عدم تطابق الإصدار! يرجى التحديث إلى أحدث إصدار من إيدن. إذا استمرت المشكلة، اتصل بمضيف الغرفة واطلب منه تحديث الخادم.</translation>
     </message>
     <message>
@@ -6529,7 +6529,7 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/host_room.cpp" line="187"/>
-        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Eden account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
+        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Guarana account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
 Debug Message: </source>
         <translation>فشل في الإعلان عن الغرفة في الردهة العامة. من أجل استضافة غرفة بشكل عام، يجب أن يكون لديك حساب إيدن صالح مُكوَّن في المحاكاة -&gt; الإعدادات -&gt; الويب. إذا كنت لا ترغب في نشر الغرفة في الردهة العامة، فاختر &quot;غير مدرجة&quot; بدلاً من ذلك.
 رسالة تصحيح الأخطاء:</translation>
@@ -6899,7 +6899,7 @@ Debug Message: </source>
     <name>MainWindow</name>
     <message>
         <location filename="../../src/lichii/main.ui" line="14"/>
-        <source>Lichii</source>
+        <source>Guarana</source>
         <translation>يوزو</translation>
     </message>
     <message>
@@ -7454,9 +7454,9 @@ Debug Message: </source>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1839"/>
-        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;How to access log files&lt;/a&gt;.</source>
+        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;How to access log files&lt;/a&gt;.</source>
         <translation>عادةً ما يحدث هذا بسبب برامج تشغيل وحدة معالجة الرسومات القديمة. يرجى الاطلاع على السجل لمزيد من التفاصيل. انظر: 
-&lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;كيفية الوصول إلى ملفات السجلات&lt;/a&gt;.</translation>
+&lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;كيفية الوصول إلى ملفات السجلات&lt;/a&gt;.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1852"/>
@@ -9453,8 +9453,8 @@ p, li { white-space: pre-wrap; }
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="328"/>
-        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Eden has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
-        <translation>قد تحدث أمور سيئة غير متوقعة إذا لم تقرأ هذا&lt;br&gt;!لقد اكتشف إيدن مجلدات الحفظ التالية بدون ملف تعريف مرفق:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;ملفات التعريف التالية صالحة:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;انقر على ”موافق“ لفتح مجلد الحفظ وإصلاح ملفات التعريف الخاصة بك.&lt;br&gt;تلميح: انسخ محتويات المجلد الأكبر أو آخر مجلد تم تعديله إلى مكان آخر، واحذف جميع ملفات التعريف اليتيمة، وانقل المحتويات المنسوخة إلى ملف التعريف الصحيح.&lt;br&gt;&lt;br&gt;هل ما زلت تشعر بالارتباك؟ انظر إلى &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;صفحة المساعدة&lt;/a&gt;.&lt;br&gt;</translation>
+        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Guarana has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
+        <translation>قد تحدث أمور سيئة غير متوقعة إذا لم تقرأ هذا&lt;br&gt;!لقد اكتشف إيدن مجلدات الحفظ التالية بدون ملف تعريف مرفق:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;ملفات التعريف التالية صالحة:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;انقر على ”موافق“ لفتح مجلد الحفظ وإصلاح ملفات التعريف الخاصة بك.&lt;br&gt;تلميح: انسخ محتويات المجلد الأكبر أو آخر مجلد تم تعديله إلى مكان آخر، واحذف جميع ملفات التعريف اليتيمة، وانقل المحتويات المنسوخة إلى ملف التعريف الصحيح.&lt;br&gt;&lt;br&gt;هل ما زلت تشعر بالارتباك؟ انظر إلى &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;صفحة المساعدة&lt;/a&gt;.&lt;br&gt;</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="347"/>
@@ -9602,7 +9602,7 @@ Only do this if you&apos;re 100% sure you want to delete this data.</source>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="501"/>
-        <source>Install decryption keys and restart Eden before attempting to install firmware.</source>
+        <source>Install decryption keys and restart Guarana before attempting to install firmware.</source>
         <translation>قم بتثبيت مفاتيح فك التشفير وأعد تشغيل إيدن قبل محاولة تثبيت الفيرموير.</translation>
     </message>
     <message>
@@ -10090,7 +10090,7 @@ Most mods are RomFS mods, but patches (.pchtxt) are typically ExeFS mods.</sourc
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="96"/>
-        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Eden or re-install firmware.</source>
+        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Guarana or re-install firmware.</source>
         <translation>تم إلغاء تثبيت الفيرموير، فقد يكون في حالة سيئة أو تالفًا. أعد تشغيل إيدن أو أعد تثبيت الفيرموير.</translation>
     </message>
     <message>

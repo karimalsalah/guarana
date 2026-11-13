@@ -90,12 +90,50 @@ great first contribution.
   integrated GPU, AMD included, but that is untested. Measure with and without each switch and send
   both rows.
 
+## The device profile in the log
+
+When a game boots, the log gets one `Render.Vulkan` Info line that says what the machine is and
+which device class it falls in. It looks like this (the values are an example):
+
+```text
+Device profile: class=Integrated label="Intel Arc 140T, integrated, 32 GB, hybrid 6P+8E+2LPE, NPU" gpu_vendor=Intel gpu_model="Intel(R) Arc(TM) 140T GPU (16GB)" gpu_type=integrated gpu_driver=101.9175 gpu_local_mib=16384 gpu_uma=yes cpu_logical=16 cpu_physical=16 cpu_hybrid=6P+8E+2LPE ram_mib=32768 ram_source=installed power=ac display_hz=60.00 npu=yes
+```
+
+| Field | Meaning |
+|---|---|
+| `class` | The device class, from the table below |
+| `label` | The same machine in a few words: GPU, its kind (and memory when discrete), RAM, cores, `on battery`, `NPU` |
+| `gpu_vendor`, `gpu_model` | The GPU's vendor (by PCI vendor ID) and the name its driver reports |
+| `gpu_type` | `integrated`, `discrete`, `virtual`, `cpu` (a software renderer) or `unknown` |
+| `gpu_driver` | The driver version, as on the `Driver:` line |
+| `gpu_local_mib` | The largest device-local memory heap the driver lists, in MiB. On an integrated GPU this is shared RAM |
+| `gpu_uma` | `yes` when the GPU's memory is the machine's RAM: an integrated GPU, a software renderer, or a driver that lists only device-local heaps |
+| `cpu_logical`, `cpu_physical` | Logical processors and cores (0: unknown) |
+| `cpu_hybrid` | Performance, efficiency and low-power efficiency cores as the OS ranks them (Windows: the cores' efficiency class; Linux: the `cpu_atom` list or `cpu_capacity`), or `no` |
+| `ram_mib`, `ram_source` | RAM in MiB. `installed` is the amount fitted (Windows, macOS); `os` is the memory the OS manages, less what firmware and the GPU reserve |
+| `power` | `ac`, `battery` or `unknown`. Only Windows says |
+| `display_hz` | The refresh rate of the display the window is on, or `unknown`. Only Windows says |
+| `npu` | `yes` when Windows lists a device under **Neural processors** in Device Manager, `no` when it lists none, `unknown` elsewhere. An NPU without its driver is not listed |
+
+| Class | When |
+|---|---|
+| `IntegratedLowPower` | An integrated GPU with less than 10 GiB of RAM, or on battery |
+| `Integrated` | Any other integrated GPU |
+| `DiscreteHigh` | A discrete GPU with 8 GB or more of its own memory. Drivers keep some back, so 7.5 GiB and up counts |
+| `DiscreteEntry` | A discrete GPU with less |
+| `Unknown` | A virtual GPU, a software renderer, or a GPU whose kind or memory the driver does not say |
+
+The class changes nothing yet. A default for a class comes only with a paired run on a verified
+scene of that class ([AGENTS.md](../AGENTS.md), rule 1). The line holds no paths or names from your
+machine, so you can paste it into a report as it is.
+
 ## Send a device report
 
 [Open a device report](https://github.com/karimalsalah/guarana/issues/new/choose), or attach bench rows
 to a pull request as described in [BENCHMARKING.md](BENCHMARKING.md). A good report has:
 
 ```text
+Device profile:    (the "Device profile:" line from the log)
 Device:            (model, for example "MSI Claw 8 AI+")
 CPU / GPU:         (for example "Core Ultra 9 285H / Arc 140T")
 GPU driver:        (exact version)
