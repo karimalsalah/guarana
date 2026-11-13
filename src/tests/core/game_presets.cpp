@@ -158,3 +158,27 @@ TEST_CASE("Game presets fill in the settings left at their default", "[core][gam
     Apply(OcarinaTitleId, Arc140T);
     REQUIRE(values.oot_anti_aliasing.UsingGlobal());
 }
+
+TEST_CASE("A game preset sums up what it did in one line", "[core][game_presets]") {
+    SettingsScope scope;
+    ResetToDefaults();
+    const std::string summary = Apply(OcarinaTitleId, Arc140T);
+    CHECK(summary.starts_with(
+        "preset \"Ocarina of Time on an Intel integrated GPU without matrix cores\": "));
+    CHECK(summary.find("oot_anti_aliasing=1") != std::string::npos);
+    CHECK(summary.find("vram_usage_mode=1") != std::string::npos);
+    CHECK(summary.find("add-on \"Max Resolution (built-in)\" enabled") != std::string::npos);
+    CHECK_FALSE(summary.ends_with(", "));
+
+    ResetToDefaults();
+    CHECK(Apply(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}).empty());
+}
+
+TEST_CASE("Ocarina of Time's first boot on an integrated GPU is reported", "[core][game_presets]") {
+    REQUIRE(ReportsFirstBoot(OcarinaTitleId, Arc140T));
+    REQUIRE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));
+    REQUIRE_FALSE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD}));
+    REQUIRE_FALSE(ReportsFirstBoot(OcarinaTitleId,
+                                   {.vendor = GPUVendor::Nvidia, .integrated = true}));
+    REQUIRE_FALSE(ReportsFirstBoot(0x0400C3F00006E000, Arc140T));
+}
