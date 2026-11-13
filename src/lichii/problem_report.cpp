@@ -322,7 +322,7 @@ void Run(QWidget* parent, const Context& context) {
     const QString summary_text = summary->text().trimmed();
     const QString steps_text = steps->toPlainText().trimmed();
 
-    const QString zip_name = QStringLiteral("lichii-report-%1.zip")
+    const QString zip_name = QStringLiteral("guarana-report-%1.zip")
                                  .arg(QDateTime::currentDateTime().toString(
                                      QStringLiteral("yyyyMMdd-HHmmss")));
     const QString attach =
