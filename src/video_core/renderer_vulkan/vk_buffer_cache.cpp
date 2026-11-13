@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "video_core/buffer_cache/buffer_cache_base.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_list_grid.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
