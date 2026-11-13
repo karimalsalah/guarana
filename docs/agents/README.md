@@ -69,7 +69,7 @@ it is merged.
   - `README.md`: one lane owns it at a time ([HANDOVER.md](../../HANDOVER.md)).
   - `src/video_core/renderer_vulkan/present/`: the pacing lane, pull requests #58 and #1 at the
     time of writing.
-- **Reviews:** [CODEOWNERS](../CODEOWNERS) sends every pull request to the owner until area owners
+- **Reviews:** [CODEOWNERS](../../.github/CODEOWNERS) sends every pull request to the owner until area owners
   volunteer.
 
 ## 4. The CI gates
