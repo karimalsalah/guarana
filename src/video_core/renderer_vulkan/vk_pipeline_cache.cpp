@@ -102,6 +102,12 @@ using VideoCommon::GraphicsEnvironment;
 constexpr u32 CACHE_VERSION = VideoCommon::VulkanPipelineCacheVersion;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
+/// Where reads of the cache hold its builds back (Device::SerializesPipelineCacheReads): a minute
+/// apart whatever the cache's size, once this many pipelines are new
+constexpr size_t VULKAN_CACHE_SERIALIZED_FLUSH_PIPELINES = 32;
+constexpr size_t VULKAN_CACHE_SERIALIZED_FLUSH_SECONDS = 60;
+/// How long such a flush waits for the running builds, which hold the new ones back meanwhile
+constexpr std::chrono::milliseconds VULKAN_CACHE_SERIALIZED_FLUSH_LOCK_WAIT{250};
 constexpr auto& VULKAN_CACHE_MAGIC_NUMBER = VideoCommon::VulkanDriverPipelineCacheMagic;
 
 template <typename Container>
@@ -1457,6 +1463,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         vulkan_pipeline_cache =
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
+        if (device.SerializesPipelineCacheReads()) {
+            LOG_INFO(Render_Vulkan, "Driver pipeline cache: reads wait for the builds into it, "
+                                    "saved during play too (EDEN_NX2_CACHE_SAFE=0 turns this off)");
+        }
     }
     if (boot_lock.Held() && !Common::FS::NewFile(boot_marker)) {
         LOG_WARNING(Common_Filesystem, "Couldn't create {}",
@@ -1972,7 +1982,11 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     }
     boot_graphics.clear();
 
-    // With the precache, the prebuild starts after it.
+    // With the precache, the prebuild starts after it. Where reads of the driver pipeline cache
+    // wait for the builds into it (Device::SerializesPipelineCacheReads), after the save below
+    // too, which would otherwise wait for the background builds then running (Intel's Windows
+    // driver crashed reading the cache during them, IGCIT #1614).
+    const bool prebuild_after_save = precache || device.SerializesPipelineCacheReads();
     size_t deferred_pipelines = 0;
     const auto start_prebuild = [&] {
         for (PrebuildRecord& record : prebuild) {
@@ -1991,7 +2005,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         }
         prebuild.clear();
     };
-    if (!precache) {
+    if (!prebuild_after_save) {
         start_prebuild();
     }
 
@@ -2004,8 +2018,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     if (skipped_pipelines != 0) {
         LOG_INFO(Render_Vulkan,
                  "{} cached graphics pipelines skipped at boot, {} {} for background prebuild",
-                 skipped_pipelines, precache ? prebuild.size() : deferred_pipelines,
-                 precache ? "held" : "admitted");
+                 skipped_pipelines, prebuild_after_save ? prebuild.size() : deferred_pipelines,
+                 prebuild_after_save ? "held" : "admitted");
     }
     {
         std::scoped_lock lock{state.mutex};
@@ -2036,11 +2050,10 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     log.reset();
 
     if (use_vulkan_pipeline_cache) {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
-        last_cache_size.store(size, std::memory_order_relaxed);
+        // Its size from the save's own read: another read would need the build lock as well
+        last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                           vulkan_pipeline_cache, CACHE_VERSION),
+                              std::memory_order_relaxed);
         last_flush = std::chrono::steady_clock::now();
     }
     if (state.statistics) {
@@ -2060,7 +2073,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - load_begin)
                             .count(),
                         graphics_records, compute_records, state.total, skipped_pipelines,
-                        precache ? prebuild.size() : deferred_pipelines,
+                        prebuild_after_save ? prebuild.size() : deferred_pipelines,
                         bytes(pipeline_cache_filename), bytes(vulkan_pipeline_cache_filename)));
     }
     if (precache && !stop_loading.stop_requested()) {
@@ -2069,7 +2082,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     }
     if (stop_loading.stop_requested()) {
         scheduled_prebuild.reset();
-    } else if (precache) {
+    } else if (prebuild_after_save) {
         start_prebuild();
         LOG_INFO(Render_Vulkan, "{} cached graphics pipelines admitted for background prebuild",
                  deferred_pipelines);
@@ -2268,17 +2281,23 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
 }
 
 void PipelineCache::QueueVulkanPipelineCacheFlush() {
+    // Where the driver can't read the cache during builds, only with the reads waiting for them
+    const bool serialized = device.SerializesPipelineCacheReads();
     if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty() ||
-        !device.CanReadPipelineCacheDuringBuilds()) {
+        (!device.CanReadPipelineCacheDuringBuilds() && !serialized)) {
         return;
     }
-    if (++pipelines_since_flush < VULKAN_CACHE_FLUSH_PIPELINES) {
+    // There every minute, whatever the size: its pipelines reached the file only at a game change
+    // or a clean exit, and a crash lost them.
+    if (++pipelines_since_flush <
+        (serialized ? VULKAN_CACHE_SERIALIZED_FLUSH_PIPELINES : VULKAN_CACHE_FLUSH_PIPELINES)) {
         return;
     }
     const auto now = std::chrono::steady_clock::now();
     const auto megabytes = last_cache_size.load(std::memory_order_relaxed) / (1024 * 1024);
     const std::chrono::seconds interval{
-        std::max<size_t>(VULKAN_CACHE_FLUSH_MIN_SECONDS, megabytes)};
+        serialized ? VULKAN_CACHE_SERIALIZED_FLUSH_SECONDS
+                   : std::max<size_t>(VULKAN_CACHE_FLUSH_MIN_SECONDS, megabytes)};
     if (last_flush.time_since_epoch().count() != 0 && now - last_flush < interval) {
         return;
     }
@@ -2287,28 +2306,40 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
     }
     pipelines_since_flush = 0;
     last_flush = now;
-    serialization_thread.QueueWork([this] {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
-        last_cache_size.store(size, std::memory_order_relaxed);
+    // There a save that would wait long for the running builds is dropped: it holds back the next
+    const std::optional<std::chrono::milliseconds> lock_wait =
+        serialized ? std::optional{VULKAN_CACHE_SERIALIZED_FLUSH_LOCK_WAIT} : std::nullopt;
+    serialization_thread.QueueWork([this, lock_wait] {
+        last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                           vulkan_pipeline_cache, CACHE_VERSION,
+                                                           lock_wait),
+                              std::memory_order_relaxed);
         flush_in_flight.store(false, std::memory_order_release);
     });
 }
 
 void PipelineCache::QueueVulkanPipelineCacheSave() {
-    if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty() ||
-        !device.CanReadPipelineCacheDuringBuilds()) {
+    if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
+        return;
+    }
+    if (device.SerializesPipelineCacheReads()) {
+        // Here, on the loading screen, before the background prebuild starts: on the
+        // serialization thread the save would wait for its first builds and hold back the next.
+        const size_t size = SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                         vulkan_pipeline_cache, CACHE_VERSION);
+        last_cache_size.store(size, std::memory_order_relaxed);
+        LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
+                 size);
+        return;
+    }
+    if (!device.CanReadPipelineCacheDuringBuilds()) {
         return;
     }
     // Not skipped when a timed flush is in flight: that one may have read the cache before the
     // stage's last builds. The serialization thread runs the two one after the other.
     serialization_thread.QueueWork([this] {
-        SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
-        size_t size = 0;
-        vulkan_pipeline_cache.Read(&size, nullptr);
+        const size_t size = SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                         vulkan_pipeline_cache, CACHE_VERSION);
         last_cache_size.store(size, std::memory_order_relaxed);
         LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
                  size);
@@ -3644,9 +3675,81 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     return {.failure = exception.what()};
 }
 
-void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& filename,
-                                                 const vk::PipelineCache& pipeline_cache,
-                                                 u32 cache_version) {
+size_t PipelineCache::SerializeVulkanPipelineCache(
+    const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
+    u32 cache_version, std::optional<std::chrono::milliseconds> max_lock_wait) {
+    using Clock = std::chrono::steady_clock;
+    const auto to_ms = [](Clock::duration duration) {
+        return std::chrono::duration<double, std::milli>(duration).count();
+    };
+    // Also when the file is left as it is, which holds the cache then (the log tools take it as
+    // the end of the boot's save)
+    const auto log_cached = [&filename] {
+        LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {}",
+                 Common::FS::PathToUTF8String(filename));
+    };
+    std::scoped_lock save_lock{vulkan_cache_save_mutex};
+    const bool serialized = device.SerializesPipelineCacheReads();
+    const auto wait_begin = Clock::now();
+    Clock::time_point read_begin;
+    size_t cache_size = 0;
+    std::unique_ptr<char[]> cache_data;
+    u64 builds = 0;
+    {
+        // Where the driver crashes reading a cache that pipelines build into (Intel's Windows
+        // driver, IGCIT #1614), this waits for the running builds and holds the next ones back
+        // until the data is read.
+        const auto read_lock = device.LockPipelineCacheForRead(max_lock_wait);
+        read_begin = Clock::now();
+        if (serialized && !read_lock.owns_lock()) {
+            LOG_INFO(Render_Vulkan,
+                     "Vulkan driver pipeline cache not saved this time: pipelines still built "
+                     "after {} ms",
+                     max_lock_wait->count());
+            return saved_cache_size;
+        }
+        builds = device.PipelineCacheBuilds();
+        if (serialized && builds == saved_cache_builds) {
+            LOG_INFO(Render_Vulkan, "Vulkan driver pipeline cache unchanged, nothing built since "
+                                    "its file was read or written: not written again");
+            log_cached();
+            return saved_cache_size;
+        }
+        VkResult result = VK_SUCCESS;
+        if (pipeline_cache) {
+            result = pipeline_cache.Read(&cache_size, nullptr);
+        }
+        if (result == VK_SUCCESS && serialized && cache_size == saved_cache_size) {
+            // What was built since was in it already
+            LOG_INFO(Render_Vulkan,
+                     "Vulkan driver pipeline cache unchanged at {} bytes after {} builds: not "
+                     "written again",
+                     cache_size, builds - saved_cache_builds);
+            saved_cache_builds = builds;
+            log_cached();
+            return cache_size;
+        }
+        // Not zeroed first: only what the driver writes is written out
+        if (result == VK_SUCCESS) {
+            cache_data = std::make_unique_for_overwrite<char[]>(cache_size);
+            if (cache_size != 0) {
+                result = pipeline_cache.Read(&cache_size, cache_data.get());
+                // It grew since the size query: what was written is a valid cache all the same
+                if (result == VK_INCOMPLETE) {
+                    result = VK_SUCCESS;
+                }
+            }
+        }
+        if (result != VK_SUCCESS) {
+            // The file stays as it was
+            LOG_ERROR(Render_Vulkan, "Failed to read the Vulkan driver pipeline cache: {}",
+                      vk::Exception{result}.what());
+            return saved_cache_size;
+        }
+    }
+    const auto read_end = Clock::now();
+    Common::NoteShutdownProgress();
+
     // Written beside the cache and renamed over it: the emulator stopped mid-write left the cache
     // empty, and every later boot failed to read it.
     auto temporary = filename;
@@ -3655,26 +3758,17 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
     if (!file.is_open()) {
         LOG_ERROR(Common_Filesystem, "Failed to open Vulkan driver pipeline cache file {}",
                   Common::FS::PathToUTF8String(temporary));
-        return;
+        return cache_size;
     }
     try {
         file.exceptions(std::ifstream::failbit);
         file.write(VULKAN_CACHE_MAGIC_NUMBER.data(), VULKAN_CACHE_MAGIC_NUMBER.size())
             .write(reinterpret_cast<const char*>(&cache_version), sizeof(cache_version));
-
-        size_t cache_size = 0;
-        std::vector<char> cache_data;
-        if (pipeline_cache) {
-            pipeline_cache.Read(&cache_size, nullptr);
-            cache_data.resize(cache_size);
-            pipeline_cache.Read(&cache_size, cache_data.data());
-        }
-        Common::NoteShutdownProgress();
         // In pieces: a cache of tens of thousands of pipelines is gigabytes, and a shutdown
         // waiting on it is told the write still moves.
         constexpr size_t Chunk = size_t{64} << 20;
         for (size_t offset = 0; offset < cache_size; offset += Chunk) {
-            file.write(cache_data.data() + offset,
+            file.write(cache_data.get() + offset,
                        static_cast<std::streamsize>((std::min)(Chunk, cache_size - offset)));
             Common::NoteShutdownProgress();
         }
@@ -3686,19 +3780,28 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
         file.close();
         std::error_code remove_error;
         std::filesystem::remove(temporary, remove_error);
-        return;
+        return cache_size;
     }
+    cache_data.reset();
     std::error_code error;
     std::filesystem::rename(temporary, filename, error);
     if (error) {
         LOG_ERROR(Common_Filesystem, "Failed to replace Vulkan driver pipeline cache file {}: {}",
                   Common::FS::PathToUTF8String(filename), error.message());
         std::filesystem::remove(temporary, error);
-        return;
+        return cache_size;
     }
-
-    LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {}",
-             Common::FS::PathToUTF8String(filename));
+    saved_cache_size = cache_size;
+    saved_cache_builds = builds;
+    if (serialized) {
+        LOG_INFO(Render_Vulkan,
+                 "Vulkan driver pipeline cache written: {} bytes; {:.0f} ms waiting for running "
+                 "builds, {:.0f} ms reading with builds held back, {:.0f} ms writing",
+                 cache_size, to_ms(read_begin - wait_begin), to_ms(read_end - read_begin),
+                 to_ms(Clock::now() - read_end));
+    }
+    log_cached();
+    return cache_size;
 }
 
 vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::path& filename,
@@ -3712,6 +3815,21 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
             .pInitialData = data};
         return device.GetLogical().CreatePipelineCache(pipeline_cache_ci);
     };
+    {
+        // What the file holds, for SerializeVulkanPipelineCache: nothing unless it is read below
+        std::scoped_lock lock{vulkan_cache_save_mutex};
+        saved_cache_size = 0;
+        saved_cache_builds = device.PipelineCacheBuilds();
+    }
+    // A save that never finished (the emulator was stopped or crashed in it) leaves its temporary
+    // file, as large as the cache. On Windows one still being written can't be removed.
+    auto temporary = filename;
+    temporary += ".tmp";
+    std::error_code remove_error;
+    if (std::filesystem::remove(temporary, remove_error)) {
+        LOG_INFO(Render_Vulkan, "Removed {}, left by a save that never finished",
+                 Common::FS::PathToUTF8String(temporary));
+    }
     try {
         std::ifstream file(filename, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
@@ -3752,14 +3870,18 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
 
         static constexpr size_t header_size = magic_number.size() + sizeof(cache_version);
         const size_t cache_size = static_cast<size_t>(end) - header_size;
-        std::vector<char> cache_data(cache_size);
-        file.read(cache_data.data(), cache_size);
+        // Not zeroed first: the read fills all of it, or throws
+        const auto cache_data = std::make_unique_for_overwrite<char[]>(cache_size);
+        file.read(cache_data.get(), cache_size);
 
         LOG_INFO(Render_Vulkan,
                  "Loaded Vulkan driver pipeline cache: {}", Common::FS::PathToUTF8String(filename));
 
         try {
-            return create_pipeline_cache(cache_size, cache_data.data());
+            vk::PipelineCache cache = create_pipeline_cache(cache_size, cache_data.get());
+            std::scoped_lock lock{vulkan_cache_save_mutex};
+            saved_cache_size = cache_size;
+            return cache;
         } catch (const vk::Exception& e) {
             // The blob came from another driver or driver version (e.g. switching between
             // MoltenVK and KosmicKrisp on macOS): the driver rejects it. Start empty instead of
