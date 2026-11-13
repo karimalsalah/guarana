@@ -28,6 +28,7 @@
 #include "video_core/gpu.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_frame_predictor.h"
 #include "video_core/present.h"
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -497,6 +498,16 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     // The first slot the frame's GPU work can be done for.
     const u64 first = slots.FirstSlotPresentedAfter(recorded + slots.latency);
     frame->fluid_slot = first;
+    // EDEN_NX2_PREDICT (nx2_frame_predictor.h): the model learns from every real frame.
+    VideoCore::Nx2Predict::FramePredictor& predictor = VideoCore::Nx2Predict::FramePredictor::Instance();
+    if (predictor.Enabled()) {
+        const auto slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+        const auto ahead = duration_cast<nanoseconds>(slots.SlotTime(first) - recorded - slots.latency);
+        const auto& semaphore = scheduler.GetMasterSemaphore();
+        predictor.OnRealFrame(duration_cast<nanoseconds>(recorded.time_since_epoch()).count(),
+                              slots.latency.count(), semaphore.CurrentTick() - semaphore.KnownGpuTick(),
+                              static_cast<double>(ahead.count()) / static_cast<double>(slot_ns));
+    }
     const f32 interval = frame_gen.FluidInterval();
     if (interval <= 0.0f || !frame_gen.CanPredict()) {
         return;
@@ -523,7 +534,14 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     }
     const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
     // Through the slot the next real frame is expected for: one spare covers it coming late.
-    const u64 last = slots.FirstSlotPresentedAfter(recorded + slots.latency + real_interval);
+    u64 last = slots.FirstSlotPresentedAfter(recorded + slots.latency + real_interval);
+    if (predictor.Enabled()) {
+        // EDEN_NX2_PREDICT: through the slot the next real frame is expected for at the model's p90.
+        const nanoseconds cover{predictor.Cover(real_interval.count())};
+        last = predictor.PlanSlots(frame->fluid_batch, first, last,
+                                   slots.FirstSlotPresentedAfter(recorded + slots.latency + cover),
+                                   slots.divisor, FLUID_MAX_PREDICTIONS);
+    }
     // EDEN_NX2_FLUID=2: each prediction is as of its slot less the latency a real frame can be
     // shown at.
     const nanoseconds behind = FluidMode() == 2 ? slots.latency + slots.lead : nanoseconds{};

@@ -145,6 +145,8 @@ add_library(video_core STATIC
     nx2_profile.h
     nx2_stutter_trace.cpp
     nx2_stutter_trace.h
+    nx2_frame_predictor.cpp
+    nx2_frame_predictor.h
     nx2_perf.h
     nx2_uma.h
     nx2_async_readback.h
@@ -266,6 +268,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_cache_v2.h
     renderer_vulkan/vk_present_manager.cpp
     renderer_vulkan/vk_present_manager.h
+    renderer_vulkan/vk_present_predict.cpp
     renderer_vulkan/vk_query_cache.cpp
     renderer_vulkan/vk_query_cache.h
     renderer_vulkan/vk_rasterizer.cpp

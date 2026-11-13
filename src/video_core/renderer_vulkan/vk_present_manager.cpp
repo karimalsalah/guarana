@@ -1004,6 +1004,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
             fluid_stats.overslept += skipped;
         }
         ++fluid_stats.slots;
+        FluidPredictHold(slot, after); // EDEN_NX2_PREDICT
         // The newest real frame's frame for the slot whose GPU work is done.
         for (Frame* const frame : fluid.pending) {
             if (!FluidScheduled(frame) || frame->fluid_slot <= after || frame->fluid_slot > slot ||
@@ -1015,6 +1016,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
                 best = frame;
             }
         }
+        FluidPredictNote(slot, best); // EDEN_NX2_PREDICT
         if (best == nullptr) {
             ++fluid_stats.no_frame;
         } else if (fluid.showing != nullptr) {
