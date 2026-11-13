@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <QByteArray>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -21,6 +22,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
@@ -50,6 +52,8 @@ constexpr std::string_view IssueForms =
     "https://github.com/karimalsalah/guarana/issues/new?template=";
 // GitHub turns longer links away; everything is in the zip.
 constexpr std::size_t MaxLinkLength = 7000;
+// Tried when the system will not open the longer one.
+constexpr std::size_t ShortLinkLength = 2000;
 // What each log keeps of its start and end, so that the zip stays under the 25 MB GitHub takes.
 constexpr std::size_t LogHead = 4 * 1024 * 1024;
 constexpr std::size_t LogTail = 20 * 1024 * 1024;
@@ -382,27 +386,38 @@ void Run(QWidget* parent, const Context& context) {
     const std::string logs_note =
         "(Cut to fit the link: the rest is in system_info.txt in the zip.) " +
         attach.toStdString();
-    const std::string link = IssueUrl(
-        std::string{IssueForms} + chosen.form,
-        {
-            {.name = "title", .value = scrub(title.trimmed().toStdString())},
-            {.name = "build", .value = scrub(BuildText().toStdString())},
-            {.name = "steps",
-             .value = scrub(steps_value),
-             .shortened_note = "(Cut to fit the link: the whole text is in system_info.txt in "
-                               "the zip.)"},
-            {.name = "logs",
-             .value = scrub(link_details.join(QLatin1Char('\n')).toStdString()),
-             .shortened_note = logs_note},
-        },
-        MaxLinkLength);
+    const std::string form = std::string{IssueForms} + chosen.form;
+    const std::vector<IssueField> fields{
+        {.name = "title", .value = scrub(title.trimmed().toStdString())},
+        {.name = "build", .value = scrub(BuildText().toStdString())},
+        {.name = "steps",
+         .value = scrub(steps_value),
+         .shortened_note = "(Cut to fit the link: the whole text is in system_info.txt in the "
+                           "zip.)"},
+        {.name = "logs",
+         .value = scrub(link_details.join(QLatin1Char('\n')).toStdString()),
+         .shortened_note = logs_note},
+    };
+    const auto open_link = [](const std::string& link) {
+        return QDesktopServices::openUrl(QUrl::fromEncoded(QByteArray::fromStdString(link)));
+    };
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
-    if (!QDesktopServices::openUrl(QUrl::fromEncoded(QByteArray::fromStdString(link)))) {
+    std::string link = IssueUrl(form, fields, MaxLinkLength);
+    bool opened = open_link(link);
+    if (!opened && link.size() > ShortLinkLength) {
+        // Some Windows shells refuse links over about 2000 characters.
+        link = IssueUrl(form, fields, ShortLinkLength);
+        opened = open_link(link);
+    }
+    if (!opened) {
+        QGuiApplication::clipboard()->setText(QString::fromStdString(link));
         QMessageBox::information(parent, QObject::tr("Report a Problem"),
-                                 QObject::tr("Open this link in a browser to report it, and "
-                                             "attach %1:\n%2")
-                                     .arg(zip_name, QString::fromStdString(link)));
+                                 QObject::tr("Lichii could not open the browser. The link to the "
+                                             "filled-in issue form is on the clipboard: paste it "
+                                             "into a browser, then attach %1 from the folder "
+                                             "that opened.")
+                                     .arg(zip_name));
     }
 }
 
