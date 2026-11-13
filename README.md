@@ -53,9 +53,9 @@ renders; generated frames are not included.
 |---|---:|---:|---|
 | Hyrule Field, from one shader fix (`EDEN_NX2_GM=11`) | 14.8 game fps | **22.8 game fps** | In v20; on by default for Ocarina of Time only |
 | Foliage mesh draw, same runs | 15.7 ms GPU | **5.8 ms GPU** | In v20 |
-| Frame generation pacing, title screen: frames whose interval is within 2 ms of the median | n/a | **100%** (16.7 ms pacing) | Next release (v20.1) |
-| Same measure, Hyrule Field | 33-54% | **75%** (p5 16.4 ms) | Next release (v20.1) |
-| Headless shader warm-up | n/a | **4,515 pipelines in 155 s** | Next release (v20.1) |
+| Frame generation pacing, title screen: frames whose interval is within 2 ms of the median | n/a | **100%** (16.7 ms pacing) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
+| Same measure, Hyrule Field | 33-54% | **75%** (p5 16.4 ms) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
+| Headless shader warm-up | n/a | **4,515 pipelines in 155 s** | In v20.1 (`eden-cli --warm-pipelines`) |
 
 <details>
 <summary><b>The full table, how each number was taken, and what is not measured yet</b></summary>
@@ -68,7 +68,7 @@ renders; generated frames are not included.
 
 The pacing rows come from `EDEN_NX2_SHOWN_STATS`, which reports every 10 s how evenly frames reached the swapchain,
 generated ones included ([docs/switches.md](docs/switches.md)). The pacing work behind them is described in
-[ROADMAP N1](ROADMAP.md#n1-vblank-locked-presenter-for-generated-frames) and ships in v20.1.
+[ROADMAP N1](ROADMAP.md#n1-vblank-locked-presenter-for-generated-frames) and shipped in v20.1.
 No figure for input latency is published yet, because none has been taken the same way.
 [Help us measure](docs/BENCHMARKING.md). Live data: the [benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html).
 
@@ -181,7 +181,7 @@ exists; extrapolation shows each real frame as soon as it is ready. Generated fr
 > [!TIP]
 > At 25-28 game fps a real frame arrives every 36-40 ms, between two and three refreshes of a 60 Hz slot, which used to show as
 > uneven frame times. The vblank-locked presenter (`EDEN_NX2_FLUID=1`) puts every shown frame on a 16.7 ms slot: 100% of frames
-> within 2 ms of the median on the title screen, 75% in Hyrule Field against 33-54% before. It ships in v20.1.
+> within 2 ms of the median on the title screen, 75% in Hyrule Field against 33-54% before. It shipped in v20.1, opt-in.
 > Contributor details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#frame-generation-and-pacing).
 
 ## Devices
