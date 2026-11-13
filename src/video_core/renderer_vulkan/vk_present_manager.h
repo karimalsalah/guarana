@@ -207,6 +207,11 @@ private:
     /// the slot.
     void FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_point slot_time, bool count);
 
+    /// EDEN_NX2_PREDICT (vk_present_predict.cpp): before the slot's frame is chosen, waits a
+    /// moment for a real frame that is nearly done; and counts the slot's outcome.
+    void FluidPredictHold(u64 slot, u64 after);
+    void FluidPredictNote(u64 slot, const Frame* best);
+
     /// Copies the frame to the swapchain; it stays the frame showing until its copy is done.
     /// Holds swapchain_mutex.
     void FluidShow(Frame* frame, u64 shown_vblank);

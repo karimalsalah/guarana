@@ -1010,6 +1010,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
             fluid_stats.overslept += skipped;
         }
         ++fluid_stats.slots;
+        FluidPredictHold(slot, after); // EDEN_NX2_PREDICT
         const auto newer = [](const Frame* frame, const Frame* than) {
             return than == nullptr || frame->fluid_batch > than->fluid_batch ||
                    (frame->fluid_batch == than->fluid_batch && frame->fluid_slot > than->fluid_slot);
@@ -1027,6 +1028,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
                 best = frame;
             }
         }
+        FluidPredictNote(slot, best); // EDEN_NX2_PREDICT
         if (best == nullptr) {
             ++fluid_stats.no_frame;
             ++(latest != nullptr ? fluid_stats.not_done : fluid_stats.uncovered);
