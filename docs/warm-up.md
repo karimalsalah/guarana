@@ -2,7 +2,7 @@
 
 `eden-cli --warm-pipelines <title id>` builds a title's cached shader pipelines into the GPU driver's caches without booting the game and without the game file. Run it after an install or a driver update, so the first start of the game does not pay for the driver compiles (measured on the Arc iGPU: async pipeline builds take 400 to 1000 ms each on Intel's driver, and the 6007 cached pipelines of Ocarina of Time take 5.85 s at boot).
 
-Status: written against the tree without a build; the lead's first run is the test. See "Risks" below.
+Status: measured on the Arc 140T, a full run built 4,515 pipelines and programs in 155 s. See "Risks" below.
 
 ## Command line
 

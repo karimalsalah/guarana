@@ -34,6 +34,7 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#1564](https://github.com/zortos293/Lichii/pull/1564) | Hugo | The compute shader precache marker follows the file's contents and the shader lowering |
 | [#1447](https://github.com/zortos293/Lichii/pull/1447) | [zortos293](https://github.com/zortos293) | Draw templates: each draw's sampled textures and image descriptors are kept across frames (`EDEN_NX2_DRAW_TEMPLATE_VERIFY` checks them) |
 | [#1571](https://github.com/zortos293/Lichii/pull/1571) | [jpkto](https://github.com/jpkto) | The texture cache's bounded retire scan resumes where it stopped; overwritten render targets are deleted after ten unused frames |
+| [#1378](https://github.com/zortos293/Lichii/pull/1378) | Krim | Graphics pipelines reuse the translated shaders of an earlier pipeline when their translation inputs and the guest memory they read match (`EDEN_NX2_SHADER_REUSE=1`) |
 
 When one of these is merged upstream, the next upstream sync brings the upstream version, and this table says so.
 
