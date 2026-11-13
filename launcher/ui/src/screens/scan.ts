@@ -3,7 +3,7 @@
 
 import { api, errorText, events } from "../api";
 import { fill, h } from "../dom";
-import { basename, dirname, gpuName, plural, prettyPath } from "../format";
+import { basename, dirname, gpuFamily, gpuName, plural, prettyPath } from "../format";
 import { icon, type IconName } from "../icons";
 import { settleFocus } from "../input";
 import { go, preload, type ScreenDef } from "../router";
@@ -263,7 +263,7 @@ function deviceCard(sys: SystemInfo, profs: Profile[]): HTMLElement {
     h(
       "dl",
       { class: "specs" },
-      spec("GPU", gpu ? `${gpuName(gpu.name)} · driver ${gpu.driver_version}` : "Not found", "chip"),
+      spec("GPU", gpu ? `${gpuName(gpu.name)}${gpuFamily(gpu) ? ` · ${gpuFamily(gpu)}` : ""} · driver ${gpu.driver_version}` : "Not found", "chip"),
       spec("CPU", `${sys.cpu.name} · ${sys.cpu.threads} threads`, "code"),
       spec("Memory", `${sys.ram_gb} GB RAM`, "memory"),
       spec("Display", display, "display"),
