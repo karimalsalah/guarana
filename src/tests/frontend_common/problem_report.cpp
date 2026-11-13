@@ -13,18 +13,18 @@ using namespace FrontendCommon::ProblemReport;
 
 TEST_CASE("Problem reports remove the home folder, user and computer names",
           "[frontend_common][problem_report]") {
-    const std::vector<std::string> users{"Yousof"};
-    const std::vector<std::string> hosts{"DESKTOP-4UD89UT"};
-    const auto redactions = MakeRedactions("C:/Users/Yousof/", users, hosts);
+    const std::vector<std::string> users{"Jordan"};
+    const std::vector<std::string> hosts{"TESTPC-01"};
+    const auto redactions = MakeRedactions("C:/Users/Jordan/", users, hosts);
 
-    CHECK(Scrub("C:\\Users\\Yousof\\AppData\\Roaming\\lichii\\log", redactions) ==
+    CHECK(Scrub("C:\\Users\\Jordan\\AppData\\Roaming\\lichii\\log", redactions) ==
           "<home>\\AppData\\Roaming\\lichii\\log");
-    CHECK(Scrub("dir c:/users/yousof/x", redactions) == "dir <home>/x");
-    CHECK(Scrub("\"C:\\\\Users\\\\Yousof\\\\x\"", redactions) == "\"<home>\\\\x\"");
-    CHECK(Scrub("Yousof on DESKTOP-4UD89UT.", redactions) == "<user> on <host>.");
+    CHECK(Scrub("dir c:/users/jordan/x", redactions) == "dir <home>/x");
+    CHECK(Scrub("\"C:\\\\Users\\\\Jordan\\\\x\"", redactions) == "\"<home>\\\\x\"");
+    CHECK(Scrub("Jordan on TESTPC-01.", redactions) == "<user> on <host>.");
     // Only where the name stands alone.
-    CHECK(Scrub("Yousofs, xYousof and C:\\Users\\Yousof2", redactions) ==
-          "Yousofs, xYousof and C:\\Users\\Yousof2");
+    CHECK(Scrub("Jordans, xJordan and C:\\Users\\Jordan2", redactions) ==
+          "Jordans, xJordan and C:\\Users\\Jordan2");
     CHECK(Scrub("Users", redactions) == "Users");
 
     const std::vector<std::string> generic{"user", "ab"};
