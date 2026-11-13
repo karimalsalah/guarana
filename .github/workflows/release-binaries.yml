@@ -922,3 +922,15 @@ jobs:
             gh release create "$TAG" dist/* --verify-tag --title "$APP_NAME $TAG" \
               --notes-file release-notes.md "${flags[@]}"
           fi
+
+  # The Windows installer (launcher/), with this release's Windows build bundled, attached to the
+  # same release with its SHA-256 added to SHA256SUMS.txt.
+  installer:
+    name: Windows installer
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/launcher.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
