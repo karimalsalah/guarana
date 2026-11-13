@@ -36,6 +36,33 @@ namespace VideoCore::AsyncReadback {
 inline std::atomic<u64> g_read_check_every{ParseReadCheck(std::getenv("EDEN_NX2_READ_CHECK"))};
 inline std::atomic<bool> g_dma_read_verify{std::getenv("EDEN_NX2_DMA_READ_VERIFY") != nullptr};
 
+/// A number from an environment value clamped to [low, high]; unset or not a number gives
+/// `fallback`.
+[[nodiscard]] inline u32 ParseClamped(const char* value, u32 fallback, u32 low, u32 high) {
+    if (value == nullptr || *value == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value) {
+        return fallback;
+    }
+    return static_cast<u32>(parsed < low ? low : (parsed > high ? high : parsed));
+}
+
+// Early download tuning (BufferCache::RecordEarlyDownloads), all off or at the old value unless set:
+// - EDEN_NX2_EARLY_SUBMIT: bit 1 submits an early download's command buffer at once instead of
+//   with the next submission (it can wait up to the DeferFlush window, or longer while the back
+//   records), bit 2 also records the early downloads of pages draws wrote right after the draw
+//   instead of at the end of the frame.
+// - EDEN_NX2_EARLY_PAGES: how many pages the read-back table holds (default 64).
+// - EDEN_NX2_EARLY_AFTER: reads of a page's writes in a row before they get early downloads
+//   (default 2).
+inline std::atomic<u32> g_early_submit{ParseClamped(std::getenv("EDEN_NX2_EARLY_SUBMIT"), 0, 0, 3)};
+inline std::atomic<u32> g_early_pages{
+    ParseClamped(std::getenv("EDEN_NX2_EARLY_PAGES"), 64, 8, 4096)};
+inline std::atomic<u32> g_early_after{ParseClamped(std::getenv("EDEN_NX2_EARLY_AFTER"), 2, 1, 8)};
+
 /// Called by VideoCore::CreateGPU: static initialization runs before the frontend loads
 /// nx2_switches.txt, so a switch set only there takes effect from that point on.
 inline void ReadSwitch() {
@@ -43,6 +70,22 @@ inline void ReadSwitch() {
                              std::memory_order_relaxed);
     g_dma_read_verify.store(std::getenv("EDEN_NX2_DMA_READ_VERIFY") != nullptr,
                             std::memory_order_relaxed);
+    g_early_submit.store(ParseClamped(std::getenv("EDEN_NX2_EARLY_SUBMIT"), 0, 0, 3),
+                         std::memory_order_relaxed);
+    g_early_pages.store(ParseClamped(std::getenv("EDEN_NX2_EARLY_PAGES"), 64, 8, 4096),
+                        std::memory_order_relaxed);
+    g_early_after.store(ParseClamped(std::getenv("EDEN_NX2_EARLY_AFTER"), 2, 1, 8),
+                        std::memory_order_relaxed);
+}
+
+[[nodiscard]] inline u32 EarlySubmit() {
+    return g_early_submit.load(std::memory_order_relaxed);
+}
+[[nodiscard]] inline size_t EarlyPages() {
+    return g_early_pages.load(std::memory_order_relaxed);
+}
+[[nodiscard]] inline u16 EarlyAfter() {
+    return static_cast<u16>(g_early_after.load(std::memory_order_relaxed));
 }
 
 /// EDEN_NX2_READ_CHECK: check 1 in this many read downloads, 0 for none.
@@ -124,6 +167,28 @@ struct Counters {
     /// they set, and for those sent before the macro code changes
     std::atomic<u64> back_waits{};
     std::atomic<u64> back_wait_ns{};
+    /// Where an async read's time goes before its fence wait: from the request until the sync
+    /// operation ran on the GPU thread (it queues behind the split's back), and its length
+    std::atomic<u64> sync_ops{};
+    std::atomic<u64> sync_ns{};
+    std::atomic<u64> sync_max_ns{};
+    /// Reader waits (all among reader_waits) whose newest download was an early one, and the
+    /// time they waited
+    std::atomic<u64> early_waits{};
+    std::atomic<u64> early_wait_ns{};
+    /// Reader waits for a tick the back had not submitted yet (WaitForHostRead asked it to), and
+    /// the time they waited for the submission (part of reader_wait_ns; the rest is the host GPU)
+    std::atomic<u64> submit_waits{};
+    std::atomic<u64> submit_wait_ns{};
+    /// Early downloads recorded, their bytes, those submitted at once (EDEN_NX2_EARLY_SUBMIT),
+    /// and early downloads a limit (MaxPendingEarlyDownloads, EarlyBytesPerFrame) refused
+    std::atomic<u64> early_recorded{};
+    std::atomic<u64> early_bytes{};
+    std::atomic<u64> early_flushes{};
+    std::atomic<u64> early_refused{};
+    /// Pages the read-back table dropped to make room, and its size at the last learning
+    std::atomic<u64> table_evictions{};
+    std::atomic<u64> table_pages{};
     std::atomic<u64> window_start{};
 };
 
@@ -139,12 +204,35 @@ inline void CountRead(Read kind, u64 ns) {
     Add(g_counters.read_ns[static_cast<size_t>(kind)], ns);
 }
 
-/// BufferCache::FinishReadDownloads waited ns for the host GPU.
-inline void CountHostWait(u64 ns) {
+/// OnCPURead's sync operation ran ns after it was requested.
+inline void CountSyncOp(u64 ns) {
+    Add(g_counters.sync_ops, 1);
+    Add(g_counters.sync_ns, ns);
+    u64 max = g_counters.sync_max_ns.load(std::memory_order_relaxed);
+    while (ns > max && !g_counters.sync_max_ns.compare_exchange_weak(max, ns,
+                                                                     std::memory_order_relaxed)) {
+    }
+}
+
+/// WaitForHostRead waited ns for the back to submit the tick it then waited on.
+inline void CountSubmitWait(u64 ns) {
+    if (t_reading) {
+        Add(g_counters.submit_waits, 1);
+        Add(g_counters.submit_wait_ns, ns);
+    }
+}
+
+/// BufferCache::FinishReadDownloads waited ns for the host GPU; `early` when the download it
+/// waited for was an early one.
+inline void CountHostWait(u64 ns, bool early = false) {
     if (!t_reading) {
         Add(g_counters.gpu_side_waits, 1);
         Add(g_counters.gpu_side_wait_ns, ns);
         return;
+    }
+    if (early) {
+        Add(g_counters.early_waits, 1);
+        Add(g_counters.early_wait_ns, ns);
     }
     Add(g_counters.reader_waits, 1);
     Add(g_counters.reader_wait_ns, ns);
@@ -235,8 +323,35 @@ inline void MaybeReport() {
     const u64 back_dma_flush_ns = take(c.back_dma_flush_ns);
     const u64 back_waits = take(c.back_waits);
     const u64 back_wait_ns = take(c.back_wait_ns);
+    const u64 sync_ops = take(c.sync_ops);
+    const u64 sync_ns = take(c.sync_ns);
+    const u64 sync_max_ns = take(c.sync_max_ns);
+    const u64 early_waits = take(c.early_waits);
+    const u64 early_wait_ns = take(c.early_wait_ns);
+    const u64 submit_waits = take(c.submit_waits);
+    const u64 submit_wait_ns = take(c.submit_wait_ns);
+    const u64 early_recorded = take(c.early_recorded);
+    const u64 early_bytes = take(c.early_bytes);
+    const u64 early_flushes = take(c.early_flushes);
+    const u64 early_refused = take(c.early_refused);
+    const u64 table_evictions = take(c.table_evictions);
+    const u64 table_pages = c.table_pages.load(std::memory_order_relaxed);
     constexpr auto async = static_cast<size_t>(Read::Async);
     constexpr auto in_flight = static_cast<size_t>(Read::InFlight);
+    LOG_INFO(HW_GPU,
+             "Read-back stages per second: async reads' sync operation ran {:.0f} times, {:.1f} ms "
+             "after the request (longest {:.2f} ms) | reader fence waits for an early download "
+             "{:.0f} times, {:.1f} ms | reader waits for the back to submit the tick {:.0f} "
+             "times, {:.1f} ms (the rest of the fence wait is the host GPU) | early downloads "
+             "recorded {:.0f} ({:.1f} KiB), {:.0f} submitted at once, {:.0f} refused by a limit | "
+             "read-back table {} pages, {:.0f} evicted (EARLY_SUBMIT={}, EARLY_PAGES={}, "
+             "EARLY_AFTER={})",
+             per_second(sync_ops), ms_per_second(sync_ns), static_cast<double>(sync_max_ns) / 1e6,
+             per_second(early_waits), ms_per_second(early_wait_ns), per_second(submit_waits),
+             ms_per_second(submit_wait_ns), per_second(early_recorded),
+             per_second(early_bytes) / 1024.0, per_second(early_flushes),
+             per_second(early_refused), table_pages, per_second(table_evictions), EarlySubmit(),
+             EarlyPages(), EarlyAfter());
     LOG_INFO(HW_GPU,
              "Async read-back per second: reads {:.0f} async ({:.1f} ms), {:.0f} only waited for a "
              "download on its way ({:.1f} ms) | GPU thread in read flushes {:.1f} ms | readers "
