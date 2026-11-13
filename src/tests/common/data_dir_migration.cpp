@@ -7,6 +7,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -62,7 +63,7 @@ struct Fixture {
 TEST_CASE("Data folder decision depends only on which folders exist", "[fs][guarana]") {
     using D = M::Decision;
     // (new exists, old exists)
-    CHECK(M::Decide(true, true) == D::UseCurrent);   // never copy over an existing guarana folder
+    CHECK(M::Decide(true, true) == D::UseCurrent); // never copy over an existing guarana folder
     CHECK(M::Decide(true, false) == D::UseCurrent);
     CHECK(M::Decide(false, true) == D::CopyFromLegacy);
     CHECK(M::Decide(false, false) == D::StartFresh);
@@ -159,9 +160,7 @@ TEST_CASE("A copy that throws is handled like one that fails", "[fs][guarana]") 
     Fixture f;
     f.MakeLegacy();
     const M::CopyFunction throwing = [](const fs::path&, const fs::path&, M::CopyStats&,
-                                        std::string&) -> bool {
-        throw std::runtime_error("boom");
-    };
+                                        std::string&) -> bool { throw std::runtime_error("boom"); };
     const auto result = M::Resolve({{f.legacy, f.current}}, throwing);
     CHECK(result.outcome == M::Outcome::UseLegacy);
     CHECK_FALSE(fs::exists(f.current));
@@ -179,8 +178,8 @@ TEST_CASE("Config and cache folders are copied together with the data folder", "
     Fixture::Write(old_cache / "shader" / "a.bin", "shader");
 
     SECTION("all succeed") {
-        const auto result = M::Resolve(
-            {{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}});
+        const auto result =
+            M::Resolve({{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}});
         CHECK(result.outcome == M::Outcome::UseCurrent);
         CHECK(Fixture::Read(new_config / "qt-config.ini") == "cfg");
         CHECK(Fixture::Read(new_cache / "shader" / "a.bin") == "shader");
@@ -198,8 +197,7 @@ TEST_CASE("Config and cache folders are copied together with the data folder", "
             return M::CopyTree(from, to, stats, error);
         };
         const auto result = M::Resolve(
-            {{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}},
-            fail_third);
+            {{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}}, fail_third);
         CHECK(result.outcome == M::Outcome::UseLegacy);
         CHECK_FALSE(fs::exists(f.current));
         CHECK_FALSE(fs::exists(new_config));
@@ -211,10 +209,71 @@ TEST_CASE("Config and cache folders are copied together with the data folder", "
 
     SECTION("a secondary folder that does not exist is skipped") {
         fs::remove_all(old_cache);
-        const auto result = M::Resolve(
-            {{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}});
+        const auto result =
+            M::Resolve({{f.legacy, f.current}, {old_config, new_config}, {old_cache, new_cache}});
         CHECK(result.outcome == M::Outcome::UseCurrent);
         CHECK(fs::exists(new_config));
         CHECK_FALSE(fs::exists(new_cache));
     }
+}
+
+TEST_CASE("Copied configs point at the new folder", "[fs][guarana]") {
+    const fs::path old_root = fs::path("C:/Users/A/AppData/Roaming/lichii");
+    const fs::path new_root = fs::path("C:/Users/A/AppData/Roaming/guarana");
+    const std::vector<M::Root> roots{{old_root, new_root}};
+
+    SECTION("data folders inside the old folder move, everything else stays") {
+        const std::string ini = "[Data%20Storage]\r\n"
+                                "nand_directory=C:/Users/A/AppData/Roaming/lichii/nand\r\n"
+                                "sdmc_directory=C:/Users/A/AppData/Roaming/lichii/sdmc/\r\n"
+                                "dump_directory=D:/Games/dump\r\n"
+                                "load_directory=C:/Users/A/AppData/Roaming/lichii2/load\r\n"
+                                "save_directory=\r\n";
+        CHECK(M::RewriteIniPaths(ini, roots) ==
+              "[Data%20Storage]\r\n"
+              "nand_directory=C:/Users/A/AppData/Roaming/guarana/nand\r\n"
+              "sdmc_directory=C:/Users/A/AppData/Roaming/guarana/sdmc/\r\n"
+              "dump_directory=D:/Games/dump\r\n"
+              "load_directory=C:/Users/A/AppData/Roaming/lichii2/load\r\n"
+              "save_directory=\r\n");
+    }
+
+    SECTION("backslashes, Qt's doubled backslashes and quotes") {
+        CHECK(M::RewriteIniPaths("a=C:\Users\A\AppData\Roaming\lichii\nand\n", roots) ==
+              "a=C:/Users/A/AppData/Roaming/guarana/nand\n");
+        CHECK(M::RewriteIniPaths("a=C:\\Users\\A\\AppData\\Roaming\\lichii\n", roots) ==
+              "a=C:/Users/A/AppData/Roaming/guarana\n");
+        CHECK(M::RewriteIniPaths("a=\"C:/Users/A/AppData/Roaming/lichii/x, y\"", roots) ==
+              "a=\"C:/Users/A/AppData/Roaming/guarana/x, y\"");
+    }
+
+    SECTION("text without old paths is returned byte for byte") {
+        const std::string ini =
+            "[UI]\nwhats_new_version=1\n\n; nand_directory=C:/Users/A/AppData/Roaming/lichii\n";
+        CHECK(M::RewriteIniPaths(ini, roots) == ini);
+    }
+}
+
+TEST_CASE("A migrated config uses the new folder", "[fs][guarana]") {
+    Fixture f;
+    f.MakeLegacy();
+    const auto slashed = [](const fs::path& p) {
+        auto s = p.generic_string();
+        return s;
+    };
+    Fixture::Write(f.legacy / "config" / "qt-config.ini",
+                   "[Data%20Storage]\nnand_directory=" + slashed(f.legacy / "nand") + "\n");
+    Fixture::Write(f.legacy / "config" / "custom" / "0400486024DEC000.ini",
+                   "[Core]\nuse_multi_core=true\n");
+
+    const auto result = M::Resolve({{f.legacy, f.current}});
+    REQUIRE(result.outcome == M::Outcome::UseCurrent);
+    CHECK(Fixture::Read(f.current / "config" / "qt-config.ini") ==
+          "[Data%20Storage]\nnand_directory=" + slashed(f.current / "nand") + "\n");
+    CHECK(Fixture::Read(f.current / "config" / "custom" / "0400486024DEC000.ini") ==
+          "[Core]\nuse_multi_core=true\n");
+    // The old folder keeps its own paths.
+    CHECK(Fixture::Read(f.legacy / "config" / "qt-config.ini") ==
+          "[Data%20Storage]\nnand_directory=" + slashed(f.legacy / "nand") + "\n");
+    CHECK(f.NoStagingLeft());
 }

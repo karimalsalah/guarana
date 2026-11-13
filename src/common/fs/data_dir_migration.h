@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // One-time copy of the pre-rename "lichii" user data folder to the "guarana" one.
@@ -52,18 +53,31 @@ struct CopyStats {
 
 /// Copies the directory tree `from` into the not yet existing `to`. Returns false and sets `error`
 /// on failure. Replaceable so tests can inject a failure half way through.
-using CopyFunction = std::function<bool(const std::filesystem::path& from,
-                                        const std::filesystem::path& to, CopyStats& stats,
-                                        std::string& error)>;
+using CopyFunction =
+    std::function<bool(const std::filesystem::path& from, const std::filesystem::path& to,
+                       CopyStats& stats, std::string& error)>;
 
 /// Copies a directory tree, keeping symbolic links as links (the Ryujinx save link relies on it).
 bool CopyTree(const std::filesystem::path& from, const std::filesystem::path& to, CopyStats& stats,
               std::string& error);
 
+/// Returns `ini_text` with every value that is a path inside one of the roots' old folders moved to
+/// the same place under that root's new folder, so "nand_directory=C:/.../lichii/nand" becomes
+/// "C:/.../guarana/nand". The frontends write their data folders out in full, so without this a
+/// copied config keeps using the old folder. Values elsewhere and every other line stay as they
+/// are.
+[[nodiscard]] std::string RewriteIniPaths(std::string_view ini_text,
+                                          const std::vector<Root>& roots);
+
+/// Applies RewriteIniPaths to the config files of a copied folder: the `*.ini` files at its top
+/// level and under its `config` and `custom` folders. Returns how many files it changed.
+std::size_t RewriteConfigFiles(const std::filesystem::path& copied_root,
+                               const std::vector<Root>& roots);
+
 struct Result {
     Outcome outcome{Outcome::UseCurrent};
     Decision decision{Decision::StartFresh};
-    bool warning{}; ///< `message` describes a failure.
+    bool warning{};      ///< `message` describes a failure.
     std::string message; ///< One line for the log, empty when nothing happened.
 };
 
