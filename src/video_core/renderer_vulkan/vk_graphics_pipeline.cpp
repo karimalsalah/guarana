@@ -2699,17 +2699,6 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .pNext = nullptr,
         .requiredSubgroupSize = GuestWarpSize,
     };
-    // EDEN_NX2_MESH_SIMD=8|16|32: experiment, the subgroup size of every native task and mesh
-    // stage (Intel picks SIMD16 by itself, two threads for a 32-thread workgroup).
-    static const u32 mesh_simd = [] {
-        const char* const value = std::getenv("EDEN_NX2_MESH_SIMD");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 0)) : 0U;
-    }();
-    const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT mesh_simd_ci{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
-        .pNext = nullptr,
-        .requiredSubgroupSize = mesh_simd,
-    };
     static_vector<VkPipelineShaderStageCreateInfo, 5> shader_stages;
     for (size_t stage = 0; stage < Maxwell::MaxShaderStage; ++stage) {
         if (!spv_modules[stage]) {
@@ -2738,16 +2727,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
             emulated_vertex    ? *mesh_vertex_module
             : prepass_fragment ? *prepass_modules[variant == PipelineVariant::PrepassDepth ? 0 : 1]
                                : *spv_modules[stage]};
-        const bool mesh_stage_simd{
-            mesh_simd != 0 && !force_warp_size && !emulated_vertex &&
-            (stage_flag == VK_SHADER_STAGE_MESH_BIT_EXT ||
-             stage_flag == VK_SHADER_STAGE_TASK_BIT_EXT) &&
-            device.IsExtSubgroupSizeControlSupported()};
         shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = force_warp_size   ? &subgroup_size_ci
-                     : mesh_stage_simd ? &mesh_simd_ci
-                                       : nullptr,
+            .pNext = force_warp_size ? &subgroup_size_ci : nullptr,
             .flags = 0,
             .stage = stage_flag,
             .module = stage_module,
