@@ -12,7 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
-- Frame pacing experiments, off by default and described in [docs/switches.md](docs/switches.md): `EDEN_NX2_QUEUE_LIMIT` (keeps the GPU queue short so screen copies and read-backs wait less), `EDEN_NX2_FLUID_OFFSET_US` (the screen copy's window before its flip), `EDEN_NX2_FLUID_SPLIT_SUBMIT` (the real frame goes to the GPU before its predictions), `EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT` (a default-priority copy queue that cannot stall rendering) and `EDEN_NX2_BUDGET_HOLD_RES`.
+- Frame pacing experiments, off by default and described in [docs/switches.md](docs/switches.md): `EDEN_NX2_QUEUE_LIMIT` (keeps the GPU queue short so screen copies and read-backs wait less), `EDEN_NX2_FLUID_OFFSET_US` (the screen copy's window before its flip), `EDEN_NX2_FLUID_SPLIT_SUBMIT` (the real frame goes to the GPU before its predictions), `EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT` (a default-priority copy queue that cannot stall rendering) and `EDEN_NX2_BUDGET_HOLD_RES`; and `EDEN_NX2_EXTRAPOLATE_HUD_FILL`, which stops the band of scenery beside the HUD from lagging in predicted frames.
 
 ### Changed
 
