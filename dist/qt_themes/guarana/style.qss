@@ -1612,13 +1612,14 @@ QPushButton:default:pressed {
 }
 
 /* Focus ring for keyboard and controller navigation: 2 px amber on anything that takes focus. */
-QPushButton:focus,
-QToolButton:focus,
-QCheckBox:focus,
-QRadioButton:focus,
-QSlider:focus,
-QTabBar::tab:focus {
+QPushButton:focus {
     border: 2px solid #fbbf24;
+    padding: 0 15px;
+}
+
+QToolButton:focus,
+QTabBar::tab:focus {
+    border-color: #fbbf24;
 }
 
 QLineEdit:focus,
@@ -1627,7 +1628,7 @@ QComboBox:focus,
 QComboBox:on,
 QPlainTextEdit:focus,
 QTextEdit:focus {
-    border: 2px solid #fbbf24;
+    border-color: #fbbf24;
 }
 
 QListView::item:selected,

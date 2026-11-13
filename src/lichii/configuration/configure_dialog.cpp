@@ -62,7 +62,7 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
               ui_tab->UpdateScreenshotInfo(ratio, setup);
           },
           nullptr, *builder, this)},
-      guarana_tab{std::make_unique<ConfigureGuarana>(this)},
+      guarana_tab{std::make_unique<ConfigureGuarana>(system_.IsPoweredOn(), this)},
       hotkeys_tab{std::make_unique<ConfigureHotkeys>(system_.HIDCore(), this)},
       input_tab{std::make_unique<ConfigureInput>(system_, this)},
       network_tab{std::make_unique<ConfigureNetwork>(system_, this)},

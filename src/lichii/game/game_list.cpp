@@ -30,9 +30,9 @@
 #include "core/core.h"
 #include "core/file_sys/nup_writer.h"
 #ifdef LICHII_NX_TOOLS
-#include "lichii/guarana_ui.h"
 #include "lichii/nx_tools.h"
 #endif
+#include "lichii/guarana_ui.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "qt_common/config/uisettings.h"
