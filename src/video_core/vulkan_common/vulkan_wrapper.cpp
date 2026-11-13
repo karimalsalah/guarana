@@ -129,7 +129,6 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdPushDescriptorSetWithTemplateKHR);
     X(vkCmdSetBlendConstants);
     X(vkCmdSetDepthBias);
-    X(vkCmdSetFragmentShadingRateKHR);
     X(vkCmdSetDepthBias2EXT);
     X(vkCmdSetDepthBounds);
     X(vkCmdSetEvent);

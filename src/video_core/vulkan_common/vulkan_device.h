@@ -835,7 +835,8 @@ FN_MAX_LIMIT_LIST
     }
 
     /// Returns true if per-draw shading rates are in use (VK_KHR_fragment_shading_rate with
-    /// EDEN_NX2_VRS set): every guest graphics pipeline then has the rate as dynamic state.
+    /// EDEN_NX2_VRS set): every guest graphics pipeline then takes the rate of its fragment
+    /// shader when it is built.
     bool IsKhrFragmentShadingRateSupported() const {
         return extensions.fragment_shading_rate &&
                features.fragment_shading_rate.pipelineFragmentShadingRate;
