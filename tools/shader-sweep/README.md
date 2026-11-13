@@ -122,6 +122,12 @@ This is an offline compiler exercise, not a driver-specific golden shader or pro
 correct in-game rendering. `EDEN_NX2_GM=<bits>` sets the global memory routing experiment
 as the Vulkan pipeline cache reads it (see `vk_pipeline_cache.cpp`); unset, it is off.
 
+`--device-profile FILE` replaces the fixed profile with a device's. The file is a JSON object
+with a `host` and a `profile` object of `HostTranslateInfo` and `Shader::Profile` fields by
+name, as `PipelineCache`'s constructor sets them from a `Vulkan::Device`; fields it leaves out
+keep the fixed values, and an unknown field is an error.
+`tools/nx2/radv_offline/radv_pipe --profile` writes one for a RADV device.
+
 ## Results
 
 Stdout contains one JSON object, except for `--help`. Stderr receives compiler warnings.

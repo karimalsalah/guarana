@@ -232,6 +232,12 @@ public:
                                           const std::string& filepath,
                                           Service::AM::FrontendAppletParameters& params);
 
+    /// Brings up the kernel, Host1x and the GPU without an application process, audio or
+    /// services, for a GPU trace replay (video_core/gpu_trace/replay.h). ShutdownMainProcess
+    /// tears it down.
+    [[nodiscard]] SystemResultStatus InitializeForGpuReplay(Frontend::EmuWindow& emu_window,
+                                                            u64 program_id);
+
     /**
      * Creates the GPU and the renderer for `title_id` with no guest program, so that the renderer's
      * disk caches can be loaded and built (eden-cli --warm-pipelines). The system is not powered
