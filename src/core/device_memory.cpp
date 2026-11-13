@@ -42,16 +42,18 @@ DeviceMemory::~DeviceMemory() = default;
 #ifdef _WIN32
 // Windows can't punch holes in the guest memory section, so pages holding only zeros (games clear
 // their heaps while booting: Ocarina leaves ~7 GB) stay resident until they leave the working set.
-// A pass comes every 5 s while they keep turning up, backing off to once a minute.
+// A pass comes every 5 s while they keep turning up, backing off to once every 5 minutes: after
+// boot most passes trim 1-2 MiB for about a second of work. It waits out bulk mapping (loads,
+// spawns), whose map calls stalled 10-14 ms while a pass ran.
 void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
     Common::PowerTuning::TagBackgroundThread();
     constexpr size_t Busy = size_t{64} << 20;
-    // Low memory mode looks again sooner: zero pages a quiet minute leaves resident are RAM the
+    // Low memory mode looks again sooner: zero pages a quiet five minutes leaves resident are RAM the
     // host is short of.
-    const std::chrono::seconds max_interval{Common::LowMemoryMode() ? 15 : 60};
+    const std::chrono::seconds max_interval{Common::LowMemoryMode() ? 15 : 300};
     std::mutex mutex;
     std::condition_variable_any wake;
     std::chrono::seconds interval = 5s;
@@ -62,6 +64,21 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         }
         if (stop.stop_requested()) {
             return;
+        }
+        // Busy: over 32 MiB mapped, unmapped or protected in the last half second. At most 10
+        // waits (5 s), then the pass runs anyway.
+        for (int wait = 0; wait < 10; ++wait) {
+            const u64 before = Common::HostMemory::MappedBytes();
+            {
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, 500ms, [] { return false; });
+            }
+            if (stop.stop_requested()) {
+                return;
+            }
+            if (Common::HostMemory::MappedBytes() - before < (u64{32} << 20)) {
+                break;
+            }
         }
         const auto start = std::chrono::steady_clock::now();
         std::pair<size_t, size_t> result;
