@@ -405,6 +405,10 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         return;
     }
     SetState(VideoCore::FrameGenState::Running, format);
+    if (FluidInterpolation()) {
+        // EDEN_NX2_FLUID_INTERP: real frames at an even share of the shown rate.
+        UpdateCadence();
+    }
 
     peak_guest_extent.width = (std::max)(peak_guest_extent.width, guest_extent.width);
     peak_guest_extent.height = (std::max)(peak_guest_extent.height, guest_extent.height);
@@ -547,6 +551,21 @@ void FrameGen::LogActivity() {
     activity.generated = 0;
 }
 
+/// EDEN_NX2_FLUID_INTERP=1: with EDEN_NX2_FLUID and the FSR3 interpolation chain, the in-between
+/// frames of each pair of real frames take the presenter's vblank slots before the newer real frame,
+/// and EDEN_NX2_CADENCE holds real frames to an even share of the shown rate. Every object moves by
+/// the optical flow between the two real frames rather than by the camera alone, at one real frame
+/// interval more latency than extrapolation.
+bool FrameGen::FluidInterpolation() {
+    static const bool on = [] {
+        const char* fluid = std::getenv("EDEN_NX2_FLUID");
+        const char* interp = std::getenv("EDEN_NX2_FLUID_INTERP");
+        return fluid != nullptr && std::strtoul(fluid, nullptr, 10) != 0 && interp != nullptr &&
+               std::strtoul(interp, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 size_t FrameGen::WantedGenerations(size_t capacity,
                                    std::chrono::steady_clock::duration blocked) {
     if (unavailable) {
@@ -556,6 +575,9 @@ size_t FrameGen::WantedGenerations(size_t capacity,
     plan = pacer.Plan(capacity, blocked);
     if (extrapolating && cadence_divisor != 0) {
         // Extrapolated frames cost next to nothing: always fill the cadence.
+        plan = {.generations = std::min<size_t>(capacity, cadence_divisor - 1), .warm = true};
+    } else if (!extrapolating && cadence_divisor != 0 && FluidInterpolation()) {
+        // EDEN_NX2_FLUID_INTERP: a frame for every slot between two real frames.
         plan = {.generations = std::min<size_t>(capacity, cadence_divisor - 1), .warm = true};
     }
     return plan.generations;
