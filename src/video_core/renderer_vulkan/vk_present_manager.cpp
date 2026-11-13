@@ -6,8 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <string>
 #include <thread>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include "common/display_hdr.h"
 #include "common/dkb_frame_trace.h"
@@ -66,6 +69,8 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
 constexpr std::chrono::nanoseconds FluidPresentOffset{3'500'000};
 /// Real frames whose GPU work is watched at once.
 constexpr size_t FluidWatches = 8;
+/// The watchdog: frames came and none was shown for this long.
+constexpr std::chrono::seconds FluidStallLimit{2};
 
 [[nodiscard]] s64 CeilDiv(s64 value, s64 divisor) {
     return value >= 0 ? (value + divisor - 1) / divisor : -((-value) / divisor);
@@ -87,6 +92,16 @@ constexpr size_t FluidWatches = 8;
 /// The slot a frame's slot falls in when slots are every divisor vblanks.
 [[nodiscard]] u64 FluidSlotOf(const Frame* frame, u64 divisor) {
     return (frame->fluid_slot + divisor - 1) / divisor * divisor;
+}
+
+[[nodiscard]] std::string FluidSlotText(const Frame* frame) {
+    if (frame->fluid_slot == 0) {
+        return "no slot (arrival order)";
+    }
+    if (frame->fluid_slot == FLUID_NOT_SHOWN) {
+        return "only its predictions shown";
+    }
+    return fmt::format("slot {}", frame->fluid_slot);
 }
 
 void ResetFrame(Frame* frame) {
@@ -561,10 +576,13 @@ void PresentManager::WaitPresent() {
 
     if (fluid_presenter) {
         // The FLUID present thread holds frames for later slots: it discards them at its next
-        // vblank.
+        // vblank. After its watchdog fell back, it empties the queue as the thread below does.
         std::unique_lock queue_lock{queue_mutex};
         const u64 request = ++fluid_drain_requests;
-        frame_cv.wait(queue_lock, [this, request] { return fluid_drains >= request; });
+        frame_cv.wait(queue_lock, [this, request] {
+            return fluid_drains >= request ||
+                   (fluid_fallback.load(std::memory_order_relaxed) && present_queue.empty());
+        });
     } else {
         // Wait for the present queue to be empty
         std::unique_lock queue_lock{queue_mutex};
@@ -581,8 +599,7 @@ void PresentManager::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
     Common::SetCurrentThreadToPerformanceCores();
-    if (fluid_presenter) {
-        FluidPresentThread(token);
+    if (fluid_presenter && FluidPresentThread(token)) {
         return;
     }
     while (!token.stop_requested()) {
@@ -619,7 +636,7 @@ void PresentManager::PresentThread(std::stop_token token) {
     }
 }
 
-void PresentManager::FluidPresentThread(std::stop_token token) {
+bool PresentManager::FluidPresentThread(std::stop_token token) {
     Common::VblankClock vblank{render_window.GetWindowInfo().render_surface};
     auto source = vblank.CurrentSource();
     LOG_INFO(Render_Vulkan,
@@ -660,8 +677,12 @@ void PresentManager::FluidPresentThread(std::stop_token token) {
             }
             FluidPresentSlot(fluid.vblank + 1, wake + period, !shown);
         }
-        FluidLogStats(std::chrono::steady_clock::now(), Common::VblankClock::SourceName(source),
-                      period);
+        const auto now = std::chrono::steady_clock::now();
+        FluidLogStats(now, Common::VblankClock::SourceName(source), period);
+        if (FluidStalled(now)) {
+            FluidFallBack(now);
+            return false;
+        }
     }
     // Nothing is presented from here on: answer WaitPresent.
     {
@@ -669,6 +690,51 @@ void PresentManager::FluidPresentThread(std::stop_token token) {
         fluid_drains = fluid_drain_requests;
     }
     frame_cv.notify_all();
+    return true;
+}
+
+bool PresentManager::FluidStalled(std::chrono::steady_clock::time_point now) const {
+    if (fluid.unshown_since == std::chrono::steady_clock::time_point{} ||
+        now - fluid.unshown_since < FluidStallLimit) {
+        return false;
+    }
+    // Frames still wait or keep coming, unlike a game that stopped presenting after a frame whose
+    // slot passed.
+    return !fluid.pending.empty() || now - fluid.last_received < FluidStallLimit;
+}
+
+void PresentManager::FluidFallBack(std::chrono::steady_clock::time_point now) {
+    const Frame* const oldest = fluid.pending.empty() ? nullptr : fluid.pending.front();
+    const char* showing = "none";
+    if (fluid.showing != nullptr) {
+        showing = FrameDone(fluid.showing) ? "copy done" : "copy still pending";
+    } else if (fluid.shown != 0) {
+        showing = "copy done, frame given back";
+    }
+    LOG_WARNING(Render_Vulkan,
+                "EDEN_NX2_FLUID: no frame shown for {:.1f} s while frames came; presenting in "
+                "arrival order from now on. {} frames pending, the oldest with {} and GPU tick "
+                "{}; last slot {}, vblank {}, GPU at tick {}; last frame shown: {}; record to GPU "
+                "done {:.1f} ms; {} frames received and {} shown since the start",
+                std::chrono::duration<f64>(now - fluid.unshown_since).count(),
+                fluid.pending.size(), oldest != nullptr ? FluidSlotText(oldest) : "-",
+                oldest != nullptr ? oldest->gpu_tick : 0, fluid.last_slot, fluid.vblank,
+                scheduler.GetMasterSemaphore().KnownGpuTick(), showing,
+                fluid.latency_ns * 1.0e-6, fluid.received, fluid.shown);
+    {
+        std::scoped_lock lock{queue_mutex};
+        // PresentThread takes present_queue in order: the frames held go first.
+        present_queue.insert(present_queue.begin(), fluid.pending.begin(), fluid.pending.end());
+        fluid_fallback.store(true, std::memory_order_relaxed);
+        fluid_drains = fluid_drain_requests;
+    }
+    fluid.pending.clear();
+    frame_cv.notify_all();
+    if (fluid.showing != nullptr) {
+        // GetRenderFrame waits for its copy before the frame is drawn into again.
+        ReturnFrame(fluid.showing);
+        fluid.showing = nullptr;
+    }
 }
 
 std::chrono::nanoseconds PresentManager::FluidCountVblanks(
@@ -739,6 +805,23 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
             .recorded = frame->fluid_recorded,
             .unready = now,
         });
+    }
+    if (fluid.pending.size() > received) {
+        if (fluid.received == 0) {
+            const Frame* const first = fluid.pending[received];
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID: first frame received at vblank {}, with {} and GPU tick {} "
+                     "(GPU at tick {})",
+                     fluid.vblank, FluidSlotText(first), first->gpu_tick,
+                     scheduler.GetMasterSemaphore().KnownGpuTick());
+        }
+        const u64 arrived = fluid.pending.size() - received;
+        fluid.received += arrived;
+        fluid_stats.received += arrived;
+        fluid.last_received = now;
+        if (fluid.unshown_since == std::chrono::steady_clock::time_point{}) {
+            fluid.unshown_since = now;
+        }
     }
     {
         std::scoped_lock swapchain_lock{swapchain_mutex};
@@ -911,6 +994,12 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
 
 void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     CopyToSwapchain(frame);
+    if (fluid.shown++ == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_FLUID: first frame shown at vblank {}, for vblank {}, after {} received",
+                 fluid.vblank, shown_vblank, fluid.received);
+    }
+    fluid.unshown_since = {};
     fluid.showing = frame;
     fluid.showing_vblank = shown_vblank;
     fluid.showing_late = false;
@@ -966,10 +1055,10 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
     LOG_INFO(Render_Vulkan,
              "Fluid presenter (10 s): {:.0f}% of shown frames held one slot, held 1/2/3/4+ "
              "refreshes {}/{}/{}/{}; real frame age at display {:.1f} ms; GPU work done {:.1f} ms "
-             "after recording ({} real frames); {} frames dropped unshown",
+             "after recording ({} real frames); {} frames received, {} dropped unshown",
              share(one_slot, held), stats.held[0], stats.held[1], stats.held[2], stats.held[3],
              mean(stats.age_ms, stats.hits), mean(stats.latency_ms, stats.latency_samples),
-             stats.latency_samples, stats.dropped);
+             stats.latency_samples, stats.received, stats.dropped);
     stats = {.since = now};
 }
 
@@ -1129,8 +1218,8 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         return;
     }
 
-    // The FLUID present thread times its presents itself.
-    const bool pace = !(fluid_presenter && use_present_thread);
+    // The FLUID present thread times its presents itself (not after its watchdog fell back).
+    const bool pace = !Fluid();
     while (swapchain.AcquireNextImage(!use_present_thread, pace)) {
         if (!RecreateSwapchain(frame)) {
             return;

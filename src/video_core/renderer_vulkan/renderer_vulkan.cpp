@@ -413,6 +413,11 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                 frame->present_spacing = spacing;
                 predicted_frames.back()->present_spacing = {};
             }
+            if (predict && FluidMode() != 0) {
+                // FrameGen leaves EDEN_NX2_FLUID's predictions to be counted as recorded, also
+                // once its watchdog fell back to this path.
+                frame_gen.NoteFluidGenerated(predicted_frames.size());
+            }
         }
     }
 #endif
