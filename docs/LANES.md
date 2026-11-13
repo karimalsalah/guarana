@@ -12,7 +12,7 @@ The long-lived branches of karimalsalah/guarana, what may land on each, and what
 
 ## main
 
-- Always green: `build-check` (Linux GCC and Windows clang-cl, `-Werror`, unit and Python tests) passes on every commit. Protect it: require the two build jobs and a review, and allow merges only through pull requests.
+- Always green: `build-check` (Linux GCC and Windows clang-cl, `-Werror`, unit and Python tests) passes on every commit. Protect it: require the two build jobs and a review, and allow merges only through pull requests. [`.github/CODEOWNERS`](../.github/CODEOWNERS) asks the owner to review every pull request.
 - Experiments may land here, off by default, each with a row in [switches.md](switches.md). A switch that shows a measured gain on a verified scene can become the default behaviour in a later pull request, with the measurement. A disproven one is removed, or stays off with the result written in its row.
 - `nightly.yml` builds `main` every day at 03:23 UTC if it moved since the last nightly and replaces the rolling [`nightly` pre-release](https://github.com/karimalsalah/guarana/releases/tag/nightly), files and tag. Run it by hand (Actions > nightly > Run workflow, with "force") to rebuild without a new commit. GitHub turns off schedules in a repository without activity for 60 days; the Actions page then has a button to turn them back on.
 
@@ -36,6 +36,22 @@ Versions are `vX.Y.Z`; release candidates and other pre-releases are `vX.Y.Z-rcN
 To rebuild a published tag (a runner failure, a packaging fix that is not in the tag), run Actions > release-binaries > Run workflow with the tag: its release gets the new files and notes. To fix the notes, change `CHANGELOG.md`, move the tag (`git tag -f -a vX.Y.Z`, `git push -f origin vX.Y.Z`) before anyone downloads it, or publish the next patch version. Run from a branch without a tag, the workflow builds artifacts only and publishes nothing.
 
 The release builds run with the update checker off: it asks zortos293/Lichii for releases and only understands upstream's `build-N` tags, so it could offer upstream's builds to this fork's users. `LICHII_BUILD_TAG` is the tag, and the build reports the tag as its version.
+
+## Rapid releases
+
+`main` is always green, so a version need not wait for a release branch: tag `main` itself while it holds only what the version should ship, and cut `release/vX.Y` (above) when `main` has to move on meanwhile. `tools/ci/bump-version.sh` keeps `VERSION` and the `CHANGELOG.md` headings in step; the workflow takes the version from the tag and never reads `VERSION`.
+
+- **A patch straight from `main`**, on a branch from it:
+
+  ```sh
+  bash tools/ci/bump-version.sh patch        # VERSION 20.2.0 -> 20.2.1-rc1; [Unreleased] moves under ## [20.2.1]
+  bash tools/ci/bump-version.sh release      # VERSION 20.2.1; that heading gets today's date
+  bash tools/ci/changelog-section.sh 20.2.1  # the notes the release will use; an empty section fails it
+  ```
+
+  Commit the two files as `release: v20.2.1`, merge the pull request, then tag the commit it made on `main` and push the tag as in step 3 above.
+- **Release candidates** are `vX.Y.Z-rcN` tags, published as pre-releases, so GitHub's latest release (the README's download link) stays on the last final version. `bump-version.sh minor` (or `major`, or `patch`) starts `X.Y.Z-rc1` and moves `[Unreleased]` under `## [X.Y.Z]`; tag `vX.Y.Z-rc1` and the pre-release gets that section as its notes (a `## [X.Y.Z-rcN]` section, if you write one, wins). A fix for the candidate adds its line to `## [X.Y.Z]`, not to `[Unreleased]`. `bump-version.sh rc` moves `VERSION` to the next `-rcN` for the next tag; `bump-version.sh release` dates the section for the final `vX.Y.Z`.
+- Every tag, candidate or final, gets the same files: all platforms, `SHA256SUMS.txt`, a build provenance attestation for each file and, once the signing secrets are set, signed Windows programs and installer ([SIGNING.md](SIGNING.md)).
 
 ## Hotfixes
 
@@ -95,6 +111,7 @@ To merge it:
 - `ingest-reports.yml` turns `device-report` issues into `site/data/community.json` (the community leaderboard on the benchmarks page) through one bot pull request on `bot/community-reports`, and comments on each report with its parsed row. See [FEEDBACK.md](FEEDBACK.md).
 - `triage.yml` labels new issues by game, GPU and symptom, asks once for a log when a crash or bug report has none, and adds `agent-ready` to agent tasks whose acceptance test is checkable. It never closes, locks or removes anything.
 - `promo-render.yml` renders the 20-second promo in `site/promo/` to MP4 and GIF artifacts.
+- Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) opens one pull request a week per ecosystem with the minor and patch updates of the workflows' actions, the launcher's crates and its npm packages, and one per major update, each at least a week after its release. `launcher.yml` builds the installer for pull requests that change `launcher/`.
 - No workflow closes or marks issues as stale.
 
 ## Repository settings these need

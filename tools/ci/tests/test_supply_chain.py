@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Checks of how releases are signed and attested (docs/SIGNING.md).
+"""Checks of how releases are signed, attested and kept up to date (docs/SIGNING.md, docs/LANES.md).
 
 The Windows programs and the installer are signed before they are uploaded and checksummed, every
 release file is attested before it is published, the jobs that call release-binaries.yml and
-launcher.yml grant what those ask for, and no condition reads a secret. Source checks only (nothing
-is built or run): python -I tools/ci/tests/test_supply_chain.py
+launcher.yml grant what those ask for, no condition reads a secret, and CODEOWNERS and Dependabot's
+configuration are where GitHub reads them. Source checks only (nothing is built or run):
+python -I tools/ci/tests/test_supply_chain.py
 """
 
 import os
@@ -131,6 +132,34 @@ class ProvenanceTests(StepOrder, unittest.TestCase):
             self.assertEqual(job["uses"], called)
             self.assertEqual(job["permissions"], ATTESTING)
             self.assertEqual(job["secrets"], "inherit")
+
+
+class RepositoryFileTests(unittest.TestCase):
+    def test_one_codeowners_file_where_github_looks_first(self):
+        # GitHub takes the first of .github/, the root and docs/; another copy would be ignored.
+        rules = [line for line in read(".github", "CODEOWNERS").splitlines() if line and not line.startswith("#")]
+        self.assertEqual(rules, ["* @karimalsalah"])
+        for other in (("CODEOWNERS",), ("docs", "CODEOWNERS")):
+            self.assertFalse(os.path.exists(os.path.join(ROOT, *other)), other)
+
+    def test_dependabot_updates_weekly_in_small_groups(self):
+        config = yaml_subset.load(read(".github", "dependabot.yml"))
+        self.assertEqual(config["version"], "2")
+        updates = {update["package-ecosystem"]: update for update in config["updates"]}
+        self.assertEqual(set(updates), {"github-actions", "cargo", "npm"})
+        self.assertEqual(updates["github-actions"]["directory"], "/")
+        self.assertEqual(updates["cargo"]["directory"], "/launcher/src-tauri")
+        self.assertEqual(updates["npm"]["directories"], ["/launcher", "/launcher/ui"])
+        for manifest in ("launcher/src-tauri/Cargo.lock", "launcher/package-lock.json", "launcher/ui/package-lock.json"):
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, *manifest.split("/"))), manifest)
+        labels = {label["name"] for label in yaml_subset.load(read(".github", "labels.yml"))}
+        for name, update in updates.items():
+            self.assertEqual(update["schedule"], {"interval": "weekly"}, name)
+            (group,) = update["groups"].values()
+            self.assertEqual(group["update-types"], ["minor", "patch"], name)
+            # Dependabot leaves out a label the repository does not have.
+            self.assertIn("dependencies", update["labels"], name)
+            self.assertEqual(set(update["labels"]) - labels, set(), name)
 
 
 if __name__ == "__main__":

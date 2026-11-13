@@ -12,7 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
-- Every release file comes with a signed build provenance attestation (`gh attestation verify <file> --repo karimalsalah/guarana`), and the release workflows Authenticode-sign `guarana.exe`, `guarana-cli.exe` and the installer with Azure Artifact Signing once its secrets are set. How to check a download and how to turn signing on: [docs/SIGNING.md](docs/SIGNING.md).
+- Every release file comes with a signed build provenance attestation (`gh attestation verify <file> --repo karimalsalah/guarana`), and the release workflows Authenticode-sign `guarana.exe`, `guarana-cli.exe` and the installer with Azure Artifact Signing once its secrets are set. How to check a download and how to turn signing on: [docs/SIGNING.md](docs/SIGNING.md). Also weekly grouped Dependabot updates, `.github/CODEOWNERS`, installer builds for launcher pull requests, and "Rapid releases" in [docs/LANES.md](docs/LANES.md).
 
 ## [20.2.0] - 2026-11-13
 

@@ -35,6 +35,8 @@ on:
       - ".github/workflows/release-binaries.yml"
       - ".github/workflows/launcher.yml"
       - ".github/workflows/nightly.yml"
+      - ".github/CODEOWNERS"
+      - ".github/dependabot.yml"
 
 permissions: {}
 

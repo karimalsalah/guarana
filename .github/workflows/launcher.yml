@@ -3,7 +3,8 @@ name: launcher
 # Builds the Guarana Launcher (launcher/, Tauri 2): the per-user NSIS installer
 # Guarana-Setup-<version>.exe, with the current Windows emulator build bundled as
 # launcher/src-tauri/resources/emulator.zip so the first run works offline.
-# - push to main or feat/** touching launcher/**: workflow artifact only;
+# - push to main or feat/** touching launcher/**, and pull requests that touch it (Dependabot's
+#   included): workflow artifact only;
 # - by hand: workflow artifact; with release_tag (or run on a tag) also attached to that release;
 # - workflow_call (after the release is published): attached to the caller's tag, or to
 #   release_tag, with its SHA-256 added to the release's SHA256SUMS.txt. The calling job must
@@ -16,6 +17,10 @@ on:
     branches:
       - main
       - "feat/**"
+    paths:
+      - "launcher/**"
+      - .github/workflows/launcher.yml
+  pull_request:
     paths:
       - "launcher/**"
       - .github/workflows/launcher.yml
@@ -47,7 +52,7 @@ permissions:
 
 concurrency:
   group: launcher-${{ github.ref }}-${{ inputs.release_tag || 'none' }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
   build:

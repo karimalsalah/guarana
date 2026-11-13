@@ -40,7 +40,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [Development.md](Development.md) | Development guidelines |
 | [Debug.md](Debug.md) | Debugging guidelines, including RenderDoc |
 | [Fuzzing.md](Fuzzing.md) | Fuzzing the game-file parsers |
-| [CODEOWNERS](CODEOWNERS) | Review ownership |
+| [../.github/CODEOWNERS](../.github/CODEOWNERS) | Review ownership |
 | [../ROADMAP.md](../ROADMAP.md) | What is being worked on, with a definition of done for each item |
 | [../CHANGELOG.md](../CHANGELOG.md) | What shipped in each version |
 
