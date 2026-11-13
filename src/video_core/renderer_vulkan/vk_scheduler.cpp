@@ -75,7 +75,45 @@ constexpr std::array<std::string_view, static_cast<size_t>(TraceCategory::Count)
         "query_copy",
         "clear_in_pass",
         "present",
+        "buffer_copy.other",
+        "buffer_copy.upload",
+        "buffer_copy.inline",
+        "buffer_copy.index",
+        "buffer_copy.dma",
+        "buffer_copy.download",
+        "buffer_copy.read_download",
+        "buffer_copy.fence_download",
+        "buffer_copy.list_page",
+        "buffer_copy.join",
+        "buffer_copy.gather",
+        "buffer_upload_batch.other",
+        "buffer_upload_batch.upload",
+        "buffer_upload_batch.inline",
+        "buffer_upload_batch.index",
+        "buffer_upload_batch.dma",
+        "buffer_upload_batch.download",
+        "buffer_upload_batch.read_download",
+        "buffer_upload_batch.fence_download",
+        "buffer_upload_batch.list_page",
+        "buffer_upload_batch.join",
+        "buffer_upload_batch.gather",
+        "buffer_upload_batch.mixed",
     };
+static_assert(!TRACE_CATEGORY_NAMES.back().empty(), "a TraceCategory without a name");
+
+/// The row a category adds up into besides its own: the call-site rows of buffer copies and
+/// upload batches go into buffer_copy and buffer_upload_batch, which keep the meaning they had
+/// before the split.
+constexpr TraceCategory TraceSumRow(TraceCategory category) {
+    if (category >= TraceCategory::BufferCopyOther && category <= TraceCategory::BufferCopyGather) {
+        return TraceCategory::BufferCopy;
+    }
+    if (category >= TraceCategory::BufferUploadBatchOther &&
+        category <= TraceCategory::BufferUploadBatchMixed) {
+        return TraceCategory::BufferUploadBatch;
+    }
+    return category;
+}
 
 std::string_view TraceBaseName(const char* file) {
     std::string_view name{file ? file : "?"};
@@ -511,7 +549,8 @@ void Scheduler::DispatchWork() {
     }
 }
 
-void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies) {
+void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies,
+                             TraceCategory category) {
     if (VideoCommon::GpuSplit::check_owner) {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordUpload");
     }
@@ -523,6 +562,11 @@ void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBuffe
             FlushUploads();
         }
         upload_batch->Add(src, dst, region);
+        if (!uploads_pending) {
+            upload_batch_category = category;
+        } else if (upload_batch_category != category) {
+            upload_batch_category = TraceCategory::BufferUploadBatchMixed;
+        }
         uploads_pending = true;
     }
 }
@@ -541,7 +585,7 @@ void Scheduler::FlushUploads() {
         upload_batch->copies.clear();
         upload_batch->groups.clear();
         uploads_pending = false;
-        RecordEmu(TraceCategory::BufferUploadBatch, {merged_num_copies, merged_num_groups, 0},
+        RecordEmu(upload_batch_category, {merged_num_copies, merged_num_groups, 0},
                   std::move(merged_command));
         return;
     }
@@ -553,7 +597,7 @@ void Scheduler::FlushUploads() {
     upload_batch->copies.clear();
     upload_batch->groups.clear();
     uploads_pending = false;
-    RecordEmu(TraceCategory::BufferUploadBatch, {num_copies, num_groups, 0}, std::move(command));
+    RecordEmu(upload_batch_category, {num_copies, num_groups, 0}, std::move(command));
 }
 
 void Scheduler::RecordReorderedUpload(VkBuffer src, VkBuffer dst,
@@ -1248,6 +1292,23 @@ void Scheduler::ReportWorkTimes(u32 count, double submission_sum_ms,
         if (item.fragment_hash == 0) {
             dispatch_ms += ms;
         }
+    }
+    // The call-site rows add up into their sum rows (TraceSumRow). Rows only: emu_ms counted each
+    // item once.
+    for (size_t category = 0; category < by_category.size(); ++category) {
+        const size_t sum_row =
+            static_cast<size_t>(TraceSumRow(static_cast<TraceCategory>(category)));
+        const Totals& part = by_category[category];
+        if (sum_row == category || part.count == 0) {
+            continue;
+        }
+        Totals& sum = by_category[sum_row];
+        if (part.max_ms > sum.max_ms || sum.count == 0) {
+            sum.max_ms = part.max_ms;
+            sum.max_size = part.max_size;
+        }
+        sum.total_ms += part.total_ms;
+        sum.count += part.count;
     }
     std::vector<std::pair<std::tuple<u64, u64, char>, Totals>> sorted(by_shaders.begin(),
                                                                       by_shaders.end());

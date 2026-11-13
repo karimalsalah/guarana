@@ -42,6 +42,28 @@ void HostReadBarrier(vk::CommandBuffer cmdbuf) {
                            barrier);
 }
 
+/// The emu rows of a copy recorded on its own and of an upload batch, by call site: the
+/// BufferCopy* and BufferUploadBatch* categories are in BufferCopySite order.
+constexpr TraceCategory CopyCategory(VideoCommon::BufferCopySite site) {
+    return static_cast<TraceCategory>(static_cast<u32>(TraceCategory::BufferCopyOther) +
+                                      static_cast<u32>(site));
+}
+
+constexpr TraceCategory UploadBatchCategory(VideoCommon::BufferCopySite site) {
+    return static_cast<TraceCategory>(static_cast<u32>(TraceCategory::BufferUploadBatchOther) +
+                                      static_cast<u32>(site));
+}
+
+static_assert(CopyCategory(VideoCommon::BufferCopySite::ListPage) ==
+              TraceCategory::BufferCopyListPage);
+static_assert(CopyCategory(VideoCommon::BufferCopySite::Gather) == TraceCategory::BufferCopyGather);
+static_assert(CopyCategory(VideoCommon::BufferCopySite::Count) ==
+              TraceCategory::BufferUploadBatchOther);
+static_assert(UploadBatchCategory(VideoCommon::BufferCopySite::ListPage) ==
+              TraceCategory::BufferUploadBatchListPage);
+static_assert(UploadBatchCategory(VideoCommon::BufferCopySite::Count) ==
+              TraceCategory::BufferUploadBatchMixed);
+
 VkBufferCopy MakeBufferCopy(const VideoCommon::BufferCopy& copy) {
     return VkBufferCopy{
         .srcOffset = copy.src_offset,
@@ -430,13 +452,16 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
     // MoltenVK's buffers are mapped already and downloaded through their mapping.
     uma_direct = Uma::Has(Uma::DirectUploads) && device.IsIntegrated() && !device.IsMoltenVK();
     uma_generations = Uma::Has(Uma::UsageGenerations);
+    uma_list_runs = Uma::Has(Uma::ListPageRuns);
+    uma_batch_copies = Uma::Has(Uma::BatchCopies);
     if (Uma::g_flags != 0) {
         LOG_INFO(Render_Vulkan,
                  "EDEN_NX2_UMA={:#x}: copy coalescing {}, direct uploads {}{}, usage generations "
-                 "{}, adaptive submissions {}",
+                 "{}, adaptive submissions {}, list page runs {}, batched copies {}",
                  Uma::g_flags, uma_coalesce ? "on" : "off", uma_direct ? "on" : "off",
                  Uma::Has(Uma::DirectUploads) && !uma_direct ? " (not an integrated GPU)" : "",
-                 uma_generations ? "on" : "off", Uma::Has(Uma::AdaptiveSubmit) ? "on" : "off");
+                 uma_generations ? "on" : "off", Uma::Has(Uma::AdaptiveSubmit) ? "on" : "off",
+                 uma_list_runs ? "on" : "off", uma_batch_copies ? "on" : "off");
         if (Uma::Has(Uma::HostImageCopy)) {
             LOG_WARNING(Render_Vulkan,
                         "EDEN_NX2_UMA bit 4 (host image copy) is not implemented");
@@ -723,6 +748,8 @@ bool BufferCacheRuntime::ClearNewBufferDirect(Buffer& buffer) {
 void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
                                     std::span<const VideoCommon::BufferCopy> copies, bool barrier,
                                     bool can_reorder_upload) {
+    const VideoCommon::BufferCopySite site =
+        std::exchange(copy_site, VideoCommon::BufferCopySite::Other);
     if (dst_buffer == VK_NULL_HANDLE || src_buffer == VK_NULL_HANDLE) {
         return;
     }
@@ -761,7 +788,8 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
         // Only in-order stream uploads share barriers. Dedicated staging buffers retain their
         // normal recording path and tick-based reuse.
         scheduler.RecordUpload(src_buffer, dst_buffer,
-                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()});
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
         return;
     }
     if (uma_coalesce && !vk_copies.empty()) {
@@ -769,10 +797,19 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
         // the batch too. It is recorded before the next command and within this tick, between
         // the same barriers as below, and holds no copy that depends on another of its copies.
         scheduler.RecordUpload(src_buffer, dst_buffer,
-                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()});
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
         return;
     }
-    scheduler.RecordEmu(TraceCategory::BufferCopy, {static_cast<u32>(vk_copies.size()), 0, 0},
+    if (uma_batch_copies && barrier && !vk_copies.empty()) {
+        // EDEN_NX2_UMA bit 64: bit 1's batching of the copies that take their own barriers, as
+        // above. Copies bracketed by PreCopyBarrier and PostCopyBarrier share theirs already.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
+        return;
+    }
+    scheduler.RecordEmu(CopyCategory(site), {static_cast<u32>(vk_copies.size()), 0, 0},
         [src_buffer, dst_buffer, vk_copies, barrier](vk::CommandBuffer cmdbuf) {
         if (barrier) {
             cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
@@ -991,6 +1028,7 @@ bool BufferCacheRuntime::BindMultiRangeStorageBuffer(u64 key, bool is_written) {
                 .dst_offset = u64(dst_offset),
                 .size = size_t(source.size),
             }};
+            SetCopySite(VideoCommon::BufferCopySite::Gather);
             CopyBuffer(ref.handle, source.handle, copy, false);
             dst_offset += source.size;
         }
