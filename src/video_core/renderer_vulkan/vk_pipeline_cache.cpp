@@ -503,29 +503,6 @@ u32 MeshCullBits(u32 wanted, const FixedPipelineState& state, const Device& devi
     return wanted;
 }
 
-/// The cheaper outputs (Profile::mesh_out) a native mesh program can have in this pipeline;
-/// `info.mesh_cull` is set. `other_stage`: a stage that is not the fragment one follows it.
-void SetMeshOut(Shader::RuntimeInfo& info, u32 wanted,
-                std::span<const Shader::IR::Program> programs,
-                const GraphicsPipelineCacheKey& key, bool other_stage) {
-    using namespace Shader::Backend::SPIRV;
-    info.mesh_out = wanted;
-    if ((wanted & MESH_OUT_DEAD) != 0) {
-        const bool has_fragment{key.unique_hashes[5] != 0};
-        // A legacy varying the fragment stage loads is moved to a generic it does not load,
-        // which would then have no output.
-        if (other_stage || key.unique_hashes[3] != 0 || key.unique_hashes[4] != 0 ||
-            (has_fragment && programs[5].info.loads.Legacy())) {
-            info.mesh_out &= ~MESH_OUT_DEAD;
-        } else if (has_fragment) {
-            info.mesh_next_stage_loads = programs[5].info.loads;
-        }
-    }
-    if ((info.mesh_cull & MESH_CULL_SMALL) == 0) {
-        info.mesh_out &= ~MESH_OUT_RATE;
-    }
-}
-
 /// EDEN_NX2_PREPASS_INVARIANT=1, read once: the stages before the fragment one of a pipeline with
 /// a prepass split decorate Position as Invariant, should the two passes' depths ever differ.
 bool PrepassInvariantPosition() {
@@ -1031,29 +1008,6 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                             (MESH_CULL_FRUSTUM | MESH_CULL_SMALL | MESH_CULL_EMPTY);
         LOG_INFO(Render_Vulkan, "EDEN_NX2_MESH_CULL={}: mesh program culling bits {}", mesh_cull,
                  profile.mesh_cull);
-    }
-    // EDEN_NX2_MESH_OUT=<bits> (experiment): cheaper outputs of native mesh programs. 1 leaves out
-    // the generic components the fragment stage never reads, 2 shades triangles whose bounding
-    // box is under EDEN_NX2_MESH_VRS_PX pixels (default 4) at 2x2 (needs EDEN_NX2_VRS and
-    // EDEN_NX2_MESH_CULL bit 2), 8 stores each output vector once. (4, packing the index map,
-    // would race between invocations and does nothing.)
-    static const char* const mesh_out{std::getenv("EDEN_NX2_MESH_OUT")};
-    if (mesh_out != nullptr) {
-        using namespace Shader::Backend::SPIRV;
-        profile.mesh_out = static_cast<u32>(std::strtoul(mesh_out, nullptr, 0)) &
-                           (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR | MESH_OUT_COUNT);
-        if (!device.IsMeshPrimitiveShadingRateSupported()) {
-            profile.mesh_out &= ~MESH_OUT_RATE;
-        }
-        if (const char* const pixels{std::getenv("EDEN_NX2_MESH_VRS_PX")}) {
-            const float value{std::strtof(pixels, nullptr)};
-            if (value > 0.0f) {
-                profile.mesh_rate_pixels = value;
-            }
-        }
-        LOG_INFO(Render_Vulkan,
-                 "EDEN_NX2_MESH_OUT={}: mesh program output bits {}, 2x2 under {} pixels",
-                 mesh_out, profile.mesh_out, profile.mesh_rate_pixels);
     }
     // EDEN_NX2_GM=<bits> (experiment): cheaper run-time routing of global memory accesses that
     // stay global. 1 computes the buffer base addresses once per invocation instead of in every
@@ -3446,12 +3400,6 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             // The pipeline pushes the viewport the small triangle test reads.
             program.info.uses_mesh_cull_viewport =
                 (runtime_info.mesh_cull & Shader::Backend::SPIRV::MESH_CULL_SMALL) != 0;
-        }
-        if (!mesh_emulation && program.stage == Shader::Stage::Mesh && profile.mesh_out != 0) {
-            SetMeshOut(runtime_info, profile.mesh_out, programs, key,
-                       layer_source_program != nullptr);
-            program.info.uses_mesh_shading_rate =
-                (runtime_info.mesh_out & Shader::Backend::SPIRV::MESH_OUT_RATE) != 0;
         }
         if (prepass_shaders && prepass_shaders->invariant_position &&
             program.stage != Shader::Stage::Fragment) {

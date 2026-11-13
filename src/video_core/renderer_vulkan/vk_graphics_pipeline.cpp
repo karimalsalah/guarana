@@ -2003,10 +2003,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
         set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
     }
-    // A mesh program's per-primitive rate (EDEN_NX2_MESH_OUT) only counts with this combiner.
-    const VkFragmentShadingRateCombinerOpKHR primitive_rate_op{
-        set_shading_rate && UsesMeshShadingRate() ? device.MeshPrimitiveRateCombiner()
-                                                  : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
@@ -2031,7 +2027,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
-                      shading_rate, set_shading_rate, primitive_rate_op,
+                      shading_rate, set_shading_rate,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
@@ -2051,7 +2047,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         // After the bind: a rate set under a pipeline with a static one does not survive it.
         if (set_shading_rate) {
             cmdbuf.SetFragmentShadingRateKHR(shading_rate,
-                                             {primitive_rate_op,
+                                             {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
                                               VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
         }
         const VkShaderStageFlags push_stages =
@@ -2748,8 +2744,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
         .pNext = nullptr,
         .fragmentSize = device.ClampFragmentShadingRate({mesh_rate.width, mesh_rate.height}),
-        .combinerOps = {UsesMeshShadingRate() ? device.MeshPrimitiveRateCombiner()
-                                              : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+        .combinerOps = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
                         VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR},
     };
     const VkGraphicsPipelineCreateInfo pipeline_ci{

@@ -148,10 +148,6 @@ struct RuntimeInfo {
     /// Native mesh program: the culling its epilogue adds (MESH_CULL_* bits) for this pipeline's
     /// state. With MESH_CULL_SMALL the host pushes viewport 0 at MESH_CULL_VIEWPORT_OFFSET.
     u32 mesh_cull{};
-    /// Native mesh program: MESH_OUT_* bits for this pipeline, and with MESH_OUT_DEAD what the
-    /// fragment stage loads (nothing without one).
-    u32 mesh_out{};
-    VaryingState mesh_next_stage_loads;
 };
 
 } // namespace Shader
