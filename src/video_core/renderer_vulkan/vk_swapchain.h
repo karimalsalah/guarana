@@ -53,7 +53,8 @@ public:
     /// Acquires the next image in the swapchain, waits as needed. Returns true when no image was
     /// acquired (out of date) and the swapchain has to be recreated first.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
-    bool AcquireNextImage(bool may_flush = true);
+    /// `pace`: false skips the wait for the image's last GPU tick and the frame pacing sleep.
+    bool AcquireNextImage(bool may_flush = true, bool pace = true);
 
     /// Presents the rendered image to the swapchain.
     void Present(VkSemaphore render_semaphore);
@@ -177,6 +178,8 @@ private:
     VkFormat image_view_format{};
     VkExtent2D extent{};
     VkPresentModeKHR present_mode{};
+    VkPresentModeKHR logged_present_mode{VK_PRESENT_MODE_MAX_ENUM_KHR};
+    std::size_t logged_image_count{};
     VkSurfaceFormatKHR surface_format{};
     std::atomic<VkFormat> sdr_image_format{VK_FORMAT_B8G8R8A8_UNORM};
     VkFormat requested_format{VK_FORMAT_B8G8R8A8_UNORM};
