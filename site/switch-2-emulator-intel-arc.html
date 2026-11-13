@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switch 2 Emulator on Intel Arc Graphics (140T, 140V) | Guarana</title>
+<meta name="description" content="Run the Switch 2 Ocarina of Time on an Intel Arc iGPU laptop: tested Arc 140T numbers, Arc 140V and Meteor Lake status, driver, power and frame generation settings.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Switch 2 Emulator on Intel Arc Graphics (140T, 140V) | Guarana">
+<meta property="og:description" content="Run the Switch 2 Ocarina of Time on an Intel Arc iGPU laptop: tested Arc 140T numbers, Arc 140V and Meteor Lake status, driver, power and frame generation settings.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Switch 2 Emulator on Intel Arc Graphics (140T, 140V) | Guarana">
+<meta name="twitter:description" content="Run the Switch 2 Ocarina of Time on an Intel Arc iGPU laptop: tested Arc 140T numbers, Arc 140V and Meteor Lake status, driver, power and frame generation settings.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "FAQPage",
+      "@id": "https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html#webpage",
+      "url": "https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html",
+      "name": "Switch 2 Emulator on Intel Arc Graphics (140T, 140V) | Guarana",
+      "description": "Run the Switch 2 Ocarina of Time on an Intel Arc iGPU laptop: tested Arc 140T numbers, Arc 140V and Meteor Lake status, driver, power and frame generation settings.",
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://karimalsalah.github.io/guarana/#website"
+      },
+      "dateModified": "2026-11-13",
+      "about": {
+        "@type": "SoftwareApplication",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/"
+      },
+      "breadcrumb": {
+        "@id": "https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html#breadcrumb"
+      },
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is there a Switch 2 emulator that runs on Intel Arc integrated graphics?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Guarana is tuned for Intel Arc iGPUs first. On a Core Ultra 9 285H with Arc 140T (driver 32.0.101.9175), one shader fix took Ocarina of Time's Hyrule Field from 14.8 to 22.8 game fps with frame generation off. That is one laptop and one scene."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which Intel Arc GPUs have been tested?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Only the Arc 140T (Arrow Lake-H, Core Ultra 9 285H laptops) by the maintainers. The Arc 140V (Lunar Lake, MSI Claw 8 AI+) has a third-party report of 22-24 fps in gameplay on another build. Meteor Lake Arc and the Arc B390 (Panther Lake) are untested."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which Intel graphics driver should I use?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "A current stable one. Our numbers use 32.0.101.9175. Intel drivers differ in shader compilation speed and have a pipeline-cache crash with a fix in progress, so put your exact version in every report."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How much RAM do I need on an Arc laptop?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The GPU shares system memory, and Switch 2 titles use a large guest memory layout. 16 GB is below the comfortable floor; close other programs and enlarge the page file. Our laptop has 32 GB."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does frame generation work on Intel Arc?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing has improved in the next release: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why do Arc laptops hitch when I enter a new area?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) ships in the next release."
+          }
+        }
+      ]
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Switch 2 emulator on Intel Arc",
+          "item": "https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="devices/">Devices</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="./">Home</a></li><li><span aria-current="page">Switch 2 emulator on Intel Arc</span></li></ol></nav>
+  <p class="eyebrow">Intel Arc iGPU &middot; Core Ultra &middot; Windows 11</p>
+  <h1>Switch 2 emulator for Intel Arc integrated graphics</h1>
+  <p class="lede">Intel Arc laptops and handhelds are the chip this emulator is tuned on. Here is what is measured on the Arc 140T, what is only reported by others, and the setup that matches the numbers.</p>
+  <div class="btn-row">
+    <a class="btn" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download Guarana</a>
+    <a class="btn btn-secondary" href="https://discord.gg/urz7vMdRM">Ask in Discord</a>
+    <a class="btn btn-secondary" href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Send a device report</a>
+  </div>
+</div>
+<div class="wrap">
+<section class="section" aria-labelledby="status">
+  <h2 id="status">Status by Intel Arc generation</h2>
+  <div class="table-wrap">
+    <table class="stack">
+      <caption class="visually-hidden">Intel Arc GPUs and their status</caption>
+      <thead><tr><th scope="col">GPU</th><th scope="col">Example devices</th><th scope="col">Status</th></tr></thead>
+      <tbody>
+        <tr><td data-label="GPU"><a href="devices/arc-140t.html">Arc 140T</a> (Arrow Lake-H)</td><td data-label="Example devices">Core Ultra 9 285H laptops</td><td data-label="Status">Tested by the maintainers: 14.75 to 22.83 game fps in Hyrule Field</td></tr>
+        <tr><td data-label="GPU"><a href="devices/arc-140v.html">Arc 140V</a> (Lunar Lake)</td><td data-label="Example devices">MSI Claw 8 AI+</td><td data-label="Status">Community report: 22-24 fps in gameplay, third-party build, not verified by us</td></tr>
+        <tr><td data-label="GPU"><a href="devices/meteor-lake-arc.html">Arc (Meteor Lake)</a></td><td data-label="Example devices">MSI Claw A1M, Core Ultra 7/9 H laptops</td><td data-label="Status">Untested</td></tr>
+        <tr><td data-label="GPU"><a href="devices/panther-lake-arc-b390.html">Arc B390</a> (Panther Lake)</td><td data-label="Example devices">Arc G3 handhelds</td><td data-label="Status">Untested</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section class="section" aria-labelledby="measured">
+  <h2 id="measured">What we measured, and on what</h2>
+  <p class="section-intro">One machine: Core Ultra 9 285H laptop, Intel Arc 140T, driver 32.0.101.9175, 120 Hz OLED, 32 GB RAM, plugged in. Game: <em>The Legend of Zelda: Ocarina of Time</em>. &ldquo;Game fps&rdquo; counts only frames the game renders, never generated ones.</p>
+  <div class="table-wrap">
+    <table class="stack">
+      <caption class="visually-hidden">Measured results on the Arc 140T laptop</caption>
+      <thead><tr><th scope="col">What</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Status</th></tr></thead>
+      <tbody>
+        <tr><td data-label="What">Hyrule Field, one shader fix (<code>EDEN_NX2_GM=11</code>), frame generation off</td><td data-label="Before">14.8 game fps</td><td data-label="After"><strong>22.8 game fps</strong></td><td data-label="Status">Shipped in v20; on by default for Ocarina of Time only</td></tr>
+        <tr><td data-label="What">Foliage mesh draw, same runs</td><td data-label="Before">15.7 ms GPU</td><td data-label="After"><strong>5.8 ms GPU</strong></td><td data-label="Status">Shipped in v20</td></tr>
+        <tr><td data-label="What">Frame pacing, title screen: frames within 2 ms of the median interval</td><td data-label="Before">n/a</td><td data-label="After"><strong>100%</strong></td><td data-label="Status">Next release</td></tr>
+        <tr><td data-label="What">Same measure, Hyrule Field</td><td data-label="Before">33-54%</td><td data-label="After"><strong>75%</strong></td><td data-label="Status">Next release</td></tr>
+        <tr><td data-label="What">Headless shader warm-up</td><td data-label="Before">n/a</td><td data-label="After"><strong>4,515 pipelines in 155 s</strong></td><td data-label="Status">Next release</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="fine">Method and caveats: <a href="benchmarks.html">benchmarks</a>. Every row is one laptop. Other games, scenes, drivers and machines will give other numbers.</p>
+</section>
+<section class="section" aria-labelledby="setup">
+  <h2 id="setup">Setup that matches the measured laptop</h2>
+<ol class="steps">
+<li><h3>Driver</h3><p>Use a current stable Intel driver and note the version. Ours is 32.0.101.9175.</p></li>
+<li><h3>Power</h3><p>Plugged in, highest performance mode. On battery the power budget drops and so does the speed.</p></li>
+<li><h3>Settings</h3><p><em>Enable Frame Generation</em>, multiplier 3, target 60. The shader fix and extrapolation are already on for Ocarina of Time. Keep Windows page file generous.</p></li>
+<li><h3>Report</h3><p>One <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> turns an &ldquo;untested&rdquo; page into data. Include the driver version, power mode, build, and game fps measured after the scene settled.</p></li>
+</ol>
+  <p>Two things to know: the Intel pipeline-cache crash (<a href="fix-stutter-switch-2-emulator.html#crash">workaround</a>), and that the first visit to any area compiles shaders.</p>
+</section>
+<section class="section" aria-labelledby="questions">
+  <h2 id="questions">Questions people ask</h2>
+<div class="faq-item">
+  <h3>Is there a Switch 2 emulator that runs on Intel Arc integrated graphics?</h3>
+  <p>Yes. Guarana is tuned for Intel Arc iGPUs first. On a Core Ultra 9 285H with Arc 140T (driver 32.0.101.9175), one shader fix took Ocarina of Time's Hyrule Field from 14.8 to 22.8 game fps with frame generation off. That is one laptop and one scene.</p>
+</div>
+<div class="faq-item">
+  <h3>Which Intel Arc GPUs have been tested?</h3>
+  <p>Only the Arc 140T (Arrow Lake-H, Core Ultra 9 285H laptops) by the maintainers. The Arc 140V (Lunar Lake, MSI Claw 8 AI+) has a third-party report of 22-24 fps in gameplay on another build. Meteor Lake Arc and the Arc B390 (Panther Lake) are untested.</p>
+</div>
+<div class="faq-item">
+  <h3>Which Intel graphics driver should I use?</h3>
+  <p>A current stable one. Our numbers use 32.0.101.9175. Intel drivers differ in shader compilation speed and have a pipeline-cache crash with a fix in progress, so put your exact version in every report.</p>
+</div>
+<div class="faq-item">
+  <h3>How much RAM do I need on an Arc laptop?</h3>
+  <p>The GPU shares system memory, and Switch 2 titles use a large guest memory layout. 16 GB is below the comfortable floor; close other programs and enlarge the page file. Our laptop has 32 GB.</p>
+</div>
+<div class="faq-item">
+  <h3>Does frame generation work on Intel Arc?</h3>
+  <p>Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing has improved in the next release: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before.</p>
+</div>
+<div class="faq-item">
+  <h3>Why do Arc laptops hitch when I enter a new area?</h3>
+  <p>Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) ships in the next release.</p>
+</div>
+</section>
+<section class="section" aria-labelledby="next">
+  <div class="cta-box">
+    <h2 id="next">Play it, then help it get better</h2>
+    <p>Guarana is free and open source (GPL-3.0-or-later). It ships no keys, firmware or games: you bring your own, dumped from hardware you own.</p>
+    
+    <ul>
+      <li><strong>Download:</strong> the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest release</a> is the only official download.</li>
+      <li><strong>Stuck?</strong> Ask in the <a href="https://discord.gg/urz7vMdRM">Discord</a> (bugs and device reports stay on GitHub so they are tracked).</li>
+      <li><strong>Test:</strong> a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> needs no code and puts your device on the <a href="benchmarks.html">leaderboard</a>.</li>
+      <li><strong>Contribute with your AI agent:</strong> one sentence gets Claude Code, Codex, Gemini CLI, Cursor or Copilot to a pull request. Start at the <a href="agents.html">agents page</a>, or see <a href="wins.html">open wins</a> with numbers.</li>
+    </ul>
+  </div>
+</section>
+<section class="section" aria-labelledby="related">
+  <h2 id="related">Related</h2>
+  <ul>
+<li><a href="play-ocarina-of-time-switch-2-on-pc.html">Play Ocarina of Time on PC in 5 minutes</a></li>
+<li><a href="fix-stutter-switch-2-emulator.html">Fix stutter</a></li>
+<li><a href="switch-2-emulator-handheld.html">Handhelds: ROG Ally, Legion Go, Claw, Steam Deck</a></li>
+<li><a href="devices/">All device pages</a></li>
+  </ul>
+  <p>Updated 2026-11-13. <a href="./">Home</a> &middot; <a href="faq.html">FAQ</a> &middot; <a href="benchmarks.html">Benchmarks</a> &middot; <a href="legal.html">Legal</a></p>
+</section>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+        <li><a href="https://discord.gg/urz7vMdRM">Discord: discord.gg/urz7vMdRM</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="devices/">Devices</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
+        <li><a href="legacy.html">Hall of fame</a></li>
+        <li><a href="legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="llms.txt">llms.txt</a></li>
+        <li><a href="llms-full.txt">llms-full.txt</a></li>
+        <li><a href="sitemap.xml">sitemap.xml</a></li>
+        <li><a href="data/benchmarks.json">benchmarks.json</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+</body>
+</html>

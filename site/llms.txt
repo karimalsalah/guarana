@@ -19,6 +19,11 @@ Key facts:
 ## Pages
 
 - [Home](https://karimalsalah.github.io/guarana/): what it is, measured results, how pacing and frame generation work, setup
+- [Play Ocarina of Time on PC](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html): Play the Switch 2 Ocarina of Time on a PC, laptop or handheld: the 5-minute path with your own keys, firmware and game, settings, frame generation and measured speed
+- [Fix stutter](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html): Fix stutter: shader warm-up, frame pacing presenter, read-back and power settings, with before and after numbers
+- [Intel Arc](https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html): Intel Arc iGPU laptops: what is tested (Arc 140T), what is only reported, driver, power and settings
+- [Handhelds](https://karimalsalah.github.io/guarana/switch-2-emulator-handheld.html): ROG Ally, Legion Go, MSI Claw and Steam Deck: status per device, memory and power advice, send a device report
+- [Controller setup](https://karimalsalah.github.io/guarana/controller-setup.html): Controller setup: Xbox, DualSense, Switch Pro and 8BitDo pads, profiles, known upstream issues
 - [Devices](https://karimalsalah.github.io/guarana/devices/): status, specs and starting settings per GPU class and handheld
 - [Benchmarks](https://karimalsalah.github.io/guarana/benchmarks.html): every measured row with its caveats
 - [FAQ](https://karimalsalah.github.io/guarana/faq.html): requirements, latency, pacing, legality, drivers, platforms
@@ -35,6 +40,7 @@ Key facts:
 - [Latest release](https://github.com/karimalsalah/guarana/releases/latest): the only official download
 - [Device report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml): how to report results for any device
 - [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md): rules for AI coding agents
+- [Testing protocol](https://github.com/karimalsalah/guarana/blob/HEAD/docs/TESTING.md): the 10-minute path for testers: install, stand in Hyrule Field, send a device report (the launcher can prefill it)
 - [AI quickstart](https://github.com/karimalsalah/guarana/blob/HEAD/docs/AI-QUICKSTART.md): from zero to a pull request, one command per tool (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline) and a paste-in prompt for web chats
 - [Discord](https://discord.gg/urz7vMdRM): chat, setup help and real-time help from contributors (bugs and device reports stay on GitHub)
 - [Open wins](https://karimalsalah.github.io/guarana/wins.html): measurable open problems with the scene, today's number, the target and where to look; data in [wins.json](https://karimalsalah.github.io/guarana/data/wins.json)

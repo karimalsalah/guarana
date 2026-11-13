@@ -2,6 +2,7 @@
 
 - [The project](#the-project)
 - [Performance and frame generation](#performance-and-frame-generation)
+- [Playing on a PC, laptop or handheld](#playing-on-a-pc-laptop-or-handheld)
 - [Install and data](#install-and-data)
 - [Contributing](#contributing)
 
@@ -61,7 +62,7 @@ follow. No figure for frames shown per second is published yet.
 
 No. It makes motion look smoother by showing extra frames between the game's own frames, so a 60 Hz
 display gets a new image on every refresh. The game still runs, and reads your input, at its own
-frame rate. [How it works](../README.md#how-frame-generation-and-pacing-work).
+frame rate. [How it works](../README.md#how-the-frame-pacing-works).
 
 ### Does frame generation add input lag?
 
@@ -86,7 +87,7 @@ progress (`EDEN_NX2_FLUID=1`, experimental): see
 
 ### Which settings should I use?
 
-On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#quick-start). On
+On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#get-it). On
 anything else, nobody knows yet: measure with and without each switch
 ([BENCHMARKING.md](BENCHMARKING.md)) and share the result.
 
@@ -109,6 +110,71 @@ and lowers the minimum processor state in your active power plan while a game ru
 shared power budget can go to the GPU. It saves your values first and writes them back when the game
 stops or the emulator exits. If the emulator crashes, the next start puts them back. Without the
 switch, nothing is changed. It is experimental, and its effect has not been measured yet.
+
+## Playing on a PC, laptop or handheld
+
+Short answers; each links the page with the detail and the numbers.
+
+### How do I play the Switch 2 Ocarina of Time on a PC?
+
+Download the Windows zip from [Releases](https://github.com/karimalsalah/guarana/releases/latest), extract it and run
+`lichii.exe`. Install keys and firmware (*Tools*) and add the folder with your game, all dumped from hardware you own. For
+this game the shader fix is on by default; turn on frame generation (multiplier 3, target 60). The steps:
+[the 5-minute path](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html).
+
+### What is the best Switch 2 emulator?
+
+There is no finished one. Guarana, Lichii, Eglantine and Eden are one family (Guarana forks Lichii), and all are
+experimental for Switch 2. Guarana is the one tuned and measured for laptop and handheld integrated GPUs; on a large
+discrete GPU we have no measurements. [Comparison](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html#compare).
+
+### Emulator or recompilation (for example Hookshot)?
+
+An emulator runs the game as dumped and also other Switch 2 games. A recompilation turns one game's code into a native
+Windows program, a separate project per game that we do not run or measure. Both need a dump from your own hardware.
+
+### What speed can I expect on a laptop?
+
+On the one tested laptop (Core Ultra 9 285H, Arc 140T), Hyrule Field went from 14.8 to 22.8 game fps with frame generation
+off, from one shader fix. Other machines are untested: send a [device report](DEVICES.md#send-a-device-report).
+
+### Why does it stutter, and what helps?
+
+Two causes. Entering a new area compiles shaders once (0.4-1 s per pipeline on Intel). Uneven frame times are pacing: the
+vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against
+33-54% before, and ships in the next release. A development build (v21) measured 19 stutters per 30 s in a scene that
+had 37-92 on the old setup. One laptop, one scene. [Detail](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html).
+
+### I get a black screen or a crash
+
+Update the graphics driver, enlarge the page file, and read [Troubleshooting](TROUBLESHOOTING.md). On Intel there is a
+known pipeline-cache driver crash with a fix in progress. Report with the `Host crash:` line of the log, never with keys,
+firmware, game files or logs that show your user name.
+
+### Does it run on a ROG Ally, Legion Go, MSI Claw or Steam Deck?
+
+Not measured by us yet. Third-party reports exist for the ROG Xbox Ally X (about 30 fps) and the MSI Claw 8 AI+ (22-24 fps,
+another build). Everything else is untested. [Handhelds](https://karimalsalah.github.io/guarana/switch-2-emulator-handheld.html).
+
+### What about Intel Arc?
+
+Arc is the first target. The Arc 140T is tested; the 140V, Meteor Lake and B390 are not, or have only third-party reports.
+[Intel Arc](https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html).
+
+### Which controllers work, and how do I set one up?
+
+*Emulation → Configure… → Controls*, pick the pad, map it, save a profile. DualSense, Xbox, Switch Pro and 8BitDo pads have
+no published test yet; the page lists what to try. [Controller setup](https://karimalsalah.github.io/guarana/controller-setup.html).
+
+### The emulator says a key or firmware is missing
+
+Install your own keys and firmware from *Tools → Install Decryption Keys* and *Tools → Install Firmware*, dumped from
+hardware you own at the version your game needs. Nobody here will point you to downloads.
+
+### Can I use Lossless Scaling?
+
+Optionally. Guarana only loads a `Lossless.dll` that you supply from your own Lossless Scaling purchase and distributes
+none of it. The built-in extrapolating frame generation needs no extra files.
 
 ## Install and data
 
@@ -157,5 +223,5 @@ that was only reasoned about, is not enough.
 
 ### Where do I ask questions?
 
-In [Discussions](https://github.com/karimalsalah/guarana/discussions). Use
+In the [Discord](https://discord.gg/urz7vMdRM) or in [Discussions](https://github.com/karimalsalah/guarana/discussions). Use
 [issues](https://github.com/karimalsalah/guarana/issues/new/choose) for bugs and device reports.

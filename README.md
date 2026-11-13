@@ -10,6 +10,7 @@ A fork of [Lichii](https://github.com/zortos293/Lichii) (the yuzu, Eden, Eglanti
 
 <a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Download Guarana" src="https://img.shields.io/badge/Download-latest_release-F2851A?style=for-the-badge&labelColor=16181D"></a>
 <a href="https://discord.gg/urz7vMdRM"><img alt="Join the Guarana Discord" src="https://img.shields.io/badge/Discord-join_the_chat-5865F2?style=for-the-badge&labelColor=16181D"></a>
+<a href="#ai-native-plug-in-your-agent"><img alt="Contribute with your AI agent" src="https://img.shields.io/badge/Contribute-with_your_AI_agent-8A2BE2?style=for-the-badge&labelColor=16181D"></a>
 
 <a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/karimalsalah/guarana?include_prereleases&sort=semver&label=release&style=flat-square"></a>
 <a href="https://github.com/karimalsalah/guarana/actions/workflows/build-check.yml"><img alt="Build check status" src="https://img.shields.io/github/actions/workflow/status/karimalsalah/guarana/build-check.yml?label=CI&style=flat-square"></a>
@@ -17,13 +18,23 @@ A fork of [Lichii](https://github.com/zortos293/Lichii) (the yuzu, Eden, Eglanti
 <a href="https://discord.gg/urz7vMdRM"><img alt="Discord: discord.gg/urz7vMdRM" src="https://img.shields.io/badge/discord-urz7vMdRM-5865F2?style=flat-square"></a>
 <a href="docs/AI-QUICKSTART.md"><img alt="AI agents welcome" src="https://img.shields.io/badge/AI_agents-welcome-8A2BE2?style=flat-square"></a>
 
-[Get it](#get-it) · [Measured wins](#measured-wins) · [AI-native](#ai-native-plug-in-your-agent) · [Why contribute now](#why-contribute-now) · [Hall of fame](#hall-of-fame) · [Devices](#devices) · [Roadmap](#roadmap) · [FAQ](#faq) · [Website](https://karimalsalah.github.io/guarana/)
+[Play Ocarina of Time](#play-ocarina-of-time-on-your-pc) · [Get it](#get-it) · [Measured wins](#measured-wins) · [AI-native](#ai-native-plug-in-your-agent) · [Why contribute now](#why-contribute-now) · [Hall of fame](#hall-of-fame) · [Devices](#devices) · [Roadmap](#roadmap) · [FAQ](#faq) · [Website](https://karimalsalah.github.io/guarana/)
 
 <sub>**Languages:** English · [简体中文](docs/i18n/README.zh-CN.md) · [Español](docs/i18n/README.es.md) · [Português (Brasil)](docs/i18n/README.pt-BR.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Русский](docs/i18n/README.ru.md) · [العربية](docs/i18n/README.ar.md)</sub>
 
 </div>
 
 <sub>No keys, firmware or games included: bring your own, dumped from hardware you own. Not affiliated with Nintendo. [Legal](#legal).</sub>
+
+**The proof:** on a Core Ultra 9 285H laptop with an Arc 140T iGPU, one shader fix took Ocarina of Time's Hyrule Field from **14.8 to 22.8 game fps** with frame generation off ([the table](#measured-wins)). Every number names its machine.
+
+## Play Ocarina of Time on your PC
+
+- **Play it on a PC or laptop:** download, bring your own keys, firmware and game, switch on frame generation. [The 5-minute path](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html), with the Intel Arc settings on [one page](https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html).
+- **Best emulator, or a recompilation?** The emulator runs the game as you dumped it; a recompilation is a separate native port per game. [How to choose](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html#compare), including Lichii, Eden and Eglantine.
+- **Stutter, black screen, crash:** a first-visit hitch is shader compilation; uneven motion is pacing. [What helps, with numbers](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html).
+- **ROG Ally, Legion Go, MSI Claw, Steam Deck:** none measured by us yet. [What to expect and how to send a device report](https://karimalsalah.github.io/guarana/switch-2-emulator-handheld.html).
+- **Controllers** (Xbox, DualSense, Switch Pro, 8BitDo): [setup](https://karimalsalah.github.io/guarana/controller-setup.html).
 
 Most Switch emulators are tuned on big graphics cards. Guarana is tuned on the chip most people actually have:
 the GPU inside a laptop or handheld, which shares memory and a power budget with the CPU. It aims at
