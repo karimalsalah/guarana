@@ -68,7 +68,7 @@ These options control executables and build flavors.
 
 **Desktop only**:
 
-- `LICHII_CMD` (ON) Compile the SDL-based frontend (eden-cli)
+- `LICHII_CMD` (ON) Compile the SDL-based frontend (guarana-cli)
 - `LICHII_ROOM` (OFF) Compile dedicated room functionality into the main executable
 - `LICHII_ROOM_STANDALONE` (OFF) Compile a separate executable for room functionality
 - `LICHII_STATIC_ROOM` (OFF) Compile the room executable *only* as a static, portable executable

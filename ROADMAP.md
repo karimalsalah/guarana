@@ -341,7 +341,7 @@ hotkeys for frame generation, a frame-time overlay, pause and quit.
 `area: frontend` · `area: packaging`
 
 **Problem.** A `user` folder next to the program already makes an install portable, but
-`nx2_switches.txt` is read only from the program's folder and from `%APPDATA%\lichii`, so a portable
+`nx2_switches.txt` is read only from the program's folder and from `%APPDATA%\guarana`, so a portable
 install cannot keep its own switches.
 
 **Plan.** Read `nx2_switches.txt` from the portable `user` folder too, and document portable use as

@@ -31,12 +31,12 @@ Guarana는 [Lichii](https://github.com/zortos293/Lichii)(`nx2` 브랜치)에서 
 ## 빠른 시작
 
 1. [Releases](https://github.com/karimalsalah/guarana/releases)에서 최신 zip 파일을 받습니다. 공식 다운로드 위치는 이 페이지뿐입니다.
-2. zip 전체를 쓰기 권한이 있는 폴더에 풀고 **`lichii.exe`**를 실행합니다.
+2. zip 전체를 쓰기 권한이 있는 폴더에 풀고 **`guarana.exe`**를 실행합니다.
 3. 키와 펌웨어를 설치합니다. **Tools → Install Decryption Keys**, 그다음 **Tools → Install Firmware** 순서로 실행하세요.
 4. 게임 폴더를 추가하고(빈 게임 목록을 두 번 클릭) 게임을 시작합니다. 각 지역에 처음 들어갈 때는 셰이더를 컴파일하느라 끊김이 생길 수 있으며, 이후에는 캐시에서 불러옵니다.
 5. 선택 사항: **Emulation → Configure… → Graphics**에서 **Enable Frame Generation**을 켭니다.
 
-설정, 세이브, 캐시는 `%APPDATA%\lichii`에 저장되며, 이는 상위 프로젝트 Lichii와 같은 폴더입니다. 두 버전을 바꿔 쓰기 전에 백업하세요. 모든 스위치는 [docs/switches.md](../../docs/switches.md)에, 자주 생기는 문제는 [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md)에 있습니다.
+설정, 세이브, 캐시는 `%APPDATA%\guarana`에 저장되며, 처음 실행할 때 이전 폴더 `%APPDATA%\lichii`에서 설정이 자동으로 옮겨집니다(이전 폴더는 그대로 남습니다). 모든 스위치는 [docs/switches.md](../../docs/switches.md)에, 자주 생기는 문제는 [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md)에 있습니다.
 
 ## 키, 펌웨어, 게임 (법적 안내)
 

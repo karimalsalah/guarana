@@ -118,7 +118,7 @@ Short answers; each links the page with the detail and the numbers.
 ### How do I play the Switch 2 Ocarina of Time on a PC?
 
 Download the Windows zip from [Releases](https://github.com/karimalsalah/guarana/releases/latest), extract it and run
-`lichii.exe`. Install keys and firmware (*Tools*) and add the folder with your game, all dumped from hardware you own. For
+`guarana.exe`. Install keys and firmware (*Tools*) and add the folder with your game, all dumped from hardware you own. For
 this game the shader fix is on by default; turn on frame generation (multiplier 3, target 60). The steps:
 [the 5-minute path](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html).
 
@@ -180,16 +180,16 @@ none of it. The built-in extrapolating frame generation needs no extra files.
 
 ### Where are my settings, saves and logs?
 
-In `%APPDATA%\lichii`: v20 keeps the upstream folder name. The log is `log\eden_log.txt` in that
-folder (**File → Open Lichii Folders → Log Folder**). A `user` folder next to `lichii.exe` makes the
+In `%APPDATA%\guarana`. The log is `log\eden_log.txt` in that
+folder (**File → Open Guarana Folders → Log Folder**). A `user` folder next to `guarana.exe` makes the
 install portable and is used instead.
 
 ### Can I use Guarana and upstream Lichii side by side?
 
-Yes, but they share `%APPDATA%\lichii`: settings, saves, caches, and the switches in
-`%APPDATA%\lichii\nx2_switches.txt` apply to both. Back the folder up before switching. A portable
-`user` folder next to one of them keeps its settings, saves and caches apart; both still read the
-switches in `%APPDATA%\lichii` ([roadmap L3](../ROADMAP.md#l3-portable-mode-out-of-the-box)).
+Yes. Guarana keeps its data in `%APPDATA%\guarana` and upstream Lichii in `%APPDATA%\lichii`, so they
+do not touch each other. A portable
+`user` folder next to the program keeps its settings, saves and caches apart too
+([roadmap L3](../ROADMAP.md#l3-portable-mode-out-of-the-box)).
 
 ### It closes as soon as I start it
 
@@ -198,7 +198,7 @@ Two common causes are a CPU without AVX2 and a missing Visual C++ runtime. See
 
 ### How do I update?
 
-Download the new release and extract it into a new folder; your data in `%APPDATA%\lichii` stays
+Download the new release and extract it into a new folder; your data in `%APPDATA%\guarana` stays
 where it is. Automatic updates are on the [roadmap](../ROADMAP.md#l4-auto-update).
 
 ## Contributing

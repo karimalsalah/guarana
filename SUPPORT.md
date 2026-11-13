@@ -23,6 +23,6 @@ Download Guarana only from this repository's [releases page](https://github.com/
 - The exact build: Help > About, or the first line of the log.
 - CPU, GPU and the full driver version, RAM, the OS and its build, and whether the machine was plugged in.
 - The game and where in it, the settings you changed, and every `EDEN_NX2_*` switch you set.
-- A screenshot, and the log of the session (`eden_log.txt` in the `log` folder of the emulator's data directory, `%APPDATA%\lichii\log` on Windows). Open it first and remove your user name and any folder paths you do not want public.
+- A screenshot, and the log of the session (`eden_log.txt` in the `log` folder of the emulator's data directory, `%APPDATA%\guarana\log` on Windows). Open it first and remove your user name and any folder paths you do not want public.
 
 Never attach keys, firmware, game files, saves or shader caches.

@@ -7,7 +7,7 @@ A pull request that adds, changes or removes a switch updates its row here. The 
 ## Setting a switch
 
 - As an environment variable before the emulator starts: `set EDEN_NX2_GM=11` in `cmd`, `$env:EDEN_NX2_GM = "11"` in PowerShell, `EDEN_NX2_GM=11 ./lichii` on Linux.
-- Or as a `NAME=VALUE` line in `nx2_switches.txt`, which the GUI reads at start: the copy next to the executable, then your own in `%APPDATA%\lichii\nx2_switches.txt` (or `$XDG_CONFIG_HOME/lichii/nx2_switches.txt`), which wins. A variable in the real environment wins over both. A file next to the executable may set only `EDEN_NX2_*` and diagnostic switches.
+- Or as a `NAME=VALUE` line in `nx2_switches.txt`, which the GUI reads at start: the copy next to the executable, then your own in `%APPDATA%\guarana\nx2_switches.txt` (or `$XDG_CONFIG_HOME/guarana/nx2_switches.txt`), which wins. A variable in the real environment wins over both. A file next to the executable may set only `EDEN_NX2_*` and diagnostic switches.
 - Most switches are read once, at start: restart after a change. Those marked "live" can also be changed in a running game through the debug server (`EDEN_NX2_DEBUG_SERVER`, [nx2/debug-mcp.md](nx2/debug-mcp.md)).
 - Unset, or `0`, leaves the emulator as it is without the switch, unless the row says otherwise.
 - "Off by default" below is the code's default. A line in the shipped `dist/nx2_switches.txt` turns a switch on in every release package: read that file to see what a release runs with.

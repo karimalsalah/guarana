@@ -15,7 +15,7 @@ Bananza, Ocarina of Time and others). It does not add HDR to SDR-only games. It 
   hosts cannot tell, so Auto means SDR there.
 - **On**: HDR whenever the display driver offers an HDR swapchain format.
 
-While HDR output is on, Lichii presents an HDR swapchain: HDR10 (10-bit PQ BT.2020) or, with
+While HDR output is on, Guarana presents an HDR swapchain: HDR10 (10-bit PQ BT.2020) or, with
 HDR format set to scRGB, a 16-bit float one. It uses the other one if the driver offers only
 that, and SDR if it offers neither. The game is told the display is HDR only while that
 swapchain really is HDR, with the monitor's peak luminance and its SDR content brightness as
@@ -37,7 +37,7 @@ says why.
 
 On Windows, Auto follows changes during play: toggling Windows HDR, moving the window to
 another monitor, changing the SDR content brightness or running the Windows HDR Calibration app
-is picked up within half a second. Lichii switches the swapchain and asks the game to query the
+is picked up within half a second. Guarana switches the swapchain and asks the game to query the
 display again; games that listen switch between SDR and HDR images. Run the Windows HDR
 Calibration app for your monitor first: Windows reports the peak from the display's colour
 profile where one is set, else from its EDID, and the game tone maps to that peak.
@@ -47,7 +47,7 @@ fullscreen.
 
 Windows Auto HDR applies to SDR output of DirectX 11 and 12 games and leaves an HDR swapchain
 alone. If you keep HDR output Off on an HDR desktop and Auto HDR engages for the emulator, turn
-Auto HDR off for `lichii.exe` / `eden-cli.exe` in Settings > System > Display > Graphics, so SDR
+Auto HDR off for `guarana.exe` / `guarana-cli.exe` in Settings > System > Display > Graphics, so SDR
 frames are shown as SDR.
 
 ### Anti-aliasing

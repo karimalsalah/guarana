@@ -124,7 +124,7 @@ def switches_section(text):
     out = ["## Switches overview (docs/switches.md)", ""]
     out.append(absolute_links(intro[0].strip(), "docs/") if intro else "")
     out += ["", "Setting one: an environment variable (`EDEN_NX2_GM=11`) or a `NAME=VALUE` line in "
-            "`%APPDATA%\\lichii\\nx2_switches.txt`. Unset or `0` leaves the emulator as it was. Every switch "
+            "`%APPDATA%\\guarana\\nx2_switches.txt`. Unset or `0` leaves the emulator as it was. Every switch "
             "is off by default unless its row says otherwise. Statuses: proven (a measured gain on a "
             "verified scene), experimental, diagnostic, default on. Full rows with measurements and code "
             f"locations: {BLOB}docs/switches.md", ""]

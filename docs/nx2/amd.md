@@ -4,7 +4,7 @@ Switch 2 games are written for an NVIDIA GPU. Their native shaders and command s
 NVIDIA behaviour in places where Vulkan leaves the result undefined, and the translated Vulkan
 usually does the same thing on an NVIDIA host by luck. AMD drivers return something else, so a
 missing or wrong emulation detail tends to show up on AMD first: NaN haze, garbage pixels, black
-scenes, driver timeouts. This page lists the differences found so far, what Lichii does about
+scenes, driver timeouts. This page lists the differences found so far, what Guarana does about
 each, and how to investigate a new one.
 
 Ocarina of Time (`0400486024DEC000`) is the main test case, but the rules apply to every title.
@@ -14,7 +14,7 @@ Ocarina of Time (`0400486024DEC000`) is the main test case, but the rules apply 
 "Open" in the last column means the fix is a pull request that isn't merged yet: nx2 still behaves
 the old way there.
 
-| Guest (NVIDIA) behaviour | Vulkan, and what AMD does | What Lichii does | Change |
+| Guest (NVIDIA) behaviour | Vulkan, and what AMD does | What Guarana does | Change |
 |---|---|---|---|
 | `FMNMX` returns the operand that is not NaN, and saturation turns NaN into 0 | `FMin`, `FMax` and `FClamp` leave NaN undefined; AMD returns the NaN, and blurred or accumulated targets spread it over the screen | Min, max, clamp and saturate are emitted as `NMin`/`NMax`, clamp as `NMin(NMax(x, lo), hi)` | [#432] (from [#325]) |
 | A bound render target that the fragment shader doesn't export keeps its old value | The attachment gets an undefined value; AMD writes whatever its export registers hold (format maximum, NaN) | The colour write mask, in the pipeline and in the dynamic mask, leaves out the components the fragment shader doesn't write | [#353] (from [#323]) |
