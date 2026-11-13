@@ -37,6 +37,7 @@ Key facts:
 - [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md): rules for AI coding agents
 - [AI quickstart](https://github.com/karimalsalah/guarana/blob/HEAD/docs/AI-QUICKSTART.md): from zero to a pull request, one command per tool (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline) and a paste-in prompt for web chats
 - [Discord](https://discord.gg/urz7vMdRM): chat, setup help and real-time help from contributors (bugs and device reports stay on GitHub)
+- [Open wins](https://karimalsalah.github.io/guarana/wins.html): measurable open problems with the scene, today's number, the target and where to look; data in [wins.json](https://karimalsalah.github.io/guarana/data/wins.json)
 - [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html): everyone credited for good, rebuilt daily from the git history; data in [legacy.json](https://karimalsalah.github.io/guarana/data/legacy.json)
 - [Debug MCP server](https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md): lets an agent read status, frame times, screenshots and logs from a running game and send input
 - [Bench harness](https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md): runs a scene the same way on any machine and writes JSON rows

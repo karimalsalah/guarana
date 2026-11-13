@@ -19,6 +19,7 @@ problem and how you would measure it.
 | | [N2. Intel pipeline-cache crash](#n2-intel-driver-crash-when-the-pipeline-cache-is-saved-during-builds) | Shaders, Intel |
 | | [N3. Test builds for every PR, nightlies](#n3-test-builds-for-every-pull-request) | CI |
 | | [N4. Switch registry](#n4-switch-registry) | Docs, tooling |
+| | [A1. NPU feasibility](#a1-npu-feasibility) | AI, NPU |
 | **Next** | [X1. Shader translation off the GPU thread](#x1-shader-translation-off-the-gpu-thread) | Shaders, stutter |
 | | [X2. Persisted SPIR-V](#x2-persisted-spir-v) | Boot, shaders |
 | | [X3. Non-blocking boot and memory-mapped caches](#x3-non-blocking-boot-and-memory-mapped-caches) | Boot |
@@ -26,10 +27,16 @@ problem and how you would measure it.
 | | [X5. Pipeline-library fast-link](#x5-graphics-pipeline-library-fast-link) | Shaders, stutter |
 | | [X6. Shader warm-up](#x6-shader-warm-up) | Shaders, stutter |
 | | [X7. AMD Radeon iGPU path](#x7-amd-radeon-igpu-path) | Devices, AMD |
+| | [A2. Disocclusion fill for predicted frames](#a2-disocclusion-fill-for-predicted-frames) | Frame generation, NPU |
+| | [A3. The game's anti-aliasing network on the NPU](#a3-the-games-anti-aliasing-network-on-the-npu) | Image quality, NPU |
+| | [A5. Shader-need prediction](#a5-shader-need-prediction) | Shaders, stutter, AI |
 | **Later** | [L1. LSE atomics in the JIT](#l1-lse-atomics-in-the-jit) | CPU |
 | | [L2. Handheld mode and hotkeys](#l2-handheld-mode-and-hotkeys) | Frontend |
 | | [L3. Portable mode out of the box](#l3-portable-mode-out-of-the-box) | Frontend, packaging |
 | | [L4. Auto-update](#l4-auto-update) | Frontend, packaging |
+| | [A4. Battery-mode super resolution](#a4-battery-mode-super-resolution) | Power, NPU |
+| | [A6. AI eyes for every build](#a6-ai-eyes-for-every-build) | CI, quality, AI |
+| | [A7. Learned autopilot](#a7-learned-autopilot) | Tuning, AI |
 
 ## Now
 
@@ -192,6 +199,90 @@ so far is a third-party report of about 30 fps in Ocarina of Time on an 890M
 
 **Done when.** Valid rows from at least two AMD iGPU devices, a recommended AMD config in
 [docs/DEVICES.md](docs/DEVICES.md), and its known issues listed there.
+
+## AI and the NPU in every track
+
+Intel Core Ultra and AMD Ryzen AI laptops and handhelds carry a neural processor (NPU) that games leave idle.
+It cannot run emulation code, but it can take neural work off the iGPU, which shares the same power budget.
+Each item ships only if it fits the frame budget it claims, measured the same way as everything else.
+
+### A1. NPU feasibility
+
+`area: ai` · status: in progress
+
+**Problem.** Nobody has published what an integrated NPU can do inside a 16.7 ms frame.
+
+**Plan.** Benchmark super-resolution, image-to-image and tiny policy networks on the Intel NPU (OpenVINO) against
+the iGPU and CPU on the Arc 140T laptop, including the cost of moving a frame between Vulkan memory and the NPU.
+
+**Done when.** A published table of latency (p50/p99) per workload and device, and a go or no-go for A2 to A4.
+
+### A2. Disocclusion fill for predicted frames
+
+`area: frame generation, ai`
+
+**Problem.** A predicted frame moves the last real frame along its motion vectors; surfaces the camera reveals
+have no pixels yet and show as smears at edges.
+
+**Plan.** A small inpainting network fills only those pixels, on the NPU when it is free, else on the GPU,
+running in parallel with the next real frame so it adds no latency.
+
+**Done when.** Side-by-side captures show fewer edge artifacts at the same shown-frame pacing and no added latency.
+
+### A3. The game's anti-aliasing network on the NPU
+
+`area: image quality, ai`
+
+**Problem.** Ocarina of Time runs a tensor network on its image; on GPUs without matrix cores it is too costly,
+so it is skipped (`oot_anti_aliasing`) and the image loses that anti-aliasing.
+
+**Plan.** Run an equivalent of the network on the NPU, reading its weights at run time from the player's own game
+(never stored or shipped), and composite the result.
+
+**Done when.** The game's own anti-aliasing is back on an Arc iGPU with no loss of game fps.
+
+### A4. Battery-mode super resolution
+
+`area: power, ai`
+
+**Problem.** On battery the iGPU's share of the power budget limits the render resolution.
+
+**Plan.** Render at a lower internal resolution and upscale on the NPU, so the iGPU and CPU keep more of the budget.
+
+**Done when.** Longer battery life at the same game fps and a sharper image than plain bilinear scaling.
+
+### A5. Shader-need prediction
+
+`area: shaders, stutter, ai`
+
+**Problem.** A new area still compiles pipelines the first time it is seen.
+
+**Plan.** Learn from sessions (the player's own and, with consent, anonymised community lists of pipeline keys)
+which pipelines follow which area and build them ahead of time, feeding [X6](#x6-shader-warm-up).
+
+**Done when.** The stutter trace shows fewer first-visit builds on a scripted route.
+
+### A6. AI eyes for every build
+
+`area: ci, quality`
+
+**Problem.** About 50 upstream pull requests land a day; a rendering regression can slip through.
+
+**Plan.** Deterministic image diffs on fixed frames gate the build; vision models describe and group the failures
+for a human, on contributors' machines (NPU where present).
+
+**Done when.** A broken frame in a test build is flagged before it reaches a release.
+
+### A7. Learned autopilot
+
+`area: tuning, ai`
+
+**Problem.** The best settings differ per device, game area and power state.
+
+**Plan.** The in-engine autopilot (`EDEN_NX2_AUTOPILOT`) starts from rules; community reports train a small policy
+that picks frame generation, resolution and power settings per device class.
+
+**Done when.** Auto beats the hand-picked profile on shown-frame pacing on two or more device classes.
 
 ## Later
 

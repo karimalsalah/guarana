@@ -129,6 +129,7 @@ What makes this more than a README promise:
 
 - **It is early.** One device has results (the Arc 140T). Almost any laptop or handheld you own is a first data point, and a [device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) needs no code.
 - **Big, measurable wins are still open.** One shader fix took Hyrule Field from 14.8 to 22.8 fps. The next ones are [autopilot tuning](#roadmap) of the power and shading-rate governors, read-back latency, and boot time. Each can be A/B tested on a scene.
+- **Open problems have numbers.** Read-back stalls, first-visit shader stutter, boot time, Hyrule Field at a steady 30 fps and the first AMD reports are on the [Open wins](https://karimalsalah.github.io/guarana/wins.html) page, each with its scene, today's number and target.
 - **Your name stays.** Every merged pull request, and every `Co-authored-by:` trailer, goes on the [Hall of fame](#hall-of-fame) and in [CONTRIBUTORS.md](CONTRIBUTORS.md), rebuilt daily from the git history, forever.
 - **Help in real time.** Questions about a task, a driver or a build get answers in the [Discord](https://discord.gg/urz7vMdRM). Bugs and device reports stay on GitHub so they can be tracked.
 - **Small steps count.** Run the [benchmark](docs/BENCHMARKING.md), triage an issue, port an upstream fix with its author credited, add a test. [CONTRIBUTING.md](CONTRIBUTING.md) has the five-minute start.
@@ -199,6 +200,7 @@ Guarana is tuned for integrated GPUs: **Intel Arc first, AMD handhelds next, and
 | Intel pipeline-cache crash ([IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)) | Persisted SPIR-V, non-blocking boot, memory-mapped caches | Handheld mode and controller hotkeys |
 | v20.1: Guarana Setup, controller auto-config | Cheaper Intel compiles, pipeline-library fast-link, shader warm-up | Portable mode, auto-update |
 | CI test builds per PR, switch registry | AMD Radeon iGPU path | |
+| NPU feasibility (in progress) | NPU: disocclusion fill for predicted frames, the game's AA network | NPU: battery super resolution, shader-need prediction, learned autopilot |
 
 Open wins we would love help with: **autopilot tuning** (the power and shading-rate governors choosing for you), **read-back latency** (guest reads of GPU-written memory), and **boot time** (about 11 s of Vulkan start-up). Each item has a problem statement and a definition of done in [ROADMAP.md](ROADMAP.md).
 
