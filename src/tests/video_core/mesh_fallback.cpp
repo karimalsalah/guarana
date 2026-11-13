@@ -5,9 +5,13 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
 #define SPV_ENABLE_UTILITY_CODE
@@ -133,7 +137,7 @@ Profile MakeProfile() {
 // With lane_id the mesh program writes its lane as the vertex's first attribute word.
 std::vector<u32> EmitProgram(Stage stage, bool as_compute, bool with_task,
                              Profile profile = MakeProfile(), bool lane_id = false,
-                             u32 mesh_cull = 0) {
+                             bool culled = false) {
     ObjectPool<IR::Inst> pool;
     IR::Block block{pool};
     IR::Program program;
@@ -156,7 +160,7 @@ std::vector<u32> EmitProgram(Stage stage, bool as_compute, bool with_task,
         ir.IsbeWriteAttribute(ir.Imm32(0), index);
         ir.IsbeWriteMapU8(ir.Imm32(4), ir.Imm32(0));
         ir.IsbeWriteMapU32(ir.Imm32(3), ir.Imm32(1));
-    } else {
+    } else if (!culled) {
         ir.IsbeWriteAttribute(ir.Imm32(4), ir.Imm32(1)); // one mesh workgroup
     }
     ir.Epilogue();
@@ -198,55 +202,65 @@ TEST_CASE("Mesh fallback leaves native task and mesh programs as mesh shaders",
     REQUIRE(UsesStorageClass(task, spv::StorageClass::TaskPayloadWorkgroupEXT));
 }
 
-TEST_CASE("Native mesh programs cull their triangles when the pipeline asks",
+TEST_CASE("Native task programs zero the mesh workgroup count before the guest runs",
           "[video_core][spirv][mesh_fallback]") {
-    const auto culls = [](const std::vector<u32>& code) {
-        return std::ranges::any_of(Instructions(code), [](const Instruction& inst) {
-            return inst.op == spv::Op::OpDecorate &&
-                   inst.operands[1] == static_cast<u32>(spv::Decoration::BuiltIn) &&
-                   inst.operands[2] == static_cast<u32>(spv::BuiltIn::CullPrimitiveEXT);
-        });
+    // A task that culls every thread never writes payload word 1, which OpEmitMeshTasksEXT reads.
+    const std::vector<u32> task{EmitProgram(Stage::Task, false, false, MakeProfile(), false, true)};
+    Dump(task, "native-task-culled");
+    std::unordered_map<u32, u32> constants;
+    std::unordered_set<u32> payload_variables;
+    std::unordered_map<u32, std::pair<u32, u32>> umins;
+    std::unordered_map<u32, u32> payload_indices;
+    const auto value_of = [&](u32 id) -> std::optional<u32> {
+        if (const auto it{constants.find(id)}; it != constants.end()) {
+            return it->second;
+        }
+        if (const auto it{umins.find(id)}; it != umins.end()) {
+            const auto a{constants.find(it->second.first)};
+            const auto b{constants.find(it->second.second)};
+            if (a != constants.end() && b != constants.end()) {
+                return (std::min)(a->second, b->second);
+            }
+        }
+        return std::nullopt;
     };
-    const auto set_outputs = [](const std::vector<u32>& code) {
-        return std::ranges::count_if(Instructions(code), [](const Instruction& inst) {
-            return inst.op == spv::Op::OpSetMeshOutputsEXT;
-        });
-    };
-    Profile profile{MakeProfile()};
-    profile.unified_descriptor_binding = true; // the viewport is a push constant
-
-    const std::vector<u32> plain{EmitProgram(Stage::Mesh, false, false, profile)};
-    REQUIRE_FALSE(culls(plain));
-    REQUIRE_FALSE(HasVariable(plain, spv::StorageClass::PushConstant));
-    REQUIRE(set_outputs(plain) == 1);
-
-    const std::vector<u32> all{
-        EmitProgram(Stage::Mesh, false, false, profile, false,
-                    SPIRV::MESH_CULL_FRUSTUM | SPIRV::MESH_CULL_SMALL | SPIRV::MESH_CULL_EMPTY)};
-    Dump(all, "native-mesh-cull");
-    REQUIRE(Model(all) == spv::ExecutionModel::MeshEXT);
-    REQUIRE(culls(all));
-    REQUIRE(HasVariable(all, spv::StorageClass::PushConstant));
-    REQUIRE(set_outputs(all) == 1);
-
-    const std::vector<u32> frustum{
-        EmitProgram(Stage::Mesh, false, false, profile, false, SPIRV::MESH_CULL_FRUSTUM)};
-    Dump(frustum, "native-mesh-cull-frustum");
-    REQUIRE(culls(frustum));
-    REQUIRE_FALSE(HasVariable(frustum, spv::StorageClass::PushConstant));
-    REQUIRE(set_outputs(frustum) == 1);
-
-    const std::vector<u32> empty{
-        EmitProgram(Stage::Mesh, false, false, profile, false, SPIRV::MESH_CULL_EMPTY)};
-    Dump(empty, "native-mesh-cull-empty");
-    REQUIRE_FALSE(culls(empty));
-    REQUIRE(set_outputs(empty) == 1);
-
-    // The compute emulation takes no culling.
-    const std::vector<u32> emulated{EmitProgram(Stage::Mesh, true, false, MakeProfile(), false,
-                                                SPIRV::MESH_CULL_FRUSTUM | SPIRV::MESH_CULL_SMALL)};
-    RequireNoMeshShading(emulated);
-    REQUIRE_FALSE(HasVariable(emulated, spv::StorageClass::PushConstant));
+    bool zeroed{};
+    for (const Instruction& inst : Instructions(task)) {
+        if (inst.op == spv::Op::OpControlBarrier) {
+            break;
+        }
+        switch (inst.op) {
+        case spv::Op::OpConstant:
+            constants[inst.operands[1]] = inst.operands[2];
+            break;
+        case spv::Op::OpVariable:
+            if (inst.operands[2] == static_cast<u32>(spv::StorageClass::TaskPayloadWorkgroupEXT)) {
+                payload_variables.insert(inst.operands[1]);
+            }
+            break;
+        case spv::Op::OpExtInst:
+            if (inst.operands[3] == 38) { // GLSL.std.450 UMin
+                umins[inst.operands[1]] = {inst.operands[4], inst.operands[5]};
+            }
+            break;
+        case spv::Op::OpAccessChain:
+            if (inst.operands.size() == 4 && payload_variables.contains(inst.operands[2])) {
+                payload_indices[inst.operands[1]] = inst.operands[3];
+            }
+            break;
+        case spv::Op::OpStore:
+            if (const auto index{payload_indices.find(inst.operands[0])};
+                index != payload_indices.end() &&
+                value_of(index->second) == std::optional<u32>{1} &&
+                value_of(inst.operands[1]) == std::optional<u32>{0}) {
+                zeroed = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    REQUIRE(zeroed);
 }
 
 TEST_CASE("Mesh fallback emits mesh programs as compute shaders writing storage buffers",

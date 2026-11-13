@@ -42,6 +42,7 @@ enum class FrameGenState : u8 {
     UnsupportedGpu,
     UnsupportedSurface,
     MissingLosslessDll,
+    NvidiaFrameGen,
 };
 
 struct FrameGenStatus {
@@ -68,8 +69,8 @@ struct RendererSettings {
 
 class RendererBase {
 public:
-    YUZU_NON_COPYABLE(RendererBase);
-    YUZU_NON_MOVEABLE(RendererBase);
+    LICHII_NON_COPYABLE(RendererBase);
+    LICHII_NON_MOVEABLE(RendererBase);
 
     explicit RendererBase(Core::Frontend::EmuWindow& window,
                           std::unique_ptr<Core::Frontend::GraphicsContext> context);

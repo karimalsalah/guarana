@@ -1,4 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifdef _WIN32
@@ -6,9 +5,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <new>
 
 #include "common/logging.h"
 #include "common/power_tuning.h"
+#include "common/memory_detect.h"
 #include "common/thread.h"
 #endif
 
@@ -63,7 +64,22 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             return;
         }
         const auto start = std::chrono::steady_clock::now();
-        const auto [resident, trimmed] = buffer.TrimZeroPages();
+        std::pair<size_t, size_t> result;
+        try {
+            result = buffer.TrimZeroPages();
+        } catch (const std::bad_alloc&) {
+            // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
+            // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
+            interval = std::chrono::seconds{60};
+            const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
+            LOG_WARNING(HW_Memory,
+                        "Skipped trimming all-zero guest pages: out of memory. Windows commit is "
+                        "{} of {} MiB (this process {} MiB); the limit is RAM plus the page file",
+                        usage.system_commit >> 20, usage.system_commit_limit >> 20,
+                        usage.commit >> 20);
+            continue;
+        }
+        const auto [resident, trimmed] = result;
         auto& counters = Common::g_memory_counters;
         counters.guest_resident.store(resident - trimmed, std::memory_order_relaxed);
         counters.guest_zero_trimmed.fetch_add(trimmed, std::memory_order_relaxed);

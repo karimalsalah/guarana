@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -49,6 +48,7 @@
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
 #include "video_core/vulkan_common/streamline.h"
+#include "video_core/vulkan_common/streamline_frame_gen.h"
 #endif
 #ifdef __ANDROID__
 #include <jni.h>
@@ -200,7 +200,7 @@ try
     , library(OpenLibrary(context.get()))
     , dld()
 #ifdef EGLANTINE_STREAMLINE
-    , streamline_started(Streamline::Start())
+    , streamline_started(Streamline::Start(render_window.GetWindowInfo().render_surface))
 #endif
     // Create raw Vulkan instance first
     , instance(CreateInstance(*library,
@@ -217,7 +217,7 @@ try
     , memory_allocator(device)
     , state_tracker()
     , scheduler(device, state_tracker)
-    , swapchain(*surface,
+    , swapchain(PresentationSurface(),
                 device,
                 scheduler,
                render_window.GetFramebufferLayout().width,
@@ -290,6 +290,13 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     SCOPE_EXIT {
         render_window.OnFrameDisplayed();
     };
+#ifdef EGLANTINE_STREAMLINE
+    // DLSS Frame Generation: this guest frame ends here, presented or not.
+    Streamline::FrameGenBeginFrame();
+    SCOPE_EXIT {
+        Streamline::FrameGenNextFrame();
+    };
+#endif
 
     RenderAppletCaptureLayer(framebuffers);
 
@@ -324,26 +331,40 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     scheduler.RecordEmuEnd();
 
 #ifdef HAS_LSFG
-    // Frames predicted from this one: presented after it, unlike interpolated frames.
+    // Frames predicted from this one (EDEN_NX2_EXTRAPOLATE): presented after it, unlike
+    // interpolated frames. The extrapolation pass writes SDR, so HDR output pauses it.
     std::vector<Frame*> predicted_frames;
-    if (output.IsHdr()) {
+    if (output.IsHdr() && ExtrapolationRequested()) {
         frame_gen.Pause();
     } else {
-        const auto& layout = render_window.GetFramebufferLayout();
-        frame_gen.SetExtrapolationSource(
-            rasterizer.OcarinaExtrapolationSource(),
-            VkRect2D{.offset = {static_cast<s32>(layout.screen.left),
-                                static_cast<s32>(layout.screen.top)},
-                     .extent = {layout.screen.GetWidth(), layout.screen.GetHeight()}});
-
-        void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames()));
+        if (!output.IsHdr()) {
+            const auto& layout = render_window.GetFramebufferLayout();
+            frame_gen.SetExtrapolationSource(
+                rasterizer.OcarinaExtrapolationSource(),
+                VkRect2D{.offset = {static_cast<s32>(layout.screen.left),
+                                    static_cast<s32>(layout.screen.top)},
+                         .extent = {layout.screen.GetWidth(), layout.screen.GetHeight()}});
+        }
+        void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames(),
+                                         present_manager.TakeBlockedTime()));
 
         frame_gen.Process(device, frame, frame->image_format, GuestExtent(framebuffers));
 
         const size_t generated_frames = frame_gen.GeneratedFrameCount();
         const bool predict = frame_gen.Extrapolating();
+        // Each generated frame keeps the screen for an equal share of the real frame interval
+        // (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh rate display
+        // shows it for one refresh only.
+        auto spacing = frame_gen.CadenceSpacing();
+        if (spacing.count() == 0) {
+            spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
+                                           static_cast<f32>(generated_frames + 1)));
+        }
         for (size_t generation = 0; generation < generated_frames; ++generation) {
             Frame* generated = present_manager.GetRenderFrame();
+            generated->color_space = output.color_space;
+            generated->present_spacing = spacing;
             blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
             frame_gen.GenerateInto(device, generated, generation);
             if (predict) {
@@ -354,6 +375,11 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
             scheduler.Flush(*generated->render_ready);
             present_manager.Present(generated);
         }
+        if (!predicted_frames.empty()) {
+            // The first predicted frame follows the real frame one spacing later, and each
+            // predicted frame holds the screen one spacing before the next frame.
+            frame->present_spacing = spacing;
+        }
     }
 #endif
 
@@ -361,29 +387,21 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         scheduler.MarkFrameEnd(++trace_frame, mark);
     }
     scheduler.Flush(*frame->render_ready);
+#ifdef EGLANTINE_STREAMLINE
+    {
+        const Streamline::FrameGenFrame ended = Streamline::FrameGenEndFrame();
+        const Common::Rectangle<u32>& screen = render_window.GetFramebufferLayout().screen;
+        frame->frame_gen = Streamline::FrameGenSession();
+        frame->frame_gen_frame = ended;
+        frame->guest_rect = VkRect2D{
+            .offset = {static_cast<s32>(screen.left), static_cast<s32>(screen.top)},
+            .extent = {screen.GetWidth(), screen.GetHeight()},
+        };
+    }
+#endif
 
     const auto presenting = trace ? std::chrono::steady_clock::now()
                                   : std::chrono::steady_clock::time_point{};
-#ifdef HAS_LSFG
-    // Predicted frames are shown one spacing apart after the real frame, and the real frame no
-    // sooner than one spacing after the last predicted frame of the frame before.
-    if (const auto spacing = frame_gen.ShownFrameSpacing();
-        spacing.count() != 0 && !predicted_frames.empty()) {
-        const auto now = std::chrono::steady_clock::now();
-        auto slot = now;
-        if (next_shown_slot > now && next_shown_slot - now < spacing) {
-            slot = next_shown_slot;
-        }
-        frame->present_at = slot;
-        for (Frame* predicted : predicted_frames) {
-            slot += spacing;
-            predicted->present_at = slot;
-        }
-        next_shown_slot = slot + spacing;
-    } else {
-        next_shown_slot = {};
-    }
-#endif
     {
         const VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::Present};
         present_manager.Present(frame);
@@ -446,7 +464,7 @@ HdrPresent RendererVulkan::UpdateHdrPresent() {
         if (output_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             LOG_INFO(Render_Vulkan,
                      "HDR output: {} {}, reference white {} nits, peak {} nits. Anti-aliasing, "
-                     "post-processing, upscaling filters and frame generation are off",
+                     "post-processing and upscaling filters are off",
                      string_VkFormat(output_format.format),
                      string_VkColorSpaceKHR(output_format.colorSpace), output_reference_white,
                      output_peak);
@@ -465,6 +483,27 @@ HdrPresent RendererVulkan::CaptureHdrPresent() const {
                                                Settings::values.hdr_reference_white.GetValue());
     return {VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, static_cast<f32>(told.reference_white),
             static_cast<f32>(told.peak_luminance)};
+}
+
+VkSurfaceKHR RendererVulkan::PresentationSurface() {
+#ifdef EGLANTINE_STREAMLINE
+    // DLSS-G looks the window up by the swapchain's surface: replace the surface made before the
+    // device with one made through Streamline, for the same window. Present support stays valid,
+    // as it belongs to the window and the queue family.
+    const auto& window_info = render_window.GetWindowInfo();
+    if (Streamline::FrameGenSession()) {
+        const VkSurfaceKHR registered =
+            window_info.type == Core::Frontend::WindowSystemType::Windows
+                ? Streamline::CreateFrameGenSurface(*instance, window_info.render_surface)
+                : VK_NULL_HANDLE;
+        if (registered) {
+            surface = vk::SurfaceKHR(registered, *instance, instance.Dispatch());
+        } else {
+            Streamline::DisableFrameGen("Streamline could not make the window's surface");
+        }
+    }
+#endif
+    return *surface;
 }
 
 void RendererVulkan::Report() const {

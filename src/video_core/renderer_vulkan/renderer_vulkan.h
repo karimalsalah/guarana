@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -27,6 +26,9 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#if defined(EGLANTINE_STREAMLINE) && !defined(HAS_LSFG)
+#include "video_core/vulkan_common/streamline.h"
+#endif
 
 namespace Core::Memory {
 class Memory;
@@ -65,6 +67,11 @@ public:
 #ifdef HAS_LSFG
         return frame_gen.CurrentStatus();
 #else
+#ifdef EGLANTINE_STREAMLINE
+        if (Streamline::FrameGenActive()) {
+            return {.state = VideoCore::FrameGenState::NvidiaFrameGen};
+        }
+#endif
         return {.state = VideoCore::FrameGenState::UnsupportedBuild};
 #endif
     }
@@ -106,6 +113,8 @@ private:
     VkCommandBuffer BeginSingleTimeCommands();
     void EndSingleTimeCommands(VkCommandBuffer command_buffer);
     void Report() const;
+    /// The surface the swapchain is made for, once the device exists.
+    VkSurfaceKHR PresentationSurface();
 
     /// The encoding and luminances this frame is presented with; picks the swapchain format
     /// again when the HDR settings or the monitor's state changed.
@@ -150,7 +159,6 @@ private:
     RasterizerVulkan rasterizer;
 #ifdef HAS_LSFG
     FrameGen frame_gen;
-    std::chrono::steady_clock::time_point next_shown_slot{}; ///< when the next shown frame is due
 #endif
     std::optional<TurboMode> turbo_mode;
 

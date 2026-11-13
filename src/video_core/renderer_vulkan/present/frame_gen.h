@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include <chrono>
-
 #include <atomic>
+#include <chrono>
 #include <optional>
 
 #include "common/common_types.h"
+#include "common/settings_enums.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/present/frame_extrapolation.h"
 #include "video_core/renderer_vulkan/present/frame_gen_pacer.h"
@@ -40,15 +40,24 @@ public:
 
     void Process(const Device& device, Frame* frame, VkFormat format, VkExtent2D guest_extent);
 
-    /// Retains resources while invalidating pacing and history across a presentation gap.
-    void Pause();
-
-    [[nodiscard]] size_t WantedGenerations(size_t capacity);
+    /// blocked: the time the renderer waited for the present thread since the last call.
+    [[nodiscard]] size_t WantedGenerations(size_t capacity,
+                                           std::chrono::steady_clock::duration blocked = {});
 
     [[nodiscard]] size_t GeneratedFrameCount() const;
 
-    /// Time between shown frames while frames are extrapolated, zero when they are not spaced.
-    [[nodiscard]] std::chrono::nanoseconds ShownFrameSpacing() const;
+    /// The measured time between real frames in seconds, or 0 while it is unknown.
+    [[nodiscard]] f32 FrameInterval() const {
+        return pacer.SmoothedInterval();
+    }
+
+    /// EDEN_NX2_CADENCE: the time each shown frame keeps the screen while real frames are held to
+    /// an even share of the target rate, zero while they are not.
+    [[nodiscard]] std::chrono::nanoseconds CadenceSpacing() const;
+
+    /// Generates nothing until Process runs again, and gives back a cadence's frame rate cap
+    /// (HDR output: extrapolation writes SDR only).
+    void Pause();
 
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
 
@@ -58,9 +67,16 @@ public:
     }
 
 private:
-    void ProcessExtrapolated(const Device& device, Frame* frame);
+    void ProcessExtrapolated(const Device& device, Frame* frame, VkFormat format);
     void UpdateCadence();
-    void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale);
+    /// Gives the frame budget back the target it had before the cadence held real frames.
+    void ReleaseCadence();
+    void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale,
+                 Settings::FrameGenType type);
+    /// Updates the status bar state and logs each change with its reason.
+    void SetState(VideoCore::FrameGenState new_state, VkFormat format);
+    /// Logs every 10 s how many frames were generated, when that changes.
+    void LogActivity();
     void DumpDebugImages(u64 count);
 
     MemoryAllocator& memory_allocator;
@@ -82,13 +98,14 @@ private:
     u32 cadence_slow_checks{};
     u32 cadence_fast_checks{};
     std::chrono::steady_clock::time_point cadence_checked{};
-    std::chrono::steady_clock::time_point real_frame_time{};
-    f32 real_interval_ms{}; ///< smoothed time between real frames
+    double cadence_saved_target{}; ///< the frame budget's target before the cadence set one
+    u32 unusable_streak{}; ///< extrapolated frames in a row without motion data
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};
     VkExtent2D built_extent{};
     VkFormat built_format{VK_FORMAT_UNDEFINED};
+    Settings::FrameGenType built_type{};
     f32 built_flow_scale{};
     u64 frame_count{};
     u64 last_count{};
@@ -99,6 +116,12 @@ private:
     bool dumped{};
     std::atomic<VideoCore::FrameGenState> state{VideoCore::FrameGenState::Pending};
     std::atomic<u64> generated_frames{};
+    struct {
+        std::chrono::steady_clock::time_point since{};
+        u64 frames{};
+        u64 generated{};
+        f32 logged_per_frame{-1.0f};
+    } activity;
 };
 
 } // namespace Vulkan
