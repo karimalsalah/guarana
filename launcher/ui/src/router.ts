@@ -4,7 +4,7 @@
 import { focusFirst, inputMode, pushIntentHandler, refreshHalo, type Intent } from "./input";
 import { viewTransition, type TransitionKind } from "./motion";
 
-export type ScreenId = "welcome" | "scan" | "profile" | "home" | "launch" | "updates" | "doctor" | "report";
+export type ScreenId = "welcome" | "scan" | "profile" | "home" | "launch" | "updates" | "doctor" | "report" | "about";
 export type TabId = "home" | "profile" | "updates" | "doctor";
 export type Chrome = "full" | "setup" | "none";
 
@@ -51,6 +51,7 @@ const loaders: Record<ScreenId, () => Promise<{ default: ScreenDef }>> = {
   updates: () => import("./screens/updates"),
   doctor: () => import("./screens/doctor"),
   report: () => import("./screens/report"),
+  about: () => import("./screens/about"),
 };
 
 const modules = new Map<ScreenId, Promise<ScreenDef>>();

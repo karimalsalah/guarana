@@ -4,7 +4,7 @@
 import type {
   AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
-  WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult,
+  WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -115,6 +115,8 @@ export const api = {
   /** Builds a scrubbed summary and opens a prefilled chat in the browser. */
   askAi: (service: AiService, issues?: string[], question?: string) =>
     call<AskAiResult>("ask_ai", { service, issues: issues && issues.length ? issues : undefined, question: question || undefined }),
+  /** The hall of fame for the About screen (cached a day, embedded copy offline). */
+  getCredits: () => call<Credits>("get_credits"),
   appVersion: async () => (await backend()).appVersion(),
 };
 

@@ -6,7 +6,7 @@ import { $$, h } from "./dom";
 import { activeKind, glyph } from "./gamepad";
 import { icon, logoMark } from "./icons";
 import { onInputMode } from "./input";
-import { attachShell, goTab, TABS, type Chrome, type TabId } from "./router";
+import { attachShell, go, goTab, TABS, type Chrome, type TabId } from "./router";
 import { launcher } from "./state";
 import { currentTheme, onThemeChange, setTheme } from "./theme";
 import { v } from "./format";
@@ -104,6 +104,7 @@ export function mountShell(app: HTMLElement, onReport: () => void): Shell {
           link("Read the docs", "https://karimalsalah.github.io/guarana/"),
         ),
       ),
+      h("button", { type: "button", class: "footer-link", onClick: () => void go("about") }, "Credits"),
       h("button", { type: "button", class: "footer-link", onClick: onReport }, "Report a problem"),
     ),
     padHints,

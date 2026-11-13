@@ -11,7 +11,7 @@
 
 import type { Backend, Unlisten } from "./api";
 import type {
-  AppliedProfile, AskAiResult, AutopilotChange, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
+  AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
   Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult,
 } from "./types";
@@ -607,6 +607,20 @@ export function createMockBackend(): Backend {
     async pick_folder() {
       await sleep(400);
       return GAME_DIR;
+    },
+    async get_credits() {
+      await sleep(250);
+      return {
+        as_of: "2026-11-20",
+        commits: 27,
+        people: [
+          { login: "karimalsalah", name: null, commits: 16, coauthored: 0 },
+          { login: "zortos293", name: null, commits: 11, coauthored: 1 },
+          { login: null, name: "Julius Bairaktaris", commits: 0, coauthored: 1 },
+        ],
+        tools: [{ name: "Claude", commits: 17 }, { name: "Capy", commits: 7 }],
+        source: "builtin",
+      } satisfies Credits;
     },
     async get_mode() {
       await sleep(200);

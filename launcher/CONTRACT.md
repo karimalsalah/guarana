@@ -46,6 +46,7 @@ Hard rules (legal and trust):
 | `autopilot_undo` | – | `ModeStatus`. Undoes the newest autopilot change; that setting is then left alone until the mode changes |
 | `autopilot_enable` | `{ enabled: boolean }` | `ModeStatus` |
 | `ask_ai` | `{ service: "claude" \| "chatgpt", issues?: string[], question?: string }` | `AskAi`. Builds a scrubbed summary (same scrubbing as reports) and opens `https://claude.ai/new?q=` or `https://chatgpt.com/?q=` in the default browser; the whole URL is at most 1950 characters and the prompt names `https://karimalsalah.github.io/guarana/llms-full.txt` |
+| `get_credits` | – | `Credits` `{ as_of, commits, people: { login: string \| null, name: string \| null, commits, coauthored }[], tools: { name, commits }[], source: "builtin" \| "cache" \| "network" }`. The hall of fame (`https://karimalsalah.github.io/guarana/data/legacy.json`, made by `tools/ci/legacy.py`), cached with its ETag in `%LOCALAPPDATA%\Guarana\cache` for 24 h, schema-checked (names stripped of control characters and angle brackets), 6 s at most, then the cache or the copy embedded at build time from `site/data/legacy.json` (`build.rs`; empty when built outside the repository). Shown on the Credits screen (footer), people first and tools apart |
 
 Argument keys are snake_case exactly as written (`invoke("apply_profile", { profile_id, overrides })`):
 the commands are declared with `rename_all = "snake_case"`. Errors reject the promise with a

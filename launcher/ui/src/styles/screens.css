@@ -483,3 +483,15 @@
   .screen { padding: 20px 16px 32px; }
   .actionbar { margin: 24px -16px -32px; padding: 16px; }
 }
+
+/* About / Credits */
+.about { display: grid; gap: 22px; max-width: 880px; }
+.credits-body { display: grid; gap: 12px; }
+.credit-list { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.credit-list > li { display: contents; }
+.item.credit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px; text-align: left; }
+button.credit-link { width: 100%; font: inherit; color: inherit; cursor: pointer; }
+button.credit-link:hover { border-color: var(--border-strong); }
+.credit .item-title, .credit .item-sub { max-width: 100%; }
+.credit-tools { display: grid; gap: 8px; margin-top: 10px; }
+.credits-join { display: grid; gap: 12px; }

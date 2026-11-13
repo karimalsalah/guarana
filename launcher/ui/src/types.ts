@@ -287,3 +287,25 @@ export interface AskAiResult {
   prompt: string;
   url_chars: number;
 }
+
+export interface CreditPerson {
+  /** GitHub login; null for someone only known by the name in a commit trailer. */
+  login: string | null;
+  name: string | null;
+  commits: number;
+  coauthored: number;
+}
+
+export interface CreditTool {
+  name: string;
+  commits: number;
+}
+
+/** The hall of fame (get_credits): people first, AI tools and bots apart. */
+export interface Credits {
+  as_of: string | null;
+  commits: number;
+  people: CreditPerson[];
+  tools: CreditTool[];
+  source: "builtin" | "cache" | "network";
+}

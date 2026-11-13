@@ -15,7 +15,7 @@ use crate::types::{
 };
 use crate::util::CmdResult;
 use crate::warm::WarmResult;
-use crate::{autopilot, community, doctor, install, keys, launch, locate, modes, profiles, report, util, warm};
+use crate::{autopilot, community, credits, doctor, install, keys, launch, locate, modes, profiles, report, util, warm};
 
 const LOCATE_EVENT: &str = "locate://progress";
 
@@ -289,4 +289,11 @@ pub async fn autopilot_enable(app: AppHandle, enabled: bool) -> CmdResult<modes:
 #[tauri::command(rename_all = "snake_case")]
 pub async fn ask_ai(app: AppHandle, service: String, issues: Option<Vec<String>>, question: Option<String>) -> CmdResult<report::AskAi> {
     blocking(&app, move |app| report::ask_ai(app, &service, &issues.unwrap_or_default(), question.as_deref())).await?
+}
+
+/// The hall of fame for the About screen: people first, tools apart. Refreshed at most once a day
+/// (6 s at most, then the cache or the copy embedded at build time).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_credits() -> CmdResult<credits::Credits> {
+    Ok(tokio::time::timeout(Duration::from_secs(6), credits::load(false)).await.unwrap_or_else(|_| credits::builtin()))
 }

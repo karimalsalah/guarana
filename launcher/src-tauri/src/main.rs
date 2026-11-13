@@ -11,6 +11,7 @@ mod autopilot;
 mod commands;
 mod community;
 mod controllers;
+mod credits;
 mod doctor;
 mod ini;
 mod install;
@@ -91,6 +92,7 @@ fn main() {
             commands::autopilot_undo,
             commands::autopilot_enable,
             commands::ask_ai,
+            commands::get_credits,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {
