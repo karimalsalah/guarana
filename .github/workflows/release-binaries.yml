@@ -467,7 +467,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin"
+          # /Z7 keeps debug info in the objects (sccache caches it); the linker writes lichii.pdb,
+          # published as a separate symbols archive so crash dumps from users can be symbolized.
+          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin /Z7"
           if [ -n '${{ matrix.march }}' ]; then flags+=" -march=${{ matrix.march }}"; fi
           if [ -n '${{ matrix.profile }}' ]; then
             flags+=" -fprofile-use=$(cygpath -m "$PWD/${{ matrix.profile }}")"
@@ -496,7 +498,8 @@ jobs:
             "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
             "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
             "-DCMAKE_C_FLAGS=$flags" \
-            "-DCMAKE_CXX_FLAGS=-EHsc $flags"
+            "-DCMAKE_CXX_FLAGS=-EHsc $flags" \
+            "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG:FULL /OPT:REF /OPT:ICF"
 
       - name: Configure macOS
         if: startsWith(matrix.platform, 'macos')
@@ -660,6 +663,8 @@ jobs:
             }
           }
           windeployqt --release --no-translations build/release/bin/lichii.exe
+          New-Item -ItemType Directory -Force build/release/symbols | Out-Null
+          Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
 
       # A self-contained app bundle: macdeployqt copies Qt and every other Homebrew library both
       # programs load into the bundle, then the leftover Homebrew and build-tree search paths are
@@ -740,6 +745,16 @@ jobs:
           name: lichii-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
+          retention-days: 7
+
+      # Debug symbols for crash reports: llvm-symbolizer --obj=lichii.exe with lichii.pdb next to it.
+      - name: Upload Windows symbols
+        if: startsWith(matrix.platform, 'windows')
+        uses: actions/upload-artifact@v7
+        with:
+          name: lichii-${{ matrix.platform }}-symbols-${{ github.sha }}
+          path: build/release/symbols/
+          if-no-files-found: warn
           retention-days: 7
 
       # Both Linux files go in one artifact: the tar.gz and the AppImage.
