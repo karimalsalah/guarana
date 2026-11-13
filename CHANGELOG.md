@@ -22,6 +22,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - **Ocarina of Time's frames reach the screen on time.** On Windows integrated GPUs the screen copy now runs on a queue of its own (`EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1`) and the frame budget no longer raises the resolution into the cadence's headroom (`EDEN_NX2_BUDGET_HOLD_RES=1`), by default. In Hyrule Field on the Arc 140T, frames that reached the screen after their refresh went from about 200 per 10 s to 0, and slots shown on time from 475-491 to up to 599 of 600 with 99.5% of frames evenly paced (two paired rounds).
 
 - A borderless fullscreen Vulkan window covers the screen exactly, so it can get independent flip: no desktop composition, up to a refresh less latency. OpenGL keeps the extra row.
+- The README opens with what Guarana is, the measured proof, three setup steps, device status, a 10-minute device test ([#55](https://github.com/karimalsalah/guarana/issues/55)) and how to contribute (`/claim`, good first issues).
 
 ### Fixed
 

@@ -11,7 +11,7 @@ one of the most useful contributions you can make.
 
 | | Requirement | Tested with |
 |---|---|---|
-| Operating system | Windows x64 for release builds. Other platforms: build from source ([docs/Build.md](Build.md)); untested on these devices | Windows |
+| Operating system | Windows x64 is the tested platform. Linux and macOS builds are on Releases; untested on these devices ([docs/Build.md](Build.md) to build from source) | Windows |
 | CPU | x86-64 with AVX2: release builds use `x86-64-v3` code | Core Ultra 9 285H |
 | GPU | A Vulkan driver; an integrated GPU is the target | Arc 140T, Intel driver 32.0.101.9175 |
 | Memory | 16 GB of shared memory is below the comfortable floor: Switch 2 titles use a 12 GiB guest memory layout, and the iGPU takes its memory from the same RAM | 32 GB |
