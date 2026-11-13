@@ -75,6 +75,10 @@ Commit exactly two things:
 - `tools/bench/results/<date>-<machine-id>.jsonl` (a new file, or lines appended to your earlier one);
 - the regenerated `tools/bench/RESULTS.md`.
 
+The `bench-rows` check on the pull request runs `validate` on the results folder and fails when
+`RESULTS.md` is not what `table` generates from it; its log says which row or line is wrong. A
+pull request with only these two files does not start the emulator builds.
+
 In the description, give what the rows cannot say: laptop or desktop model class, thermal or
 performance mode, external display, anything that differs from the scene's notes (another time
 of day, other equipment), and any `--base-ini`, `--mod` or `--power-policy` you used.

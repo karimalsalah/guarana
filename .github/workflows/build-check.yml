@@ -135,6 +135,10 @@ jobs:
       - name: Test debug adapter
         run: python3 tools/nx2/test_debug_mcp.py
 
+      # bench-rows.yml also runs it, and checks contributed result rows, on changes under tools/bench/.
+      - name: Test benchmark tool
+        run: python3 -I tools/bench/test_bench.py
+
       - name: Test cache metrics and bench
         run: |
           python3 tools/nx2/test_cache_metrics.py
