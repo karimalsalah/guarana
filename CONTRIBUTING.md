@@ -46,6 +46,7 @@ Do not have a compiler set up? Skip step 4's build: CI builds every pull request
 
 Numbers from your hardware are as valuable as code, especially for GPUs the maintainers do not have.
 
+- **Ten minutes, no code**: follow [docs/TESTING.md](docs/TESTING.md): install, stand in Hyrule Field, press Share in the launcher (or fill in the form) and submit.
 - **Quick**: open a [Device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml). It asks for the device, CPU, GPU, driver, RAM, OS, power mode, build, scene, settings and your numbers, with a screenshot of the scene.
 - **Best**: run `tools/bench` ([CONTRIBUTING-bench.md](tools/bench/CONTRIBUTING-bench.md)). It plays a scene the same way on every machine, checks the scene against your reference screenshot, and writes rows without user names or paths. Paste the rows into a device report, or open a pull request with your `tools/bench/results/<date>-<machine-id>.jsonl` and the regenerated `tools/bench/RESULTS.md`.
 - Make a report comparable: plugged in, background programs closed, the driver version in full, the power mode, and the baseline measured the same way right before or after.

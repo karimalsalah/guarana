@@ -11,6 +11,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [FAQ.md](FAQ.md) | Short answers: legality, frame generation, hitches, settings, updates |
 | [DEVICES.md](DEVICES.md) | Which GPUs and handhelds are tested, requirements, and how to send a device report |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Start-up errors, hitches, pacing problems and crashes |
+| [TESTING.md](TESTING.md) | The 10-minute test protocol: install, Hyrule Field, what to send, no debugging |
 | [BENCHMARKING.md](BENCHMARKING.md) | How to measure your device so your numbers can be compared |
 | [switches.md](switches.md) | The registry of every `EDEN_NX2_*` switch Guarana adds or relies on |
 | [Options.md](Options.md) | CMake build options |

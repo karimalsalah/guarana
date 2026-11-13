@@ -48,7 +48,7 @@ results, optional `tools/bench` rows and a screenshot. Crashes, game bugs, perfo
 agent tasks have their own forms.
 
 **From the launcher or the emulator.** A report button opens the form in the browser with its text
-fields filled in. GitHub fills the text fields of an issue form from URL query parameters, and a
+fields filled in. After a game with a minute or more of play, the launcher's Home also offers **Share my numbers**: the same form, with the session's game fps and frame-pacing share read from the emulator's log. The user adds the scene and a screenshot, reads it and submits it; nothing is sent automatically, and it can be turned off. The 10-minute path for testers is [TESTING.md](TESTING.md). GitHub fills the text fields of an issue form from URL query parameters, and a
 field's `id` is its name there. See the
 [form schema](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-githubs-form-schema)
 and
