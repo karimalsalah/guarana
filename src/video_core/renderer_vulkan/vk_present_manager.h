@@ -51,6 +51,8 @@ struct Frame {
     vk::ImageView storage_view;
     vk::Framebuffer framebuffer;
     vk::CommandBuffer cmdbuf;
+    /// EDEN_NX2_FLUID_QUEUE: the screen copy recorded for the dedicated queue.
+    vk::CommandBuffer fluid_cmdbuf;
     vk::Semaphore render_ready;
     vk::Fence present_done;
     bool storage_capable{};
@@ -210,6 +212,14 @@ private:
 
     void CopyToSwapchainImpl(Frame* frame);
 
+    /// EDEN_NX2_FLUID_QUEUE: whether this frame's screen copy runs on the dedicated queue.
+    [[nodiscard]] bool UseFluidQueue(const Frame* frame, VkExtent2D extent);
+
+    /// Copies the frame to the acquired swapchain image on the dedicated queue, waiting for the
+    /// acquire and render-done semaphores and signalling render_semaphore and the frame's fence.
+    void SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D extent,
+                         VkSemaphore render_semaphore);
+
     // Returns false after discarding the frame if creation or transfer cannot proceed.
     bool RecreateSwapchain(Frame* frame);
 
@@ -236,6 +246,8 @@ private:
     Swapchain& swapchain;
     vk::SurfaceKHR& surface;
     vk::CommandPool cmdpool;
+    vk::CommandPool fluid_cmdpool; ///< EDEN_NX2_FLUID_QUEUE: pool of the dedicated queue family
+    bool fluid_queue_mismatch_logged{};
     std::vector<Frame> frames;
     std::vector<f32> shown_intervals; ///< EDEN_NX2_SHOWN_STATS, present thread only
     std::chrono::steady_clock::time_point shown_last{};

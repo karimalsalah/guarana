@@ -189,6 +189,7 @@ struct InstanceDispatch {
     PFN_vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceProperties2{};
     PFN_vkGetPhysicalDeviceToolProperties vkGetPhysicalDeviceToolProperties{};
     PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties{};
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties2 vkGetPhysicalDeviceQueueFamilyProperties2{};
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR{};
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR{};
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR{};
@@ -1240,6 +1241,10 @@ public:
     std::vector<VkExtensionProperties> EnumerateDeviceExtensionProperties() const;
 
     std::vector<VkQueueFamilyProperties> GetQueueFamilyProperties() const;
+
+    /// The global priorities a queue family allows (VK_KHR_global_priority); empty when the
+    /// driver cannot say.
+    std::vector<VkQueueGlobalPriorityKHR> GetQueueFamilyGlobalPriorities(u32 family) const;
 
     std::vector<VkPhysicalDeviceToolProperties> GetPhysicalDeviceToolProperties() const;
 

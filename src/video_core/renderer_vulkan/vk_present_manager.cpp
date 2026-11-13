@@ -245,12 +245,26 @@ PresentManager::PresentManager(const vk::Instance& instance_,
         .queueFamilyIndex = device.GetGraphicsFamily(),
     });
     auto cmdbuffers = cmdpool.Allocate(image_count);
+    vk::CommandBuffers fluid_cmdbuffers;
+    if (device.HasFluidQueue()) {
+        fluid_cmdpool = dld.CreateCommandPool({
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+                     VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = device.GetFluidFamily(),
+        });
+        fluid_cmdbuffers = fluid_cmdpool.Allocate(image_count);
+    }
 
     frames.resize(image_count);
     for (u32 i = 0; i < frames.size(); i++) {
         Frame& frame = frames[i];
         frame.index = i;
         frame.cmdbuf = vk::CommandBuffer{cmdbuffers[i], device.GetDispatchLoader()};
+        if (i < fluid_cmdbuffers.size()) {
+            frame.fluid_cmdbuf = vk::CommandBuffer{fluid_cmdbuffers[i], device.GetDispatchLoader()};
+        }
         frame.render_ready = dld.CreateSemaphore({
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             .pNext = nullptr,
@@ -482,6 +496,11 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
         storage_usage = VK_IMAGE_USAGE_STORAGE_BIT;
     }
 
+    std::vector<u32> frame_families{device.GetGraphicsFamily()};
+    if (device.HasFluidQueue()) {
+        frame_families.push_back(device.GetFluidFamily());
+    }
+
     frame->image = memory_allocator.CreateImage({
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
@@ -500,9 +519,12 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | storage_usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = nullptr,
+        // EDEN_NX2_FLUID_QUEUE: the renderer writes the image on the graphics queue and the
+        // dedicated queue's family reads it, so it is shared rather than handed over.
+        .sharingMode = frame_families.size() > 1 ? VK_SHARING_MODE_CONCURRENT
+                                                 : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = static_cast<u32>(frame_families.size() > 1 ? frame_families.size() : 0),
+        .pQueueFamilyIndices = frame_families.size() > 1 ? frame_families.data() : nullptr,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     });
 
@@ -1193,6 +1215,110 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
     DiscardFrame(frame);
 }
 
+bool PresentManager::UseFluidQueue(const Frame* frame, VkExtent2D extent) {
+    if (!device.HasFluidQueue() || !Fluid()) {
+        return false;
+    }
+    // The dedicated queue's family cannot blit: it copies, which needs the same format and size.
+    if (frame->image_format == swapchain.GetImageFormat() && frame->width == extent.width &&
+        frame->height == extent.height) {
+        return true;
+    }
+    if (!fluid_queue_mismatch_logged) {
+        fluid_queue_mismatch_logged = true;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_FLUID_QUEUE: frame {}x{} format {} and swapchain {}x{} format {} "
+                 "differ; those frames are copied on the graphics queue",
+                 frame->width, frame->height, static_cast<int>(frame->image_format), extent.width,
+                 extent.height, static_cast<int>(swapchain.GetImageFormat()));
+    }
+    return false;
+}
+
+void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D extent,
+                                     VkSemaphore render_semaphore) {
+    const vk::CommandBuffer cmdbuf{frame->fluid_cmdbuf};
+    cmdbuf.Begin({
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr,
+    });
+
+    // The frame image stays in GENERAL, a valid copy source: the render-done semaphore makes the
+    // renderer's writes available and visible, and the fence the copy signals hands the image
+    // back, so it needs no barrier or layout change here.
+    const VkImageSubresourceRange range{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+    };
+    const VkImageMemoryBarrier to_destination{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = range,
+    };
+    const VkImageMemoryBarrier to_present{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = 0,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = range,
+    };
+    // Only stages every queue family supports: the family may be compute or transfer only.
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, {},
+                           {}, {}, to_destination);
+    cmdbuf.CopyImage(*frame->image, VK_IMAGE_LAYOUT_GENERAL, image,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                           {}, {}, {}, to_present);
+    cmdbuf.End();
+
+    const std::array wait_semaphores = {swapchain.CurrentPresentSemaphore(), *frame->render_ready};
+    static constexpr std::array<VkPipelineStageFlags, 2> wait_stage_masks{
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+    };
+    const VkSubmitInfo submit_info{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 2U,
+        .pWaitSemaphores = wait_semaphores.data(),
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = 1,
+        .pCommandBuffers = cmdbuf.address(),
+        .signalSemaphoreCount = 1U,
+        .pSignalSemaphores = &render_semaphore,
+    };
+    // Only the present thread uses this queue, so the renderer's submit mutex is not needed.
+    switch (const VkResult result =
+                device.GetFluidQueue().Submit(submit_info, *frame->present_done)) {
+    case VK_SUCCESS:
+        break;
+    case VK_ERROR_DEVICE_LOST:
+        device.ReportLoss();
+        [[fallthrough]];
+    default:
+        vk::Check(result);
+        break;
+    }
+}
+
 void PresentManager::CopyToSwapchainImpl(Frame* frame) {
 
     // Recreate for size changes, SDR/HDR10/scRGB transitions, or a suboptimal swapchain.
@@ -1232,146 +1358,150 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         }
     }
 
-    const vk::CommandBuffer cmdbuf{frame->cmdbuf};
-    cmdbuf.Begin({
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        .pInheritanceInfo = nullptr,
-    });
-
     const VkImage image{swapchain.CurrentImage()};
     const VkExtent2D extent = swapchain.GetExtent();
-    const std::array pre_barriers{
-        VkImageMemoryBarrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = VK_REMAINING_ARRAY_LAYERS,
-            },
-        },
-        VkImageMemoryBarrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = *frame->image,
-            .subresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = VK_REMAINING_ARRAY_LAYERS,
-            },
-        },
-    };
-    const std::array post_barriers{
-        VkImageMemoryBarrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = VK_REMAINING_ARRAY_LAYERS,
-            },
-        },
-        VkImageMemoryBarrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-            .dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = *frame->image,
-            .subresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = VK_REMAINING_ARRAY_LAYERS,
-            },
-        },
-    };
-
-    cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER, VK_PIPELINE_STAGE_TRANSFER_BIT, {},
-                           {}, {}, pre_barriers);
-
-    if (transfer_mode == TransferMode::Blit) {
-        cmdbuf.BlitImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         MakeImageBlit(frame->width, frame->height, extent.width, extent.height),
-                         VK_FILTER_LINEAR);
-    } else {
-        cmdbuf.CopyImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
-    }
-
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, {},
-                           {}, {}, post_barriers);
-
-    cmdbuf.End();
-
-    const VkSemaphore present_semaphore = swapchain.CurrentPresentSemaphore();
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
-    const std::array wait_semaphores = {present_semaphore, *frame->render_ready};
+    if (UseFluidQueue(frame, extent)) {
+        SubmitFluidCopy(frame, image, extent, render_semaphore);
+    } else {
+        const vk::CommandBuffer cmdbuf{frame->cmdbuf};
+        cmdbuf.Begin({
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        });
 
-    static constexpr std::array<VkPipelineStageFlags, 2> wait_stage_masks{
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-    };
+        const std::array pre_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                },
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = *frame->image,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                },
+            },
+        };
+        const std::array post_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                },
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = *frame->image,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                },
+            },
+        };
 
-    const VkSubmitInfo submit_info{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext = nullptr,
-        .waitSemaphoreCount = 2U,
-        .pWaitSemaphores = wait_semaphores.data(),
-        .pWaitDstStageMask = wait_stage_masks.data(),
-        .commandBufferCount = 1,
-        .pCommandBuffers = cmdbuf.address(),
-        .signalSemaphoreCount = 1U,
-        .pSignalSemaphores = &render_semaphore,
-    };
+        cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER, VK_PIPELINE_STAGE_TRANSFER_BIT, {},
+                               {}, {}, pre_barriers);
 
-    // Submit the image copy/blit to the swapchain
-    {
-        std::scoped_lock submit_lock{scheduler.submit_mutex};
-        switch (const VkResult result =
-                    device.GetGraphicsQueue().Submit(submit_info, *frame->present_done)) {
-        case VK_SUCCESS:
-            break;
-        case VK_ERROR_DEVICE_LOST:
-            device.ReportLoss();
-            [[fallthrough]];
-        default:
-            vk::Check(result);
-            break;
+        if (transfer_mode == TransferMode::Blit) {
+            cmdbuf.BlitImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             MakeImageBlit(frame->width, frame->height, extent.width, extent.height),
+                             VK_FILTER_LINEAR);
+        } else {
+            cmdbuf.CopyImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
+        }
+
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, {},
+                               {}, {}, post_barriers);
+
+        cmdbuf.End();
+
+        const VkSemaphore present_semaphore = swapchain.CurrentPresentSemaphore();
+        const std::array wait_semaphores = {present_semaphore, *frame->render_ready};
+
+        static constexpr std::array<VkPipelineStageFlags, 2> wait_stage_masks{
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+        };
+
+        const VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 2U,
+            .pWaitSemaphores = wait_semaphores.data(),
+            .pWaitDstStageMask = wait_stage_masks.data(),
+            .commandBufferCount = 1,
+            .pCommandBuffers = cmdbuf.address(),
+            .signalSemaphoreCount = 1U,
+            .pSignalSemaphores = &render_semaphore,
+        };
+
+        // Submit the image copy/blit to the swapchain
+        {
+            std::scoped_lock submit_lock{scheduler.submit_mutex};
+            switch (const VkResult result =
+                        device.GetGraphicsQueue().Submit(submit_info, *frame->present_done)) {
+            case VK_SUCCESS:
+                break;
+            case VK_ERROR_DEVICE_LOST:
+                device.ReportLoss();
+                [[fallthrough]];
+            default:
+                vk::Check(result);
+                break;
+            }
         }
     }
 
