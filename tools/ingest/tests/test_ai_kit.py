@@ -173,8 +173,8 @@ class ReadmeTests(unittest.TestCase):
         for heading in ("## Measured wins", "## Get it", "## AI-native: plug in your agent", "## Why contribute now",
                         "## Hall of fame", "## Devices", "## Roadmap", "## FAQ", "## Legal"):
             self.assertIn(heading, self.text)
-        self.assertIn("guarana setup arrives with v20.1", self.text.lower())
-        self.assertIn("Next release (v20.1)", self.text)
+        self.assertIn("guarana setup** (since v20.1)", self.text.lower())
+        self.assertIn("In v20.1, opt-in", self.text)
         self.assertIn("no keys, firmware, games or system files", self.text.lower())
         self.assertIn("Not affiliated with Nintendo", self.text)
         self.assertIn("emulator-debug", self.text)

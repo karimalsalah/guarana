@@ -77,7 +77,7 @@ No figure for input latency is published yet, because none has been taken the sa
 ## Get it
 
 > [!NOTE]
-> **Guarana Setup arrives with v20.1:** a 4.7 MB Windows installer (WebView2 included), one click:
+> **Guarana Setup** (since v20.1), the Windows installer and launcher, about 92 MB with WebView2 included, one click:
 > - **One switch** for how it runs: Auto, Smooth, Quality or Battery.
 > - **Finds your own keys, firmware and games** on your own PC, with your consent, and sets up your controller automatically.
 > - **Autopilot** retunes after each session, with undo.
@@ -85,9 +85,9 @@ No figure for input latency is published yet, because none has been taken the sa
 > - **"Ask AI" buttons** open a prefilled Claude or ChatGPT chat with scrubbed diagnostics (you press send).
 > - **Discord** is in Help.
 >
-> Until then, the zip below is the whole install.
+> Download `Guarana-Setup-<version>.exe` from [Releases](https://github.com/karimalsalah/guarana/releases/latest). Prefer no installer? The zip below is the whole install.
 
-**Today (v20.0.2): [Releases](https://github.com/karimalsalah/guarana/releases/latest)**, the only official download, for every platform:
+**[Releases](https://github.com/karimalsalah/guarana/releases/latest)** is the only official download, for every platform:
 Windows x86-64 zips (plain and PGO), Linux x86-64 and ARM64 (AppImage and tar.gz, plain and PGO), macOS Apple silicon (dmg and zip),
 and `SHA256SUMS` to check them. Every number on this page was measured on Windows with a CPU with AVX2 and a current GPU driver.
 
