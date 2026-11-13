@@ -28,7 +28,7 @@
       <pubDate>Fri, 13 Nov 2026 12:00:00 +0000</pubDate>
       <dc:creator>Guarana contributors</dc:creator>
       <category>Frame pacing</category>
-      <description>Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.</description>
+      <description>Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.</description>
     </item>
     <item>
       <title>Booting a Switch 2 emulator in half the time: what the boot marks found</title>

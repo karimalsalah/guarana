@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Why 16.67 ms is hard: frame pacing and frame generation</title>
-<meta name="description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<meta name="description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.">
 <link rel="canonical" href="https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html">
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
 <meta name="author" content="Guarana contributors">
@@ -19,7 +19,7 @@
 <meta property="og:site_name" content="Guarana">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED">
-<meta property="og:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<meta property="og:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.">
 <meta property="og:url" content="https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html">
 <meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
 <meta property="og:image:type" content="image/png">
@@ -35,7 +35,7 @@
 <meta property="article:tag" content="OLED">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED">
-<meta name="twitter:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<meta name="twitter:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.">
 <meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
 <meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
 <script type="application/ld+json">
@@ -46,7 +46,7 @@
       "@type": "Article",
       "@id": "https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html#article",
       "headline": "Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED",
-      "description": "Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.",
+      "description": "Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.",
       "datePublished": "2026-11-13",
       "dateModified": "2026-11-13",
       "author": {
@@ -152,17 +152,17 @@
 <article aria-labelledby="post-title">
 <div class="wrap page-head">
   <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="../">Home</a></li><li><a href="./">Blog</a></li><li><span aria-current="page">Frame pacing on a 120 Hz OLED</span></li></ol></nav>
-  <p class="post-kicker">Frame pacing &middot; Frame generation &middot; In progress</p>
+  <p class="post-kicker">Frame pacing &middot; Frame generation &middot; Shipped in v20.1</p>
   <h1 id="post-title">Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</h1>
   <p class="post-meta"><span>By Guarana contributors</span><span><time datetime="2026-11-13">November 13, 2026</time></span><span>6 min read</span></p>
-  <p class="lede">Frame generation can put a new image on screen at every refresh. Making each of those images stay up for the same length of time is a separate problem, and it is the one we are working on now.</p>
+  <p class="lede">Frame generation can put a new image on screen at every refresh. Making each of those images stay up for the same length of time is a separate problem, and it is the one this post is about.</p>
 </div>
 <div class="wrap">
 <div class="prose post-body">
 
 <div class="status" role="note">
-  <span class="pill">In progress</span>
-  <p>The presenter described here is experimental, will arrive behind <code>EDEN_NX2_FLUID=1</code>, and has no published result yet. Nothing below claims it works.</p>
+  <span class="pill">Update: shipped in v20.1</span>
+  <p>The presenter described here shipped in v20.1, opt-in behind <code>EDEN_NX2_FLUID=1</code>. On the Arc 140T with frame generation on, 601 of 601 slots on the title screen were on time (100% of shown frames within 2 ms of the median), and 75% of shown frames in Hyrule Field were within 2 ms, against 33-54% before. That is one device, so it stays opt-in until another device agrees. The diagnosis and design below are as written before the result.</p>
 </div>
 
 <aside class="in-short" aria-labelledby="in-short-title">
@@ -170,7 +170,7 @@
   <ul>
     <li><strong>Pacing</strong> is how evenly frames reach the screen. The goal is that every shown frame, real or predicted, stays up for exactly one 16.67 ms slot, the length of one 60 Hz frame.</li>
     <li><strong>Why v20 still stutters:</strong> with frame generation on, the swapchain is forced to FIFO, the present thread spaces frames on the CPU clock instead of the display's vblank, and predictions are made for fixed fractions of the frame interval rather than for the moment they reach the screen.</li>
-    <li><strong>The fix in progress:</strong> a presenter locked to vblank. It is not finished, and this post reports a diagnosis and a design, not a result.</li>
+    <li><strong>The fix:</strong> a presenter locked to vblank, opt-in in v20.1 (<code>EDEN_NX2_FLUID=1</code>). On the Arc 140T, 75% of shown frames in Hyrule Field land within 2 ms of the median, against 33-54% before.</li>
   </ul>
 </aside>
 
@@ -211,7 +211,7 @@
     <rect class="d-gen" x="447.5" y="85.25" width="55" height="23.5" rx="5"/>
     <rect class="d-accent" x="505.5" y="84" width="113" height="26" rx="5"/>
     <text class="d-small" x="40" y="132">Some frames stay up for one slot, some for two: micro-stutter.</text>
-    <text class="d-strong" x="40" y="174">Vblank-locked presenter (in progress)</text>
+    <text class="d-strong" x="40" y="174">Vblank-locked presenter (v20.1, opt-in)</text>
     <rect class="d-accent" x="41.5" y="186" width="55" height="26" rx="5"/>
     <rect class="d-gen" x="99.5" y="187.25" width="55" height="23.5" rx="5"/>
     <rect class="d-gen" x="157.5" y="187.25" width="55" height="23.5" rx="5"/>
@@ -231,8 +231,8 @@
   <figcaption>Illustration, not a capture. On a 120 Hz panel each 16.67 ms slot covers two refreshes.</figcaption>
 </figure>
 
-<h2 id="presenter">The presenter we are building</h2>
-<p>The fix is a presenter locked to the display's vblank. It is experimental, will arrive behind <code>EDEN_NX2_FLUID=1</code>, and is still in progress:</p>
+<h2 id="presenter">The presenter</h2>
+<p>The fix is a presenter locked to the display's vblank. It is experimental and ships in v20.1 behind <code>EDEN_NX2_FLUID=1</code>:</p>
 <ul>
   <li><strong>A vblank clock.</strong> The present thread waits for the display's own vblank instead of sleeping for a computed spacing. On Windows it waits on the window's display output, with fallbacks when that is not available, and it follows the display when its refresh rate changes.</li>
   <li><strong>Slots, not sleeps.</strong> Frames are scheduled into 16.67 ms slots, and each frame carries the slot it is meant for. On a 120 Hz panel a slot covers two refreshes.</li>
