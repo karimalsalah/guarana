@@ -30,6 +30,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 - `eden-cli` output redirected to a file or a pipe is kept instead of lost.
 - The Report a Problem window compiles again (a name shadowed the dialog's form layout).
+- A GPU puller torn down while waiting no longer leaves stale semaphore waiters behind (upstream [#1592](https://github.com/zortos293/Lichii/pull/1592)).
+- Windows: the loading screen no longer freezes in borderless fullscreen (upstream [#1558](https://github.com/zortos293/Lichii/pull/1558)).
+- Logging no longer ends the emulator when formatting fails while the host is out of memory (upstream [#1475](https://github.com/zortos293/Lichii/pull/1475)).
+- MSVC builds: the selected user index is cast to the launch parameter type (upstream [#1596](https://github.com/zortos293/Lichii/pull/1596)).
 
 ## [20.0.2]
 

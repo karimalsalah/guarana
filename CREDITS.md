@@ -35,6 +35,9 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#1447](https://github.com/zortos293/Lichii/pull/1447) | [zortos293](https://github.com/zortos293) | Draw templates: each draw's sampled textures and image descriptors are kept across frames (`EDEN_NX2_DRAW_TEMPLATE_VERIFY` checks them) |
 | [#1571](https://github.com/zortos293/Lichii/pull/1571) | [jpkto](https://github.com/jpkto) | The texture cache's bounded retire scan resumes where it stopped; overwritten render targets are deleted after ten unused frames |
 | [#1378](https://github.com/zortos293/Lichii/pull/1378) | Krim | Graphics pipelines reuse the translated shaders of an earlier pipeline when their translation inputs and the guest memory they read match (`EDEN_NX2_SHADER_REUSE=1`) |
+| [#1596](https://github.com/zortos293/Lichii/pull/1596) | [sanchodecuba11-del](https://github.com/sanchodecuba11-del) | The selected user index is cast to the launch parameter type (MSVC C4244) |
+| [#1475](https://github.com/zortos293/Lichii/pull/1475) | [RomainROCH](https://github.com/RomainROCH) | Logging no longer calls std::terminate when formatting fails while the host is out of memory |
+| [#1558](https://github.com/zortos293/Lichii/pull/1558) | [BrunoSilvestre00](https://github.com/BrunoSilvestre00) | The loading screen no longer freezes in borderless fullscreen on Windows |
 
 When one of these is merged upstream, the next upstream sync brings the upstream version, and this table says so.
 
