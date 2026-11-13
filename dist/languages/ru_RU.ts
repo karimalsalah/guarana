@@ -2656,8 +2656,8 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
     </message>
     <message>
         <location filename="../../src/lichii/configuration/configure_debug.ui" line="449"/>
-        <source>When checked, Lichii will log statistics about the compiled pipeline cache</source>
-        <translation>Если включено, Lichii будет записывать статистику о скомпилированном кэше конвейера</translation>
+        <source>When checked, Guarana will log statistics about the compiled pipeline cache</source>
+        <translation>Если включено, Guarana будет записывать статистику о скомпилированном кэше конвейера</translation>
     </message>
     <message>
         <location filename="../../src/lichii/configuration/configure_debug.ui" line="452"/>
@@ -2691,8 +2691,8 @@ Enabling it bypasses such prompts and directly exits the emulation.</source>
     </message>
     <message>
         <location filename="../../src/lichii/configuration/configure_debug.ui" line="488"/>
-        <source>Enables Lichii to check for a working Vulkan environment when the program starts up. Disable this if this is causing issues with external programs seeing Lichii.</source>
-        <translation>Позволяет Lichii проверять наличие рабочей среды Vulkan при запуске программы. Отключите эту опцию, если это вызывает проблемы с тем, что внешние программы видят Lichii.</translation>
+        <source>Enables Guarana to check for a working Vulkan environment when the program starts up. Disable this if this is causing issues with external programs seeing Guarana.</source>
+        <translation>Позволяет Guarana проверять наличие рабочей среды Vulkan при запуске программы. Отключите эту опцию, если это вызывает проблемы с тем, что внешние программы видят Guarana.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/configuration/configure_debug.ui" line="491"/>
@@ -7360,7 +7360,7 @@ Debug Message: </source>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="503"/>
         <source>Running a game</source>
-        <extracomment>TRANSLATORS: This string is shown to the user to explain why Lichii needs to prevent the computer from sleeping</extracomment>
+        <extracomment>TRANSLATORS: This string is shown to the user to explain why Guarana needs to prevent the computer from sleeping</extracomment>
         <translation>Запущена игра</translation>
     </message>
     <message>

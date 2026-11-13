@@ -10,6 +10,7 @@
 #include "network/network.h"
 #include "qt_common.h"
 
+#include "common/fs/data_dir_migration.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -227,6 +228,7 @@ void Init(QWidget* root) {
 
     Common::Log::Initialize();
     Common::Log::Start();
+    Common::FS::DataDirMigration::LogPendingReport();
 #ifdef _WIN32
     Common::Windows::InstallCrashHandler(Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
 #endif
@@ -248,7 +250,7 @@ void Init(QWidget* root) {
     const auto processor_count = std::thread::hardware_concurrency();
 
     // info logging
-    LOG_INFO(Frontend, "Lichii Version: {}", lichii_build_version);
+    LOG_INFO(Frontend, "Guarana Version: {}", lichii_build_version);
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;

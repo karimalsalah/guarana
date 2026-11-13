@@ -34,6 +34,7 @@
 
 #include <fmt/ostream.h>
 
+#include "common/fs/data_dir_migration.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/literals.h"
@@ -675,6 +676,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);
     Common::Log::Start();
+    Common::FS::DataDirMigration::LogPendingReport();
 #ifdef _WIN32
     // EDEN_NX2_CRASH_DUMP=<dir> puts the dump somewhere other than the log directory.
     const char* const crash_dump_dir = std::getenv("EDEN_NX2_CRASH_DUMP");
