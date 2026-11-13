@@ -448,11 +448,21 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     } else {
         requested_image_count = (std::max)(requested_image_count, 3U);
     }
+    // EDEN_NX2_FLUID showing more than 75 frames a second: five images. With three, the copy for
+    // a 120 Hz slot waited for a free image (Arc 140T: slots on time 790-801 of 1200 with three,
+    // 1134-1137 with five, copies done after their vblank about 500 per 10 s to 0).
     // EDEN_NX2_FLUID_COPY_AHEAD keeps an image acquired across a slot: at least four.
-    if (const char* ahead = std::getenv("EDEN_NX2_FLUID_COPY_AHEAD");
-        ahead != nullptr && std::strtoul(ahead, nullptr, 10) != 0) {
+    const auto env_on = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    };
+    if (env_on("EDEN_NX2_FLUID")) {
+        const char* shown = std::getenv("EDEN_NX2_SHOWN_RATE");
+        const u32 rate = shown != nullptr ? static_cast<u32>(std::strtoul(shown, nullptr, 10))
+                                          : Settings::values.frame_gen_target_rate.GetValue();
+        const u32 least = rate > 75 ? 5U : env_on("EDEN_NX2_FLUID_COPY_AHEAD") ? 4U : 0U;
         const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
-        requested_image_count = (std::min)((std::max)(requested_image_count, 4U), most);
+        requested_image_count = (std::min)((std::max)(requested_image_count, least), most);
     }
     // EDEN_NX2_SWAPCHAIN_IMAGES=<n> (2 to 16): ask for n images, within what the surface allows.
     if (const char* images = std::getenv("EDEN_NX2_SWAPCHAIN_IMAGES")) {
