@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "updated": null,
+  "source": "built-in",
+  "classes": {
+    "intel-arc-igpu": { "label": "Intel Arc iGPU", "samples": 0, "validated": 0, "settings": {} },
+    "amd-rdna3-igpu": { "label": "AMD RDNA3 / 3.5 iGPU", "samples": 0, "validated": 0, "settings": {} },
+    "nvidia-rtx-desktop": { "label": "NVIDIA RTX desktop", "samples": 0, "validated": 0, "settings": {} },
+    "nvidia-rtx-laptop": { "label": "NVIDIA RTX laptop", "samples": 0, "validated": 0, "settings": {} },
+    "amd-desktop": { "label": "AMD desktop", "samples": 0, "validated": 0, "settings": {} },
+    "other": { "label": "Other", "samples": 0, "validated": 0, "settings": {} }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "guarana-launcher",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Guarana Launcher: Windows installer, first-run setup, launcher, updater and doctor (Tauri 2). The web UI is in ui/, the Rust backend in src-tauri/.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "ui:install": "npm --prefix ui ci || npm --prefix ui install --no-audit --no-fund",
+    "ui:build": "npm run ui:install && npm --prefix ui run build",
+    "ui:dev": "npm run ui:install && npm --prefix ui run dev",
+    "icons": "node src-tauri/scripts/render-icon.mjs ../assets/brand/logo-mark.svg src-tauri/target/icon-source-1024.png && tauri icon src-tauri/target/icon-source-1024.png -o src-tauri/icons",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "@tauri-apps/cli": "2.12.4"
+  }
+}
