@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- Device profile: at boot the log gets one `Device profile:` line with the GPU (vendor, model, integrated or discrete, driver, device-local memory, shared memory), the CPU (logical and physical cores, hybrid P, E and LPE cores), installed RAM, AC or battery, the display's refresh rate, whether there is an NPU, and the device class (`IntegratedLowPower`, `Integrated`, `DiscreteEntry`, `DiscreteHigh` or `Unknown`) with a short label. Game presets receive the class; no default changes with it yet. See [docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log).
+
 ## [20.2.0] - 2026-11-13
 
 ### Added

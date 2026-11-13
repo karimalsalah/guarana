@@ -177,6 +177,7 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
+    common/device_profile.cpp
     common/data_dir_migration.cpp
     common/event.cpp
     common/fibers.cpp
