@@ -2145,8 +2145,6 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     if (as_compute) {
         return; // the output buffer: DefineMeshEmulationOutput, after the storage buffers
     }
-    mesh_out = runtime_info.mesh_out &
-               (MESH_OUT_DEAD | MESH_OUT_RATE | MESH_OUT_VECTOR | MESH_OUT_COUNT);
 
     const Id vertex_count{Const(mesh_info.max_vertices)};
     const Id primitive_count{Const(mesh_info.max_primitives)};
@@ -2175,9 +2173,6 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     const auto target = [&](u32 line, bool per_primitive) -> MeshLineTarget {
         const IR::Attribute attribute{line};
         if (IR::IsGeneric(attribute)) {
-            if ((mesh_out & MESH_OUT_DEAD) != 0 && !runtime_info.mesh_next_stage_loads[attribute]) {
-                return {}; // the fragment stage declares no input for a generic it never loads
-            }
             const u32 index{IR::GenericAttributeIndex(attribute)};
             Id& variable{generics[per_primitive][index]};
             if (!Sirit::ValidId(variable)) {
@@ -2232,68 +2227,6 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     }
     for (const u32 line : mesh_info.primitive_lines) {
         mesh_primitive_targets.push_back(target(line, true));
-    }
-
-    // Culling in the epilogue: triangles whose clip space x, y and w are in the stage buffer.
-    const auto has_line = [](const auto& lines, IR::Attribute attribute) {
-        return std::ranges::find(lines, static_cast<u32>(attribute)) != lines.end();
-    };
-    mesh_cull = runtime_info.mesh_cull & (MESH_CULL_FRUSTUM | MESH_CULL_SMALL | MESH_CULL_EMPTY);
-    if (primitive_vertices != 3 || !has_line(mesh_info.vertex_lines, IR::Attribute::PositionX) ||
-        !has_line(mesh_info.vertex_lines, IR::Attribute::PositionY) ||
-        !has_line(mesh_info.vertex_lines, IR::Attribute::PositionW)) {
-        mesh_cull &= MESH_CULL_EMPTY;
-    }
-    // The small triangle test reads viewport 0 from a push constant: not with another viewport
-    // or another push constant block in the program.
-    if (!profile.unified_descriptor_binding || program.info.uses_rescaling_uniform ||
-        program.info.uses_render_area ||
-        has_line(mesh_info.primitive_lines, IR::Attribute::ViewportIndex) ||
-        has_line(mesh_info.primitive_lines, IR::Attribute::ViewportMask)) {
-        mesh_cull &= ~MESH_CULL_SMALL;
-    }
-    if ((mesh_out & MESH_OUT_COUNT) != 0 && mesh_info.PrimitiveVertices() == 3) {
-        mesh_used_vertices =
-            DefineVariable(*this, TypeArray(U32[1], Const((std::max)(mesh_threads, 1U))),
-                           std::nullopt, spv::StorageClass::Workgroup);
-        Name(mesh_used_vertices, "mesh_used_vertices");
-    }
-    if ((mesh_cull & (MESH_CULL_FRUSTUM | MESH_CULL_SMALL)) != 0) {
-        mesh_cull_primitive =
-            DefineVariable(*this, TypeArray(U1, primitive_count), spv::BuiltIn::CullPrimitiveEXT,
-                           spv::StorageClass::Output);
-        Decorate(mesh_cull_primitive, spv::Decoration::PerPrimitiveEXT);
-        if ((mesh_cull & MESH_CULL_EMPTY) != 0) {
-            mesh_cull_any =
-                DefineVariable(*this, TypeArray(U32[1], Const((std::max)(mesh_threads, 1U))),
-                               std::nullopt, spv::StorageClass::Workgroup);
-            Name(mesh_cull_any, "mesh_cull_any");
-        }
-    }
-    if ((mesh_cull & MESH_CULL_SMALL) != 0) {
-        const Id block{TypeStruct(F32[4])};
-        Decorate(block, spv::Decoration::Block);
-        Name(block, "MeshCullInfo");
-        MemberDecorate(block, 0, spv::Decoration::Offset, MESH_CULL_VIEWPORT_OFFSET);
-        MemberName(block, 0, "viewport");
-        mesh_cull_viewport = AddGlobalVariable(TypePointer(spv::StorageClass::PushConstant, block),
-                                               spv::StorageClass::PushConstant);
-        Name(mesh_cull_viewport, "mesh_cull_push_constants");
-        if (profile.supported_spirv >= 0x00010400) {
-            interfaces.push_back(mesh_cull_viewport);
-        }
-    }
-    // The shading rate comes from the small triangle test's bounding box.
-    if ((mesh_cull & MESH_CULL_SMALL) == 0) {
-        mesh_out &= ~MESH_OUT_RATE;
-    }
-    if ((mesh_out & MESH_OUT_RATE) != 0) {
-        AddExtension("SPV_KHR_fragment_shading_rate");
-        AddCapability(spv::Capability::FragmentShadingRateKHR);
-        mesh_shading_rate =
-            DefineVariable(*this, TypeArray(S32[1], primitive_count),
-                           spv::BuiltIn::PrimitiveShadingRateKHR, spv::StorageClass::Output);
-        Decorate(mesh_shading_rate, spv::Decoration::PerPrimitiveEXT);
     }
 }
 

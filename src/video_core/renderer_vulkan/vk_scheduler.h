@@ -229,32 +229,6 @@ public:
     void RequestRenderpass(const Framebuffer* framebuffer,
                            std::source_location location = std::source_location::current());
 
-    /// As RequestRenderpass, for a pass that samples nothing or a draw whose sampled images went
-    /// through ReleaseDepthForSampling: another pass's depth image may stay in its attachment
-    /// layout.
-    void RequestDrawRenderpass(const Framebuffer* framebuffer,
-                               std::source_location location = std::source_location::current());
-
-    /// EDEN_NX2_DEPTH_OPTIMAL. 0: depth attachments stay in GENERAL. 1: single-sample depth
-    /// attachments are in DEPTH_STENCIL_ATTACHMENT_OPTIMAL during their passes. 2: and stay
-    /// there after the pass until something else needs the image (ReleaseRestingDepth).
-    [[nodiscard]] static u32 DepthOptimalMode();
-
-    /// Whether `image` (not null) is the active pass's depth attachment in its attachment layout
-    /// or the one the last pass left there.
-    [[nodiscard]] bool IsDepthInAttachmentLayout(VkImage image) const noexcept {
-        return image == resting_depth_image || image == pass_depth_image;
-    }
-
-    /// Returns the depth image the last pass left in DEPTH_STENCIL_ATTACHMENT_OPTIMAL to GENERAL,
-    /// ending the render pass: all the code outside render passes expects GENERAL. With `image`,
-    /// only when it is that image.
-    void ReleaseRestingDepth(VkImage image = VK_NULL_HANDLE);
-
-    /// Before a draw samples `image`: ends the pass that has it as its depth attachment and
-    /// returns it to GENERAL.
-    void ReleaseDepthForSampling(VkImage image);
-
     /// Defers a full-attachment color clear so it becomes the next render pass.
     bool DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot, const VkClearValue& value);
 
@@ -268,14 +242,6 @@ public:
     /// of a renderpass.
     void RequestOutsideRenderPassOperationContext(
         std::source_location location = std::source_location::current());
-
-    /// The same for work that reads and writes no image.
-    void RequestOutsideRenderPassBufferContext(
-        std::source_location location = std::source_location::current());
-
-    /// The same for work whose only image is `image`.
-    void RequestOutsideRenderPassImageContext(
-        VkImage image, std::source_location location = std::source_location::current());
 
     void DeferFragmentBarrier() {
         fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
@@ -336,16 +302,6 @@ public:
     }
     [[nodiscard]] bool GraphicsPipelineMissing() const {
         return graphics_pipeline_missing;
-    }
-
-    /// Returns true when the fragment shading rate has to be set in the command buffer.
-    bool UpdateFragmentShadingRate(VkExtent2D rate) {
-        if (state.fragment_shading_rate.width == rate.width &&
-            state.fragment_shading_rate.height == rate.height) {
-            return false;
-        }
-        state.fragment_shading_rate = rate;
-        return true;
     }
 
     /// Update the rescaling state. Returns true if the state has to be updated.
@@ -620,7 +576,6 @@ private:
         VkFramebuffer framebuffer{};
         VkExtent2D render_area = {0, 0};
         GraphicsPipeline* graphics_pipeline = nullptr;
-        VkExtent2D fragment_shading_rate = {0, 0}; ///< {0, 0}: not set in this command buffer
         bool is_rescaling = false;
         bool rescaling_defined = false;
         bool mesh_layout = false;
@@ -693,23 +648,6 @@ private:
     void EndPendingOperations();
 
     void EndRenderPass();
-
-    /// Ends the render pass for work asked from `location`.
-    void EndRenderPassForOutsideWork(const std::source_location& location);
-
-    /// Picks RenderPassKey::depth_layout for the pass about to begin on `framebuffer` (none is
-    /// active) and returns the resting depth image to GENERAL when that pass can't take it over.
-    [[nodiscard]] u8 PickDepthLayout(const Framebuffer* framebuffer);
-
-    /// The active pass's depth attachment when it is not in GENERAL, and its layout afterwards.
-    VkImage pass_depth_image{};
-    VkImageSubresourceRange pass_depth_range{};
-    VkImageLayout pass_depth_final_layout = VK_IMAGE_LAYOUT_GENERAL;
-    /// The depth image the last pass left in DEPTH_STENCIL_ATTACHMENT_OPTIMAL (mode 2). Never set
-    /// while a pass with a pass_depth_image is active.
-    VkImage resting_depth_image{};
-    VkImageSubresourceRange resting_depth_range{};
-    bool keep_resting_depth{};
 
     void AcquireNewChunk();
 

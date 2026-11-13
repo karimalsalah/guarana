@@ -207,33 +207,6 @@ RenderPassKey MakeRenderPassKey(const FixedPipelineState& state, const Device& d
     return key;
 }
 
-/// EDEN_NX2_DEPTH_OPTIMAL: draws sample images as GENERAL. A draw that samples its own depth
-/// attachment makes its framebuffer keep that attachment in GENERAL, and one that samples a depth
-/// image a pass has in its attachment layout returns it to GENERAL first.
-void PrepareSampledDepthLayouts(TextureCache& texture_cache, Scheduler& scheduler,
-                                std::span<const VideoCommon::ImageViewInOut> views) {
-    if (Scheduler::DepthOptimalMode() == 0) {
-        return;
-    }
-    Framebuffer* const framebuffer = texture_cache.GetFramebuffer();
-    const VkImage own_depth = framebuffer->DepthImage();
-    for (const VideoCommon::ImageViewInOut& view : views) {
-        if (!view.id) {
-            continue;
-        }
-        const VkImage image = texture_cache.GetImageView(view.id).ImageHandle();
-        if (image == VK_NULL_HANDLE) {
-            continue;
-        }
-        if (image == own_depth) {
-            framebuffer->NoteDepthSampledInPass();
-        }
-        if (scheduler.IsDepthInAttachmentLayout(image)) {
-            scheduler.ReleaseDepthForSampling(image);
-        }
-    }
-}
-
 size_t NumAttachments(const FixedPipelineState& state) {
     size_t num{};
     for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
@@ -908,16 +881,6 @@ u64 KeptGraphicsStages::Bytes() const noexcept {
     return bytes;
 }
 
-void GraphicsPipeline::PushMeshCullViewport(const std::array<f32, 4>& viewport) {
-    scheduler.Record([this, viewport](vk::CommandBuffer cmdbuf) {
-        cmdbuf.PushConstants(*pipeline_layout,
-                             VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT |
-                                 VK_SHADER_STAGE_MESH_BIT_EXT,
-                             Shader::Backend::SPIRV::MESH_CULL_VIEWPORT_OFFSET, sizeof(viewport),
-                             viewport.data());
-    });
-}
-
 KeptGraphicsStages GraphicsPipeline::TakeKeptStages() {
     KeptGraphicsStages kept{
         .spirv = std::move(kept_spirv),
@@ -1533,7 +1496,6 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         Profile::Scope scope{Profile::Zone::RenderTargets};
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{views.data(), views.size()};
-        PrepareSampledDepthLayouts(texture_cache, scheduler, view_span);
         texture_cache.CheckFeedbackLoop(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
@@ -1709,7 +1671,6 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         Profile::Scope scope{Profile::Zone::RenderTargets};
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{delta_views};
-        PrepareSampledDepthLayouts(texture_cache, scheduler, view_span);
         texture_cache.CheckFeedbackLoop(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
@@ -1985,7 +1946,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
         });
     }
-    scheduler.RequestDrawRenderpass(texture_cache.GetFramebuffer());
+    scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }
@@ -2023,19 +1984,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     const bool is_rescaling{texture_cache.IsRescaling()};
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
-    // EDEN_NX2_VRS: the rate is dynamic state of every guest pipeline. It is set again with each
-    // bind, as a pipeline with a static rate (blits, presentation) leaves it undefined.
-    VkExtent2D shading_rate{1, 1};
-    bool set_shading_rate{};
-    if (false) {
-        const auto wanted{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
-        shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
-        set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
-    }
-    // A mesh program's per-primitive rate (EDEN_NX2_MESH_OUT) only counts with this combiner.
-    const VkFragmentShadingRateCombinerOpKHR primitive_rate_op{
-        set_shading_rate && UsesMeshShadingRate() ? device.MeshPrimitiveRateCombiner()
-                                                  : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
@@ -2060,7 +2008,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
-                      shading_rate, set_shading_rate, primitive_rate_op,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
@@ -2076,12 +2023,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 return;
             }
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
-        }
-        // After the bind: a rate set under a pipeline with a static one does not survive it.
-        if (set_shading_rate) {
-            cmdbuf.SetFragmentShadingRateKHR(shading_rate,
-                                             {primitive_rate_op,
-                                              VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
         }
         const VkShaderStageFlags push_stages =
             mesh_emulation ? VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT
@@ -2591,16 +2532,6 @@ void GraphicsPipeline::FillStates(PipelineStates& s, PipelineVariant variant) co
         }
     }
 
-    // EDEN_NX2_VRS: on every guest pipeline, so a shader's rate changes without a rebuild.
-    // Not on mesh pipelines: with the rate dynamic their draws vanish on Intel's driver, so they
-    // take the rate of their fragment shader at build time instead.
-    // Measured on Intel: draws of pipelines with the rate as dynamic state vanish, with or without
-    // mesh programs. Every pipeline takes its shader's rate at build time instead.
-    const bool dynamic_shading_rate{false};
-    if (dynamic_shading_rate) {
-        dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
-    }
-
     const bool is_mesh{IsMeshPipeline()};
     s.is_mesh = is_mesh;
     if (is_mesh) {
@@ -2699,17 +2630,6 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .pNext = nullptr,
         .requiredSubgroupSize = GuestWarpSize,
     };
-    // EDEN_NX2_MESH_SIMD=8|16|32: experiment, the subgroup size of every native task and mesh
-    // stage (Intel picks SIMD16 by itself, two threads for a 32-thread workgroup).
-    static const u32 mesh_simd = [] {
-        const char* const value = std::getenv("EDEN_NX2_MESH_SIMD");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 0)) : 0U;
-    }();
-    const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT mesh_simd_ci{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
-        .pNext = nullptr,
-        .requiredSubgroupSize = mesh_simd,
-    };
     static_vector<VkPipelineShaderStageCreateInfo, 5> shader_stages;
     for (size_t stage = 0; stage < Maxwell::MaxShaderStage; ++stage) {
         if (!spv_modules[stage]) {
@@ -2738,16 +2658,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
             emulated_vertex    ? *mesh_vertex_module
             : prepass_fragment ? *prepass_modules[variant == PipelineVariant::PrepassDepth ? 0 : 1]
                                : *spv_modules[stage]};
-        const bool mesh_stage_simd{
-            mesh_simd != 0 && !force_warp_size && !emulated_vertex &&
-            (stage_flag == VK_SHADER_STAGE_MESH_BIT_EXT ||
-             stage_flag == VK_SHADER_STAGE_TASK_BIT_EXT) &&
-            device.IsExtSubgroupSizeControlSupported()};
         shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = force_warp_size   ? &subgroup_size_ci
-                     : mesh_stage_simd ? &mesh_simd_ci
-                                       : nullptr,
+            .pNext = force_warp_size ? &subgroup_size_ci : nullptr,
             .flags = 0,
             .stage = stage_flag,
             .module = stage_module,
@@ -2795,8 +2708,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
         .pNext = nullptr,
         .fragmentSize = device.ClampFragmentShadingRate({mesh_rate.width, mesh_rate.height}),
-        .combinerOps = {UsesMeshShadingRate() ? device.MeshPrimitiveRateCombiner()
-                                              : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+        .combinerOps = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
                         VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR},
     };
     const VkGraphicsPipelineCreateInfo pipeline_ci{
@@ -2824,14 +2736,13 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     };
-    // Stored driver binaries are checked against the driver's key of this create info; the salt
-    // keeps the builds with the dynamic rate beside the others instead of replacing them.
-    // So do the salts of a prepass split: its two pipelines are other builds of this key, and so
+    // Stored driver binaries are checked against the driver's key of this create info; the salts
+    // keep the builds of a prepass split beside the others instead of replacing them:
+    // its two pipelines are other builds of this key, and so
     // is the pipeline itself when its stages decorate Position for the split.
     static constexpr std::array<u64, 3> variant_salts{0ULL, 0x5052455f44455054ULL,
                                                       0x5052455f434f4c52ULL};
     const u64 binary_key{GraphicsRecordKey(key) ^
-                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
                          variant_salts[static_cast<size_t>(variant)] ^
                          (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL) ^
                          // Stages emitted with one descriptor set each (libraries)

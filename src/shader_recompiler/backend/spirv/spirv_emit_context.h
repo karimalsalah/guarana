@@ -442,21 +442,6 @@ public:
     std::vector<MeshLineTarget> mesh_primitive_targets;
     std::array<Id, 2> mesh_outputs_marker{};
     std::array<Id, 4> mesh_tasks_marker{};
-    /// Culling added to a native mesh program (the MESH_CULL_* bits it can take), its
-    /// CullPrimitiveEXT output, one "a triangle is left" word per invocation and the viewport
-    /// push constant.
-    u32 mesh_cull{};
-    Id mesh_cull_primitive{};
-    Id mesh_cull_any{};
-    Id mesh_used_vertices{}; ///< MESH_OUT_COUNT: one word per invocation
-    Id mesh_cull_viewport{};
-    /// MESH_OUT_* bits in effect, the PrimitiveShadingRateKHR output, the last tested triangle's
-    /// "in front of the camera" and bounding box size in pixels (CulledTriangle), and the rate
-    /// of each primitive group of the invocation.
-    u32 mesh_out{};
-    Id mesh_shading_rate{};
-    std::array<Id, 3> mesh_triangle_extent{};
-    std::vector<Id> mesh_primitive_rates;
     /// Mesh emulation (RuntimeInfo::mesh_as_compute): the output storage buffer and the
     /// pointer type to one of its words.
     Id mesh_output_buffer{};

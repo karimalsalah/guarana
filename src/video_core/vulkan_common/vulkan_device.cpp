@@ -2088,16 +2088,7 @@ void Device::RemoveUnsuitableExtensions() {
     // VK_EXT_mesh_shader: Switch 2 titles draw some geometry with task and mesh programs. Only
     // the two stages are used; the multiview, shading rate and query features need more.
     features.mesh_shader.multiviewMeshShader = VK_FALSE;
-    // The shading rate one is kept for EDEN_NX2_MESH_OUT bit 2 with EDEN_NX2_VRS (see below).
-    const char* const mesh_out_env{std::getenv("EDEN_NX2_MESH_OUT")};
-    const bool mesh_primitive_rate{
-        std::getenv("EDEN_NX2_VRS") != nullptr && mesh_out_env != nullptr &&
-        (std::strtoul(mesh_out_env, nullptr, 0) & 2) != 0 &&
-        features.mesh_shader.primitiveFragmentShadingRateMeshShader &&
-        features.fragment_shading_rate.primitiveFragmentShadingRate};
-    if (!mesh_primitive_rate) {
-        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    }
+    features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
     // Kept for EDEN_NX2_DRAW_STATS only.
     if (std::getenv("EDEN_NX2_DRAW_STATS") == nullptr) {
         features.mesh_shader.meshShaderQueries = VK_FALSE;
@@ -2113,29 +2104,13 @@ void Device::RemoveUnsuitableExtensions() {
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
     // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
-    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used, and the per-primitive
-    // rate of native mesh programs with EDEN_NX2_MESH_OUT bit 2.
-    if (!mesh_primitive_rate || !extensions.mesh_shader) {
-        features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
-    }
+    // of their fragment shader when they are built. Only the per-draw rate is used.
+    features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
     features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
     extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
                                        features.fragment_shading_rate.pipelineFragmentShadingRate &&
                                        instance_version >= VK_API_VERSION_1_2 &&
                                        std::getenv("EDEN_NX2_VRS") != nullptr;
-    if (!extensions.fragment_shading_rate ||
-        !features.fragment_shading_rate.primitiveFragmentShadingRate) {
-        // The mesh feature needs the primitive rate one.
-        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    }
-    if (mesh_primitive_rate) {
-        LOG_INFO(Render_Vulkan,
-                 "EDEN_NX2_MESH_OUT: per-primitive shading rate of mesh programs {} (multiple "
-                 "viewports {}, non-trivial combiners {})",
-                 IsMeshPrimitiveShadingRateSupported() ? "enabled" : "not available",
-                 properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports,
-                 properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps);
-    }
     fragment_shading_rates.clear();
     if (extensions.fragment_shading_rate) {
         std::string rates;
@@ -2486,7 +2461,7 @@ u64 Device::GetDeviceMemoryBudget() const {
         // An integrated GPU's device-local heap is system memory (a Radeon 780M reported a 21 GB
         // budget): following it let the texture cache fill that much RAM before collecting, and
         // kept ASTC uncompressed. Its budget is at most the share CollectPhysicalMemoryInfo
-        // gives it (4 GiB, 6 GiB with aggressive VRAM use, or EDEN_NX2_IGPU_VRAM_MIB).
+        // gives it (4 GiB, 6 GiB with aggressive VRAM use).
         result = (std::min)(result, device_access_memory);
     }
     return result;
@@ -2544,20 +2519,7 @@ void Device::CollectPhysicalMemoryInfo() {
     main_heap_size = limit(mem_properties.memoryHeaps[main_heap].size);
     if (is_integrated) {
         const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
-        u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
-        // EDEN_NX2_IGPU_VRAM_MIB=<n>: n MiB instead, still within what the heaps allow below.
-        if (const char* value = std::getenv("EDEN_NX2_IGPU_VRAM_MIB")) {
-            // At most 1 TiB, so the signed arithmetic below cannot overflow.
-            const u64 size = std::min<u64>(std::strtoull(value, nullptr, 10), 1u << 20) << 20;
-            if (size != 0) {
-                memory_size = size;
-                LOG_INFO(Render_Vulkan, "EDEN_NX2_IGPU_VRAM_MIB: integrated GPU share {} MiB",
-                         size >> 20);
-            } else {
-                LOG_WARNING(Render_Vulkan,
-                            "EDEN_NX2_IGPU_VRAM_MIB={} is not a size in MiB, ignored", value);
-            }
-        }
+        const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
         device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
     } else {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);

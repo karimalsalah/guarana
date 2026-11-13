@@ -1410,9 +1410,8 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear, bool is_draw) {
     // counts for all color targets, and rasterizer discard is not looked at.
     bool color_writable = true;
     bool depth_writable = true;
-    const bool lazy = Nx2AliasLazy();
     const bool trace = Nx2AliasTrace();
-    if (is_draw && !is_clear && (lazy || trace)) [[unlikely]] {
+    if (is_draw && !is_clear && trace) [[unlikely]] {
         const auto& regs = maxwell3d->regs;
         color_writable = false;
         const size_t num_masks = regs.color_mask_common != 0 ? 1 : regs.color_mask.size();
@@ -1423,20 +1422,16 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear, bool is_draw) {
         depth_writable = regs.depth_write_enabled != 0 || regs.stencil_enable != 0;
         alias_trace_draws += trace ? 1 : 0;
     }
-    // EDEN_NX2_ALIAS_LAZY: a target the draw cannot write is prepared like a sampled image, so
-    // its modification tick stays and SynchronizeAliases does not copy it into the aliases the
-    // next draws sample (it did once per draw: the tick was raised by every draw).
     const auto prepare_target = [&](ImageViewId view_id, bool can_write) {
-        const bool mark = can_write || !lazy;
         const bool invalidate = is_clear && IsFullClear(view_id);
         if (!trace || !PreparesImage(slot_image_views, view_id)) [[likely]] {
-            PrepareImageView(view_id, mark, invalidate);
+            PrepareImageView(view_id, true, invalidate);
             return;
         }
         const ImageId image_id = slot_image_views[view_id].image_id;
         const u64 tick_before = slot_images[image_id].modification_tick;
-        PrepareImageView(view_id, mark, invalidate);
-        TraceAliasTarget(image_id, tick_before, can_write, mark);
+        PrepareImageView(view_id, true, invalidate);
+        TraceAliasTarget(image_id, tick_before, can_write, true);
     };
     auto& flags = maxwell3d->dirty.flags;
     if (!flags[Dirty::RenderTargets]) {
@@ -4925,9 +4920,9 @@ void TextureCache<P>::ReportAliasTrace() {
     }
     LOG_INFO(HW_GPU,
              "Nx2AliasTrace window copies={} sync_copies={} needless={} pairs={} untracked={} "
-             "draws={} lazy={}",
+             "draws={}",
              copies, sync, needless, alias_trace_pairs.size(), alias_trace_untracked,
-             alias_trace_draws, Nx2AliasLazy() ? 1 : 0);
+             alias_trace_draws);
     const auto describe = [](ImageId id, GPUVAddr addr, const ImageInfo& info) {
         return fmt::format("id:{} addr:{:#x} fmt:{} type:{} size:{}x{}x{} levels:{} layers:{} "
                            "samples:{}",

@@ -858,27 +858,11 @@ FN_MAX_LIMIT_LIST
     }
 
     /// Returns true if per-draw shading rates are in use (VK_KHR_fragment_shading_rate with
-    /// EDEN_NX2_VRS set): every guest graphics pipeline then has the rate as dynamic state.
+    /// EDEN_NX2_VRS set): every guest graphics pipeline then takes the rate of its fragment
+    /// shader when it is built.
     bool IsKhrFragmentShadingRateSupported() const {
         return extensions.fragment_shading_rate &&
                features.fragment_shading_rate.pipelineFragmentShadingRate;
-    }
-
-    /// Returns true if native mesh programs may write PrimitiveShadingRateKHR (EDEN_NX2_VRS and
-    /// EDEN_NX2_MESH_OUT bit 2). Guest pipelines have several viewports, so it needs that limit.
-    bool IsMeshPrimitiveShadingRateSupported() const {
-        return IsKhrFragmentShadingRateSupported() && IsExtMeshShaderSupported() &&
-               features.fragment_shading_rate.primitiveFragmentShadingRate &&
-               features.mesh_shader.primitiveFragmentShadingRateMeshShader &&
-               properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports;
-    }
-
-    /// Returns how a mesh program's per-primitive rate combines with the per-draw one: the
-    /// coarser of the two where the device can, else the primitive's.
-    VkFragmentShadingRateCombinerOpKHR MeshPrimitiveRateCombiner() const {
-        return properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps
-                   ? VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR
-                   : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
     }
 
     /// Returns the largest supported fragment size that fits in the wanted one.

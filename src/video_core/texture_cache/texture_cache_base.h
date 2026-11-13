@@ -62,17 +62,6 @@ struct ChannelState;
 
 namespace VideoCommon {
 
-/// EDEN_NX2_ALIAS_LAZY=1 (experiment): a draw marks a render target modified only when its
-/// write masks let it write that target, so aliases sampled between such draws are not copied
-/// again. Off: every draw marks every bound target.
-[[nodiscard]] inline bool Nx2AliasLazy() noexcept {
-    static const bool enabled = [] {
-        const char* const value = std::getenv("EDEN_NX2_ALIAS_LAZY");
-        return value != nullptr && value[0] == '1' && value[1] == '\0';
-    }();
-    return enabled;
-}
-
 /// EDEN_NX2_ALIAS_TRACE=1: once a second, the image pairs the texture cache copied most.
 [[nodiscard]] inline bool Nx2AliasTrace() noexcept {
     static const bool enabled = [] {

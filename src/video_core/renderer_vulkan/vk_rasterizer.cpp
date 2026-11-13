@@ -365,23 +365,6 @@ VkViewport GetViewportState(const Device& device, const Maxwell& regs, size_t in
     return viewport;
 }
 
-/// Viewport 0 as UpdateViewportsState sets it, before the jitter: x, y, width, height.
-std::array<f32, 4> GetMeshCullViewport(const Device& device, const Maxwell& regs, float scale) {
-    if (regs.viewport_scale_offset_enabled) {
-        const VkViewport viewport{GetViewportState(device, regs, 0, scale)};
-        return {viewport.x, viewport.y, viewport.width, viewport.height};
-    }
-    const float x = static_cast<float>(regs.surface_clip.x);
-    float y = static_cast<float>(regs.surface_clip.y);
-    const float width = (std::max)(1.0f, static_cast<float>(regs.surface_clip.width));
-    float height = (std::max)(1.0f, static_cast<float>(regs.surface_clip.height));
-    if (regs.window_origin.mode != Maxwell::WindowOrigin::Mode::UpperLeft) {
-        y += height;
-        height = -height;
-    }
-    return {x, y, width, height};
-}
-
 VkRect2D GetScissorState(const Maxwell& regs, size_t index, u32 up_scale = 1, u32 down_shift = 0) {
     const auto& src = regs.scissor_test[index];
     VkRect2D scissor{};
@@ -1503,14 +1486,6 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         Profile::Scope scope{Profile::Zone::DynamicState};
         UpdateOcarinaJitter();
         UpdateDynamicStates(pipeline);
-        if (mesh_draw && pipeline->UsesMeshCullViewport()) {
-            const float scale =
-                texture_cache.IsRescaling() ? Settings::values.resolution_info.up_factor : 1.0f;
-            std::array<f32, 4> viewport{GetMeshCullViewport(device, maxwell3d->regs, scale)};
-            viewport[0] += oot_jitter_applied[0];
-            viewport[1] += oot_jitter_applied[1];
-            pipeline->PushMeshCullViewport(viewport);
-        }
         verify_vertex_input = false;
     }
 
@@ -2654,7 +2629,7 @@ void RasterizerVulkan::Clear(u32 layer_count) {
                                  !scheduler.IsRenderPassActive() &&
                                  (!use_color || color_full_channels) && ds_deferrable;
     if (!can_defer_clear) {
-        scheduler.RequestDrawRenderpass(framebuffer);
+        scheduler.RequestRenderpass(framebuffer);
     }
 
     query_cache.NotifySegment(true);
@@ -3547,21 +3522,9 @@ void RasterizerVulkan::WaitForIdle() {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
 
-    // EDEN_NX2_DEFER_WFI=1 (experiment): every driver keeps the open render pass as MoltenVK
-    // does below. The query sync would end it too (QueryCacheRuntime::Barriers), so it waits
-    // until FlushWork finds no pass open, or the next fence (CommitAsyncFlushes) syncs it.
-    static const bool defer_wfi = [] {
-        const char* const value = std::getenv("EDEN_NX2_DEFER_WFI");
-        return value != nullptr && value[0] == '1' && value[1] == '\0';
-    }();
-    if (defer_wfi && scheduler.IsRenderPassActive()) {
-        deferred_wfi_query_sync = true;
-    } else {
-        deferred_wfi_query_sync = false;
-        query_cache.NotifyWFI();
-    }
+    query_cache.NotifyWFI();
 
-    if ((device.IsMoltenVK() || defer_wfi) && scheduler.IsRenderPassActive()) {
+    if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
         fence_manager.SignalOrdering();
         return;
@@ -4666,13 +4629,6 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
 }
 
 void RasterizerVulkan::FlushWork() {
-    SCOPE_EXIT {
-        // The query sync a deferred WaitForIdle left (EDEN_NX2_DEFER_WFI).
-        if (deferred_wfi_query_sync && !scheduler.IsRenderPassActive()) [[unlikely]] {
-            deferred_wfi_query_sync = false;
-            query_cache.NotifyWFI();
-        }
-    };
 #ifdef __ANDROID__
     static constexpr bool android = true;
 #else

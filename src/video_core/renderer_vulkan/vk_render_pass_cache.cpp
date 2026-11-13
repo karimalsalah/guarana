@@ -169,8 +169,7 @@ VkRenderPass RenderPassCache::Get(const RenderPassKey& key) {
     if (key.depth_format != PixelFormat::Invalid) {
         depth_reference = VkAttachmentReference{
             .attachment = num_colors,
-            .layout = key.depth_layout != 0 ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                            : VK_IMAGE_LAYOUT_GENERAL,
+            .layout = VK_IMAGE_LAYOUT_GENERAL,
         };
         const VkAttachmentLoadOp depth_load_op = key.depth_stencil_clear
                                                      ? VK_ATTACHMENT_LOAD_OP_CLEAR
@@ -178,15 +177,8 @@ VkRenderPass RenderPassCache::Get(const RenderPassKey& key) {
         const VkAttachmentStoreOp depth_store_op = key.depth_stencil_discard
                                                        ? VK_ATTACHMENT_STORE_OP_DONT_CARE
                                                        : VK_ATTACHMENT_STORE_OP_STORE;
-        VkAttachmentDescription depth_description = AttachmentDescription(
-            *device, key.depth_format, key.samples, depth_load_op, depth_store_op);
-        if (key.depth_layout == 3) {
-            depth_description.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        }
-        if (key.depth_layout >= 2) {
-            depth_description.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        }
-        descriptions.push_back(depth_description);
+        descriptions.push_back(AttachmentDescription(*device, key.depth_format, key.samples,
+                                                     depth_load_op, depth_store_op));
     }
     std::array<VkAttachmentReference, 8> resolve_references{};
     const bool do_resolve_color =
