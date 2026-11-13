@@ -77,6 +77,26 @@ class ShimTests(unittest.TestCase):
         self.assertIn("tools/nx2/debug_mcp.py", server["args"])
 
 
+class CodexBudgetTests(unittest.TestCase):
+    """Codex CLI reads only project_doc_max_bytes of AGENTS.md (32 KiB by default) and cuts the rest."""
+
+    def setUp(self):
+        match = re.search(r"(?m)^project_doc_max_bytes = (\d+)$", read(".codex", "config.toml"))
+        self.assertIsNotNone(match)
+        self.budget = int(match.group(1))
+
+    def test_the_budget_holds_all_of_agents_md_even_with_crlf(self):
+        with open(os.path.join(ROOT, "AGENTS.md"), "rb") as handle:
+            lf = handle.read().replace(b"\r\n", b"\n")
+        # A Windows checkout turns every LF into CRLF, and Codex counts the bytes on disk.
+        self.assertLess(len(lf) + lf.count(b"\n"), self.budget)
+
+    def test_the_docs_give_the_same_override(self):
+        flag = f"project_doc_max_bytes={self.budget}"
+        for path in ("README.md", "docs/AI-QUICKSTART.md", "docs/agents/README.md", ".codex/config.toml"):
+            self.assertIn(flag, read(*path.split("/")), path)
+
+
 class QuickstartTests(unittest.TestCase):
     def setUp(self):
         self.text = read("docs", "AI-QUICKSTART.md")
