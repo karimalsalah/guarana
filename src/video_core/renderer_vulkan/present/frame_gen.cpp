@@ -14,6 +14,7 @@
 #include "common/settings.h"
 #include "video_core/frame_budget.h"
 #include "video_core/frame_gen_choice.h"
+#include "video_core/nx2.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
@@ -311,6 +312,7 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat 
     const bool usable = extrapolation_source && !extrapolation_source->cut &&
                         extrapolation_screen.extent.width != 0 &&
                         extrapolation_screen.extent.height != 0;
+    extrapolation_usable = usable;
     extrapolation_missing += extrapolation_source ? 0 : 1;
     extrapolation_cuts += extrapolation_source && extrapolation_source->cut ? 1 : 0;
     // A cadence holds real frames only while frames are predicted: menus and cut scenes without
@@ -324,7 +326,10 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat 
 
     last_generations = plan.generations;
     generated = usable && plan.warm && plan.generations > 0;
-    generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
+    if (FluidMode() == 0) {
+        // The FLUID presenter's predictions are counted as recorded (NoteFluidGenerated).
+        generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
+    }
 
     if (++extrapolation_frames % EXTRAPOLATION_LOG_INTERVAL == 0) {
         LOG_INFO(Render_Vulkan,
@@ -341,6 +346,7 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat 
 void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                        VkExtent2D guest_extent) {
     generated = false;
+    extrapolation_usable = false;
 
     const Settings::FrameGenType chosen = Settings::values.frame_gen_type.GetValue();
     const Settings::FrameGenType type =
@@ -442,6 +448,7 @@ void FrameGen::Pause() {
     last_generations = 0;
     warm_streak = 0;
     generated = false;
+    extrapolation_usable = false;
     extrapolation_source.reset();
     ReleaseCadence();
 }
@@ -547,6 +554,42 @@ std::chrono::nanoseconds FrameGen::CadenceSpacing() const {
         return {};
     }
     return std::chrono::nanoseconds{static_cast<s64>(1.0e9 / CadenceTargetRate())};
+}
+
+f32 FrameGen::FluidInterval() const {
+    const f32 measured = pacer.SmoothedInterval();
+    if (measured <= 0.0f) {
+        return 0.0f;
+    }
+    // A cadence or frame budget holds real frames to an exact interval; jitter in the measured
+    // one would only move the predictions.
+    const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                          std::memory_order_relaxed)) *
+                      1.0e-9f;
+    const f32 interval =
+        paced > 0.0f && std::abs(measured - paced) <= paced * 0.1f ? paced : measured;
+    return std::clamp(interval, 1.0f / 240.0f, 0.1f);
+}
+
+bool FrameGen::CanPredict() const {
+    return extrapolating && extrapolation_usable && extrapolation && extrapolation_source &&
+           extrapolation_frame != nullptr && extrapolation_frame->storage_view;
+}
+
+bool FrameGen::GenerateAt(const Device& device, Frame* destination, f32 advance) {
+    if (!CanPredict() || !destination->storage_view) {
+        return false;
+    }
+    const VkExtent2D extent{.width = destination->width, .height = destination->height};
+    scheduler.RequestOutsideRenderPassOperationContext();
+    extrapolation->Generate(device, scheduler, *extrapolation_source,
+                            *extrapolation_frame->storage_view, *destination->image,
+                            *destination->storage_view, extent, extrapolation_screen, advance);
+    return true;
+}
+
+void FrameGen::NoteFluidGenerated(size_t count) {
+    generated_frames.fetch_add(count, std::memory_order_relaxed);
 }
 
 void FrameGen::ReleaseCadence() {

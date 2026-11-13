@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -25,6 +26,7 @@
 #include "core/frontend/graphics_context.h"
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/present.h"
 #include "video_core/render_trace.h"
@@ -64,6 +66,15 @@ constexpr VkExtent2D CaptureImageSize{
 };
 
 #ifdef HAS_LSFG
+/// EDEN_NX2_FLUID: the real frame is shown as it is for its first slot while the prediction for
+/// that slot would carry its motion at most this share of a frame interval.
+constexpr f64 FLUID_REAL_ADVANCE = 0.1;
+/// Predictions reach at most this many frame intervals ahead.
+constexpr f64 FLUID_MAX_ADVANCE = 3.0;
+constexpr size_t FLUID_MAX_PREDICTIONS = 6;
+/// EDEN_NX2_CADENCE: real frames are paced to be done this long before their slot's present.
+constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
+
 [[nodiscard]] VkExtent2D GuestExtent(std::span<const Tegra::FramebufferConfig> framebuffers) {
     if (framebuffers.empty()) {
         return VkExtent2D{};
@@ -344,8 +355,12 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // Frames predicted from this one (EDEN_NX2_EXTRAPOLATE): presented after it, unlike
     // interpolated frames. The extrapolation pass writes SDR, so HDR output pauses it.
     std::vector<Frame*> predicted_frames;
+    const bool fluid = present_manager.Fluid();
     if (output.IsHdr() && ExtrapolationRequested()) {
         frame_gen.Pause();
+        if (fluid) {
+            RecordFluidFrames(frame, output, predicted_frames);
+        }
     } else {
         if (!output.IsHdr()) {
             const auto& layout = render_window.GetFramebufferLayout();
@@ -362,36 +377,42 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
         const size_t generated_frames = frame_gen.GeneratedFrameCount();
         const bool predict = frame_gen.Extrapolating();
-        // Each generated frame keeps the screen for an equal share of the real frame interval
-        // (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh rate display
-        // shows it for one refresh only.
-        auto spacing = frame_gen.CadenceSpacing();
-        if (spacing.count() == 0) {
-            spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
-                                           static_cast<f32>(generated_frames + 1)));
-        }
-        for (size_t generation = 0; generation < generated_frames; ++generation) {
-            Frame* generated = present_manager.GetRenderFrame();
-            generated->color_space = output.color_space;
-            generated->present_spacing = spacing;
-            blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
-            frame_gen.GenerateInto(device, generated, generation);
-            if (predict) {
-                // Recorded with the real frame's commands, which it reads; shown after it.
-                predicted_frames.push_back(generated);
-                continue;
+        if (fluid && (predict || generated_frames == 0)) {
+            // EDEN_NX2_FLUID: the present thread shows each frame at its vblank slot.
+            RecordFluidFrames(frame, output, predicted_frames);
+        } else {
+            // Each generated frame keeps the screen for an equal share of the real frame
+            // interval (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh
+            // rate display shows it for one refresh only.
+            auto spacing = frame_gen.CadenceSpacing();
+            if (spacing.count() == 0) {
+                spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
+                                               static_cast<f32>(generated_frames + 1)));
             }
-            scheduler.Flush(*generated->render_ready);
-            present_manager.Present(generated);
-        }
-        if (!predicted_frames.empty()) {
-            // The real frame and each predicted frame but the last hold the screen one spacing.
-            // The last leaves the next real frame free to show as soon as it is ready, as the real
-            // frame does after interpolated ones: (gens + 1) spacings plus copy time per batch
-            // would let the present queue creep behind.
-            frame->present_spacing = spacing;
-            predicted_frames.back()->present_spacing = {};
+            for (size_t generation = 0; generation < generated_frames; ++generation) {
+                Frame* generated = present_manager.GetRenderFrame();
+                generated->color_space = output.color_space;
+                generated->present_spacing = spacing;
+                blit_swapchain.PrepareFrame(device, generated,
+                                            render_window.GetFramebufferLayout());
+                frame_gen.GenerateInto(device, generated, generation);
+                if (predict) {
+                    // Recorded with the real frame's commands, which it reads; shown after it.
+                    predicted_frames.push_back(generated);
+                    continue;
+                }
+                generated->gpu_tick = scheduler.Flush(*generated->render_ready);
+                present_manager.Present(generated);
+            }
+            if (!predicted_frames.empty()) {
+                // The real frame and each predicted frame but the last hold the screen one
+                // spacing. The last leaves the next real frame free to show as soon as it is
+                // ready, as the real frame does after interpolated ones: (gens + 1) spacings plus
+                // copy time per batch would let the present queue creep behind.
+                frame->present_spacing = spacing;
+                predicted_frames.back()->present_spacing = {};
+            }
         }
     }
 #endif
@@ -399,7 +420,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
         scheduler.MarkFrameEnd(++trace_frame, mark);
     }
-    scheduler.Flush(*frame->render_ready);
+    frame->gpu_tick = scheduler.Flush(*frame->render_ready);
 #ifdef EGLANTINE_STREAMLINE
     {
         const Streamline::FrameGenFrame ended = Streamline::FrameGenEndFrame();
@@ -423,7 +444,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                                  : std::chrono::steady_clock::time_point{};
 #ifdef HAS_LSFG
     for (Frame* predicted : predicted_frames) {
-        scheduler.Flush(*predicted->render_ready);
+        predicted->gpu_tick = scheduler.Flush(*predicted->render_ready);
         present_manager.Present(predicted);
     }
     scheduler.DispatchWork();
@@ -453,6 +474,88 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         trace_last_frame = entered;
     }
 }
+
+#ifdef HAS_LSFG
+void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
+                                       std::vector<Frame*>& predicted_frames) {
+    using std::chrono::duration_cast;
+    using std::chrono::nanoseconds;
+    const auto recorded = std::chrono::steady_clock::now();
+    frame->fluid_batch = ++fluid_batch;
+    frame->fluid_recorded = recorded;
+    const PresentManager::FluidClock slots = present_manager.GetFluidClock();
+    if (!slots.Valid()) {
+        // No vblank counted yet: shown in arrival order.
+        return;
+    }
+    // The first slot the frame's GPU work can be done for.
+    const u64 first = slots.FirstSlotPresentedAfter(recorded + slots.latency);
+    frame->fluid_slot = first;
+    const f32 interval = frame_gen.FluidInterval();
+    if (interval <= 0.0f || !frame_gen.CanPredict()) {
+        return;
+    }
+    const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                          std::memory_order_relaxed)) *
+                      1.0e-9f;
+    if (frame_gen.CadenceActive() && paced > 0.0f &&
+        std::abs(frame_gen.FrameInterval() - paced) <= paced * 0.05f) {
+        // EDEN_NX2_CADENCE paces the guest's presents, and the game keeps to it: move them, an
+        // eighth of the way a frame, towards real frames whose GPU work is done just before
+        // their first slot.
+        const s64 slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+        const s64 slack = duration_cast<nanoseconds>(slots.SlotTime(first) - slots.lead -
+                                                     (recorded + slots.latency))
+                              .count();
+        s64 error = slack - FLUID_PHASE_MARGIN_NS;
+        if (error > slot_ns / 2) {
+            // Nearer the slot before: be earlier.
+            error -= slot_ns;
+        }
+        Tegra::g_nx2_present_phase_shift_ns.fetch_add(
+            std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
+    }
+    const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
+    // Through the slot the next real frame is expected for: one spare covers it coming late.
+    const u64 last = slots.FirstSlotPresentedAfter(recorded + slots.latency + real_interval);
+    // EDEN_NX2_FLUID=2: each prediction is as of its slot less the latency a real frame can be
+    // shown at.
+    const nanoseconds behind = FluidMode() == 2 ? slots.latency + slots.lead : nanoseconds{};
+    size_t predicted = 0;
+    for (u64 slot = first; slot <= last && predicted < FLUID_MAX_PREDICTIONS;
+         slot += slots.divisor) {
+        const nanoseconds ahead =
+            duration_cast<nanoseconds>(slots.SlotTime(slot) - recorded - behind);
+        const f64 advance =
+            static_cast<f64>(ahead.count()) / static_cast<f64>(real_interval.count());
+        if (slot == first && advance <= FLUID_REAL_ADVANCE) {
+            // The real frame is on time for its slot.
+            continue;
+        }
+        // Never waits: with no frame to spare the batch ends here.
+        Frame* const generated = present_manager.TryGetRenderFrame();
+        if (generated == nullptr) {
+            break;
+        }
+        generated->color_space = output.color_space;
+        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        generated->fluid_batch = frame->fluid_batch;
+        generated->fluid_recorded = recorded;
+        generated->fluid_slot = FLUID_NOT_SHOWN;
+        if (frame_gen.GenerateAt(device, generated,
+                                 static_cast<f32>(std::clamp(advance, 0.0, FLUID_MAX_ADVANCE)))) {
+            generated->fluid_slot = slot;
+            if (slot == first) {
+                // The prediction takes the real frame's slot.
+                frame->fluid_slot = FLUID_NOT_SHOWN;
+            }
+            ++predicted;
+        }
+        predicted_frames.push_back(generated);
+    }
+    frame_gen.NoteFluidGenerated(predicted);
+}
+#endif
 
 HdrPresent RendererVulkan::UpdateHdrPresent() {
     const auto& monitor = Common::DisplayHdrMonitor::Instance();

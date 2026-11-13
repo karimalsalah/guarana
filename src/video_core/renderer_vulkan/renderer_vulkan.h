@@ -116,6 +116,15 @@ private:
     /// The surface the swapchain is made for, once the device exists.
     VkSurfaceKHR PresentationSurface();
 
+#ifdef HAS_LSFG
+    /// EDEN_NX2_FLUID: gives the real frame the first slot its GPU work can be done for, and when
+    /// its motion can be extrapolated, records a prediction for each slot until the next real
+    /// frame is due and one more, each as of its slot's time.
+    void RecordFluidFrames(Frame* frame, const HdrPresent& output,
+                           std::vector<Frame*>& predicted_frames);
+    u64 fluid_batch{}; ///< real frames recorded for the FLUID presenter
+#endif
+
     /// The encoding and luminances this frame is presented with; picks the swapchain format
     /// again when the HDR settings or the monitor's state changed.
     HdrPresent UpdateHdrPresent();
