@@ -304,16 +304,6 @@ public:
         return graphics_pipeline_missing;
     }
 
-    /// Returns true when the fragment shading rate has to be set in the command buffer.
-    bool UpdateFragmentShadingRate(VkExtent2D rate) {
-        if (state.fragment_shading_rate.width == rate.width &&
-            state.fragment_shading_rate.height == rate.height) {
-            return false;
-        }
-        state.fragment_shading_rate = rate;
-        return true;
-    }
-
     /// Update the rescaling state. Returns true if the state has to be updated.
     bool UpdateRescaling(bool is_rescaling, bool mesh_layout);
 
@@ -586,7 +576,6 @@ private:
         VkFramebuffer framebuffer{};
         VkExtent2D render_area = {0, 0};
         GraphicsPipeline* graphics_pipeline = nullptr;
-        VkExtent2D fragment_shading_rate = {0, 0}; ///< {0, 0}: not set in this command buffer
         bool is_rescaling = false;
         bool rescaling_defined = false;
         bool mesh_layout = false;

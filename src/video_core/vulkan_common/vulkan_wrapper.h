@@ -253,7 +253,6 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdSetBlendConstants vkCmdSetBlendConstants{};
     PFN_vkCmdSetCullModeEXT vkCmdSetCullModeEXT{};
     PFN_vkCmdSetDepthBias vkCmdSetDepthBias{};
-    PFN_vkCmdSetFragmentShadingRateKHR vkCmdSetFragmentShadingRateKHR{};
     PFN_vkCmdSetDepthBias2EXT vkCmdSetDepthBias2EXT{};
     PFN_vkCmdSetDepthBounds vkCmdSetDepthBounds{};
     PFN_vkCmdSetDepthBoundsTestEnableEXT vkCmdSetDepthBoundsTestEnableEXT{};
@@ -1614,12 +1613,6 @@ public:
 
     void SetDepthBias(float constant_factor, float clamp, float slope_factor) const noexcept {
         dld->vkCmdSetDepthBias(handle, constant_factor, clamp, slope_factor);
-    }
-
-    void SetFragmentShadingRateKHR(
-        const VkExtent2D& fragment_size,
-        const std::array<VkFragmentShadingRateCombinerOpKHR, 2>& combiner_ops) const noexcept {
-        dld->vkCmdSetFragmentShadingRateKHR(handle, &fragment_size, combiner_ops.data());
     }
 
     void SetDepthBias(float constant_factor, float clamp, float slope_factor,

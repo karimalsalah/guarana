@@ -1984,15 +1984,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     const bool is_rescaling{texture_cache.IsRescaling()};
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
-    // EDEN_NX2_VRS: the rate is dynamic state of every guest pipeline. It is set again with each
-    // bind, as a pipeline with a static rate (blits, presentation) leaves it undefined.
-    VkExtent2D shading_rate{1, 1};
-    bool set_shading_rate{};
-    if (false) {
-        const auto wanted{VideoCore::Nx2Debug::ShadingRateFor(key.unique_hashes[5])};
-        shading_rate = device.ClampFragmentShadingRate({wanted.width, wanted.height});
-        set_shading_rate = scheduler.UpdateFragmentShadingRate(shading_rate) || bind_pipeline;
-    }
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
@@ -2017,7 +2008,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
-                      shading_rate, set_shading_rate,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
@@ -2033,12 +2023,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 return;
             }
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
-        }
-        // After the bind: a rate set under a pipeline with a static one does not survive it.
-        if (set_shading_rate) {
-            cmdbuf.SetFragmentShadingRateKHR(shading_rate,
-                                             {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
-                                              VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR});
         }
         const VkShaderStageFlags push_stages =
             mesh_emulation ? VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT
@@ -2548,16 +2532,6 @@ void GraphicsPipeline::FillStates(PipelineStates& s, PipelineVariant variant) co
         }
     }
 
-    // EDEN_NX2_VRS: on every guest pipeline, so a shader's rate changes without a rebuild.
-    // Not on mesh pipelines: with the rate dynamic their draws vanish on Intel's driver, so they
-    // take the rate of their fragment shader at build time instead.
-    // Measured on Intel: draws of pipelines with the rate as dynamic state vanish, with or without
-    // mesh programs. Every pipeline takes its shader's rate at build time instead.
-    const bool dynamic_shading_rate{false};
-    if (dynamic_shading_rate) {
-        dynamic_states.push_back(VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR);
-    }
-
     const bool is_mesh{IsMeshPipeline()};
     s.is_mesh = is_mesh;
     if (is_mesh) {
@@ -2762,14 +2736,13 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     };
-    // Stored driver binaries are checked against the driver's key of this create info; the salt
-    // keeps the builds with the dynamic rate beside the others instead of replacing them.
-    // So do the salts of a prepass split: its two pipelines are other builds of this key, and so
+    // Stored driver binaries are checked against the driver's key of this create info; the salts
+    // keep the builds of a prepass split beside the others instead of replacing them:
+    // its two pipelines are other builds of this key, and so
     // is the pipeline itself when its stages decorate Position for the split.
     static constexpr std::array<u64, 3> variant_salts{0ULL, 0x5052455f44455054ULL,
                                                       0x5052455f434f4c52ULL};
     const u64 binary_key{GraphicsRecordKey(key) ^
-                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
                          variant_salts[static_cast<size_t>(variant)] ^
                          (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
     // A build that captures for EDEN_NX2_PIPELINE_STATS takes no driver pipeline cache, so that

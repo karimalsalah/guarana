@@ -2104,7 +2104,7 @@ void Device::RemoveUnsuitableExtensions() {
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
     // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
-    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used.
+    // of their fragment shader when they are built. Only the per-draw rate is used.
     features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
     features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
     extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
