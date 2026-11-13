@@ -59,8 +59,8 @@ enum class TraceCategory : u8 {
     ImageConvert,
     ImageUpload,
     ImageDownload,
-    BufferCopy,
-    BufferUploadBatch,
+    BufferCopy,        ///< The sum of the BufferCopy* rows: nothing is timed under it
+    BufferUploadBatch, ///< The sum of the BufferUploadBatch* rows: nothing is timed under it
     UploadCmdbuf, ///< The whole reordered-upload command buffer of a submission
     ComputeVertexRepack,
     ComputeUint8Index,
@@ -73,6 +73,31 @@ enum class TraceCategory : u8 {
     QueryCopy,
     ClearInPass,
     Present,
+    /// Buffer copies recorded on their own, by call site (VideoCommon::BufferCopySite order).
+    BufferCopyOther,
+    BufferCopyUpload,
+    BufferCopyInline,
+    BufferCopyIndex,
+    BufferCopyDma,
+    BufferCopyDownload,
+    BufferCopyReadDownload,
+    BufferCopyFenceDownload,
+    BufferCopyListPage,
+    BufferCopyJoin,
+    BufferCopyGather,
+    /// Upload batches by the call site of their copies (VideoCommon::BufferCopySite order).
+    BufferUploadBatchOther,
+    BufferUploadBatchUpload,
+    BufferUploadBatchInline,
+    BufferUploadBatchIndex,
+    BufferUploadBatchDma,
+    BufferUploadBatchDownload,
+    BufferUploadBatchReadDownload,
+    BufferUploadBatchFenceDownload,
+    BufferUploadBatchListPage,
+    BufferUploadBatchJoin,
+    BufferUploadBatchGather,
+    BufferUploadBatchMixed, ///< Copies of more than one call site
     Count,
 };
 
@@ -337,7 +362,10 @@ public:
 
     /// Consecutive in-order staging uploads share barriers until their destinations overlap,
     /// a source depends on a pending copy, or the batch is full. Call outside a render pass.
-    void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
+    /// A batch is timed under the category of its copies (BufferUploadBatchMixed when they
+    /// differ).
+    void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies,
+                      TraceCategory category = TraceCategory::BufferUploadBatchOther);
 
     /// EDEN_NX2_UMA bit 1. Uploads that go in the upload command buffer, ahead of everything
     /// recorded in this submission: they wait for the submission, or for an upload that writes
@@ -691,6 +719,7 @@ private:
 
     std::unique_ptr<UploadBatch> upload_batch;
     bool uploads_pending{};
+    TraceCategory upload_batch_category{TraceCategory::BufferUploadBatchOther};
     /// Records pending uploads before another command, worker handoff, or submission tick.
     void FlushUploads();
 

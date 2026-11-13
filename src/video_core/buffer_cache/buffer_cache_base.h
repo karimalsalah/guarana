@@ -21,6 +21,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "common/container/unordered_map.h"
@@ -92,6 +93,24 @@ enum class ObtainBufferOperation : u32 {
     MarkAsWritten = 1,
     DiscardWrite = 2,
     MarkQuery = 3,
+};
+
+/// The part of the buffer cache a buffer copy comes from. The Vulkan runtime times its copies by
+/// it: gpu_costs emu rows buffer_copy.<site> and buffer_upload_batch.<site>, which add up into
+/// the buffer_copy and buffer_upload_batch rows (Vulkan::TraceCategory, in this order).
+enum class BufferCopySite : u8 {
+    Other,
+    Upload,        ///< SynchronizeBuffer's uploads (MappedUploadMemory)
+    Inline,        ///< Inline-to-memory writes (InlineMemoryImplementation)
+    Index,         ///< Inline index buffers
+    Dma,           ///< DMACopy
+    Download,      ///< Waited for: DownloadRangesMemory, DownloadBuffer(s)Memory
+    ReadDownload,  ///< RecordReadDownload, with its EDEN_NX2_READ_CHECK copies
+    FenceDownload, ///< CommitAsyncFlushesHigh
+    ListPage,      ///< Nx2CopyListPages
+    Join,          ///< JoinOverlap
+    Gather,        ///< Multi-range storage buffer gathers (Vulkan runtime)
+    Count,
 };
 
 static constexpr BufferId NULL_BUFFER_ID{0};
@@ -627,6 +646,15 @@ private:
             const DAddr end_addr = buffer.CpuAddr() + buffer.SizeBytes();
             page = Common::DivCeil(end_addr, CACHING_PAGESIZE);
         }
+    }
+
+    /// runtime.CopyBuffer, timed under `site` by a runtime that tells the sites apart.
+    template <typename... Args>
+    void CopyBufferAt(BufferCopySite site, Args&&... args) {
+        if constexpr (requires { runtime.SetCopySite(site); }) {
+            runtime.SetCopySite(site);
+        }
+        runtime.CopyBuffer(std::forward<Args>(args)...);
     }
 
     static bool IsRangeGranular(DAddr device_addr, size_t size) {
@@ -1231,12 +1259,21 @@ private:
         /// the page's lists read guest memory once the back ran the work before the last such
         /// wait and no write came since the front flushed the page (Nx2ReadListCopy).
         bool draw_written{};
+        /// The page's bytes: copy_begin to copy_end of mapped_span hold them.
         std::optional<Nx2Staging> copy;
+        /// EDEN_NX2_UMA bit 32: when one copy took a run of pages, the staging buffer of the run
+        /// `copy` is a page of. Only Nx2CopyListPages holds and drops these references.
+        std::shared_ptr<Nx2Staging> copy_run;
     };
+    /// EDEN_NX2_UMA bit 32: pages a run's copy takes at most.
+    static constexpr size_t NX2_MAX_LIST_RUN_PAGES = 16;
     std::mutex nx2_list_mutex; ///< nx2_list_pages: the split's front reads the copies
     std::unordered_map<DAddr, Nx2ListPage> nx2_list_pages;
     /// Copies replaced while the GPU may still write them: freed once it is past their tick.
     std::vector<std::pair<u64, Nx2Staging>> nx2_retired_list_copies;
+    /// The same for the staging buffers of runs: one goes back to the pool once the GPU is past
+    /// its copy and no page of the run holds it any more.
+    std::vector<std::pair<u64, std::shared_ptr<Nx2Staging>>> nx2_retired_list_runs;
     boost::container::small_vector<std::pair<BufferId, DAddr>, 8> nx2_list_copy_requests;
     bool nx2_collect_list_copies{};
 };
