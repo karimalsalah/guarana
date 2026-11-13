@@ -323,7 +323,8 @@ DriverKey VulkanDriverKey() {
     const std::pair<HKEY, const char*> roots[] = {{HKEY_LOCAL_MACHINE, "HKLM"},
                                                   {HKEY_CURRENT_USER, "HKCU"}};
     for (const auto& [root, root_name] : roots) {
-        for (const wchar_t* list : {L"Drivers", L"ImplicitLayers", L"LoaderSettings", L"Settings"}) {
+        for (const wchar_t* list :
+             {L"Drivers", L"ImplicitLayers", L"LoaderSettings", L"Settings"}) {
             for (const RegistryValue& value :
                  ReadRegistryValues(root, std::wstring{L"SOFTWARE\\Khronos\\Vulkan\\"} + list)) {
                 const fs::path file{value.name};
@@ -530,6 +531,10 @@ bool StartupChecks(const char* arg0, bool* has_broken_vulkan, bool perform_vulka
                                  : "the drivers, layers or loader changed since the last pass",
                 key.drivers);
 
+            // No marker until this check passes: a start killed while it runs checks again.
+            std::error_code remove_error;
+            std::filesystem::remove(VulkanCheckMarker(), remove_error);
+
             // Spawn child process that performs Vulkan check
             PROCESS_INFORMATION process_info;
             std::memset(&process_info, '\0', sizeof(process_info));
@@ -558,8 +563,6 @@ bool StartupChecks(const char* arg0, bool* has_broken_vulkan, bool perform_vulka
             }
 
             if (*has_broken_vulkan) {
-                std::error_code error;
-                std::filesystem::remove(VulkanCheckMarker(), error);
                 vulkan_check_outcome.reason += fmt::format(", and it failed (exit code {})",
                                                            exit_code);
             } else {
