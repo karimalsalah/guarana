@@ -20,16 +20,52 @@
 namespace Core::GamePresets {
 namespace {
 
-// Ocarina of Time on an Intel Arc 140T: 9.5 to 15 fps. Its anti-aliasing network is tensor math
-// that runs as scalar shader code there, "No sharpening" replaces it; Max Resolution keeps the
-// game off its 480p dynamic resolution floor.
+// Ocarina of Time on an Intel Arc 140T. Its anti-aliasing network is tensor math that runs as
+// scalar shader code there, "No sharpening" replaces it; Max Resolution keeps the game off its
+// 480p dynamic resolution floor. On Windows frame generation is on, 3 frames per real one toward
+// 60: with OCARINA_IGPU_SWITCHES it predicts from the game's motion on the vblank-locked presenter
+// (20 real frames a second, one per 20 Hz game tick). Elsewhere that presenter is not measured,
+// so frame generation stays off.
 constexpr std::array OCARINA_SOFTWARE_TENSOR_SETTINGS{
     SettingValue{"oot_anti_aliasing", "1"}, // No sharpening
     SettingValue{"ocarina_fsr", "false"},
+#ifdef _WIN32
+    SettingValue{"frame_gen", "true"},
+    SettingValue{"frame_gen_multiplier", "3"},
+    SettingValue{"frame_gen_target_rate", "60"},
+#else
     SettingValue{"frame_gen", "false"},
+#endif
     SettingValue{"vram_usage_mode", "1"},   // Aggressive
     SettingValue{"frame_pacing_mode", "0"}, // Auto
 };
+
+// Ocarina of Time on a Windows integrated GPU: the pacing measured best in Hyrule Field on the
+// Arc 140T (docs/switches.md, "Defaults for Ocarina of Time"). FLUID=2 shows each real frame and
+// predicts under one frame interval ahead, CADENCE=3 holds real frames to the game's 20 Hz tick,
+// EXTRAPOLATE predicts from the game's motion vectors, EARLY_* download read-backs early. Against
+// FLUID=1 in one paired session: slots shown on time 430 to 536 of 600, evenly paced frames 62%
+// to 88%. GPL (pipeline library fast links) only on Intel, where it was measured.
+#ifdef _WIN32
+constexpr std::array OCARINA_IGPU_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+};
+constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
+constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
+#endif
 constexpr std::array<std::string_view, 1> OCARINA_SOFTWARE_TENSOR_ADDONS{
     "Max Resolution (built-in)",
 };
@@ -169,6 +205,53 @@ std::string Apply(u64 title_id, const GpuInfo& gpu) {
         separator = ", ";
     }
     return summary;
+}
+
+std::span<const SwitchValue> SwitchDefaults([[maybe_unused]] u64 title_id,
+                                            [[maybe_unused]] const GpuInfo& gpu) {
+#ifdef _WIN32
+    if (title_id == OCARINA_TITLE_ID && gpu.integrated) {
+        if (gpu.vendor == GameSettings::GPUVendor::Intel) {
+            return OCARINA_INTEL_IGPU_SWITCHES;
+        }
+        if (gpu.vendor == GameSettings::GPUVendor::AMD) {
+            return OCARINA_IGPU_SWITCHES;
+        }
+    }
+#endif
+    return {};
+}
+
+std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
+    const std::span<const SwitchValue> defaults = SwitchDefaults(title_id, gpu);
+    if (defaults.empty()) {
+        return {};
+    }
+    if (!Enabled()) {
+        LOG_INFO(Core, "Switch defaults for this game and GPU: not used, automatic presets are off");
+        return "switch defaults not used, automatic presets are off";
+    }
+    std::string set;
+    std::string kept;
+    for (const SwitchValue& item : defaults) {
+        const std::string name{item.name};
+        if (const char* current = std::getenv(name.c_str()); current != nullptr) {
+            kept += fmt::format(" {}={}", name, current);
+            continue;
+        }
+        const std::string value{item.value};
+#ifdef _WIN32
+        _putenv_s(name.c_str(), value.c_str());
+#else
+        setenv(name.c_str(), value.c_str(), 0);
+#endif
+        set += fmt::format(" {}={}", name, value);
+    }
+    LOG_INFO(Core, "Switch defaults for this game and GPU:{}{}",
+             set.empty() ? std::string{" none needed"} : set,
+             kept.empty() ? std::string{} : fmt::format("; set by the user:{}", kept));
+    return fmt::format("switch defaults:{}{}", set.empty() ? std::string{" none needed"} : set,
+                       kept.empty() ? std::string{} : fmt::format(" (user set:{})", kept));
 }
 
 bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {

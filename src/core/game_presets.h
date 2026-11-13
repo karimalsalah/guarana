@@ -69,6 +69,22 @@ enum class Decision {
 /// before the settings are read. Returns what it did in one line, empty without a preset.
 std::string Apply(u64 title_id, const GpuInfo& gpu);
 
+/// An EDEN_NX2_* switch a title runs better with on a kind of GPU.
+struct SwitchValue {
+    std::string_view name;
+    std::string_view value;
+};
+
+/// The switches the title gets by default on this GPU: Ocarina of Time on a Windows integrated
+/// GPU gets the pacing measured best (docs/switches.md). Empty for everything else.
+[[nodiscard]] std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu);
+
+/// Sets the title's SwitchDefaults that neither the environment nor nx2_switches.txt set, as
+/// environment variables of this process, so a switch set to anything (0 included) stays the
+/// user's. Call it before the device and the renderer are built: they read most switches once.
+/// Off with the presets (auto_presets, EDEN_NX2_NO_PRESETS=1). Returns what it did in one line.
+std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu);
+
 /// Whether the title's first boot on this GPU gets the line ReportFirstBoot logs: Ocarina of
 /// Time on an Intel or AMD integrated GPU.
 [[nodiscard]] bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu);

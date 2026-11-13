@@ -108,6 +108,18 @@ Arc 140T setup above, plugged in, nothing else running. Cold cache each run: del
 | `EDEN_NX2_NO_FLOAT_ATOMICS` | `1` | Float32 atomic add on storage buffers through `VK_EXT_shader_atomic_float` on Intel, instead of compare-and-swap loops. From Fritchii-Intel-Fixes patch 0010. | By the patch's authors: on an Arc B580 a contended loop of Ocarina of Time took 2 ms of each frame (comment in the code). Not measured by us. | `video_core/vulkan_common/vulkan_device.cpp` |
 | `EDEN_NX2_LOW_MEMORY` | `1` or `0` | Forces low memory mode on or off. Without it the mode is on for hosts with 20 GiB of RAM or less (not Android): caches that hold host memory keep less of it. | Not measured. | `common/memory_detect.cpp` |
 
+### Defaults for Ocarina of Time on a Windows integrated GPU
+
+Ocarina of Time on a Windows integrated GPU sets these switches for the session when neither the environment nor `nx2_switches.txt` sets them; a switch set to anything, `0` included, stays as set. On Intel and AMD integrated GPUs (`core/game_presets.cpp`, `SwitchDefaults`; applied before the Vulkan device is built). The game's preset there also turns frame generation on, 3 frames per real frame toward 60, for a user who left those settings at their defaults. `EDEN_NX2_NO_PRESETS=1`, or Automatic presets off, turns both off.
+
+| Switch | Value | Why | Measured |
+|---|---|---|---|
+| `EDEN_NX2_FLUID` | `2` | The vblank-locked presenter; predictions as of when a frame can be shown, so the real frame is shown and predictions reach under one frame interval ahead | With `CADENCE=3`, against `FLUID=1` in one paired session (Hyrule Field, Arc 140T, 120 Hz): slots shown on time 430 to 536 of 600, evenly paced frames 62% to 88% |
+| `EDEN_NX2_CADENCE` | `3` | 20 real frames a second, one per 20 Hz game tick, so predicted motion has the right speed | See `FLUID` |
+| `EDEN_NX2_EXTRAPOLATE` | `1` | Frames predicted from the game's motion vectors | See `FLUID` |
+| `EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES`, `EDEN_NX2_EARLY_AFTER` | `1`, `256`, `1` | Early read-back downloads | Part of the play configuration that took p99 frame time from 135-158 ms to 44-47 ms and stutters from 37-92 to 0 per 30 s |
+| `EDEN_NX2_GPL` | `1` (Intel only) | Pipeline library fast links for first-visit shaders | Same play configuration; no failures, image unchanged |
+
 ## Diagnostic
 
 | Switch | Values | Output | Code |
