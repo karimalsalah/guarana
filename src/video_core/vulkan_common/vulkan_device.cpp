@@ -409,9 +409,10 @@ std::vector<const char*> ExtensionListForVulkan(
 /// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE (experimental, off unless set): the FLUID presenter's
 /// screen copy gets a queue of its own. 1: the queue at high global priority, also presenting.
 /// 2: default priority. 3: the copy only, presents stay on the original queue. 4: the queue is
-/// created but nothing uses it. On the Arc 140T (driver 9175), presenting from the compute family
-/// (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost 17% of
-/// the real frame rate in Hyrule Field (20.0 against 24.0 fps).
+/// created but nothing uses it. 5: as 3 at default priority, so the copy runs beside the game's
+/// rendering without preempting it. On the Arc 140T (driver 9175), presenting from the compute
+/// family (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost
+/// 17% of the real frame rate in Hyrule Field (20.0 against 24.0 fps) in one unpaired run.
 [[nodiscard]] u32 FluidQueueMode() {
     const char* fluid = std::getenv("EDEN_NX2_FLUID");
     if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
@@ -599,7 +600,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             if (score > chosen_score) {
                 chosen = index;
                 chosen_score = score;
-                fluid_presents = presents && fluid_queue_mode != 3;
+                fluid_presents = presents && fluid_queue_mode != 3 && fluid_queue_mode != 5;
             }
         }
         if (chosen) {
@@ -607,7 +608,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             has_fluid_queue = true;
             const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
             fluid_high_priority =
-                fluid_queue_mode != 2 &&
+                fluid_queue_mode != 2 && fluid_queue_mode != 5 &&
                 (supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
                  supported_extensions.contains(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)) &&
                 std::ranges::find(priorities, VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) !=

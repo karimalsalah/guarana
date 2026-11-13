@@ -121,7 +121,8 @@ private:
     /// its motion can be extrapolated, records a prediction for each slot until the next real
     /// frame is due and one more, each as of its slot's time.
     void RecordFluidFrames(Frame* frame, const HdrPresent& output,
-                           std::vector<Frame*>& predicted_frames);
+                           std::vector<Frame*>& predicted_frames,
+                           bool& real_flushed);
     u64 fluid_batch{}; ///< real frames recorded for the FLUID presenter
 #endif
 

@@ -133,6 +133,17 @@ void ResetLocked(Session& session) {
     session.logged_scale = session.scale.load(std::memory_order_relaxed);
 }
 
+/// EDEN_NX2_BUDGET_HOLD_RES=1: the budget only lowers the resolution, never gives it back. Under
+/// EDEN_NX2_CADENCE frames finish well inside the paced interval, and raising the resolution into
+/// that headroom keeps the GPU queue deep, which makes the presenter's copies late.
+[[nodiscard]] bool HoldResolution() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_BUDGET_HOLD_RES");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 /// Caller holds session.mutex. One tick over the presents gathered up to `now`.
 void TickLocked(Session& session, double target_fps, TimePoint now) {
     const double target_ms = 1000.0 / target_fps;
@@ -160,7 +171,8 @@ void TickLocked(Session& session, double target_fps, TimePoint now) {
         .target_ms = target_ms,
         .ceiling = Ceiling(),
         // The governor gives its coarse rates back before the resolution goes up again.
-        .hold_lower = was_allowed && shading_fps > 0.0 && AutoShadingRate::Coarsening(),
+        .hold_lower = HoldResolution() ||
+                      (was_allowed && shading_fps > 0.0 && AutoShadingRate::Coarsening()),
     };
     const FrameBudgetController::Decision decision = session.controller.Update(input, before);
     session.state = decision.state;

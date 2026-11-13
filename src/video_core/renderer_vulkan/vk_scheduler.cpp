@@ -44,6 +44,41 @@
 namespace Vulkan {
 
 namespace {
+
+/// EDEN_NX2_QUEUE_LIMIT=<n> (1 to 16; off unless set): a submission of the GPU thread waits until
+/// at most n earlier ones are still running on the GPU. The GPU thread otherwise queues a frame's
+/// draws as fast as it records them, so work submitted later from elsewhere (the FLUID presenter's
+/// screen copy, an early read-back) waits behind all of them. With frames split every 128 draws, a
+/// small n keeps that wait to a few ms. The wait gives up after QueueLimitTimeout, so a
+/// submission another queue's work depends on is never held for good.
+[[nodiscard]] u32 QueueLimit() {
+    static const u32 limit = [] {
+        const char* value = std::getenv("EDEN_NX2_QUEUE_LIMIT");
+        if (value == nullptr) {
+            return 0U;
+        }
+        const u32 parsed = static_cast<u32>(std::strtoul(value, nullptr, 10));
+        const u32 clamped = (std::min)(parsed, 16U);
+        if (clamped != 0) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_QUEUE_LIMIT={}: a submission waits until at most {} earlier ones "
+                     "still run on the GPU",
+                     clamped, clamped);
+        }
+        return clamped;
+    }();
+    return limit;
+}
+constexpr std::chrono::milliseconds QueueLimitTimeout{50};
+
+struct QueueLimitStats {
+    u64 submits{};
+    u64 held{};
+    u64 timeouts{};
+    std::chrono::nanoseconds held_time{};
+    std::chrono::steady_clock::time_point since{};
+};
+
 std::atomic<u64> g_profile_submits{};
 std::atomic<u64> g_profile_renderpasses{};
 std::atomic<u64> g_profile_finishes{};
@@ -1766,6 +1801,35 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
 
         if (on_submit) {
             on_submit();
+        }
+
+        if (const u32 limit = QueueLimit(); limit != 0 && signal_value > u64{limit} + 1) {
+            // EDEN_NX2_QUEUE_LIMIT: only this worker thread submits ticks, in order, so every
+            // tick below signal_value is submitted; at most `limit` of them may still run.
+            static QueueLimitStats stats;
+            const auto now = std::chrono::steady_clock::now();
+            if (stats.since == std::chrono::steady_clock::time_point{}) {
+                stats.since = now;
+            }
+            ++stats.submits;
+            const u64 target = signal_value - 1 - limit;
+            if (!master_semaphore->IsFree(target)) {
+                ++stats.held;
+                if (!master_semaphore->WaitFor(target, QueueLimitTimeout)) {
+                    ++stats.timeouts;
+                }
+                stats.held_time += std::chrono::steady_clock::now() - now;
+            }
+            if (now - stats.since >= std::chrono::seconds{10}) {
+                LOG_INFO(Render_Vulkan,
+                         "Queue limit in {:.1f} s: {} submissions, {} held ({:.1f} ms in all), {} "
+                         "gave up after {} ms",
+                         std::chrono::duration<double>(now - stats.since).count(), stats.submits,
+                         stats.held,
+                         std::chrono::duration<double, std::milli>(stats.held_time).count(),
+                         stats.timeouts, QueueLimitTimeout.count());
+                stats = QueueLimitStats{.since = now};
+            }
         }
 
         std::scoped_lock lock{submit_mutex};
