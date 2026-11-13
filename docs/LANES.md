@@ -84,7 +84,7 @@ To merge it:
   git push origin merge/upstream-YYYYMMDD
   ```
 
-- After either: run the verified scenes if upstream touched frame pacing, the shader recompiler or the Vulkan backend, check that the rows in [switches.md](switches.md) still hold, and add the upstream range to `CHANGELOG.md`.
+- After either: run the verified scenes if upstream touched frame pacing, the shader recompiler or the Vulkan backend, check that the rows in [switches.md](switches.md) still hold, and add the upstream range to `CHANGELOG.md`. Optional housekeeping, in the `merge/upstream-<date>` branch or a pull request after the sync: regenerate `tools/ci/switch-registry-upstream.txt` (its header has the command); `switch-registry.yml` already takes the upstream branch's switches as upstream's.
 
 ### When the sync stops
 
@@ -105,6 +105,7 @@ To merge it:
 
 ## Other workflows
 
+- `switch-registry.yml` fails a pull request that uses an `EDEN_NX2_*` or `EDEN_DKB_*` switch with no row in [switches.md](switches.md) and not upstream's (the `upstream` branch or `tools/ci/switch-registry-upstream.txt`); see `tools/ci/switch_registry.py`.
 - `labels.yml` creates and updates the labels in `.github/labels.yml` when that file changes on `main`. It never deletes a label.
 - `pages.yml` publishes `site/` to GitHub Pages when it changes on `main`.
 - `label-issues.yml` labels new issues from their form answers (game, GPU vendor, integrated GPU family, handheld, operating system, regression).
