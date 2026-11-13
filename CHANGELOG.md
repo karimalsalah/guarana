@@ -10,6 +10,14 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.0.2]
+
+### Fixed
+
+- Linux builds: the generated frame-extrapolation shader header needed `<cstdint>` (GCC).
+- A merged unit test referred to a removed parameter.
+- Releases publish every platform that built; a missing Windows binary still blocks the release.
+
 ## [20.0.1]
 
 ### Changed
