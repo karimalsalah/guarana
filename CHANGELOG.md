@@ -10,6 +10,20 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.0.2]
+
+### Fixed
+
+- Linux builds: the generated frame-extrapolation shader header needed `<cstdint>` (GCC).
+- A merged unit test referred to a removed parameter.
+- Releases publish every platform that built; a missing Windows binary still blocks the release.
+
+## [20.0.1]
+
+### Changed
+
+- `EDEN_NX2_GM=11` is now on by default only for Ocarina of Time (0400486024DEC000), the one game it is verified in, instead of every game through `nx2_switches.txt`. An explicit `EDEN_NX2_GM` still wins. Known issue tracked in #6.
+
 ## [20.0.0]
 
 The first Guarana release: upstream Lichii `nx2` at `e633e165f7`, ten upstream pull requests merged
