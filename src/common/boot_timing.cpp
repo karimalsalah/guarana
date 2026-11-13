@@ -30,8 +30,8 @@ Clock::time_point ProcessStart() {
     if (GetProcessTimes(GetCurrentProcess(), &creation, &exited, &kernel, &user) != 0) {
         FILETIME current{};
         GetSystemTimePreciseAsFileTime(&current);
-        const auto ticks = [](const FILETIME& time) {
-            return (static_cast<u64>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+        const auto ticks = [](const FILETIME& filetime) {
+            return (static_cast<u64>(filetime.dwHighDateTime) << 32) | filetime.dwLowDateTime;
         };
         if (ticks(current) > ticks(creation)) {
             // FILETIME counts 100 ns intervals.
