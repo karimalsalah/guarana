@@ -431,7 +431,6 @@ private:
     bool pending_native_work{};
     u64 budget_defer_tick{}; ///< The submission DeferBudgetFlush last deferred
     u32 budget_deferrals{};  ///< and how many times
-    bool deferred_wfi_query_sync{}; ///< WaitForIdle skipped the query sync (EDEN_NX2_DEFER_WFI)
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
     /// The draw being recorded as an alpha-test prepass split (EDEN_NX2_PREPASS_HASHES), if it is
     PrepassDraw prepass_draw;

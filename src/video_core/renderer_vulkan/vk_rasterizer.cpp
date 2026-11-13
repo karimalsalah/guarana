@@ -3577,21 +3577,9 @@ void RasterizerVulkan::WaitForIdle() {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
 
-    // EDEN_NX2_DEFER_WFI=1 (experiment): every driver keeps the open render pass as MoltenVK
-    // does below. The query sync would end it too (QueryCacheRuntime::Barriers), so it waits
-    // until FlushWork finds no pass open, or the next fence (CommitAsyncFlushes) syncs it.
-    static const bool defer_wfi = [] {
-        const char* const value = std::getenv("EDEN_NX2_DEFER_WFI");
-        return value != nullptr && value[0] == '1' && value[1] == '\0';
-    }();
-    if (defer_wfi && scheduler.IsRenderPassActive()) {
-        deferred_wfi_query_sync = true;
-    } else {
-        deferred_wfi_query_sync = false;
-        query_cache.NotifyWFI();
-    }
+    query_cache.NotifyWFI();
 
-    if ((device.IsMoltenVK() || defer_wfi) && scheduler.IsRenderPassActive()) {
+    if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
         fence_manager.SignalOrdering();
         return;
@@ -4761,13 +4749,6 @@ void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_load
 }
 
 void RasterizerVulkan::FlushWork() {
-    SCOPE_EXIT {
-        // The query sync a deferred WaitForIdle left (EDEN_NX2_DEFER_WFI).
-        if (deferred_wfi_query_sync && !scheduler.IsRenderPassActive()) [[unlikely]] {
-            deferred_wfi_query_sync = false;
-            query_cache.NotifyWFI();
-        }
-    };
 #ifdef __ANDROID__
     static constexpr bool android = true;
 #else
