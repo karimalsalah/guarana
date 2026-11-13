@@ -10,8 +10,16 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.1.0] - 2026-11-13
+
 ### Added
 
+- **Guarana Setup**, the Windows installer and launcher (per-user, no admin, WebView2 included): one switch for how it runs (Auto, Smooth, Quality, Battery), finds your own keys, firmware and games on your PC with your consent, configures your controller, an autopilot that retunes after each session with undo, a doctor with fixes, Report a problem and Ask AI (a prefilled Claude or ChatGPT chat with scrubbed diagnostics), a Credits screen, and shader warm-up after driver changes. Every release attaches `Guarana-Setup-<version>.exe`.
+- Contributing with any AI agent: one-line setups for Claude Code, Codex CLI, Gemini CLI, Cursor, Copilot, Windsurf, Aider and Cline in [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md), the whole project context for a web chat in one URL ([llms-full.txt](https://karimalsalah.github.io/guarana/llms-full.txt)), and "Solve it with AI" links on agent-ready issues and bug reports.
+- Credit for everyone: a hall of fame rebuilt daily from the git history ([CONTRIBUTORS.md](CONTRIBUTORS.md), the site), contributors in the emulator's About dialog and the launcher's Credits screen, and release notes that thank every contributor by handle.
+- Community data: device reports feed a leaderboard and a records board with a "Beat it" button; the [Open wins](https://karimalsalah.github.io/guarana/wins.html) page lists measurable problems with their numbers; a triage bot labels new issues and asks once for a missing log.
+- Guides for what players search for: playing Ocarina of Time on a PC, fixing stutter, Intel Arc, handhelds and controller setup; a blog; a 20-second promo with an original score; an NPU benchmark (`tools/npu/`) with the measured verdict on the [roadmap](ROADMAP.md#a1-npu-feasibility).
+- Discord for real-time help: [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM).
 - FLUID presenter (`EDEN_NX2_FLUID=1`, opt-in, experimental): frames are shown on the display's vblank clock, and frame generation records a prediction for each slot, so generated frames get even 16.7 ms pacing. On the Arc 140T the title screen showed 601 of 601 slots on time (p50 16.7 ms, 100% within 2 ms of the median), and Hyrule Field had p5 16.4, p50 16.7 and p95 33.5 ms with 75% of frames within 2 ms, against 33 to 54% without it. With `EDEN_NX2_CADENCE` it also locks real frames to their slot. See [docs/switches.md](docs/switches.md).
 - Controllers: player 1 is configured automatically for a connected gamepad on start and when one is plugged in. Turn it off in the advanced input settings.
 - Help > Report a Problem writes a zip with the log and system details, scrubbed of user names and paths, and opens a prefilled GitHub issue; a link over 2000 characters is retried shorter and then copied.
@@ -28,6 +36,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- Windows release zips now include the licence texts (`LICENSE.txt`, `LEGAL.md`, `LICENSES/`) and a `SOURCE.txt` naming the exact source commit.
+- CI: a merged unit test regained a closing brace; the standalone thread-worker wake test stubs `PowerTuning::TagBackgroundThread`; the Qt frontend links QuaZip on every platform (Report a Problem zips logs).
 - `eden-cli` output redirected to a file or a pipe is kept instead of lost.
 - The Report a Problem window compiles again (a name shadowed the dialog's form layout).
 - A GPU puller torn down while waiting no longer leaves stale semaphore waiters behind (upstream [#1592](https://github.com/zortos293/Lichii/pull/1592)).
