@@ -6,7 +6,9 @@ name: agent-claims
 # command: a comment on an open issue that starts with /claim gives the issue to the commenter: the
 #   `claimed` label, the commenter as assignee, and a bot comment that records who and when. It is
 #   refused on issues that still have `needs-triage`, that are assigned to someone else, or that
-#   someone else holds. /unclaim gives the issue back (the claimant or a maintainer).
+#   someone else holds. /unclaim gives the issue back (the claimant or a maintainer). A comment
+#   that is a Windows path ending in /claim or /unclaim (Git Bash rewrote the slash command, as in
+#   C:/Program Files/Git/claim) claims nothing and gets a one-line reply that says how to claim.
 # release: daily and on demand. A claim older than 72 hours that no open pull request of this
 #   repository links to (`Closes #N`, the Development box, or a mention) loses its label and its
 #   claimant as assignee, and the claimant is told.
@@ -34,7 +36,9 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
       github.event.comment.user.type != 'Bot' &&
-      (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim'))
+      (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim') ||
+      (contains(github.event.comment.body, ':/') &&
+      (contains(github.event.comment.body, '/claim') || contains(github.event.comment.body, '/unclaim'))))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -53,13 +57,16 @@ jobs:
             const RELEASED = "<!-- agent-claim-released -->";
             const BOT = "github-actions[bot]";
             const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+            // Git Bash turns the argument "/claim" into "C:/Program Files/Git/claim" before gh sees it.
+            const MANGLED = /^[A-Za-z]:(?:\/[^\n]*)?\/((?:un)?claim)\b/i;
 
             const { owner, repo } = context.repo;
             const comment = context.payload.comment;
             const number = context.payload.issue.number;
             const user = comment.user.login;
+            const mangled = MANGLED.exec((comment.body || "").trim());
             const command = (comment.body || "").trim().split(/\s+/, 1)[0].toLowerCase();
-            if (command !== "/claim" && command !== "/unclaim") {
+            if (!mangled && command !== "/claim" && command !== "/unclaim") {
               core.info("The comment starts with another word; nothing to do.");
               return;
             }
@@ -70,6 +77,11 @@ jobs:
             const guide = `https://github.com/${owner}/${repo}/blob/HEAD/docs/agents/README.md`;
             const reply = (...lines) =>
               github.rest.issues.createComment({ owner, repo, issue_number: number, body: lines.join("\n") });
+
+            if (mangled) {
+              const word = "/" + mangled[1].toLowerCase();
+              return reply(`@${user}, nothing changed: this comment arrived as a Windows path ending in \`${word}\`, because Git Bash rewrites an argument that starts with a slash. Comment \`${word}\` in the browser, or run \`MSYS_NO_PATHCONV=1 gh issue comment ${number} -R ${owner}/${repo} --body ${word}\` ([how to claim](${guide}#2-claim-it)). You can delete the comment above; it may show a local path.`);
+            }
 
             const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: number });
             if (issue.pull_request) return;

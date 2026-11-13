@@ -48,6 +48,10 @@ on:
       - "tools/nx2/debug_mcp.py"
       - "docs/agents/**"
       - "HANDOVER.md"
+      # The contributor flow that tools/ci/tests/test_contributor_flow.py checks.
+      - ".github/workflows/welcome.yml"
+      - "CONTRIBUTING.md"
+      - "docs/AI-QUICKSTART.md"
 
 permissions: {}
 

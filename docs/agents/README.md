@@ -36,6 +36,19 @@ the claims.
   `claimed` label, assigns you, and comments with your name, the time and the deadline. It refuses
   when the issue still has `needs-triage`, is assigned to someone else, is claimed by someone else,
   or is closed.
+- **From a terminal:** this form works in every shell (bash, zsh, Git Bash, PowerShell, cmd),
+  because the command reaches `gh` on standard input:
+
+  ```sh
+  echo /claim | gh issue comment <n> -R karimalsalah/guarana --body-file -
+  ```
+
+  Do not pass it as `--body "/claim"` from Git Bash on Windows: Git Bash rewrites an argument that
+  starts with a slash into a Windows path, and the comment arrives as a path into the Git
+  install folder, such as `.../Program Files/Git/claim`.
+  That claims nothing; the workflow answers with how to claim. In Git Bash,
+  `MSYS_NO_PATHCONV=1 gh issue comment <n> -R karimalsalah/guarana --body /claim` also works.
+  PowerShell, macOS and Linux shells pass `--body /claim` unchanged. `/unclaim` works the same way.
 - **72 hours:** a claim stays while an open pull request in this repository links to the issue.
   The pull request says `Closes #<issue>`, is linked in the issue's Development box, or mentions
   the issue. A daily check (05:41 UTC) releases claims older than 72 hours that have no such pull
@@ -113,13 +126,41 @@ from their own account, and Gemini only comments.
 | Agent | How it is called | What the owner sets up once | Cost |
 |---|---|---|---|
 | Claude Code | `@claude` in an issue, pull request or review comment | In Claude Code, run `/install-github-app`. It installs the [Claude GitHub App](https://github.com/apps/claude) and stores `ANTHROPIC_API_KEY`, or a `CLAUDE_CODE_OAUTH_TOKEN` made with `claude setup-token`. Without the app, the secret alone fails | API usage, or a Pro or Max plan |
-| Gemini CLI | `@gemini-cli` and the request | A key from [Google AI Studio](https://aistudio.google.com/apikey), then `gh secret set GEMINI_API_KEY -R karimalsalah/guarana` | Free tier |
-| Copilot cloud agent | Assign the issue to Copilot | A Copilot plan that includes the cloud agent, turned on for the repository. Its environment is [copilot-setup-steps.yml](../../.github/workflows/copilot-setup-steps.yml) | The assigner's premium requests |
+| Gemini CLI | `@gemini-cli` and the request | A key from [Google AI Studio](https://aistudio.google.com/apikey), then `gh secret set GEMINI_API_KEY -R karimalsalah/guarana` | Gemini API free tier, if the model the action uses has one |
+| Copilot cloud agent | Assign the issue to Copilot | A Copilot plan that includes the cloud agent, turned on for the repository. Its environment is [copilot-setup-steps.yml](../../.github/workflows/copilot-setup-steps.yml) | The assigner's Copilot AI credits |
 | Codex | `@codex review` on a pull request | Connect the repository in Codex cloud settings and turn on Code review | A ChatGPT plan with cloud features |
-| Jules | The `jules` label on an issue | Install the Jules GitHub app on the repository and create the `jules` label | Free tier (third-party figures) |
+| Jules | The `jules` label on an issue | Install the Jules GitHub app on the repository and create the `jules` label | Base plan: 15 tasks a day |
 
 Contributors with their own subscriptions do not need any of this: they run their agent on their
 fork ([AI-QUICKSTART.md](../AI-QUICKSTART.md)).
+
+### What costs nothing today
+
+Checked on the vendors' own pages on 2026-11-14. Free tiers change often, and the linked page is
+the authority. Whoever starts an agent owns the pull request it produces, and the rules of
+[AI_POLICY.md](../AI_POLICY.md) apply to it as to any other.
+
+| Way | What is free | Limits the vendor states | Started by | Secret in this repository |
+|---|---|---|---|---|
+| Jules on this repository | The base Jules plan. Pro and Ultra come with Google AI Pro and Ultra; the page shows no price for the base plan | 15 tasks a day (rolling 24 hours), 3 at once ([plans](https://jules.google/docs/usage-limits)) | Adding the `jules` label to an issue, in any letter case, once the Jules GitHub app may access the repository; Jules comments on the issue and links a pull request when it is done ([running tasks](https://jules.google/docs/running-tasks/)). Only people with triage or write access can add labels here | None |
+| `@gemini-cli` through [agents.yml](../../.github/workflows/agents.yml) | The Gemini API free tier, with a key from Google AI Studio. Several Flash, Flash-Lite and 2.5 models have one; Gemini 3.1 Pro Preview does not ([pricing](https://aistudio.google.com/docs/pricing)). Free only if the model the action uses has a free tier; agents.yml does not pin one yet | Set per project and shown in AI Studio, not published as fixed numbers ([rate limits](https://aistudio.google.com/docs/rate-limits)). On the free tier, prompts and answers may be used to improve Google's products | A maintainer's comment; the job only comments | `GEMINI_API_KEY`; the job is skipped until it exists |
+| Copilot cloud agent | Not in Copilot Free. Copilot Student (free for verified students) includes it, and maintainers of popular open-source projects may get Copilot Pro free, re-checked every month ([plans](https://docs.github.com/en/copilot/get-started/plans), [free access](https://docs.github.com/en/copilot/how-tos/manage-your-account/get-free-access-to-copilot-pro)) | The plan's monthly AI credits | Assigning the issue to Copilot, on a repository where the assigner's plan has it turned on | None |
+| Codex | The ChatGPT Free plan lists Codex "on quick coding tasks", without a number. GitHub code review is listed from Plus up, and an API key gets no cloud features ([pricing](https://learn.chatgpt.com/docs/pricing)) | Not stated for Free | The contributor, on their fork | None |
+| Claude Code | No free tier for the action. [Claude for Open Source](https://claude.com/contact-sales/claude-for-oss) gives six months of Claude Ultra to people who meet one of its criteria, for example 100 or more merged pull requests in repositories they do not own in the last 12 months, or a repository with 20 or more outside contributors with merged pull requests in that time. A paid plan resumes afterwards unless cancelled. Guarana's repository does not meet them today; a contributor may | The plan's usage limits | `@claude`, by a maintainer | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, and the Claude GitHub App |
+| A web chat | The paste block in [AI-QUICKSTART.md](../AI-QUICKSTART.md#no-install-chatgpt-claude-or-gemini-in-the-browser) works in any free chat | The chat's own | The contributor, by hand | None |
+
+So, for the maintainer, the two ways that cost nothing are the Jules app with the `jules` label
+(no secret in the repository) and a free AI Studio key for `@gemini-cli`, which only answers in
+comments, once agents.yml pins a model that has a free tier. For a contributor without a subscription: Jules on their fork, Copilot Student if they
+qualify, the Codex Free plan, or the web chat paste block.
+
+No longer options, so do not build on them: GitHub Models, which would have given a workflow a
+model through the repository's own token, was retired on 2026-07-30
+([notice](https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models)).
+Free sign-in to Gemini CLI with a Google account moved to Antigravity CLI on 2026-06-18
+([gemini-cli](https://github.com/google-gemini/gemini-cli)); the API key that agents.yml uses is a
+separate route. The OpenHands resolver (the `fix-me` label or an `@openhands-agent` comment) needs
+an LLM key of your own, and we could not open its current setup page to check the secret names.
 
 ## 7. The debug MCP server in the MCP registry
 
