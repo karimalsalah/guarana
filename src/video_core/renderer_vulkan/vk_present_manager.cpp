@@ -23,6 +23,7 @@
 #include "common/windows/timer_resolution.h"
 #endif
 #include "core/frontend/emu_window.h"
+#include "video_core/autopilot_feed.h"
 #include "video_core/nx2_profile.h"
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
@@ -426,11 +427,13 @@ void PresentManager::Present(Frame* frame) {
             scheduler.WaitWorker();
         }
         CopyToSwapchain(frame);
+        VideoCore::AutopilotFeed::NoteShown();
         free_queue.push_back(frame);
     }
 }
 
 void PresentManager::NoteShownFrame() {
+    VideoCore::AutopilotFeed::NoteShown();
     // EDEN_NX2_SHOWN_STATS=1: every 10 s, how evenly frames reached the swapchain (generated ones
     // included): the intervals between presents and the share within 2 ms of the median.
     static const bool enabled = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
@@ -680,6 +683,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                      Common::VblankClock::SourceName(source));
         }
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
+        VideoCore::AutopilotFeed::SetRefreshPeriod(period);
         const auto offset = (std::min)(FluidPresentOffset, period * 42 / 100);
         {
             std::scoped_lock lock{fluid_clock_mutex};
@@ -814,8 +818,11 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
     }
     fluid.vblank += static_cast<u64>(elapsed);
     fluid.last_wake = wake;
-    // Slots of about 16.7 ms: every round(refresh / 60) vblanks.
-    const f64 per_slot = 1.0e9 / (60.0 * static_cast<f64>(period.count()));
+    // Slots of about 16.7 ms: every round(refresh / 60) vblanks, or of the shown rate the
+    // autopilot steers towards (EDEN_NX2_AUTOPILOT).
+    const f64 slot_rate = VideoCore::AutopilotFeed::SlotRate();
+    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : 60.0) *
+                                  static_cast<f64>(period.count()));
     fluid.divisor =
         static_cast<u64>(std::clamp<s64>(static_cast<s64>(std::llround(per_slot)), 1, 8));
     return period;

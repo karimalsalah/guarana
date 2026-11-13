@@ -310,6 +310,8 @@ it. The reply also has `target_ms`, `samples` (presents of the last tick), `scal
 `ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers` and `last_change`. A change of the
 scale by more than 10% logs one `Frame budget:` line, at most one a second.
 
+**`autopilot`**. The autopilot (`EDEN_NX2_AUTOPILOT=1`, [../autopilot.md](../autopilot.md)), answered at once from its last 2 s window, also under `status.autopilot`: `running`, `windows`, `changes`, `real_fps`, `shown_p50_ms`, `shown_p95_ms`, `shown_even_percent`, `refresh_hz` and its `refresh_source`, `gpu_busy` (negative when not measured), `power` (`ac`, `battery`, `unknown`), `frame_gen_on`, `frame_gen_target`, `frame_gen_multiplier`, `gpu_time_scale` and its base, `resolution_available` (false while the frame budget has a target), `power_policy_available`, `power_policy_applied` and `last_change`. Without the switch `running` is false.
+
 **`gpu_costs`** `{top?, enable?}`. Host GPU time of the last sampled frame (one a second, the
 `DKB gpu_work` and `DKB gpu_pass` data without the log lines): `work` per vertex+fragment or
 compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).
