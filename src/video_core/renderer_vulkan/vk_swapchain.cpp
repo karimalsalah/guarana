@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <array>
 #include <limits>
@@ -446,6 +447,12 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         }
     } else {
         requested_image_count = (std::max)(requested_image_count, 3U);
+    }
+    // EDEN_NX2_SWAPCHAIN_IMAGES=<n> (2 to 16): ask for n images, within what the surface allows.
+    if (const char* images = std::getenv("EDEN_NX2_SWAPCHAIN_IMAGES")) {
+        const u32 asked = std::clamp<u32>(static_cast<u32>(std::strtoul(images, nullptr, 10)), 2U, 16U);
+        const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
+        requested_image_count = std::clamp(asked, capabilities.minImageCount, most);
     }
     VkSwapchainCreateInfoKHR swapchain_ci{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,

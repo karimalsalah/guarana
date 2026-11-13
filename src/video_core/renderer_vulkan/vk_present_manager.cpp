@@ -328,6 +328,26 @@ PresentManager::PresentManager(const vk::Instance& instance_,
             .queueFamilyIndex = device.GetFluidFamily(),
         });
         fluid_cmdbuffers = fluid_cmdpool.Allocate(image_count);
+        // Timestamps need a family that can reset queries in a command buffer (not transfer only).
+        const auto families = device.GetPhysical().GetQueueFamilyProperties();
+        const u32 fluid_family = device.GetFluidFamily();
+        if (std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr && fluid_family < families.size() &&
+            (families[fluid_family].queueFlags &
+             (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0 &&
+            families[fluid_family].timestampValidBits != 0) {
+            fluid_copy_queries = dld.CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = 2 * 32,
+                .pipelineStatistics = 0,
+            });
+            fluid_timestamp_ns =
+                static_cast<f64>(device.GetPhysical().GetProperties().limits.timestampPeriod);
+            const u32 bits = families[fluid_family].timestampValidBits;
+            fluid_timestamp_mask = bits >= 64 ? ~u64{0} : (u64{1} << bits) - 1;
+        }
     }
 
     frames.resize(image_count);
@@ -991,6 +1011,7 @@ void PresentManager::FluidRelease(std::chrono::steady_clock::time_point now) {
     // vblank, it was shown late.
     if (fluid.showing != nullptr) {
         if (FrameDone(fluid.showing)) {
+            FluidNoteCopyTime(fluid.showing);
             ReturnFrame(fluid.showing);
             fluid.showing = nullptr;
         } else if (!fluid.showing_late && fluid.vblank >= fluid.showing_vblank) {
@@ -1185,6 +1206,27 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     NoteShownFrame();
 }
 
+void PresentManager::FluidNoteCopyTime(Frame* frame) {
+    if (!frame->copy_timed) {
+        return;
+    }
+    frame->copy_timed = false;
+    std::array<u64, 2> stamps{};
+    if (device.GetLogical().GetQueryResults(*fluid_copy_queries, 2 * frame->index, 2,
+                                            sizeof(stamps), stamps.data(), sizeof(u64),
+                                            VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
+        return;
+    }
+    const u64 ticks = (stamps[1] - stamps[0]) & fluid_timestamp_mask;
+    const f64 ms = static_cast<f64>(ticks) * fluid_timestamp_ns * 1.0e-6;
+    if (ms < 0.0 || ms > 1000.0) {
+        return;
+    }
+    ++fluid_stats.copy_gpu_samples;
+    fluid_stats.copy_gpu_ms += ms;
+    fluid_stats.copy_gpu_max_ms = (std::max)(fluid_stats.copy_gpu_max_ms, ms);
+}
+
 void PresentManager::FluidDiscard(Frame* frame) {
     DiscardFrame(frame);
     ReturnFrame(frame);
@@ -1246,12 +1288,15 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              "Fluid presenter (10 s): present thread: {} presents; acquire {:.2f} ms mean, {:.2f} "
              "max; copy wait {:.2f} ms mean, {:.2f} max, {} of {} timed out; submit lock {:.2f} ms "
              "mean, {:.2f} max; present call {:.2f} ms mean, {:.2f} max; slot presents returned "
-             "{:.2f} ms before their vblank on average, {:.2f} at the least, {} after it",
+             "{:.2f} ms before their vblank on average, {:.2f} at the least, {} after it; the copy "
+             "ran {:.2f} ms on the GPU once started on average, {:.2f} at most ({} timed)",
              stats.presents, mean(stats.acquire_ms, stats.presents), stats.acquire_max_ms,
              mean(stats.copy_wait_ms, stats.copy_waits), stats.copy_wait_max_ms,
              stats.copy_wait_timeouts, stats.copy_waits, mean(stats.lock_ms, stats.presents),
              stats.lock_max_ms, mean(stats.call_ms, stats.presents), stats.call_max_ms,
-             mean(stats.margin_ms, stats.margin_samples), stats.margin_min_ms, stats.after_vblank);
+             mean(stats.margin_ms, stats.margin_samples), stats.margin_min_ms, stats.after_vblank,
+             mean(stats.copy_gpu_ms, stats.copy_gpu_samples), stats.copy_gpu_max_ms,
+             stats.copy_gpu_samples);
     stats = {.since = now};
 }
 
@@ -1444,6 +1489,13 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
         .image = image,
         .subresourceRange = range,
     };
+    const bool timed = fluid_copy_queries && frame->index < 32;
+    if (timed) {
+        cmdbuf.ResetQueryPool(*fluid_copy_queries, 2 * frame->index, 2);
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index);
+    }
+    frame->copy_timed = timed;
     // Only stages every queue family supports: the family may be compute or transfer only.
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, {},
                            {}, {}, to_destination);
@@ -1452,6 +1504,10 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
                      MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                            {}, {}, {}, to_present);
+    if (timed) {
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index + 1);
+    }
     cmdbuf.End();
 
     const std::array wait_semaphores = {swapchain.CurrentPresentSemaphore(), *frame->render_ready};

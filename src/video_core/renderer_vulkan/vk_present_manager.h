@@ -55,6 +55,8 @@ struct Frame {
     vk::CommandBuffer fluid_cmdbuf;
     vk::Semaphore render_ready;
     vk::Fence present_done;
+    /// EDEN_NX2_SHOWN_STATS: the screen copy wrote GPU timestamps (queries 2 index and 2 index + 1).
+    bool copy_timed{};
     bool storage_capable{};
     /// Time the present thread leaves before presenting the next frame. Frame generation sets it
     /// on generated frames, so they share the screen time evenly with the real ones.
@@ -266,6 +268,10 @@ private:
     vk::SurfaceKHR& surface;
     vk::CommandPool cmdpool;
     vk::CommandPool fluid_cmdpool; ///< EDEN_NX2_FLUID_QUEUE: pool of the dedicated queue family
+    /// EDEN_NX2_SHOWN_STATS with the dedicated queue: timestamps around each screen copy.
+    vk::QueryPool fluid_copy_queries;
+    f64 fluid_timestamp_ns{};
+    u64 fluid_timestamp_mask{};
     bool fluid_queue_mismatch_logged{};
     std::vector<Frame> frames;
     std::vector<f32> shown_intervals; ///< EDEN_NX2_SHOWN_STATS, present thread only
@@ -374,7 +380,11 @@ private:
         // How long before its slot's vblank each slot present returned; negative after it.
         f64 margin_ms{}, margin_min_ms{};
         u64 margin_samples{}, after_vblank{};
+        // GPU time the screen copy ran for once it started (its timestamps), in ms.
+        u64 copy_gpu_samples{};
+        f64 copy_gpu_ms{}, copy_gpu_max_ms{};
     } fluid_stats;
+    void FluidNoteCopyTime(Frame* frame);
 };
 
 } // namespace Vulkan
