@@ -386,7 +386,7 @@ void Run(QWidget* parent, const Context& context) {
     const std::string logs_note =
         "(Cut to fit the link: the rest is in system_info.txt in the zip.) " +
         attach.toStdString();
-    const std::string form = std::string{IssueForms} + chosen.form;
+    const std::string form_link = std::string{IssueForms} + chosen.form;
     const std::vector<IssueField> fields{
         {.name = "title", .value = scrub(title.trimmed().toStdString())},
         {.name = "build", .value = scrub(BuildText().toStdString())},
@@ -403,11 +403,11 @@ void Run(QWidget* parent, const Context& context) {
     };
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
-    std::string link = IssueUrl(form, fields, MaxLinkLength);
+    std::string link = IssueUrl(form_link, fields, MaxLinkLength);
     bool opened = open_link(link);
     if (!opened && link.size() > ShortLinkLength) {
         // Some Windows shells refuse links over about 2000 characters.
-        link = IssueUrl(form, fields, ShortLinkLength);
+        link = IssueUrl(form_link, fields, ShortLinkLength);
         opened = open_link(link);
     }
     if (!opened) {
