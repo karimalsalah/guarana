@@ -474,6 +474,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (!launcher_session) {
         show();
     }
+    // The launcher follows the boot on stdout until the game is on screen (Hidden, below).
+    Common::BootTiming::SetSessionOutput(launcher_session);
     Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
@@ -612,6 +614,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (launcher_session &&
         (!launch_params || !launch_params->launcher_session || launch_params->filepath.empty())) {
         launcher_session = false;
+        Common::BootTiming::SetSessionOutput(false);
         show();
         game_list->PopulateAsync(UISettings::values.game_dirs);
     }
@@ -1045,6 +1048,11 @@ void MainWindow::InitializeWidgets() {
         if (emulation_running) {
             render_window->show();
             render_window->setFocus();
+            Common::BootTiming::Mark("frontend: loading screen hidden, game shown");
+            // A launcher session's output ends here: the launcher has handed over to the game.
+            if (launcher_session) {
+                Common::BootTiming::SetSessionOutput(false);
+            }
         }
     });
 
@@ -2461,6 +2469,15 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     connect(QtCommon::emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
             &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+    if (launcher_session) {
+        // The launcher shows the shader counts too: one line per stage and whole percent.
+        connect(
+            QtCommon::emu_thread.get(), &EmuThread::LoadProgress, this,
+            [](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+                Common::BootTiming::SessionProgress(static_cast<int>(stage), value, total);
+            },
+            Qt::QueuedConnection);
+    }
 
     connect(
         QtCommon::emu_thread.get(), &EmuThread::ShaderCacheReloadStarted, this,

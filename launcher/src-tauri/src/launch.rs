@@ -12,7 +12,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -23,7 +25,7 @@ use windows::Win32::System::Threading::{
 use crate::state::{self, AppState};
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{autopilot, install, modes, paths, profiles, system, warm};
+use crate::{autopilot, boot, install, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
 
@@ -190,6 +192,11 @@ pub fn launch(
     if let Some(gp) = &game_path {
         cmd.args(game_args(&current.version, gp));
     }
+    // A launcher session writes its boot to stdout until the game is on screen (`boot.rs`).
+    let follow_boot = game_path.is_some() && understands_launcher_session(&current.version);
+    if follow_boot {
+        cmd.stdout(Stdio::piped());
+    }
 
     // Game Booster (Off by default). The GPU preference must be set before the emulator starts, so
     // it and the journal go down now; priority and throttling come after the process exists, and the
@@ -226,14 +233,30 @@ pub fn launch(
     let started = Instant::now();
     let session_tid = tid.as_ref().map(|t| t.to_ascii_uppercase());
     let had_game = game_path.is_some();
+    // The launch screen holds until the game is on screen: `game://boot` from the session output
+    // and from the foreground watcher; both stop once the game is shown or the process is gone.
+    let boot_done = Arc::new(AtomicBool::new(false));
+    let exit_done = boot_done.clone();
+    let boot_out = if had_game { child.stdout.take() } else { None };
     std::thread::Builder::new()
         .name("game-watch".into())
         .spawn(move || {
             let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
             let seconds = started.elapsed().as_secs_f64();
+            exit_done.store(true, Ordering::Relaxed);
+            // Taken before the event, while the emulator's window may still be the last one active.
+            let foreground = boot::foreground_pid();
             log::info!("Guarana (pid {pid}) exited with {code} after {seconds:.0} s");
             let _ = app2.emit(EXITED_EVENT, GameExited { code, seconds });
             if had_game {
+                // Back to the launcher at once; to the front only if the player was not in another app.
+                if let Some(window) = app2.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
+                        let _ = window.set_focus();
+                    }
+                }
                 let info = autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery };
                 crate::share::after_session(&app2, &info);
                 autopilot::after_session(&app2, info);
@@ -245,13 +268,20 @@ pub fn launch(
             warm::resume_if_interrupted(&app2);
         })
         .ctx("Could not watch the game")?;
+    // After the game-watch thread exists, so `boot_done` is always set when the process ends.
+    if had_game {
+        if let Some(out) = boot_out {
+            boot::follow(app, out, boot_done.clone());
+        }
+        boot::watch_foreground(app, pid, boot_done);
+    }
 
     // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on
     // its own thread: the prompt never holds up the launch or competes with the game before it is up.
     if let Some(prep) = booster_prep {
         crate::booster::launch_helper_async(app, pid, booster_level, prep);
     }
-    Ok(LaunchResult { pid })
+    Ok(LaunchResult { pid, follows_boot: follow_boot })
 }
 
 #[cfg(test)]

@@ -31,6 +31,10 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   its loading screen and then the game fill the screen (until then the launcher's screen stays),
   and the emulator exits when the game stops, so you are back in the launcher. The leave-fullscreen key (Esc by default) stops the game
   (see [CONTRACT.md](CONTRACT.md#launcher-session)). Older versions get `-f -g` only.
+  While the game boots, the launch screen shows what the emulator is doing (loading the game,
+  loading shaders with the real count, starting the game), read from the boot marks the emulator
+  writes to the launcher in a launcher session, and it switches to "Playing" once the game is on
+  screen. When the game exits, the launcher comes back to the front.
   It can warm the title's shader
   cache files into memory first, and prepares a title's shaders for a new GPU driver with
   `guarana-cli.exe --warm-pipelines <title id> -c <qt-config.ini>` (`docs/warm-up.md`).
