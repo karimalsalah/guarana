@@ -73,18 +73,7 @@ jobs:
             }
             if (get("Last known working build")) labels.add("needs-bisect");
 
-            // Crash without log
-            const isCrash = (context.payload.issue.labels || []).some(
-              (l) => l.name.toLowerCase() === "crash"
-            );
-            if (isCrash && !get("Log / crash dump")) {
-              labels.add("needs-info");
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number: context.issue.number,
-                body: "Thanks for the report! Please attach the log / crash dump so we can investigate.",
-              });
-            }
+            // A crash without a log is asked for once, by the triage workflow (tools/ingest/triage.py).
 
             if (labels.size) {
               await github.rest.issues.addLabels({

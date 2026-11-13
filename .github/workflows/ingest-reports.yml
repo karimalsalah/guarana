@@ -1,0 +1,121 @@
+name: ingest-reports
+
+# Turns device reports (the device-report issue form) into the community leaderboard on
+# site/benchmarks.html. docs/FEEDBACK.md describes the whole loop.
+#
+# publish: every run parses all issues labelled device-report again (tools/ingest/ingest.py),
+#   writes site/data/community.json as one commit on top of the default branch to the branch
+#   bot/community-reports, and opens, updates or closes its pull request. One run at a time; a
+#   newer queued run replaces an older queued one, which loses nothing because each run rebuilds
+#   every record from the issues.
+# comment: one comment on the report that started the run, with the row it adds or what to fix,
+#   updated in place when the report is edited.
+#
+# Issue text is data: the scripts read it from $GITHUB_EVENT_PATH and the API, never through an
+# expression in a run block. Only the repository's token is used. A pull request it opens starts
+# no workflows by itself: close and reopen it to run build-check. Needs Settings > Actions >
+# General > Workflow permissions > "Allow GitHub Actions to create and approve pull requests".
+on:
+  issues:
+    types: [opened, edited, labeled]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Parse every report and print the result, without pushing or touching the pull request
+        type: boolean
+        default: false
+  # The tests on pull requests that change the bots or what they read: drift between the forms,
+  # labels, bench schema or site files and the parsers shows up here, not in a failed publish.
+  pull_request:
+    paths:
+      - "tools/ingest/**"
+      - ".github/workflows/ingest-reports.yml"
+      - ".github/workflows/triage.yml"
+      - ".github/workflows/label-issues.yml"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/labels.yml"
+      - "tools/bench/bench.py"
+      - "site/benchmarks.html"
+      - "site/agents.json"
+      - "site/data/community.json"
+      - "site/llms.txt"
+      - "docs/AGENTS-INVITE.md"
+      - "docs/FEEDBACK.md"
+
+permissions: {}
+
+jobs:
+  test:
+    name: Test tools/ingest
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run the ingest and triage tests
+        run: python3 -I -m unittest discover -s tools/ingest/tests -t tools/ingest/tests -v
+
+  publish:
+    name: Update the leaderboard pull request
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+      contains(github.event.issue.labels.*.name, 'device-report') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'device-report'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    concurrency:
+      group: ingest-reports-publish
+      cancel-in-progress: false
+    steps:
+      # The default branch's code only; the token stays in the checkout for the push.
+      - name: Check out
+        uses: actions/checkout@v5
+
+      # Only the parser's own tests: they pass whatever the data file holds, so a merged data
+      # pull request or a new layout never blocks the run that rewrites it.
+      - name: Test the parser
+        run: python3 -I tools/ingest/tests/test_ingest.py
+
+      - name: Rebuild site/data/community.json and update the pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python3 -I tools/ingest/ingest.py publish
+
+  comment:
+    name: Comment the parsed row on the report
+    needs: publish
+    if: >-
+      always() && github.event_name == 'issues' &&
+      contains(github.event.issue.labels.*.name, 'device-report') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'device-report')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    concurrency:
+      group: ingest-reports-comment-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Comment the parsed row or what to fix
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -I tools/ingest/ingest.py comment

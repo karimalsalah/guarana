@@ -1,0 +1,34 @@
+name: triage
+
+# Labels a new issue from its form answers and the words in them (stutter, frame-pacing, boot-time,
+# Crash, intel-arc, amd-igpu, handheld), asks once and politely for the log when a crash report has
+# none, and adds agent-ready to an agent task whose acceptance test says something checkable
+# (tools/ingest/triage.py, docs/FEEDBACK.md). label-issues.yml adds the game, vendor and OS labels.
+# It only adds labels and writes at most one comment: no stale bot, nothing is ever closed or
+# locked. Issue text reaches the script only through $GITHUB_EVENT_PATH.
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  triage:
+    name: Label and ask for missing logs
+    if: github.event.issue.user.type != 'Bot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the script
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ingest
+
+      - name: Label the issue and ask for missing logs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -I tools/ingest/triage.py

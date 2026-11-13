@@ -91,10 +91,46 @@
           "contentUrl": "https://karimalsalah.github.io/guarana/data/benchmarks.json"
         }
       ]
+    },
+    {
+      "@type": "Dataset",
+      "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#community-dataset",
+      "name": "Guarana community device reports",
+      "description": "Game fps, frame times, device, GPU, driver, build and settings that testers reported through the device-report issue form, one record per issue. Records from a tools/bench row whose scene check passed have scene_ok true. Not measured by the maintainers.",
+      "url": "https://karimalsalah.github.io/guarana/benchmarks.html#community",
+      "isAccessibleForFree": true,
+      "variableMeasured": [
+        "Game fps",
+        "Frame time p50 (ms)",
+        "Frame time p99 (ms)"
+      ],
+      "distribution": [
+        {
+          "@type": "DataDownload",
+          "encodingFormat": "application/json",
+          "contentUrl": "https://karimalsalah.github.io/guarana/data/community.json"
+        }
+      ]
     }
   ]
 }
 </script>
+<style>
+/* Community leaderboard (rendered by the script at the end of the page). */
+.lb-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; margin: 20px 0 8px; }
+.lb-filters label { display: grid; gap: 4px; color: var(--text-2); font-size: 0.875rem; font-weight: 600; }
+.lb-filters select { min-height: 40px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 0.9375rem; }
+.lb-filters .lb-check { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+.lb-filters input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.lb-count { margin: 8px 0 0; color: var(--muted); font-size: 0.9375rem; }
+.lb-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.lb-sort::after { content: "\2195"; opacity: 0.45; }
+th[aria-sort="ascending"] .lb-sort::after { content: "\2191"; opacity: 1; }
+th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
+.lb-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 0.8125rem; }
+.lb-table td.num .badge { margin-top: 6px; }
+@media (max-width: 759.98px) { .lb-table td.num .badge { margin-top: 2px; } }
+</style>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -119,6 +155,8 @@
         <li><a href="benchmarks.html" aria-current="page">Benchmarks</a></li>
         <li><a href="faq.html">FAQ</a></li>
         <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
       </ul>
     </nav>
   </div>
@@ -127,7 +165,7 @@
 <div class="wrap page-head">
   <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="./">Home</a></li><li><span aria-current="page">Benchmarks</span></li></ol></nav>
   <h1>Benchmarks</h1>
-  <p class="lede">What we measured, on what, and what it does not prove. Every row so far comes from one laptop: Intel Core Ultra 9 285H with Arc 140T, Intel driver 32.0.101.9175, Windows 11.</p>
+  <p class="lede">What we measured, on what, and what it does not prove. Every row the maintainers measured so far comes from one laptop: Intel Core Ultra 9 285H with Arc 140T, Intel driver 32.0.101.9175, Windows 11. Testers' reports from other machines are in the <a href="#community">community leaderboard</a>.</p>
 </div>
 <div class="wrap">
 <section class="section" aria-labelledby="headline">
@@ -181,6 +219,14 @@
 </section>
 <p class="fine">Static copy of <a href="data/benchmarks.json">data/benchmarks.json</a> (updated 2026-11-13).</p>
 </div>
+<section class="section" id="community" aria-labelledby="community-title">
+  <h2 id="community-title">Community leaderboard</h2>
+  <p class="section-intro">One row per <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20label%3Adevice-report">device report</a>, as the tester reported it, once a maintainer merged it. <strong>Verified scene</strong> marks numbers from a <code>tools/bench</code> row whose scene check passed against the tester's reference screenshot; the other rows are the tester's own measurement. The maintainers did not measure these, and builds, settings and scenes differ from row to row.</p>
+  <div id="community-app" data-src="data/community.json" data-issues="https://github.com/karimalsalah/guarana/issues/">
+    <p class="fine">The leaderboard loads from <a href="data/community.json">data/community.json</a>.</p>
+    <noscript><p class="fine">It needs JavaScript to show; every row is in the data file.</p></noscript>
+  </div>
+</section>
 <section class="section" aria-labelledby="others">
   <h2 id="others">Reports from others</h2>
   <p class="section-intro">Third-party numbers, on other builds. We list them because they help people with these GPUs, not as benchmarks of Guarana.</p>
@@ -203,7 +249,7 @@
 <section class="section" aria-labelledby="add">
   <div class="cta-box">
     <h2 id="add">Add your numbers</h2>
-    <p>Run the harness with <a href="https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/CONTRIBUTING-bench.md">the benchmark contribution guide</a>, or send a quick <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> with your game fps. Untested devices need it most.</p>
+    <p>Run the harness with <a href="https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/CONTRIBUTING-bench.md">the benchmark contribution guide</a>, or send a quick <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> with your game fps. Untested devices need it most. A bot reads the report, comments the row it would add or what is missing, and the row joins the <a href="#community">community leaderboard</a> once a maintainer merges it.</p>
     <p><a class="btn" href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Send a device report</a></p>
   </div>
 </section>
@@ -231,6 +277,8 @@
         <li><a href="benchmarks.html">Benchmarks</a></li>
         <li><a href="faq.html">FAQ</a></li>
         <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
         <li><a href="legal.html">Legal</a></li>
       </ul>
     </nav>
@@ -250,5 +298,267 @@
   </div>
 </footer>
 <script src="assets/bench.js" defer></script>
+<script>
+/* Community leaderboard: renders data/community.json, which tools/ingest/ingest.py writes from the
+   device-report issues, into #community-app. Data reaches the page as text only, and report links
+   are built from the issue number. Without JavaScript the data file is linked instead. */
+(function () {
+  "use strict";
+  var app = document.getElementById("community-app");
+  if (!app || !window.fetch || !Array.prototype.forEach || !Object.keys) return;
+  var issueBase = app.getAttribute("data-issues");
+  var dataUrl = app.getAttribute("data-src");
+  var VENDORS = [["", "All"], ["intel", "Intel"], ["amd", "AMD"], ["nvidia", "NVIDIA"], ["other", "Other"]];
+  var FORMS = ["Laptop", "Handheld", "Mini PC", "Desktop"];
+  var SORTS = [
+    ["fps:desc", "Game fps, high to low"], ["fps:asc", "Game fps, low to high"],
+    ["p99:asc", "p99 frame time, low to high"], ["p99:desc", "p99 frame time, high to low"],
+    ["submitted:desc", "Newest report"], ["submitted:asc", "Oldest report"],
+    ["device:asc", "Device, A to Z"], ["device:desc", "Device, Z to A"]
+  ];
+  var FIRST_DIRECTION = { fps: "desc", p99: "asc", submitted: "desc", device: "asc" };
+  var state = { vendor: "", form: "", game: "", verified: false, key: "fps", dir: "desc" };
+  var records = [];
+  var ui = { heads: {} };
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+      }
+    }
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function svg(tag, attrs) {
+    var node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var key in attrs) {
+      if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+    }
+    return node;
+  }
+
+  function str(value) { return typeof value === "string" ? value : ""; }
+  function num(value) { return typeof value === "number" && isFinite(value) ? value : null; }
+  function fmt(value) { return String(Math.round(value * 100) / 100); }
+  function strings(list) {
+    return Array.isArray(list) ? list.filter(function (item) { return typeof item === "string" && item; }) : [];
+  }
+
+  function fpsText(r) {
+    var fps = num(r.fps);
+    if (fps === null) return "n/a";
+    var text = (r.fps_approximate === true ? "~" : "") + fmt(fps);
+    var base = r.baseline && typeof r.baseline === "object" ? num(r.baseline.fps) : null;
+    return base === null ? text : fmt(base) + " → " + text;
+  }
+
+  function timesText(r) {
+    var p50 = num(r.p50_ms), p99 = num(r.p99_ms);
+    if (p50 === null && p99 === null) return "n/a";
+    return (p50 === null ? "–" : fmt(p50)) + " / " + (p99 === null ? "–" : fmt(p99)) + " ms";
+  }
+
+  function verifiedBadge() {
+    var badge = el("span", { "class": "badge badge-tested" });
+    var icon = svg("svg", { viewBox: "0 0 16 16", "aria-hidden": "true", focusable: "false" });
+    icon.appendChild(svg("circle", { cx: "8", cy: "8", r: "6.8", fill: "none", stroke: "currentColor", "stroke-width": "1.6" }));
+    icon.appendChild(svg("path", { d: "M4.9 8.3l2.1 2.1 4.2-4.5", fill: "none", stroke: "currentColor", "stroke-width": "1.8",
+                                   "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    badge.appendChild(icon);
+    badge.appendChild(document.createTextNode("Verified scene"));
+    return badge;
+  }
+
+  function cell(label, main, sub, cls) {
+    var td = el("td", { "data-label": label });
+    if (cls) td.className = cls;
+    td.appendChild(document.createTextNode(main));
+    if (sub) td.appendChild(el("span", { "class": "lb-sub" }, sub));
+    return td;
+  }
+
+  function row(r) {
+    var tr = el("tr");
+    tr.appendChild(cell("Device", str(r.device) || "n/a", str(r.form_factor)));
+    tr.appendChild(cell("GPU and driver", str(r.gpu) || "n/a", str(r.driver) ? "Driver " + str(r.driver) : ""));
+    tr.appendChild(cell("Game and scene", str(r.game) || "n/a", str(r.scene)));
+    var settings = strings(r.switches).join(", ");
+    if (r.frame_generation === "on" || r.frame_generation === "off") {
+      settings += (settings ? "; " : "") + "frame generation " + r.frame_generation;
+    }
+    tr.appendChild(cell("Build and settings", str(r.build) || "n/a", settings));
+    var fps = cell("Game fps", fpsText(r), "", "num");
+    if (r.scene_ok === true) {
+      fps.appendChild(el("br"));
+      fps.appendChild(verifiedBadge());
+    }
+    tr.appendChild(fps);
+    tr.appendChild(cell("p50 / p99", timesText(r), "", "num"));
+    var report = el("td", { "data-label": "Report" });
+    var number = Number(r.issue);
+    if (number > 0 && Math.floor(number) === number) report.appendChild(el("a", { href: issueBase + number }, "#" + number));
+    var details = [str(r.submitted), r.source === "tools/bench" ? "tools/bench" : "own measurement"].concat(strings(r.notes));
+    report.appendChild(el("span", { "class": "lb-sub" }, details.filter(Boolean).join(" · ")));
+    tr.appendChild(report);
+    return tr;
+  }
+
+  function sortValue(r, key) {
+    if (key === "fps") return num(r.fps);
+    if (key === "p99") return num(r.p99_ms);
+    if (key === "submitted") return str(r.submitted) || null;
+    return str(r.device).toLowerCase() || null;
+  }
+
+  function compare(a, b) {
+    var x = sortValue(a, state.key), y = sortValue(b, state.key);
+    var tie = (Number(a.issue) || 0) - (Number(b.issue) || 0);
+    if (x === null || y === null) return x === y ? tie : (x === null ? 1 : -1);  /* unknown values last */
+    var order = x < y ? -1 : (x > y ? 1 : 0);
+    return (state.dir === "desc" ? -order : order) || tie;
+  }
+
+  function shown(r) {
+    return (!state.vendor || r.gpu_vendor === state.vendor) && (!state.form || r.form_factor === state.form) &&
+      (!state.game || r.game === state.game) && (!state.verified || r.scene_ok === true);
+  }
+
+  function render() {
+    var rows = records.filter(shown).sort(compare);
+    while (ui.body.firstChild) ui.body.removeChild(ui.body.firstChild);
+    rows.forEach(function (r) { ui.body.appendChild(row(r)); });
+    ui.table.hidden = rows.length === 0;
+    ui.none.hidden = rows.length !== 0;
+    ui.count.textContent = "Showing " + rows.length + " of " + records.length + (records.length === 1 ? " report." : " reports.");
+    Object.keys(ui.heads).forEach(function (key) {
+      if (key === state.key) ui.heads[key].setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
+      else ui.heads[key].removeAttribute("aria-sort");
+    });
+    ui.sort.value = state.key + ":" + state.dir;
+  }
+
+  function picker(id, label, options, onChange) {
+    var wrap = el("label", { "for": id });
+    wrap.appendChild(document.createTextNode(label));
+    var select = el("select", { id: id });
+    options.forEach(function (option) { select.appendChild(el("option", { value: option[0] }, option[1])); });
+    select.addEventListener("change", function () { onChange(select.value); render(); });
+    wrap.appendChild(select);
+    return { wrap: wrap, select: select };
+  }
+
+  function dataLink(before, after) {
+    var p = el("p", { "class": "fine" });
+    p.appendChild(document.createTextNode(before));
+    p.appendChild(el("a", { href: dataUrl }, "data/community.json"));
+    p.appendChild(document.createTextNode(after));
+    return p;
+  }
+
+  function show(frag) {
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(frag);
+    app.setAttribute("data-rendered", "client");
+  }
+
+  function build(data) {
+    var frag = document.createDocumentFragment();
+    var updated = /^\d{4}-\d\d-\d\d$/.test(str(data.updated)) ? " (updated " + data.updated + ")." : ".";
+    if (!records.length) {
+      var first = el("p");
+      first.appendChild(document.createTextNode("No community reports yet. "));
+      first.appendChild(el("a", { href: "https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml" },
+                           "Send the first device report"));
+      first.appendChild(document.createTextNode(": a bot checks it and comments the row it would add."));
+      frag.appendChild(first);
+      frag.appendChild(dataLink("Rendered from ", updated));
+      show(frag);
+      return;
+    }
+    var games = [];
+    records.forEach(function (r) { if (str(r.game) && games.indexOf(r.game) < 0) games.push(r.game); });
+    games.sort();
+    var bar = el("div", { "class": "lb-filters", role: "group", "aria-label": "Filter and sort the leaderboard" });
+    var pickers = [
+      picker("lb-vendor", "GPU vendor", VENDORS, function (value) { state.vendor = value; }),
+      picker("lb-form", "Form factor", [["", "All"]].concat(FORMS.map(function (f) { return [f, f]; })),
+             function (value) { state.form = value; }),
+      picker("lb-game", "Game", [["", "All"]].concat(games.map(function (g) { return [g, g]; })),
+             function (value) { state.game = value; }),
+      picker("lb-sort", "Sort by", SORTS, function (value) {
+        var parts = value.split(":");
+        state.key = parts[0];
+        state.dir = parts[1];
+      })
+    ];
+    pickers.forEach(function (p) { bar.appendChild(p.wrap); });
+    ui.sort = pickers[3].select;
+    var check = el("label", { "class": "lb-check" });
+    var box = el("input", { type: "checkbox", id: "lb-verified" });
+    box.addEventListener("change", function () { state.verified = box.checked; render(); });
+    check.appendChild(box);
+    check.appendChild(document.createTextNode("Verified scene only"));
+    bar.appendChild(check);
+    frag.appendChild(bar);
+    ui.count = el("p", { "class": "lb-count", "aria-live": "polite" });
+    frag.appendChild(ui.count);
+
+    ui.table = el("div", { "class": "table-wrap" });
+    var table = el("table", { "class": "stack lb-table" });
+    table.appendChild(el("caption", { "class": "visually-hidden" }, "Community leaderboard"));
+    var head = el("tr");
+    [["Device", "device"], ["GPU and driver"], ["Game and scene"], ["Build and settings"],
+     ["Game fps", "fps", "num"], ["Frame time p50 / p99", "p99", "num"], ["Report", "submitted"]].forEach(function (column) {
+      var th = el("th", { scope: "col" });
+      if (column[2]) th.className = column[2];
+      if (column[1]) {
+        var button = el("button", { type: "button", "class": "lb-sort" }, column[0]);
+        button.addEventListener("click", function () {
+          if (state.key === column[1]) state.dir = state.dir === "asc" ? "desc" : "asc";
+          else { state.key = column[1]; state.dir = FIRST_DIRECTION[column[1]]; }
+          render();
+        });
+        th.appendChild(button);
+        ui.heads[column[1]] = th;
+      } else {
+        th.textContent = column[0];
+      }
+      head.appendChild(th);
+    });
+    var thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    ui.body = el("tbody");
+    table.appendChild(ui.body);
+    ui.table.appendChild(table);
+    frag.appendChild(ui.table);
+    ui.none = el("p", { "class": "fine" }, "No report matches these filters.");
+    frag.appendChild(ui.none);
+    frag.appendChild(dataLink("Rendered from ", updated));
+    show(frag);
+    render();
+  }
+
+  fetch(dataUrl, { cache: "no-cache" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      var reports = data && data.reports && typeof data.reports === "object" ? data.reports : {};
+      records = Object.keys(reports).map(function (key) { return reports[key]; })
+        .filter(function (r) { return r && typeof r === "object"; });
+      build(data || {});
+    })
+    .catch(function () {
+      var frag = document.createDocumentFragment();
+      frag.appendChild(dataLink("The leaderboard could not be loaded here. Every row is in ", "."));
+      show(frag);
+    });
+})();
+</script>
 </body>
 </html>

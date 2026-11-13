@@ -92,6 +92,9 @@ To merge it:
 - `labels.yml` creates and updates the labels in `.github/labels.yml` when that file changes on `main`. It never deletes a label.
 - `pages.yml` publishes `site/` to GitHub Pages when it changes on `main`.
 - `label-issues.yml` labels new issues from their form answers (game, GPU vendor, integrated GPU family, handheld, operating system, regression).
+- `ingest-reports.yml` turns `device-report` issues into `site/data/community.json` (the community leaderboard on the benchmarks page) through one bot pull request on `bot/community-reports`, and comments on each report with its parsed row. See [FEEDBACK.md](FEEDBACK.md).
+- `triage.yml` labels new issues by game, GPU and symptom, asks once for a log when a crash or bug report has none, and adds `agent-ready` to agent tasks whose acceptance test is checkable. It never closes, locks or removes anything.
+- `promo-render.yml` renders the 20-second promo in `site/promo/` to MP4 and GIF artifacts.
 - No workflow closes or marks issues as stale.
 
 ## Repository settings these need

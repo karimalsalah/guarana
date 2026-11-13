@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "description": "Community device reports for the leaderboard on benchmarks.html: one record per issue labelled device-report, keyed by the issue number. Generated from the issues by .github/workflows/ingest-reports.yml (tools/ingest/ingest.py); edit the issue, not this file.",
+  "repository": "karimalsalah/guarana",
+  "issue_url": "https://github.com/karimalsalah/guarana/issues/{issue}",
+  "updated": "2026-11-13",
+  "count": 0,
+  "fields": {
+    "fps": "Game fps, the frames the game itself renders, as reported. From the tools/bench row when the report has one, else parsed from the report's Results.",
+    "p50_ms, p99_ms": "Median and 99th percentile frame time in ms, or null when not reported.",
+    "baseline": "The figure the report compares with (for example the build without a switch), or null.",
+    "scene_ok": "true only when the numbers come from a tools/bench row that is valid and passed its scene check against the tester's reference screenshot; null otherwise.",
+    "source": "tools/bench or manual.",
+    "gpu_vendor, gpu_type": "intel, amd, nvidia or other; integrated, discrete or unknown, from the form's Graphics card answer.",
+    "runs": "Every valid tools/bench row of the report (variant, scene, fps, p50_ms, p99_ms, switches).",
+    "notes": "Caveats a reader should see next to the numbers."
+  },
+  "reports": {}
+}
