@@ -445,17 +445,17 @@ class SchemaTest(unittest.TestCase):
 
 class SanitizeTest(unittest.TestCase):
     def test_names_and_paths(self):
-        clean = bench.make_sanitizer(user="Yousof", home="C:\\Users\\Yousof", host="DESKTOP-ABC123")
-        row = clean({"a": "C:\\Users\\Yousof\\AppData\\Roaming\\lichii\\dump",
-                     "b": ["c:/users/yousof/x", "D:\\games\\yousof\\save on desktop-abc123"],
+        clean = bench.make_sanitizer(user="Alice", home="C:\\Users\\Alice", host="DESKTOP-ABC123")
+        row = clean({"a": "C:\\Users\\Alice\\AppData\\Roaming\\lichii\\dump",
+                     "b": ["c:/users/alice/x", "D:\\games\\alice\\save on desktop-abc123"],
                      "c": {"C:\\Users\\Other Person\\y": 5, "n": 1.5, "t": True, "z": None},
-                     "d": "Yousofian /home/zed/q /Users/mac/q"})
+                     "d": "Aliceian /home/zed/q /Users/mac/q"})
         self.assertEqual(row["a"], "~\\AppData\\Roaming\\lichii\\dump")
         self.assertEqual(row["b"], ["~/x", "D:\\games\\<user>\\save on <host>"])
         self.assertEqual(row["c"], {"~ Person\\y": 5, "n": 1.5, "t": True, "z": None})
-        self.assertEqual(row["d"], "Yousofian ~/q ~/q")
+        self.assertEqual(row["d"], "Aliceian ~/q ~/q")
         self.assertEqual(bench.private_strings(row), [])
-        self.assertNotIn("yousof", json.dumps(row).lower().replace("yousofian", ""))
+        self.assertNotIn("alice", json.dumps(row).lower().replace("aliceian", ""))
 
     def test_unusual_home(self):
         clean = bench.make_sanitizer(user="me", home="/srv/people/me", host="")

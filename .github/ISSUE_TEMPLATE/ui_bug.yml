@@ -1,7 +1,7 @@
 name: UI Bug
 description: UI Doesnt works as expected
 title: "[UIBug] "
-labels: ["bug", "Lichii-UI"]
+labels: ["bug", "ui"]
 body:
   - type: checkboxes
     id: checks
@@ -40,15 +40,21 @@ body:
     attributes:
       label: Graphics card
       options:
+        - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc (Meteor Lake)
+        - Intel Arc (Panther Lake)
+        - Other Intel integrated (Iris Xe, UHD)
+        - AMD Radeon 780M / 760M
+        - AMD Radeon 880M / 890M
+        - AMD Ryzen Z1 / Z2 (handheld)
+        - Other AMD integrated
+        - Intel Arc discrete (A or B series)
         - NVIDIA RTX 50 series
         - NVIDIA RTX 40 series
         - NVIDIA RTX 30 series or older
         - AMD RX 9000 series
         - AMD RX 7000 series
         - AMD RX 6000 series or older
-        - Intel Arc
-        - Integrated graphics INTEL
-        - Integrated graphics AMD
         - Other
     validations:
       required: true

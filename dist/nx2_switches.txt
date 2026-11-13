@@ -29,6 +29,21 @@ EDEN_NX2_FENCE_BATCH=1
 # Ocarina of Time with =0 (or =2): 30.9 fps against 38.9 unset, same spot and settings.
 #EDEN_NX2_FRAMES_AHEAD=1
 
+# --- Guarana defaults (integrated GPUs) ---
+# Global-memory routing: work out buffer bases once per invocation and search only the buffers a
+# native load can come from (1+2), returning zero below them (8). Hyrule Field on an Arc 140T:
+# foliage draw 15.7 -> 5.8 ms, 14.8 -> 22.8 fps. On by default for Ocarina of Time only (the one
+# game it is verified in). Uncomment to use it in every game, or set 0 to turn it off for OoT.
+#EDEN_NX2_GM=11
+
+# Frame generation for Ocarina of Time predicts frames forward from the game's motion vectors
+# (no added latency) instead of interpolating. Needs Frame Generation on in Graphics settings.
+EDEN_NX2_EXTRAPOLATE=1
+
+# Optional, off by default: while a game runs, shift the laptop's power budget from CPU boost to the
+# integrated GPU (changes the active Windows power plan for the session and restores it at exit).
+#EDEN_NX2_POWER_POLICY=igpu
+
 # --- Workarounds / Debug ---
 # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
 #EDEN_NX2_RESETFIX=0

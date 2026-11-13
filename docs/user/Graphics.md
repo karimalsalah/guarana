@@ -15,7 +15,7 @@ Bananza, Ocarina of Time and others). It does not add HDR to SDR-only games. It 
   hosts cannot tell, so Auto means SDR there.
 - **On**: HDR whenever the display driver offers an HDR swapchain format.
 
-While HDR output is on, Lichii presents an HDR swapchain: HDR10 (10-bit PQ BT.2020) or, with
+While HDR output is on, Guarana presents an HDR swapchain: HDR10 (10-bit PQ BT.2020) or, with
 HDR format set to scRGB, a 16-bit float one. It uses the other one if the driver offers only
 that, and SDR if it offers neither. The game is told the display is HDR only while that
 swapchain really is HDR, with the monitor's peak luminance and its SDR content brightness as
@@ -37,7 +37,7 @@ says why.
 
 On Windows, Auto follows changes during play: toggling Windows HDR, moving the window to
 another monitor, changing the SDR content brightness or running the Windows HDR Calibration app
-is picked up within half a second. Lichii switches the swapchain and asks the game to query the
+is picked up within half a second. Guarana switches the swapchain and asks the game to query the
 display again; games that listen switch between SDR and HDR images. Run the Windows HDR
 Calibration app for your monitor first: Windows reports the peak from the display's colour
 profile where one is set, else from its EDID, and the game tone maps to that peak.
@@ -47,7 +47,7 @@ fullscreen.
 
 Windows Auto HDR applies to SDR output of DirectX 11 and 12 games and leaves an HDR swapchain
 alone. If you keep HDR output Off on an HDR desktop and Auto HDR engages for the emulator, turn
-Auto HDR off for `lichii.exe` / `eden-cli.exe` in Settings > System > Display > Graphics, so SDR
+Auto HDR off for `guarana.exe` / `guarana-cli.exe` in Settings > System > Display > Graphics, so SDR
 frames are shown as SDR.
 
 ### Anti-aliasing
@@ -109,7 +109,7 @@ While stock shaders offer a basic subset of options for most users, programs suc
 1. [Download ReShade](https://reshade.me/#download) with add-on support.
  - [ReShade Setup 6.6.2 (Windows 64-bit) with add-on support](https://reshade.me/downloads/ReShade_Setup_6.6.2_Addon.exe)
  - SHA512 checksum: `1f09a73afa160480c13ffdd73cc04b1dc82943dddea58ad3bb9375f26b48c2787d0a85197e46b6fce32a4fd3472465520a3355ed3436241e17fba7ebaff7ffec`.
-2. Open ReShade and hit browse, then the folder where `eden.exe` is at, hit open, then hit next.
+2. Open ReShade and hit browse, then the folder where `guarana.exe` is at, hit open, then hit next.
 3. Select Vulkan as the rendering API, hit next.
 4. In "Select effects to install" screen: hit next don't change anything.
 5. In "Select add on" screen: click the box for `Shader Toggler by Otis` ([GitHub](https://github.com/FransBouma/ShaderToggler)) and hit next.
@@ -152,7 +152,7 @@ pushd "%~dp0"
 if exist "%temp%\FixFullScreen.reg" (
   del %temp%\FixFullScreen.reg
 )
-set str_path="%cd:\=\\%\\eden.exe"
+set str_path="%cd:\=\\%\\guarana.exe"
 echo Windows Registry Editor Version 5.00 >> %temp%\FixFullScreen.reg
 echo. >> %temp%\FixFullScreen.reg
 echo [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers] >> %temp%\FixFullScreen.reg

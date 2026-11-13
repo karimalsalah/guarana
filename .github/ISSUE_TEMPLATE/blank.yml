@@ -1,10 +1,10 @@
 name: New Issue (Developers Only)
-description: A blank issue template for developers only. If you are not a developer, do not use this issue template. Your issue WILL BE CLOSED if you do not use the appropriate issue template.
+description: A blank issue for contributors and maintainers. Bugs, device results, performance ideas and agent tasks have their own forms.
 body:
   - type: markdown
     attributes:
       value: |
-        **If you are not a developer, do not use this issue template. Your issue WILL BE CLOSED if you do not use the appropriate issue template.**
+        **For contributors and maintainers.** Reporting a bug, a device result, a performance idea or an agent task? Use that form instead: it asks for what we need. A maintainer may move or close an issue filed here that belongs in another form.
   - type: textarea
     attributes:
       label: "Issue"

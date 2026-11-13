@@ -87,7 +87,7 @@ the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
   the game's own bias.
 - FSR 4 (Windows, AMD's driver, off by default): with "Use AMD FSR 4 in place of FSR 3.1" on,
   the same inputs, jitter and RCAS setting go to AMD's FSR 4 through AMD's FidelityFX runtime
-  (FidelityFX SDK 2.4.0, FSR Upscaling 4.1.2). Nothing of AMD's ships with Lichii: the setting's
+  (FidelityFX SDK 2.4.0, FSR Upscaling 4.1.2). Nothing of AMD's ships with Guarana: the setting's
   panel downloads `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from
   the SDK's GitHub repository at the release commit into the user folder's `fidelityfx` folder,
   after showing AMD's licence. Each file must match its pinned size and SHA-256
@@ -113,7 +113,7 @@ the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
   subgroups, 8/16-bit arithmetic with integer dot products, linear compute derivatives) and picks
   the network: FP8 with FP16/FP8 cooperative matrices, `shaderFloat8` and the matrix conversions
   of `VK_NV_cooperative_matrix2` (RADV exposes it only with its `radv_cooperative_matrix2_nv`
-  option), INT8 otherwise. Lichii asks fsr4-vk for that model by version. The extra device
+  option), INT8 otherwise. Guarana asks fsr4-vk for that model by version. The extra device
   features are enabled only while the setting is on with RADV. Anything missing, a missing
   library or a failed context or dispatch leaves FSR 3.1 running, and the log names the active
   upscaler and why. Ported from #915's loader; untested on AMD hardware so far.

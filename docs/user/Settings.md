@@ -14,7 +14,7 @@ Before touching the settings, see the game boots with stock options. We try our 
 
 ## Recommended settings
 
-Lichii can switch to the developer's recommended settings. It never asks on its own: use the Help menu. They only change performance options on the Graphics (Advanced and Extras), System and CPU pages. Language, region, resolution, graphics backend and per-game settings stay as they are.
+Guarana can switch to the developer's recommended settings. It never asks on its own: use the Help menu. They only change performance options on the Graphics (Advanced and Extras), System and CPU pages. Language, region, resolution, graphics backend and per-game settings stay as they are.
 
 - `Help/Apply Recommended Settings...`: Asks whether to use them, then lists what changed.
 - `Help/Restore My Previous Settings`: Puts back the values you had before you first applied the recommended ones. It appears once the recommended settings have changed something.

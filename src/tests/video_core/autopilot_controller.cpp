@@ -266,9 +266,9 @@ TEST_CASE("Autopilot headroom run is broken by a busy window", "[video_core]") {
     AutopilotController controller;
     const Input headroom = Gpu(30.0, 0.5, 1.25);
     for (u32 i = 0; i < 4; ++i) {
-        controller.Update(headroom);
+        static_cast<void>(controller.Update(headroom));
     }
-    controller.Update(Gpu(30.0, 0.8, 1.25));
+    static_cast<void>(controller.Update(Gpu(30.0, 0.8, 1.25)));
     for (u32 i = 0; i < 4; ++i) {
         REQUIRE(controller.Update(headroom).resolution == ResolutionAction::Hold);
     }

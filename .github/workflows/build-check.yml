@@ -2,15 +2,18 @@ name: build-check
 
 on:
   pull_request:
-    branches: [nx2]
   push:
-    branches: [nx2]
+    branches:
+      - main
+      - "release/**"
+      - "hotfix/**"
+      - "exp/**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push cancels a pull request's run; nx2 runs finish so each merge saves its compiler cache.
+# A newer push cancels a pull request's run; branch runs finish so each merge saves its compiler cache.
 concurrency:
   group: build-check-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -25,6 +28,7 @@ jobs:
     outputs:
       build: ${{ steps.files.outputs.build }}
     steps:
+      # Documentation, the website, issue forms, the label list and benchmark rows change no binary.
       - name: Skip builds for documentation-only pull requests
         id: files
         env:
@@ -34,7 +38,8 @@ jobs:
           build=true
           if [ -n "$PR" ]; then
             files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-            if ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
+            if ! printf '%s\n' "$files" |
+              grep -qvE '^(docs/.*|site/.*|.*\.md|\.github/ISSUE_TEMPLATE/.*|\.github/labels\.yml|tools/bench/results/.*)$'; then
               build=false
             fi
           fi
@@ -83,7 +88,7 @@ jobs:
           modules: qtcharts
           cache: true
 
-      # Objects are keyed by content, so the newest cache of this branch or nx2 always helps;
+      # Objects are keyed by content, so the newest cache of this branch or main always helps;
       # keying it on cpmfile.json threw the whole cache away whenever a dependency changed.
       - name: Restore dependencies and compiler objects
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
@@ -166,6 +171,8 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 1G
+      # The test build's artifact is named <APP>-<pr number or branch>-<commit>-windows-x86_64.
+      APP: "guarana"
     defaults:
       run:
         shell: bash
@@ -253,15 +260,19 @@ jobs:
           cmake --build build --parallel
           ccache --show-stats -v
 
-      # nxformat is linked statically: lichii.exe must not need an nxformat.dll, which Windows
+      # nxformat is linked statically: guarana.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
-      - name: Check lichii.exe does not import nxformat.dll
+      # A build from before the rename still produces lichii.exe, so that name is checked too.
+      - name: Check guarana.exe does not import nxformat.dll
         run: |
-          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/lichii.exe |
+          exe=build/bin/guarana.exe
+          [ -f "$exe" ] || exe=build/bin/lichii.exe
+          [ -f "$exe" ] || { echo "::error::neither build/bin/guarana.exe nor build/bin/lichii.exe was produced"; exit 1; }
+          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports "$exe" |
             awk '/^(Import|DelayImport) {/ { kind = $1 } /^  Name:/ { print kind, $2 }')
           echo "$imports"
           if grep -qi ' nxformat.dll$' <<< "$imports"; then
-            echo "::error::lichii.exe imports nxformat.dll; nxformat must be linked statically"
+            echo "::error::$(basename "$exe") imports nxformat.dll; nxformat must be linked statically"
             exit 1
           fi
 
@@ -277,6 +288,60 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
+
+      # The build a pull request hands to testers: the programs without the unit tests, with the
+      # Qt runtime next to them as in the release zips. It is a Release build of this commit (for a
+      # pull request, merged into its base) without the release builds' ThinLTO and PGO.
+      - name: Name the Windows test build
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$PR" ]; then
+            label="pr$PR"
+          else
+            label=$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')
+          fi
+          echo "TEST_BUILD=$APP-$label-${HEAD_SHA::7}-windows-x86_64" >> "$GITHUB_ENV"
+
+      - name: Package the Windows test build
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'test-build'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/bin/$cli")) { $cli = 'eden-cli.exe' }
+          foreach ($exe in $gui, $cli) {
+              if (-not (Test-Path "build/bin/$exe")) {
+                  throw "build/bin/$exe was not produced"
+              }
+          }
+          # Everything the release zip has, without the test programs and linker by-products.
+          Get-ChildItem build/bin -File |
+              Where-Object { $_.Name -notmatch '(^|_)tests?\.exe$|_probe\.exe$|fuzzer|\.(pdb|ilk|lib|exp)$' } |
+              Copy-Item -Destination $out
+          Get-ChildItem build/bin -Directory | Copy-Item -Destination $out -Recurse
+          windeployqt --release --no-translations (Join-Path $out $gui)
+
+      # The folder itself: GitHub zips an artifact on download, and uploading a zip gave a zip
+      # inside a zip. pr-build-comment.yml links it on the pull request.
+      - name: Upload the Windows test build
+        id: test-build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TEST_BUILD }}
+          path: ${{ runner.temp }}/test-build/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link the Windows test build
+        env:
+          URL: ${{ steps.test-build.outputs.artifact-url }}
+        run: |
+          echo "Windows test build: [$TEST_BUILD]($URL). Sign in to GitHub to download it; it is kept for 14 days." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save dependencies and compiler objects
         if: always()

@@ -40,11 +40,14 @@ const char* ModeToString(Mode mode) {
 std::vector<std::pair<std::string, std::string>> ModeSwitches(Mode mode) {
     switch (mode) {
     case Mode::Smooth:
-        // The configuration measured smoothest (Ocarina of Time, Arc 140T): the vblank-locked
-        // presenter, extrapolated frames, pipeline library links and early read-backs.
-        return {{"EDEN_NX2_FLUID", "1"},         {"EDEN_NX2_EXTRAPOLATE", "1"},
-                {"EDEN_NX2_GPL", "1"},           {"EDEN_NX2_EARLY_SUBMIT", "1"},
-                {"EDEN_NX2_EARLY_PAGES", "256"}, {"EDEN_NX2_EARLY_AFTER", "1"}};
+        // The pacing measured best (Ocarina of Time, Hyrule Field, Arc 140T): the vblank-locked
+        // presenter predicting from when a frame can be shown, real frames held to 20 per second
+        // (one per 20 Hz game tick), extrapolated frames, pipeline library links and early
+        // read-backs.
+        return {{"EDEN_NX2_FLUID", "2"},         {"EDEN_NX2_CADENCE", "3"},
+                {"EDEN_NX2_EXTRAPOLATE", "1"},   {"EDEN_NX2_GPL", "1"},
+                {"EDEN_NX2_EARLY_SUBMIT", "1"},  {"EDEN_NX2_EARLY_PAGES", "256"},
+                {"EDEN_NX2_EARLY_AFTER", "1"}};
     case Mode::Battery:
         return {{"EDEN_NX2_POWER_POLICY", "igpu"},
                 {"EDEN_NX2_ECO_BACKGROUND", "1"},

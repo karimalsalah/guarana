@@ -2624,9 +2624,6 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
     }
     PipelineStates states;
     FillStates(states, variant);
-    const bool dynamic_shading_rate{std::ranges::find(states.dynamic_states,
-                                                      VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR) !=
-                                    states.dynamic_states.end()};
     const bool is_mesh{states.is_mesh};
     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
