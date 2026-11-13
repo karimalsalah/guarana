@@ -175,6 +175,7 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
+    common/data_dir_migration.cpp
     common/event.cpp
     common/fibers.cpp
     common/fs_iterate.cpp
@@ -267,6 +268,8 @@ target_compile_definitions(tests PRIVATE
     LICHII_NX_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/nx_fixtures")
 
 add_test(NAME tests COMMAND tests)
+# The path manager copies the old "lichii" user data folder on first use; a test run must not.
+set_tests_properties(tests PROPERTIES ENVIRONMENT "GUARANA_SKIP_DATA_MIGRATION=1")
 
 add_executable(profile_migration_tests
     common/profile_migration.cpp)

@@ -97,7 +97,13 @@ static void LoadNx2Switches(const char* argv0) {
     const auto config_base = Common::FS::GetDataDirectory("XDG_CONFIG_HOME");
 #endif
     if (config_base.is_absolute()) {
-        ParseSwitchFile(config_base / EDEN_DIR / "nx2_switches.txt", entries);
+        // This runs before the path manager copies the pre-rename "lichii" folder, so on the first
+        // start after the rename the user's file is still only in the old folder.
+        std::error_code ec;
+        const bool has_current_dir = std::filesystem::exists(config_base / EDEN_DIR, ec);
+        ParseSwitchFile(config_base / (has_current_dir ? EDEN_DIR : PRE_GUARANA_DIR) /
+                            "nx2_switches.txt",
+                        entries);
     }
     for (const auto& [name, value] : entries) {
         if (std::getenv(name.c_str()) != nullptr) {

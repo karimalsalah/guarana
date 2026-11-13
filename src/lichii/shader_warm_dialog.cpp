@@ -185,7 +185,7 @@ void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped
         stage_label->setText(tr("Shader precache is ready."));
         if (result.compute_programs == 0) {
             text = result.archives == 0
-                       ? tr("This game keeps its shaders in a format Lichii can't read, so none "
+                       ? tr("This game keeps its shaders in a format Guarana can't read, so none "
                             "are prepared from the game files.")
                        : tr("The game files have no compute shaders to prepare.");
             text += QLatin1Char(' ') +

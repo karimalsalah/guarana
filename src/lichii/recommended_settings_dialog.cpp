@@ -91,11 +91,11 @@ bool RecommendedSettingsDialog::Ask(QWidget* parent) {
     QMessageBox box(parent);
     box.setIcon(QMessageBox::Question);
     box.setWindowTitle(tr("Recommended settings"));
-    box.setText(tr("Do you want to use the recommended settings from the Lichii developer?"));
+    box.setText(tr("Do you want to use the recommended settings from the Guarana developer?"));
     box.setInformativeText(
         tr("They improve performance for most games. Games with their own value for one of these "
            "settings in their per-game settings use the recommended value too; other per-game "
-           "settings do not change. Lichii keeps your own settings, global and per-game, so you "
+           "settings do not change. Guarana keeps your own settings, global and per-game, so you "
            "can go back at any time with Help > Restore My Previous Settings."));
     auto* const use = box.addButton(tr("Use recommended settings"), QMessageBox::AcceptRole);
     box.addButton(tr("Not now"), QMessageBox::RejectRole);
@@ -113,7 +113,7 @@ void RecommendedSettingsDialog::ShowApplied(
         return;
     }
     ShowChanges(parent, tr("Recommended settings"),
-                tr("Lichii now uses the recommended settings, in every game."),
+                tr("Guarana now uses the recommended settings, in every game."),
                 Describe(parent, changes, tr("On"), tr("Off")),
                 tr("To go back, use Help > Restore My Previous Settings."));
 }
@@ -126,7 +126,7 @@ void RecommendedSettingsDialog::ShowRestored(
             tr("Your settings already match your previous settings. Nothing changed."));
         return;
     }
-    ShowChanges(parent, tr("Previous settings"), tr("Lichii uses your previous settings again."),
+    ShowChanges(parent, tr("Previous settings"), tr("Guarana uses your previous settings again."),
                 Describe(parent, changes, tr("On"), tr("Off")),
                 tr("To use the recommended settings again, use Help > Apply Recommended "
                    "Settings."));

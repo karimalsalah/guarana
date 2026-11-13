@@ -69,7 +69,7 @@ WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     header->addWidget(logo, 0, Qt::AlignTop);
     auto* const titles = new QVBoxLayout;
     titles->setSpacing(3);
-    auto* const title = new QLabel(tr("Lichii has a new look"));
+    auto* const title = new QLabel(tr("Guarana has a new look"));
     title->setObjectName(QStringLiteral("WhatsNewTitle"));
     QFont title_font = title->font();
     title_font.setBold(true);
@@ -85,7 +85,7 @@ WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     body->addLayout(header);
 
     body->addWidget(Item(QStringLiteral("wand"), tr("Lichii Dark theme"),
-                         tr("A darker theme with the Lichii pink accent. The old themes are still "
+                         tr("A darker theme with the Guarana pink accent. The old themes are still "
                             "in Configure > General > UI.")));
     body->addWidget(Item(QStringLiteral("sliders"), tr("Settings that fit your screen"),
                          tr("Configure and game Properties open at a size that fits your screen, "
@@ -98,7 +98,7 @@ WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     body->addWidget(Item(QStringLiteral("gamepad"), tr("Same places as before"),
                          tr("Configure is in Emulation > Configure (Ctrl+,). Right-click a game "
                             "and choose Properties for its own settings. Help > What's New in "
-                            "Lichii shows this again.")));
+                            "Guarana shows this again.")));
     auto* const scroll = new QScrollArea;
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);

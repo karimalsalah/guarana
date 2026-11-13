@@ -160,7 +160,7 @@ void AmdFsr4Panel::Refresh() {
         ready ? Tr("<b>Ready.</b> Found fsr4-vk, the community Vulkan port of FSR 4 (not AMD's "
                    "official FSR 4). It runs if the GPU and driver support it; otherwise FSR 3.1 "
                    "does.")
-              : Tr("<b>Not in this build:</b> Lichii's x86-64 Linux packages include fsr4-vk. For "
+              : Tr("<b>Not in this build:</b> Guarana's x86-64 Linux packages include fsr4-vk. For "
                    "a build without it, put %1 from fsr4-vk in the folder. Until then, FSR 3.1 is "
                    "used.")
                     .arg(QString::fromUtf8(
@@ -219,9 +219,9 @@ void AmdFsr4Panel::Download() {
     dialog.setWindowTitle(Tr("Download AMD FSR 4"));
     QVBoxLayout* layout = new QVBoxLayout(&dialog);
     QLabel* intro = new QLabel(
-        Tr("Lichii will download amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll "
+        Tr("Guarana will download amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll "
            "from AMD's FidelityFX SDK %1 release on GitHub into %2.<br>These files are AMD's, under "
-           "AMD's licence terms below. Lichii checks AMD's signature before using them.")
+           "AMD's licence terms below. Guarana checks AMD's signature before using them.")
             .arg(QString::fromUtf8(FfxRuntime::SDK_VERSION.data(),
                                    static_cast<qsizetype>(FfxRuntime::SDK_VERSION.size())),
                  PathText(folder)),

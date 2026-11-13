@@ -2,7 +2,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
 
     <!-- General application strings -->
-    <string name="app_name" translatable="false">Eglantine</string>
+    <string name="app_name" translatable="false">Guarana</string>
     <string name="app_disclaimer">This software will run games for the Nintendo Switch game console. No game titles or keys are included.&lt;br /&gt;&lt;br /&gt;Before you begin, please locate your <![CDATA[<b> prod.keys </b>]]> file on your device storage.&lt;br /&gt;&lt;br /&gt;<![CDATA[<a href=\"https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/QuickStart.md\">Learn more</a>]]></string>
     <string name="notice_notification_channel_name">Notices and errors</string>
     <string name="notice_notification_channel_id" translatable="false">noticesAndErrors</string>
@@ -941,7 +941,7 @@
     <string name="loader_error_encrypted_keys_description"><![CDATA[Please ensure your prod.keys file is installed so that games can be decrypted.]]></string>
     <string name="loader_error_video_core">An error occurred initializing the video core</string>
     <string name="loader_error_memory">Not enough memory to start the game</string>
-    <string name="loader_error_memory_description">Lichii could not allocate the game\'s memory. Close other applications to free memory, then try again.</string>
+    <string name="loader_error_memory_description">Guarana could not allocate the game\'s memory. Close other applications to free memory, then try again.</string>
     <string name="loader_error_video_core_description">This is usually caused by an incompatible GPU driver. Installing a custom GPU driver may resolve this problem.</string>
     <string name="loader_error_file_not_found">ROM file does not exist</string>
 
