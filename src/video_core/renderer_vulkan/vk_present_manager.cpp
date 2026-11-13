@@ -44,6 +44,32 @@ namespace Vulkan {
 namespace {
 
 constexpr size_t MAX_FRAMES_IN_FLIGHT = 7;
+/// EDEN_NX2_FLUID at a shown rate over 75: a real frame and a prediction for each slot until the
+/// next one (six at 120 for 20 real frames), while the last real frame's predictions still wait
+/// for their slots. Only extrapolated frames use the frames past MAX_FRAMES_IN_FLIGHT; Lossless
+/// Scaling's generation targets stop there (FrameGen::GenerateInto).
+constexpr size_t FLUID_HIGH_RATE_FRAMES = 12;
+constexpr size_t FLUID_MAX_FRAMES = 16;
+
+/// The rate EDEN_NX2_FLUID shows frames at: EDEN_NX2_SHOWN_RATE=<hz> (30 to 240) if set, else the
+/// frame generation target rate, else 60.
+[[nodiscard]] f64 FluidShownRate() {
+    if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
+        return static_cast<f64>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
+    }
+    const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
+    return rate != 0 ? static_cast<f64>(rate) : 60.0;
+}
+
+/// EDEN_NX2_FLUID_FRAMES=<n> (7 to 16): the FLUID presenter's frame pool, by default 7, or 12 when
+/// frames are shown at over 75 a second.
+[[nodiscard]] size_t FluidFrameCount() {
+    if (const char* value = std::getenv("EDEN_NX2_FLUID_FRAMES")) {
+        return std::clamp<size_t>(std::strtoul(value, nullptr, 10), MAX_FRAMES_IN_FLIGHT,
+                                  FLUID_MAX_FRAMES);
+    }
+    return FluidShownRate() > 75.0 ? FLUID_HIGH_RATE_FRAMES : MAX_FRAMES_IN_FLIGHT;
+}
 constexpr u32 MAX_PRESENT_ATTEMPTS = 3;
 #ifdef HAS_LSFG
 static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
@@ -844,10 +870,11 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
     }
     fluid.vblank += static_cast<u64>(elapsed);
     fluid.last_wake = wake;
-    // Slots of about 16.7 ms: every round(refresh / 60) vblanks, or of the shown rate the
-    // autopilot steers towards (EDEN_NX2_AUTOPILOT).
+    // Slots of the frame generation target rate (16.7 ms at 60, a refresh each at 120 on a 120 Hz
+    // display): every round(refresh / rate) vblanks, or of the shown rate the autopilot steers
+    // towards (EDEN_NX2_AUTOPILOT).
     const f64 slot_rate = VideoCore::AutopilotFeed::SlotRate();
-    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : 60.0) *
+    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : FluidShownRate()) *
                                   static_cast<f64>(period.count()));
     fluid.divisor =
         static_cast<u64>(std::clamp<s64>(static_cast<s64>(std::llround(per_slot)), 1, 8));
@@ -1246,7 +1273,7 @@ void PresentManager::SetImageCount() {
     if (fluid_presenter) {
         // A real frame and a prediction for each slot until the next one is due, while the last
         // real frame's predictions still wait for their slots.
-        image_count = MAX_FRAMES_IN_FLIGHT;
+        image_count = FluidFrameCount();
     } else {
         const size_t generations = Settings::FrameGenMaxGenerations();
         const size_t queued_composites = Settings::values.frame_gen_queue_target.GetValue() + 1;
