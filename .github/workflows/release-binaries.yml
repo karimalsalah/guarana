@@ -124,7 +124,7 @@ jobs:
       # tools/ci/thanks.py imports (github_api.py).
       - name: Check out CHANGELOG.md
         if: steps.plan.outputs.publish == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.plan.outputs.sha }}
           persist-credentials: false
@@ -248,7 +248,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
@@ -927,7 +927,7 @@ jobs:
 
       # The licence texts travel inside every zip (GPL-3.0: binaries ship with the licence).
       - name: Check out the licence texts
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           path: src
           sparse-checkout: |

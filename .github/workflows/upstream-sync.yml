@@ -29,7 +29,7 @@ jobs:
       # pull request, with two limits: GitHub refuses it a push of commits that change
       # .github/workflows, and a pull request it opens starts no workflows (docs/LANES.md).
       - name: Check out main
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
