@@ -300,7 +300,8 @@ private:
         u64 watched_batch{};
         std::vector<FluidWatch> watches;
         f64 latency_ns{};
-        /// The first frame received after the last one shown (the watchdog), zero when none.
+        /// Since when frames wait unshown (the watchdog): the first received after the last show,
+        /// or that show if frames were still held; zero when none.
         std::chrono::steady_clock::time_point unshown_since{};
         std::chrono::steady_clock::time_point last_received{};
         u64 received{}; ///< since the thread started

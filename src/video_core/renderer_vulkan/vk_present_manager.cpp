@@ -71,6 +71,8 @@ constexpr std::chrono::nanoseconds FluidPresentOffset{3'500'000};
 constexpr size_t FluidWatches = 8;
 /// The watchdog: frames came and none was shown for this long.
 constexpr std::chrono::seconds FluidStallLimit{2};
+/// A frame that comes this long after the last, with none held, starts the watchdog's count again.
+constexpr std::chrono::milliseconds FluidArrivalGap{500};
 
 [[nodiscard]] s64 CeilDiv(s64 value, s64 divisor) {
     return value >= 0 ? (value + divisor - 1) / divisor : -((-value) / divisor);
@@ -818,10 +820,12 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
         const u64 arrived = fluid.pending.size() - received;
         fluid.received += arrived;
         fluid_stats.received += arrived;
-        fluid.last_received = now;
-        if (fluid.unshown_since == std::chrono::steady_clock::time_point{}) {
+        // After the game paused, a frame a slot dropped before the pause doesn't count.
+        if (fluid.unshown_since == std::chrono::steady_clock::time_point{} ||
+            (received == 0 && now - fluid.last_received > FluidArrivalGap)) {
             fluid.unshown_since = now;
         }
+        fluid.last_received = now;
     }
     {
         std::scoped_lock swapchain_lock{swapchain_mutex};
@@ -999,7 +1003,9 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
                  "EDEN_NX2_FLUID: first frame shown at vblank {}, for vblank {}, after {} received",
                  fluid.vblank, shown_vblank, fluid.received);
     }
-    fluid.unshown_since = {};
+    // Frames still held count from this show.
+    fluid.unshown_since = fluid.pending.empty() ? std::chrono::steady_clock::time_point{}
+                                                : std::chrono::steady_clock::now();
     fluid.showing = frame;
     fluid.showing_vblank = shown_vblank;
     fluid.showing_late = false;
