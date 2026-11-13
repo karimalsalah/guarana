@@ -279,6 +279,28 @@ export interface StopResult {
   message: string;
 }
 
+// ---- Game Booster -------------------------------------------------------------------------------------
+
+/** One booster level as the picker shows it, with the exact changes it makes on this PC. */
+export interface BoosterLevelInfo {
+  level: number;
+  title: string;
+  summary: string;
+  /** True when the level shows one Windows permission (UAC) prompt. */
+  elevated: boolean;
+  changes: string[];
+}
+
+export interface BoosterStatus {
+  /** The chosen level: 0 = Off (default), 1, 2 or 3. */
+  level: number;
+  /** A boosted session is running now. */
+  active: boolean;
+  /** Off..3, for the picker and the "what it changes" list. */
+  levels: BoosterLevelInfo[];
+  note: string | null;
+}
+
 export type AiService = "claude" | "chatgpt";
 
 export interface AskAiResult {

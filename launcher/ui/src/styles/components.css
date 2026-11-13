@@ -629,3 +629,28 @@ html[data-pad="generic"] .glyph > .g-generic { display: inline-flex; }
 .share-card { display: grid; gap: var(--sp-3); }
 .share-card[hidden] { display: none; }
 .share-text { font-weight: 600; margin: 0; }
+
+/* Game Booster (Home) */
+.booster-slot:empty { display: none; }
+.booster-card { display: grid; gap: var(--sp-3); }
+.booster-card > .fine { margin: 0; }
+.booster-levels { display: grid; gap: var(--sp-2); }
+.booster-level {
+  display: grid; gap: 2px; text-align: left; width: 100%; padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); cursor: pointer;
+}
+.booster-level:hover { border-color: var(--accent); }
+.booster-level[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.booster-level-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.booster-level-title { font-weight: 650; }
+.booster-tag { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--accent); }
+.booster-tag svg { width: 14px; height: 14px; }
+.booster-level-summary { color: var(--text-2); font-size: var(--fs-sm); }
+.booster-sub { margin: 0; font-size: var(--fs-sm); font-weight: 650; color: var(--text-2); }
+.booster-changes { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); }
+.booster-changes li { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.booster-changes li.muted { color: var(--muted); }
+.booster-changes svg { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--accent); }
+.booster-active { display: flex; align-items: center; gap: var(--sp-2); margin: 0; color: var(--accent); }
+.booster-active svg { flex: none; }
+.booster-active[hidden] { display: none; }

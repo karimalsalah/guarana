@@ -51,6 +51,9 @@ Hard rules (legal and trust):
 | `share_open` | – | `ShareLink` `{ url, url_chars, level: "full" \| "short" \| "clipboard", text }`. The `device-report.yml` form prefilled by field id, text fields only (`device`, `cpu`, `driver`, `ram`, `os`, `power_mode`, `build`, `settings`, `results`, `notes`); the scene, the screenshot and the choices are left to the user. At most 7000 characters (`full`); else the essentials in at most 2000 (`short`); else an empty form (`clipboard`). The UI copies `text` to the clipboard for `short` and `clipboard`, then opens `url`. User name, profile folder and host name are scrubbed like reports. Nothing is sent |
 | `share_dismiss` | – | `ShareStatus` ("Not now", and after Share): drops the offer |
 | `share_set_prompt` | `{ enabled: boolean }` | `ShareStatus`. The setting to stop asking (Home → Advanced); off also drops the offer |
+| `get_booster` | – | `BoosterStatus` (the Game Booster: chosen level, whether a session is active, and every level with what it changes on this PC) |
+| `set_booster_level` | `{ level: number }` (0 = Off … 3) | `BoosterStatus`. Saves the level; it takes effect at the next launch |
+| `booster_undo_all` | – | `BoosterStatus`. Restores every change the booster made right now |
 
 Argument keys are snake_case exactly as written (`invoke("apply_profile", { profile_id, overrides })`):
 the commands are declared with `rename_all = "snake_case"`. Errors reject the promise with a
@@ -139,13 +142,22 @@ interface AutopilotChange { id: number; at: string; mode: string; kind: "change"
 interface StopResult { was_running: boolean; title_id: string | null; stopped: boolean; message: string; }
 interface AskAi { service: "claude" | "chatgpt"; url: string; prompt: string; url_chars: number; }
 
+interface BoosterLevelInfo { level: number; title: string; summary: string;
+  elevated: boolean;                   // true when the level shows one Windows permission (UAC) prompt
+  changes: string[]; }                 // the exact changes the level makes on this PC, in order
+interface BoosterStatus { level: number;   // chosen level: 0 = Off (default) … 3
+  active: boolean;                      // a boosted session is running now
+  levels: BoosterLevelInfo[];           // Off..3, for the picker and the "what it changes" list
+  note: string | null; }
+
 Progress events carry `{ stage: string, done: number, total: number, message?: string }`.
 
 Events: `install://progress` (stages `resolve`, `download`, `verify`, `extract`, `done`; bytes for
 `download`, files for `extract`), `locate://progress` (`scan` with done/total = roots, then `done`),
 `doctor://progress` (stage = the check id being run, then `done`), `game://exited`
 (`{ code, seconds }`), `controller://changed` (`Controller[]`), `warm://progress` (`WarmProgress`), `autopilot://changed`
-(`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed).
+(`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed),
+`booster://changed` (`BoosterStatus`, after the booster applies for a session, restores it, or the level changes).
 
 ## Modes, community data and the autopilot
 
@@ -193,6 +205,32 @@ is not lower, else turned off and not tried for 30 days; resolution one step up 
 at 58 fps or more with even frames. History (50 entries) with the reason, `autopilot_undo`, and
 "Autopilot changed X because Y" on Home. State is in `launcher-state.json`; the only files it
 causes to be written are the ones `apply_profile` writes.
+
+## Game Booster
+
+A separate, opt-in setting (`booster.rs`), Off by default, saved as `booster_level` (0–3) in
+`launcher-state.json`. While a game started from the launcher runs it tunes Windows for speed, and
+puts everything back when the game exits, when the launcher starts after a crash (from
+`booster-journal.json`), or from the UI's **Undo all**. The levels are cumulative:
+
+| Level | Admin | Adds |
+|---|---|---|
+| 1 | no | the emulator at **Above Normal** priority; power throttling (**EcoQoS**) off for it (`SetProcessInformation(ProcessPowerThrottling)`); the **high-performance GPU** asked for `guarana.exe` (`HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, `GpuPreference=2;`, other tokens kept and the previous value restored) |
+| 2 | one UAC prompt | the active **power plan** switched to Ultimate Performance (if installed) or High performance for the session, then the previous one restored |
+| 3 | one UAC prompt | as 2, but the emulator at **High** priority, and **SysMain** and **Windows Search** paused while you play (only if running) and restarted after |
+
+The two things that need administrator rights — the power-plan switch and the services — are done by a
+small elevated helper (the launcher re-run with `--booster-helper`, started with `ShellExecuteEx`
+"runas" on its own thread, so the prompt never holds up the launch), so a whole session costs one
+prompt: the helper applies them, waits for the emulator to exit, and restores them. When a level has
+nothing that needs admin on this PC (the plan is already active or none is installed, and no listed
+service is running), no prompt appears, and `BoosterStatus.levels[].elevated` is then false.
+Everything else is set by the launcher without elevation (the GPU preference before the emulator
+starts, so Windows reads it for the run; priority and EcoQoS on the process once it exists). Every change is
+written to `booster-journal.json` before it is made and is undone from it. **Security settings are
+never touched** (Defender, firewall, VBS/HVCI/Memory Integrity, SmartScreen, UAC, Windows Update,
+BitLocker), and nothing under `HKLM` is written except what `powercfg` itself does. The UI (Home)
+shows the picker and, for each level, exactly what it changes and whether it needs the prompt.
 
 ## Profiles (first set)
 

@@ -5,6 +5,7 @@ import type {
   AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
   WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits, ShareStatus, ShareLink,
+  BoosterStatus,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -125,6 +126,12 @@ export const api = {
   shareDismiss: () => call<ShareStatus>("share_dismiss"),
   /** The setting to stop (or resume) asking after a game. */
   shareSetPrompt: (enabled: boolean) => call<ShareStatus>("share_set_prompt", { enabled }),
+  /** The Game Booster: chosen level, whether a session is active, and each level's changes. */
+  getBooster: () => call<BoosterStatus>("get_booster"),
+  /** Picks the booster level (0 = Off … 3); used at the next launch. */
+  setBoosterLevel: (level: number) => call<BoosterStatus>("set_booster_level", { level }),
+  /** "Undo all": restores every change the booster made now. */
+  boosterUndoAll: () => call<BoosterStatus>("booster_undo_all"),
   appVersion: async () => (await backend()).appVersion(),
 };
 
@@ -138,6 +145,7 @@ export const events = {
   warmProgress: (h: (p: WarmProgress) => void, signal?: AbortSignal) => on<WarmProgress>("warm://progress", h, signal),
   shareChanged: (h: (p: ShareStatus) => void, signal?: AbortSignal) => on<ShareStatus>("share://changed", h, signal),
   autopilotChanged: (h: (p: ModeStatus) => void, signal?: AbortSignal) => on<ModeStatus>("autopilot://changed", h, signal),
+  boosterChanged: (h: (p: BoosterStatus) => void, signal?: AbortSignal) => on<BoosterStatus>("booster://changed", h, signal),
 };
 
 /** Turns whatever a rejected invoke carries (string, Error, {message}) into one readable line. */

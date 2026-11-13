@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- Launcher: a **Game Booster** with three opt-in levels (Off by default) that tune Windows for speed only while a game started from Guarana runs, and undo everything when it exits, when the launcher restarts after a crash (from a journal file), or from an "Undo all" button. Level 1 (no admin): the emulator at Above Normal priority, power throttling (EcoQoS) off for it, and the high-performance GPU asked for `guarana.exe`. Level 2 (one UAC prompt): the High performance, or Ultimate Performance when installed, power plan for the session. Level 3: High priority and pausing SysMain and Windows Search while you play. The elevated steps run in a small `--booster-helper` process behind one prompt, and no security setting is ever touched (Defender, firewall, VBS/HVCI, SmartScreen, UAC, Windows Update, BitLocker). See [launcher/CONTRACT.md](launcher/CONTRACT.md#game-booster).
+
 ## [20.2.0] - 2026-11-13
 
 ### Added

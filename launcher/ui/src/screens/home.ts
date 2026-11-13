@@ -11,7 +11,7 @@ import { whenIdle } from "../motion";
 import { go, type ScreenContext, type ScreenDef } from "../router";
 import { lastSession } from "../sessions";
 import { launcher, library, profiles, warmStatus } from "../state";
-import type { Game, LauncherState, ModeId, ModeStatus, Profile, ShareStatus, UpdateInfo, WarmResult } from "../types";
+import type { BoosterStatus, Game, LauncherState, ModeId, ModeStatus, Profile, ShareStatus, UpdateInfo, WarmResult } from "../types";
 import { badge, busy, button, card, segmented, skeleton, spinner, switchControl } from "../ui/controls";
 import { controllersCard } from "../ui/controllers-card";
 import { heroArt } from "../ui/hero-art";
@@ -71,8 +71,9 @@ const screen: ScreenDef = {
     const libSection = h("section", { class: "library", "aria-labelledby": "lib-title" }, h("div", { class: "section-head" }, libTitle), libBody);
 
     const modeSlot = h("div", { class: "mode-slot" });
+    const boosterSlot = h("div", { class: "booster-slot" });
     const shareSlot = shareCard(ctx);
-    const el = h("div", { class: "home" }, heroSlot, shareSlot, modeSlot, h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot), libSection);
+    const el = h("div", { class: "home" }, heroSlot, shareSlot, modeSlot, boosterSlot, h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot), libSection);
 
     const exited = ctx.params.exited as { code: number; seconds: number; title: string } | undefined;
     if (exited) {
@@ -102,7 +103,10 @@ const screen: ScreenDef = {
       const oot = games.find((g) => g.is_ocarina);
 
       heroSlot.replaceChildren(renderHero(ctx, state, oot, profile, profileId));
-      if (state.keys_present || state.profile_id) modeSlot.replaceChildren(modeCard(ctx));
+      if (state.keys_present || state.profile_id) {
+        modeSlot.replaceChildren(modeCard(ctx));
+        boosterSlot.replaceChildren(boosterCard(ctx));
+      }
       setupSlot.replaceChildren(setupCard(state, profile, ctx));
       settleFocus(el);
 
@@ -571,5 +575,83 @@ function modeCard(ctx: ScreenContext): HTMLElement {
     note,
     autoRow,
     advanced,
+  );
+}
+
+// ---- Game Booster: Off / Level 1 / 2 / 3 --------------------------------------------------------------
+
+function boosterCard(ctx: ScreenContext): HTMLElement {
+  const group = h("div", { class: "booster-levels", role: "radiogroup", "aria-label": "Game Booster level" });
+  const changes = h("ul", { class: "booster-changes" });
+  const activeRow = h("p", { class: "booster-active", role: "status", hidden: true }, icon("bolt"), h("span", { text: "Boost is on for this game. It will be undone when the game exits." }));
+  const note = h("p", { class: "fine mode-note", hidden: true });
+  const undo = button("Undo all", { kind: "ghost", size: "sm", icon: "history", attrs: { title: "Put every change back right now" } });
+  let current = 0;
+
+  const select = (level: number) => {
+    if (level === current) return;
+    void api
+      .setBoosterLevel(level)
+      .then(show)
+      .catch((e: unknown) => {
+        toast(errorText(e), { tone: "fail" });
+        void api.getBooster().then(show, () => undefined);
+      });
+  };
+
+  function show(st: BoosterStatus): void {
+    if (ctx.signal.aborted) return;
+    current = st.level;
+    group.replaceChildren(
+      ...st.levels.map((info) => {
+        const row = h(
+          "button",
+          { type: "button", role: "radio", class: "booster-level", "aria-checked": String(info.level === current) },
+          h(
+            "span",
+            { class: "booster-level-head" },
+            h("span", { class: "booster-level-title", text: info.title }),
+            info.elevated ? h("span", { class: "booster-tag" }, icon("shield"), "Needs a Windows prompt") : null,
+          ),
+          h("span", { class: "booster-level-summary", text: info.summary }),
+        );
+        row.addEventListener("click", () => select(info.level));
+        return row;
+      }),
+    );
+    const chosen = st.levels.find((l) => l.level === current);
+    changes.replaceChildren(
+      ...(chosen && chosen.changes.length
+        ? chosen.changes.map((c) => h("li", {}, icon("check"), h("span", { text: c })))
+        : [h("li", { class: "muted" }, icon("info"), h("span", { text: "Nothing changes. Windows runs games as usual." }))]),
+    );
+    activeRow.hidden = !st.active;
+    note.hidden = !st.note;
+    note.textContent = st.note ?? "";
+  }
+
+  undo.addEventListener("click", () => {
+    void busy(undo, () => api.boosterUndoAll(), "Undoing…")
+      .then((st) => {
+        show(st);
+        if (st.note) toast(st.note, { tone: "ok" });
+      })
+      .catch((e: unknown) => toast(errorText(e), { tone: "fail" }));
+  });
+
+  void api.getBooster().then(show, (e: unknown) => changes.replaceChildren(h("li", { class: "muted", text: `Booster unavailable: ${errorText(e)}` })));
+  void events.boosterChanged(show, ctx.signal).catch(() => undefined);
+
+  return h(
+    "section",
+    { class: "card booster-card", "aria-label": "Game Booster" },
+    h("div", { class: "mode-head" }, h("h2", { class: "card-title", text: "Game Booster" })),
+    h("p", { class: "fine", text: "Tunes Windows for speed only while a game runs, and puts everything back when it exits. Off by default. It never touches security settings." }),
+    group,
+    h("h3", { class: "booster-sub", text: "What this level changes" }),
+    changes,
+    activeRow,
+    note,
+    h("div", { class: "row" }, undo),
   );
 }
