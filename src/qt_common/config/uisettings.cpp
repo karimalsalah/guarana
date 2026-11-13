@@ -74,13 +74,23 @@ const Themes themes{{
     {"Midnight Blue", "qdarkstyle_midnight_blue"},
     {"Midnight Blue Colorful", "colorful_midnight_blue"},
     {"Lichii Dark", "lichii"},
+    {"Guarana Dark", "guarana"},
 }};
 
 bool IsDarkTheme() {
     const auto& theme = UISettings::values.theme;
     return theme == std::string("qdarkstyle") || theme == std::string("qdarkstyle_midnight_blue") ||
            theme == std::string("colorful_dark") ||
-           theme == std::string("colorful_midnight_blue") || theme == std::string("lichii");
+           theme == std::string("colorful_midnight_blue") || theme == std::string("lichii") ||
+           theme == std::string("guarana");
+}
+
+bool IsGuaranaTheme() {
+    return UISettings::values.theme == std::string("guarana");
+}
+
+bool IsLichiiFamilyTheme() {
+    return UISettings::values.theme == std::string("lichii") || IsGuaranaTheme();
 }
 
 Values values = {};

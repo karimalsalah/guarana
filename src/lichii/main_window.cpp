@@ -48,6 +48,7 @@
 #include "lichii/problem_report.h"
 #include "lichii/recommended_settings_dialog.h"
 #include "lichii/shader_warm_dialog.h"
+#include "lichii/guarana_ui.h"
 #include "lichii/whats_new_dialog.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #ifdef LICHII_NX_TOOLS
@@ -341,7 +342,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 #include "lichii/startup_checks.h"
 
-constexpr int default_mouse_hide_timeout = 2500;
+constexpr int default_mouse_hide_timeout = 2000;
 constexpr int default_input_update_timeout = 1;
 constexpr int EmuThreadStopTimeoutMs = 10'000;
 // A teardown that keeps making progress (Common::ShutdownProgress) is waited for this long at
@@ -440,7 +441,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (whats_new_pending) {
         UISettings::values.whats_new_version = WhatsNewDialog::Version;
         UISettings::values.theme =
-            UISettings::themes[static_cast<size_t>(UISettings::Theme::LichiiDark)].second;
+            UISettings::themes[static_cast<size_t>(UISettings::default_theme)].second;
     }
     UpdateUITheme();
 
@@ -463,6 +464,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QtCommon::SetupHID();
     controller_dialog->refreshConfiguration();
 
+    setWindowIcon(Guarana::AppIcon());
+    render_window->setWindowIcon(Guarana::AppIcon());
     UpdateWindowTitle();
 
     show();
@@ -623,6 +626,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 }
 
 MainWindow::~MainWindow() {
+    delete guarana_toast;
     if (nup_cancel) {
         nup_cancel->store(true);
     }
@@ -1497,6 +1501,9 @@ void MainWindow::SetDefaultUIGeometry() {
 void MainWindow::RestoreUIState() {
     setWindowFlags(windowFlags() & ~Qt::FramelessWindowHint);
     restoreGeometry(UISettings::values.geometry);
+    if (UISettings::values.guarana_remember_window.GetValue()) {
+        Guarana::RestoreGeometry(this, UISettings::values.guarana_window_geometry.GetValue());
+    }
     // Work-around because the games list isn't supposed to be full screen
     if (isFullScreen()) {
         showNormal();
@@ -1618,6 +1625,10 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::AddDirectory, this, &MainWindow::OnGameListAddDirectory);
     connect(game_list_placeholder, &GameListPlaceholder::AddDirectory, this,
             &MainWindow::OnGameListAddDirectory);
+    connect(game_list_placeholder, &GameListPlaceholder::InstallKeys, this,
+            [this] { ui->action_Install_Keys->trigger(); });
+    connect(game_list_placeholder, &GameListPlaceholder::InstallFirmware, this,
+            [this] { ui->menuInstall_Firmware->popup(QCursor::pos()); });
     connect(game_list, &GameList::ShowList, this, &MainWindow::OnGameListShowList);
     connect(game_list, &GameList::PopulatingCompleted,
             [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
@@ -2511,6 +2522,9 @@ bool MainWindow::OnShutdownBegin() {
 
     if (ui->action_Fullscreen->isChecked()) {
         HideFullscreen();
+    }
+    if (guarana_toast != nullptr) {
+        guarana_toast->hide();
     }
 
     AllowOSSleep();
@@ -3793,10 +3807,26 @@ void MainWindow::ShowFullscreen() {
         statusBar()->hide();
 
         show_fullscreen(this);
+        ShowMenuHintToast();
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
         show_fullscreen(render_window);
     }
+}
+
+void MainWindow::ShowMenuHintToast() {
+    if (!emulation_running || !UISettings::values.guarana_play_toast.GetValue()) {
+        return;
+    }
+    if (guarana_toast == nullptr) {
+        guarana_toast = new Guarana::Toast(this);
+    }
+    // After the window has settled into fullscreen
+    QTimer::singleShot(600, this, [this] {
+        if (emulation_running && ui->action_Fullscreen->isChecked()) {
+            guarana_toast->ShowMessage(Guarana::MenuHintText());
+        }
+    });
 }
 
 void MainWindow::HideFullscreen() {
@@ -4007,6 +4037,8 @@ void MainWindow::OnConfigure() {
             &MainWindow::OnLanguageChanged);
     connect(&configure_dialog, &ConfigureDialog::ExternalContentDirsChanged, this,
             &MainWindow::OnGameListRefresh);
+    connect(&configure_dialog, &ConfigureDialog::ReportProblemRequested, this,
+            &MainWindow::OnReportProblem);
 
     const auto result = configure_dialog.exec();
     if (result != QDialog::Accepted && !UISettings::values.configuration_applied &&
@@ -5264,6 +5296,11 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
+    if (Guarana::UseCleanTitle()) {
+        setWindowTitle(Guarana::CleanWindowTitle(title_name));
+        return;
+    }
+
     static const std::string build_id = std::string{Common::g_build_id};
     static const std::string lichii_title =
         fmt::format("{} | {} | {}", std::string{Common::g_build_name},
@@ -5640,6 +5677,12 @@ void MainWindow::UpdateUISettings() {
     if (!ui->action_Fullscreen->isChecked()) {
         UISettings::values.geometry = saveGeometry();
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
+        if (UISettings::values.guarana_remember_window.GetValue() && !isFullScreen() &&
+            !isMinimized()) {
+            std::string store = UISettings::values.guarana_window_geometry.GetValue();
+            Guarana::RememberGeometry(this, store);
+            UISettings::values.guarana_window_geometry = store;
+        }
     }
     UISettings::values.state = saveState();
     UISettings::values.single_window_mode = ui->action_Single_Window_Mode->isChecked();
@@ -6004,7 +6047,9 @@ void MainWindow::filterBarSetChecked(bool state) {
 static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
 
-    if (UISettings::values.theme == "lichii")
+    if (UISettings::IsGuaranaTheme())
+        new_pal.setColor(QPalette::Link, QColor(0xfb, 0xbf, 0x24));
+    else if (UISettings::values.theme == "lichii")
         new_pal.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
@@ -6018,12 +6063,14 @@ static void AdjustLinkColor() {
 // Lichii Dark styles most widgets through its stylesheet; the palette covers what Qt draws
 // without one: item view text, disabled text, links and the native parts of dialogs.
 static QPalette LichiiPalette() {
+    // Guarana Dark: the same palette on the launcher's navy with the ember accent.
+    const bool guarana = UISettings::IsGuaranaTheme();
     QPalette palette;
-    const QColor window(0x17, 0x18, 0x1b);
-    const QColor surface(0x20, 0x21, 0x25);
-    const QColor text(0xec, 0xec, 0xef);
-    const QColor disabled(0x55, 0x57, 0x5d);
-    const QColor accent(0xf0, 0x38, 0x6b);
+    const QColor window = guarana ? QColor(0x0b, 0x10, 0x1d) : QColor(0x17, 0x18, 0x1b);
+    const QColor surface = guarana ? QColor(0x0e, 0x15, 0x27) : QColor(0x20, 0x21, 0x25);
+    const QColor text = guarana ? QColor(0xee, 0xf1, 0xf6) : QColor(0xec, 0xec, 0xef);
+    const QColor disabled = guarana ? QColor(0x4d, 0x57, 0x6b) : QColor(0x55, 0x57, 0x5d);
+    const QColor accent = guarana ? QColor(0xf2, 0x85, 0x1a) : QColor(0xf0, 0x38, 0x6b);
     palette.setColor(QPalette::Window, window);
     palette.setColor(QPalette::WindowText, text);
     palette.setColor(QPalette::Base, window);
@@ -6042,8 +6089,9 @@ static QPalette LichiiPalette() {
     palette.setColor(QPalette::Shadow, Qt::black);
     palette.setColor(QPalette::Highlight, accent);
     palette.setColor(QPalette::HighlightedText, Qt::white);
-    palette.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
-    palette.setColor(QPalette::LinkVisited, QColor(0xd4, 0x2c, 0x5a));
+    palette.setColor(QPalette::Link, guarana ? QColor(0xfb, 0xbf, 0x24) : QColor(0xf4, 0x5a, 0x85));
+    palette.setColor(QPalette::LinkVisited,
+                     guarana ? QColor(0xd9, 0x72, 0x0f) : QColor(0xd4, 0x2c, 0x5a));
     palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
     palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
@@ -6122,7 +6170,7 @@ void MainWindow::UpdateUITheme() {
         current_theme = default_theme;
 
     static bool lichii_palette = false;
-    if (current_theme == QStringLiteral("lichii")) {
+    if (current_theme == QStringLiteral("lichii") || current_theme == QStringLiteral("guarana")) {
         qApp->setPalette(LichiiPalette());
         lichii_palette = true;
     } else if (lichii_palette) {
