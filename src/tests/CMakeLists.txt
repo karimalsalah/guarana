@@ -86,6 +86,7 @@ add_executable(tests
     video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp
     video_core/auto_shading_rate.cpp
+    common/guarana_modes.cpp
     common/power_governor.cpp
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp

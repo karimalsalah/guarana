@@ -64,6 +64,9 @@ class QSlider;
 class QHBoxLayout;
 class WaitTreeWidget;
 class PerformanceOverlay;
+namespace Guarana {
+class Toast;
+}
 #ifdef HAS_RESHADE
 class ConfigurePostProcessing;
 #endif
@@ -498,6 +501,7 @@ private:
     void UpdateUISettings();
     void UpdateInputDrivers();
     void HideMouseCursor();
+    void ShowMenuHintToast();
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
@@ -614,6 +618,7 @@ private:
     u32 sleep_assertion_id = 0;
 #endif
     QTimer mouse_hide_timer;
+    Guarana::Toast* guarana_toast = nullptr;
     QTimer update_input_timer;
 
     QString startup_icon_theme;

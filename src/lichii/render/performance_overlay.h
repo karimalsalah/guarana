@@ -35,6 +35,12 @@ private:
     void resetPosition(const QPoint& pos);
     void updateStats(const Core::PerfStatsResults& results, const VideoCore::ShaderNotify& shaders);
     void paintGraph(QPainter& painter, const QRectF& area);
+    void paintCompact(QPainter& painter);
+    void applyLayout();
+
+    bool m_compact = false;
+    double m_generatedFps = 0.0;
+    bool m_frameGenOn = false;
 
     MainWindow* m_mainWindow = nullptr;
 

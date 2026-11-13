@@ -76,6 +76,8 @@ add_library(
     fs/path_util.h
     fs/profile_migration.cpp
     fs/profile_migration.h
+    guarana_modes.cpp
+    guarana_modes.h
     hash.h
     heap_tracker.cpp
     heap_tracker.h

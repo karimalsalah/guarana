@@ -101,7 +101,9 @@ public:
             const int star_y = title_rect.center().y() - 7;
             if (star_x + 14 <= rect.right()) {
                 painter->drawPixmap(QRect(star_x, star_y, 14, 14),
-                                    QPixmap(QStringLiteral(":/lichii/icons/star_accent@2x.png")));
+                                    QPixmap(UISettings::IsGuaranaTheme()
+                                            ? QStringLiteral(":/guarana/icons/star_accent@2x.png")
+                                            : QStringLiteral(":/lichii/icons/star_accent@2x.png")));
             }
         }
 
