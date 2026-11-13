@@ -93,3 +93,7 @@ eden_log.txt*
 # tools/bench: rows (*.jsonl) are committed, saved debug server replies are not
 tools/bench/results/*.json
 !tools/bench/results/.gitkeep
+
+# Python bytecode
+__pycache__/
+*.py[cod]
