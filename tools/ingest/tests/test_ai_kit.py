@@ -173,12 +173,12 @@ class ReadmeTests(unittest.TestCase):
         for heading in ("## Measured wins", "## Get it", "## AI-native: plug in your agent", "## Why contribute now",
                         "## Hall of fame", "## Devices", "## Roadmap", "## FAQ", "## Legal"):
             self.assertIn(heading, self.text)
-        self.assertIn("coming with v20.1, not shipped yet", self.text.lower())
-        self.assertIn("not in the v20.0.2 zip", self.text)
+        self.assertIn("guarana setup arrives with v20.1", self.text.lower())
+        self.assertIn("Next release (v20.1)", self.text)
         self.assertIn("no keys, firmware, games or system files", self.text.lower())
         self.assertIn("Not affiliated with Nintendo", self.text)
         self.assertIn("emulator-debug", self.text)
-        self.assertIn("Only the Arc 140T has measured results", self.text)
+        self.assertIn("Measured first on the Arc 140T", self.text)
 
     def test_badges_images_and_languages(self):
         for needed in ("img.shields.io/github/v/release", "build-check.yml", "license-GPL", "discord-urz7vMdRM",
