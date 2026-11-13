@@ -376,9 +376,12 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
             present_manager.Present(generated);
         }
         if (!predicted_frames.empty()) {
-            // The first predicted frame follows the real frame one spacing later, and each
-            // predicted frame holds the screen one spacing before the next frame.
+            // The real frame and each predicted frame but the last hold the screen one spacing.
+            // The last leaves the next real frame free to show as soon as it is ready, as the real
+            // frame does after interpolated ones: (gens + 1) spacings plus copy time per batch
+            // would let the present queue creep behind.
             frame->present_spacing = spacing;
+            predicted_frames.back()->present_spacing = {};
         }
     }
 #endif

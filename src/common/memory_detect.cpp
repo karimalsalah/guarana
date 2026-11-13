@@ -182,6 +182,8 @@ bool LowMemoryMode() {
 
 std::string_view LowMemoryModeReason() {
     return GetLowMemoryDecision().reason;
+}
+
 u64 GetAvailablePhysicalMemory() {
 #ifdef _WIN32
     MEMORYSTATUSEX memorystatus;
