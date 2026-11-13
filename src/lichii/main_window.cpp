@@ -3794,8 +3794,12 @@ void MainWindow::ShowFullscreen() {
         window->hide();
         window->setWindowFlags(window->windowFlags() | Qt::FramelessWindowHint);
         const auto screen_geometry = GuessCurrentScreen(window)->geometry();
+        // One row taller keeps an OpenGL window composed. A Vulkan window that covers the screen
+        // exactly can get independent flip: no desktop composition, up to a refresh less latency.
+        const bool vulkan =
+            Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
         window->setGeometry(screen_geometry.x(), screen_geometry.y(), screen_geometry.width(),
-                            screen_geometry.height() + 1);
+                            screen_geometry.height() + (vulkan ? 0 : 1));
         window->raise();
         window->showNormal();
     };
