@@ -404,17 +404,19 @@ std::vector<const char*> ExtensionListForVulkan(
     return output;
 }
 
-/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE: the FLUID presenter's screen copy gets a queue of its
-/// own. Unset or 1: the queue at high global priority, also presenting. 0: off. For bisecting a
-/// fault: 2 default priority; 3 the copy only, presents stay on the original queue; 4 the queue is
-/// created but nothing uses it.
+/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE (experimental, off unless set): the FLUID presenter's
+/// screen copy gets a queue of its own. 1: the queue at high global priority, also presenting.
+/// 2: default priority. 3: the copy only, presents stay on the original queue. 4: the queue is
+/// created but nothing uses it. On the Arc 140T (driver 9175), presenting from the compute family
+/// (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost 17% of
+/// the real frame rate in Hyrule Field (20.0 against 24.0 fps).
 [[nodiscard]] u32 FluidQueueMode() {
     const char* fluid = std::getenv("EDEN_NX2_FLUID");
     if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
         return 0;
     }
     const char* queue = std::getenv("EDEN_NX2_FLUID_QUEUE");
-    return queue == nullptr ? 1U : static_cast<u32>(std::strtoul(queue, nullptr, 10));
+    return queue == nullptr ? 0U : static_cast<u32>(std::strtoul(queue, nullptr, 10));
 }
 
 constexpr u32 NvidiaDriverVersion(u32 major, u32 minor, u32 secondary) {
