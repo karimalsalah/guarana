@@ -157,6 +157,7 @@ th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
         <li><a href="contribute.html">Contribute</a></li>
         <li><a href="blog/">Blog</a></li>
         <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
       </ul>
     </nav>
   </div>
@@ -219,6 +220,14 @@ th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
 </section>
 <p class="fine">Static copy of <a href="data/benchmarks.json">data/benchmarks.json</a> (updated 2026-11-13).</p>
 </div>
+<section class="section" id="records" aria-labelledby="records-title">
+  <h2 id="records-title">Records</h2>
+  <p class="section-intro">The best result for each GPU class and scene: the highest game fps among the reports whose <code>tools/bench</code> row is valid and passed its scene check. A name is shown only when the tester asked for it in the report form ("Credit me as"). Think you can do better? Send a report with a higher number on the same scene.</p>
+  <div id="records-app" data-src="data/community.json" data-form="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml" data-issues="https://github.com/karimalsalah/guarana/issues/">
+    <p class="fine">The records load from <a href="data/community.json">data/community.json</a>.</p>
+    <noscript><p class="fine">They need JavaScript to show; the records are the <code>records</code> list in the data file.</p></noscript>
+  </div>
+</section>
 <section class="section" id="community" aria-labelledby="community-title">
   <h2 id="community-title">Community leaderboard</h2>
   <p class="section-intro">One row per <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20label%3Adevice-report">device report</a>, as the tester reported it, once a maintainer merged it. <strong>Verified scene</strong> marks numbers from a <code>tools/bench</code> row whose scene check passed against the tester's reference screenshot; the other rows are the tester's own measurement. The maintainers did not measure these, and builds, settings and scenes differ from row to row.</p>
@@ -280,6 +289,7 @@ th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
         <li><a href="contribute.html">Contribute</a></li>
         <li><a href="blog/">Blog</a></li>
         <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
         <li><a href="legacy.html">Hall of fame</a></li>
         <li><a href="legal.html">Legal</a></li>
       </ul>
@@ -559,6 +569,125 @@ th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
       var frag = document.createDocumentFragment();
       frag.appendChild(dataLink("The leaderboard could not be loaded here. Every row is in ", "."));
       show(frag);
+    });
+})();
+</script>
+<script>
+/* Records board: renders the "records" list of data/community.json (tools/ingest/ingest.py picks the
+   best validated row per GPU class and scene) into #records-app. Data reaches the page as text only;
+   a handle becomes a link only when it looks like a GitHub login, and report links are built from the
+   issue number. */
+(function () {
+  "use strict";
+  var app = document.getElementById("records-app");
+  if (!app || !window.fetch || !Array.prototype.forEach) return;
+  var formUrl = app.getAttribute("data-form");
+  var issueBase = app.getAttribute("data-issues");
+  var dataUrl = app.getAttribute("data-src");
+  var LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+      }
+    }
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function str(value) { return typeof value === "string" ? value : ""; }
+  function num(value) { return typeof value === "number" && isFinite(value) ? value : null; }
+  function fmt(value) { return String(Math.round(value * 100) / 100); }
+
+  function cell(label, main, sub, cls) {
+    var td = el("td", { "data-label": label });
+    if (cls) td.className = cls;
+    td.appendChild(document.createTextNode(main));
+    if (sub) td.appendChild(el("span", { "class": "lb-sub" }, sub));
+    return td;
+  }
+
+  function beatIt(r) {
+    var td = el("td", { "data-label": "Beat it" });
+    var label = "Beat it: " + (str(r.gpu) || "this GPU class") + ", " + (str(r.scene) || "this scene");
+    td.appendChild(el("a", { "class": "btn btn-small", href: formUrl, "aria-label": label }, "Beat it"));
+    return td;
+  }
+
+  function row(r) {
+    var tr = el("tr");
+    tr.appendChild(cell("GPU class", str(r.gpu) || "n/a", ""));
+    tr.appendChild(cell("Game and scene", str(r.game) || "n/a", str(r.scene)));
+    var fps = num(r.fps), p99 = num(r.p99_ms);
+    tr.appendChild(cell("Record", fps === null ? "n/a" : fmt(fps) + " fps", p99 === null ? "" : "p99 " + fmt(p99) + " ms", "num"));
+    var holder = el("td", { "data-label": "Held by" });
+    var handle = str(r.credit);
+    if (LOGIN.test(handle)) holder.appendChild(el("a", { href: "https://github.com/" + handle }, "@" + handle));
+    else holder.appendChild(document.createTextNode("Anonymous"));
+    var detail = [str(r.device), str(r.driver) ? "driver " + str(r.driver) : "", str(r.measured)].filter(Boolean).join(" · ");
+    if (detail) holder.appendChild(el("span", { "class": "lb-sub" }, detail));
+    tr.appendChild(holder);
+    var report = el("td", { "data-label": "Report" });
+    var number = Number(r.issue);
+    if (number > 0 && Math.floor(number) === number) report.appendChild(el("a", { href: issueBase + number }, "#" + number));
+    tr.appendChild(report);
+    tr.appendChild(beatIt(r));
+    return tr;
+  }
+
+  function show(node) {
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(node);
+    app.setAttribute("data-rendered", "client");
+  }
+
+  function empty() {
+    var box = document.createDocumentFragment();
+    box.appendChild(el("p", null, "No record yet: the first verified-scene report sets it."));
+    var p = el("p");
+    p.appendChild(el("a", { "class": "btn", href: formUrl }, "Set the first record"));
+    box.appendChild(p);
+    show(box);
+  }
+
+  function build(list) {
+    var box = document.createDocumentFragment();
+    var wrap = el("div", { "class": "table-wrap" });
+    var table = el("table", { "class": "stack lb-table" });
+    table.appendChild(el("caption", { "class": "visually-hidden" }, "Records per GPU class and scene"));
+    var head = el("tr");
+    ["GPU class", "Game and scene", "Record", "Held by", "Report", "Beat it"].forEach(function (name) {
+      var th = el("th", { scope: "col" }, name);
+      if (name === "Record") th.className = "num";
+      head.appendChild(th);
+    });
+    var thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    var body = el("tbody");
+    list.forEach(function (r) { body.appendChild(row(r)); });
+    table.appendChild(body);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+    show(box);
+  }
+
+  fetch(dataUrl, { cache: "no-cache" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      var list = data && Array.isArray(data.records) ? data.records.filter(function (r) { return r && typeof r === "object"; }) : [];
+      if (list.length) build(list); else empty();
+    })
+    .catch(function () {
+      var p = el("p", { "class": "fine" });
+      p.appendChild(document.createTextNode("The records could not be loaded here. They are in "));
+      p.appendChild(el("a", { href: dataUrl }, "data/community.json"));
+      p.appendChild(document.createTextNode("."));
+      show(p);
     });
 })();
 </script>

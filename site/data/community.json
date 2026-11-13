@@ -13,7 +13,10 @@
     "source": "tools/bench or manual.",
     "gpu_vendor, gpu_type": "intel, amd, nvidia or other; integrated, discrete or unknown, from the form's Graphics card answer.",
     "runs": "Every valid tools/bench row of the report (variant, scene, fps, p50_ms, p99_ms, switches).",
-    "notes": "Caveats a reader should see next to the numbers."
+    "notes": "Caveats a reader should see next to the numbers.",
+    "credit": "The reporter's GitHub handle when they filled in \"Credit me as\" with the account that opened the report; null otherwise. It is the only personal detail a record carries, and only by consent.",
+    "records": "The Records board: per GPU class (the form's Graphics card answer) and scene, the best row that is valid with scene_ok true, by game fps, then lower p99, then the earlier report. credit is null when the reporter did not ask for one."
   },
+  "records": [],
   "reports": {}
 }

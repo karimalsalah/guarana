@@ -68,6 +68,8 @@ REQUIRED_CHECKS = (
 )
 REQUIRED = ("Device", "Form factor", "Graphics card", "GPU driver", "Emulator build", "Game", "Scene", "Results")
 OPTIONAL = ("CPU", "RAM", "Operating system", "Power source", "Power mode", "Settings and switches")
+CREDIT_LABEL = "Credit me as"  # optional; the consent for the handle on the Records board
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 
 FPS_RANGE = (0.5, 500.0)
 P50_RANGE = (0.5, 2000.0)
@@ -89,6 +91,11 @@ FIELD_DOCS = {
                             "Graphics card answer.",
     "runs": "Every valid tools/bench row of the report (variant, scene, fps, p50_ms, p99_ms, switches).",
     "notes": "Caveats a reader should see next to the numbers.",
+    "credit": "The reporter's GitHub handle when they filled in \"Credit me as\" with the account that opened the "
+              "report; null otherwise. It is the only personal detail a record carries, and only by consent.",
+    "records": "The Records board: per GPU class (the form's Graphics card answer) and scene, the best row that is "
+               "valid with scene_ok true, by game fps, then lower p99, then the earlier report. credit is null "
+               "when the reporter did not ask for one.",
 }
 
 
@@ -569,10 +576,14 @@ def parse_report(body, number, created=None, logins=(), titles=None, validate=No
         "scene_ok": None,
         "bench": None,
         "runs": [],
+        "credit": None,
         "screenshot": bool(re.search(r"(?i)!\[[^\]]*\]\([^)]+\)|<img\b|user-attachments/assets/|"
                                      r"\.(?:png|jpe?g|webp|gif)\b", sections.get("Screenshot", ""))),
         "notes": notes,
     }
+
+    credit = credit_handle(sections.get(CREDIT_LABEL), logins, warnings)
+    record["credit"] = credit
 
     if rows:
         usable, left_out = select_rows(rows, validate, logins)
@@ -659,6 +670,21 @@ def parse_report(body, number, created=None, logins=(), titles=None, validate=No
     return record, problems, warnings
 
 
+def credit_handle(answer, logins, warnings):
+    """The GitHub handle to show next to a record, or None. Only the account that opened the report
+    can be credited, so nobody can put another person's name on a row."""
+    first = (answer or "").strip().split(chr(10))[0].strip()
+    handle = first.lstrip("@").strip()
+    if not handle:
+        return None
+    author = next((login for login in logins if login), "")
+    if not GITHUB_LOGIN.fullmatch(handle) or not author or handle.casefold() != author.casefold():
+        warnings.append('"Credit me as" must be the GitHub handle of the account that opens the report; '
+                        "the row is listed without a name.")
+        return None
+    return author
+
+
 def parse_issue(issue, titles=None, validate=None):
     number = int(issue.get("number") or 0)
     excluded = None
@@ -697,6 +723,30 @@ def records_of(reports):
     return {str(report.number): report.record for report in listed}
 
 
+def records_board(records):
+    """The best validated row per GPU class and scene: records is {issue: record}. Only a tools/bench row
+    that is valid with scene_ok true and an exact fps counts; the best has the highest fps, then the lower
+    p99, then the earlier report."""
+    best = {}
+    for record in records.values():
+        fps = record.get("fps")
+        if record.get("scene_ok") is not True or record.get("source") != "tools/bench" or not is_number(fps)                 or fps <= 0 or record.get("fps_approximate"):
+            continue
+        scene = record.get("bench_scene") or record.get("scene") or "unknown scene"
+        key = (record.get("gpu_option") or record.get("gpu") or "Other", record.get("game") or "Other", scene)
+        p99 = record.get("p99_ms") if is_number(record.get("p99_ms")) else float("inf")
+        rank = (-fps, p99, record.get("issue") or 0)
+        if key not in best or rank < best[key][0]:
+            best[key] = (rank, record)
+    board = []
+    for (gpu, game, scene), (_, record) in sorted(best.items(), key=lambda item: tuple(map(str.casefold, item[0]))):
+        board.append({"gpu": gpu, "game": game, "scene": scene, "fps": record["fps"], "p50_ms": record.get("p50_ms"),
+                      "p99_ms": record.get("p99_ms"), "issue": record.get("issue"), "credit": record.get("credit"),
+                      "device": record.get("device"), "driver": record.get("driver"), "build": record.get("build"),
+                      "measured": (record.get("bench") or {}).get("measured") or record.get("submitted")})
+    return board
+
+
 def make_document(records, repo, previous=None, today=None):
     """The file's content. "updated" moves only when the records change."""
     keep = previous and previous.get("reports") == records and previous.get("updated")
@@ -708,6 +758,7 @@ def make_document(records, repo, previous=None, today=None):
         "updated": previous["updated"] if keep else (today or utc_today()),
         "count": len(records),
         "fields": FIELD_DOCS,
+        "records": records_board(records),
         "reports": records,
     }
 

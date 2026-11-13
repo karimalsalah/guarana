@@ -192,3 +192,10 @@ body:
     attributes:
       label: Anything else
       description: Background programs, temperatures or throttling, an external display, what you compared with
+
+  - type: input
+    id: credit
+    attributes:
+      label: Credit me as
+      description: Optional. Your GitHub handle, to be named on the Records board of the benchmarks page when your row is the best for its GPU and scene. It must be the account that opens this report. Leave it empty to stay anonymous; nothing else about you is published.
+      placeholder: "e.g. your-github-handle"
