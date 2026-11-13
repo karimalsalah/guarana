@@ -1108,6 +1108,7 @@ static std::jthread RunHostThreadFunc(KernelCore& kernel, KProcess* process, std
     return std::jthread([&kernel, thread, thread_name_{std::move(thread_name)}, func_{std::move(func)}] {
         // Set the thread name.
         Common::SetCurrentThreadName(thread_name_.c_str());
+        Common::SetCurrentThreadToResponsiveCores();
 
         // Set the thread as current.
         kernel.RegisterHostThread(thread);

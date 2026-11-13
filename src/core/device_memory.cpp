@@ -47,6 +47,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+    Common::SetCurrentThreadToBackgroundWork();
     Common::PowerTuning::TagBackgroundThread();
     constexpr size_t Busy = size_t{64} << 20;
     // Low memory mode looks again sooner: zero pages a quiet minute leaves resident are RAM the

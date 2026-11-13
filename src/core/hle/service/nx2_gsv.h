@@ -1709,6 +1709,7 @@ private:
     std::jthread m_cold_hint_thread{[this](std::stop_token stop) {
         Common::SetCurrentThreadName("nx2:ColdHint");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        Common::SetCurrentThreadToBackgroundWork();
         Common::PowerTuning::TagBackgroundThread();
         while (!stop.stop_requested()) {
             for (int i = 0; i < 30 && !stop.stop_requested(); ++i) {
