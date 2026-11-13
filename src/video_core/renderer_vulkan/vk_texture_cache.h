@@ -9,6 +9,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <span>
 
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -84,7 +85,9 @@ public:
                                  DescriptorPool& descriptor_pool,
                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
 
-    void Finish();
+    /// Submits and waits for the host GPU; the location names the caller in the Finish trace
+    /// (EDEN_NX2_HITCH_FINISH_TRACE).
+    void Finish(std::source_location location = std::source_location::current());
 
     StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
 
