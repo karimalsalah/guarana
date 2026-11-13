@@ -39,6 +39,8 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#1571](https://github.com/zortos293/Lichii/pull/1571) | [jpkto](https://github.com/jpkto) | The texture cache's bounded retire scan resumes where it stopped; overwritten render targets are deleted after ten unused frames |
 | [#1602](https://github.com/zortos293/Lichii/pull/1602) | [cerroverb](https://github.com/cerroverb) | A guest write that finds the caches busy waits for the next gather instead of blocking the game thread |
 | [#995](https://github.com/zortos293/Lichii/pull/995) | [VirusEx](https://github.com/VirusEx) | Pointer-slot compute rebuilds compile on a worker; the Hyrule Field grass-culling dispatch keeps its old translation instead of freezing for 2.5-3.4 s |
+| [#1584](https://github.com/zortos293/Lichii/pull/1584) | [rushi806](https://github.com/rushi806) | Packed R16 shadow dispatches may read global memory, so Ocarina of Time's prop shadows render (upstream issue #1343) |
+| [#1483](https://github.com/zortos293/Lichii/pull/1483) | [cerroverb](https://github.com/cerroverb) | The virtual range cache remembers linear spans |
 | [#1378](https://github.com/zortos293/Lichii/pull/1378) | Krim | Graphics pipelines reuse the translated shaders of an earlier pipeline when their translation inputs and the guest memory they read match (`EDEN_NX2_SHADER_REUSE=1`) |
 | [#1596](https://github.com/zortos293/Lichii/pull/1596) | [sanchodecuba11-del](https://github.com/sanchodecuba11-del) | The selected user index is cast to the launch parameter type (MSVC C4244) |
 | [#1475](https://github.com/zortos293/Lichii/pull/1475) | [RomainROCH](https://github.com/RomainROCH) | Logging no longer calls std::terminate when formatting fails while the host is out of memory |
