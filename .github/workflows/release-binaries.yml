@@ -476,7 +476,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # /Z7 keeps debug info in the objects (sccache caches it); the linker writes lichii.pdb,
+          # /Z7 keeps debug info in the objects (sccache caches it); the linker writes guarana.pdb,
           # published as a separate symbols archive so crash dumps from users can be symbolized.
           flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin /Z7"
           if [ -n '${{ matrix.march }}' ]; then flags+=" -march=${{ matrix.march }}"; fi
@@ -592,17 +592,20 @@ jobs:
       # need except the base system ones (glibc, X11/Wayland client libraries, the GPU driver and
       # Vulkan loader), and its Qt plugin adds the Qt libraries and platform plugins. The AppImage
       # packs that folder into one file; the tar.gz holds the same folder for systems without FUSE,
-      # with lichii and eden-cli links at its top. Both run on glibc 2.39+ systems. A tar.gz of the
+      # with guarana and guarana-cli links at its top. Both run on glibc 2.39+ systems. A tar.gz of the
       # bare programs needed the Qt 6.8 they were built against installed system-wide (#901).
-      # Files are named lichii-<commit>-<platform> here; the publish job gives them release names.
+      # Files are named guarana-<commit>-<platform> here; the publish job gives them release names.
       - name: Package Linux AppImage and tar.gz
         if: startsWith(matrix.platform, 'linux')
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/lichii
-          test -x build/release/bin/eden-cli
-          strip build/release/bin/lichii build/release/bin/eden-cli
+          # guarana and guarana-cli; a build from before the rename has lichii and eden-cli.
+          gui=guarana; [ -x build/release/bin/$gui ] || gui=lichii
+          cli=guarana-cli; [ -x build/release/bin/$cli ] || cli=eden-cli
+          test -x build/release/bin/$gui
+          test -x build/release/bin/$cli
+          strip build/release/bin/$gui build/release/bin/$cli
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
           arch=$(uname -m)   # aarch64 or x86_64
@@ -611,9 +614,13 @@ jobs:
           curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
           https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage
           chmod +x "$tools"/*.AppImage
-          # The desktop file names its icon io.github.zortos293.lichii.
+          # The desktop file names its icon io.github.zortos293.lichii (the app id keeps its name).
           icon="$RUNNER_TEMP/io.github.zortos293.lichii.png"
           cp dist/lichii.png "$icon"
+          # linuxdeploy needs the desktop file's Exec to be a bundled program: point it at the one built.
+          desktop="$RUNNER_TEMP/io.github.zortos293.lichii.desktop"
+          sed -e "s|^TryExec=.*|TryExec=$gui|" -e "s|^Exec=[^ ]*|Exec=$gui|" \
+            dist/io.github.zortos293.lichii.desktop > "$desktop"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
           # Include Wayland platform plugins and their graphics/shell integrations.
@@ -621,7 +628,7 @@ jobs:
           export EXTRA_PLATFORM_PLUGINS='libqwayland-egl.so;libqwayland-generic.so'
           # Embedded in the AppImage metadata: the release version plus the commit.
           export LDAI_VERSION="${VERSION}-${BUILD_SHA::7}"
-          export LDAI_OUTPUT="lichii-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+          export LDAI_OUTPUT="guarana-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
           export ARCH="$arch"
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses
@@ -634,44 +641,49 @@ jobs:
             fsr4_library=(--library "$RUNNER_TEMP/fsr4-vk/$fsr4")
           fi
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
-            --executable build/release/bin/lichii \
-            --executable build/release/bin/eden-cli \
+            --executable build/release/bin/$gui \
+            --executable build/release/bin/$cli \
             "${fsr4_library[@]}" \
-            --desktop-file dist/io.github.zortos293.lichii.desktop \
+            --desktop-file "$desktop" \
             --icon-file "$icon" \
             --plugin qt \
             --output appimage
           test -s "$LDAI_OUTPUT"
           ls -la "$LDAI_OUTPUT"
           test -f AppDir/usr/bin/qt.conf
-          mv AppDir lichii
-          ln -s usr/bin/lichii lichii/lichii
-          ln -s usr/bin/eden-cli lichii/eden-cli
-          tar -czf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" lichii
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
+          mv AppDir guarana
+          ln -s usr/bin/$gui guarana/guarana
+          ln -s usr/bin/$cli guarana/guarana-cli
+          tar -czf "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" guarana
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
           # Both x86-64 packages must carry fsr4-vk and its licences.
           if [ "$arch" = x86_64 ]; then
-            test "$(tar -tzf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
-              grep -cFx -e "lichii/usr/lib/$fsr4" -e lichii/usr/share/licenses/fsr4-vk/LICENSE \
-                -e lichii/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
+            test "$(tar -tzf "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
+              grep -cFx -e "guarana/usr/lib/$fsr4" -e guarana/usr/share/licenses/fsr4-vk/LICENSE \
+                -e guarana/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
             extract="$RUNNER_TEMP/appimage-check"
             mkdir -p "$extract"
             (cd "$extract" &&
               "$GITHUB_WORKSPACE/$LDAI_OUTPUT" --appimage-extract "usr/lib/$fsr4" > /dev/null)
-            cmp "$extract/squashfs-root/usr/lib/$fsr4" "lichii/usr/lib/$fsr4"
-            nm -D --defined-only "lichii/usr/lib/$fsr4" | grep -w ffxCreateContext
+            cmp "$extract/squashfs-root/usr/lib/$fsr4" "guarana/usr/lib/$fsr4"
+            nm -D --defined-only "guarana/usr/lib/$fsr4" | grep -w ffxCreateContext
           fi
 
       - name: Package Windows binary
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
-          foreach ($exe in 'lichii.exe', 'eden-cli.exe') {
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/release/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/release/bin/$cli")) { $cli = 'eden-cli.exe' }
+          foreach ($exe in $gui, $cli) {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations build/release/bin/lichii.exe
+          windeployqt --release --no-translations "build/release/bin/$gui"
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
 
@@ -684,12 +696,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app=build/release/bin/lichii.app
-          test -x "$app/Contents/MacOS/lichii"
-          test -x build/release/bin/eden-cli
-          cp build/release/bin/eden-cli "$app/Contents/MacOS/eden-cli"
+          # guarana.app with guarana and guarana-cli; a build from before the rename has
+          # lichii.app, lichii and eden-cli. The bundle ships as guarana.app either way.
+          app=build/release/bin/guarana.app
+          gui=guarana
+          if [ ! -d "$app" ]; then
+            mv build/release/bin/lichii.app "$app"
+            gui=lichii
+          fi
+          cli=guarana-cli; [ -x build/release/bin/$cli ] || cli=eden-cli
+          test -x "$app/Contents/MacOS/$gui"
+          test -x build/release/bin/$cli
+          cp build/release/bin/$cli "$app/Contents/MacOS/$cli"
           "$(brew --prefix qt@6)/bin/macdeployqt" "$app" \
-            -executable="$app/Contents/MacOS/eden-cli" -libpath="$(brew --prefix)/lib" \
+            -executable="$app/Contents/MacOS/$cli" -libpath="$(brew --prefix)/lib" \
             -always-overwrite -verbose=1
           # Qt's virtual keyboard input plugin pulls in the QML stack, which the emulator doesn't use.
           rm -f "$app/Contents/PlugIns/platforminputcontexts/libqtvirtualkeyboardplugin.dylib"
@@ -703,7 +723,7 @@ jobs:
               done
           done
           # Libraries that load their dependencies through @rpath find them in the bundle.
-          for program in lichii eden-cli; do
+          for program in "$gui" "$cli"; do
             install_name_tool -add_rpath @executable_path/../Frameworks \
               "$app/Contents/MacOS/$program" 2> /dev/null
           done
@@ -731,19 +751,19 @@ jobs:
           codesign --force --deep --sign - "$app"
           if [ -f dist/eglantine.entitlements ]; then
             codesign --force --sign - --entitlements dist/eglantine.entitlements \
-              "$app/Contents/MacOS/eden-cli"
+              "$app/Contents/MacOS/$cli"
             codesign --force --sign - --entitlements dist/eglantine.entitlements "$app"
           fi
           codesign --verify --deep --strict "$app"
-          ditto -c -k --keepParent "$app" "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          # Also ship a .dmg (drag lichii.app onto Applications).
+          ditto -c -k --keepParent "$app" "guarana-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          # Also ship a .dmg (drag guarana.app onto Applications).
           dmgdir=$(mktemp -d)
-          ditto "$app" "$dmgdir/lichii.app"
+          ditto "$app" "$dmgdir/guarana.app"
           ln -s /Applications "$dmgdir/Applications"
           hdiutil create -volname "$APP_NAME" -srcfolder "$dmgdir" -ov -format UDZO \
-            "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+            "guarana-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
 
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.
@@ -751,17 +771,18 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
 
-      # Debug symbols for crash reports: llvm-symbolizer --obj=lichii.exe with lichii.pdb next to it.
+      # Debug symbols for crash reports: llvm-symbolizer --obj=guarana.exe with guarana.pdb next to it
+      # (lichii.exe and lichii.pdb in a build from before the rename; the *.pdb glob above moves either).
       - name: Upload Windows symbols
         if: startsWith(matrix.platform, 'windows')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-symbols-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-symbols-${{ github.sha }}
           path: build/release/symbols/
           if-no-files-found: warn
           retention-days: 7
@@ -771,10 +792,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.tar.gz
-            lichii-${{ github.sha }}-${{ matrix.platform }}.AppImage
+            guarana-${{ github.sha }}-${{ matrix.platform }}.tar.gz
+            guarana-${{ github.sha }}-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -784,10 +805,10 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.zip
-            lichii-${{ github.sha }}-${{ matrix.platform }}.dmg
+            guarana-${{ github.sha }}-${{ matrix.platform }}.zip
+            guarana-${{ github.sha }}-${{ matrix.platform }}.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -816,13 +837,13 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
-          pattern: lichii-*-${{ github.sha }}
+          pattern: guarana-*-${{ github.sha }}
           path: artifacts
 
       - name: Require a Windows binary
         shell: bash
         run: |
-          if ! compgen -G "artifacts/lichii-windows-*" > /dev/null; then
+          if ! compgen -G "artifacts/guarana-windows-*" > /dev/null; then
             echo "::error::No Windows binary was built; not publishing"
             exit 1
           fi
@@ -845,7 +866,7 @@ jobs:
             LICENSES
           sparse-checkout-cone-mode: false
 
-      # lichii-<commit>-<platform>.<ext> becomes <APP>-<version>-<platform>.<ext>; each Windows bin
+      # guarana-<commit>-<platform>.<ext> becomes <APP>-<version>-<platform>.<ext>; each Windows bin
       # folder is zipped as <APP>-<version>-<platform>.zip.
       - name: Package release files
         shell: bash
@@ -853,13 +874,13 @@ jobs:
           set -euo pipefail
           mkdir dist
           for artifact in artifacts/*/; do
-            name=$(basename "$artifact")            # lichii-<platform>-<commit>
-            platform=${name#lichii-}
+            name=$(basename "$artifact")            # guarana-<platform>-<commit>
+            platform=${name#guarana-}
             platform=${platform%-"$GITHUB_SHA"}
             if compgen -G "$artifact*.AppImage" > /dev/null || compgen -G "$artifact*.dmg" > /dev/null; then
               for file in "$artifact"*; do
                 base=$(basename "$file")
-                cp "$file" "dist/$APP-$VERSION-${base#lichii-"$GITHUB_SHA"-}"
+                cp "$file" "dist/$APP-$VERSION-${base#guarana-"$GITHUB_SHA"-}"
               done
             else
               cp src/LICENSE.txt src/LEGAL.md "$artifact"
@@ -901,9 +922,9 @@ jobs:
             echo "| macOS arm64 | $(pair zip "$(asset macos-arm64).zip" dmg "$(asset macos-arm64).dmg") | |"
             echo
             cat <<'EOF'
-          - **Windows**: extract the whole zip into a folder you can write to and run `lichii.exe` (`eden-cli.exe` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
-          - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `lichii/lichii`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
-          - **macOS** 15 or newer, Apple Silicon. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine lichii.app`.
+          - **Windows**: extract the whole zip into a folder you can write to and run `guarana.exe` (`guarana-cli.exe` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
+          - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `guarana/guarana`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
+          - **macOS** 15 or newer, Apple Silicon. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine guarana.app`.
           - **Checksums**: `SHA256SUMS.txt`. Check with `sha256sum -c SHA256SUMS.txt` (Linux), `shasum -a 256 -c SHA256SUMS.txt` (macOS) or `Get-FileHash <file>` (PowerShell).
 
           No keys, firmware or games are included or provided. Dump your own from hardware you own; see LEGAL.md.

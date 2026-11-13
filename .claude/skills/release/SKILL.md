@@ -64,8 +64,8 @@ sha256sum -c github.sha256                         # GitHub's digest of each upl
 - Every asset passes both checks and appears in `SHA256SUMS.txt`. In PowerShell,
   `Get-FileHash -Algorithm SHA256 <file>` gives the same hash.
 - A mismatch or a missing file is a failed release: report it; do not delete or replace assets.
-- Spot-check the contents: `unzip -l guarana-X.Y.Z-windows-x86_64.zip` shows `lichii.exe`,
-  `eden-cli.exe`, `qt.conf` and `plugins/`; `tar -tzf guarana-X.Y.Z-linux-x86_64.tar.gz | head`.
+- Spot-check the contents: `unzip -l guarana-X.Y.Z-windows-x86_64.zip` shows `guarana.exe`,
+  `guarana-cli.exe`, `qt.conf` and `plugins/`; `tar -tzf guarana-X.Y.Z-linux-x86_64.tar.gz | head`.
 - A local zip from `scripts/package-windows.ps1` has its own `<zip>.sha256`:
   `sha256sum -c <zip>.sha256`.
 

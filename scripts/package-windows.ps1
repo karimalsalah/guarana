@@ -9,7 +9,7 @@ Copies the build's bin folder without test programs and linker leftovers into
 build\package\<name>\, runs windeployqt on the copy with the layout of the build's own deploy
 step (Qt plugins in plugins\, as qt.conf says), adds LICENSE.txt, the license texts of LICENSES\
 and the license files of the third-party code the build compiled, zips the folder's contents (extract
-and run lichii.exe, as the release zips) and writes <name>.zip.sha256 in sha256sum format.
+and run guarana.exe, as the release zips) and writes <name>.zip.sha256 in sha256sum format.
 
     powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 
@@ -113,7 +113,12 @@ $exitCode = 0
 try {
     $Build = Resolve-UnderRoot $BuildDir
     $Bin = Join-Path $Build 'bin'
-    foreach ($exe in @('lichii.exe', 'eden-cli.exe')) {
+    # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+    $gui = 'guarana.exe'
+    if (-not (Test-Path -LiteralPath (Join-Path $Bin $gui))) { $gui = 'lichii.exe' }
+    $cli = 'guarana-cli.exe'
+    if (-not (Test-Path -LiteralPath (Join-Path $Bin $cli))) { $cli = 'eden-cli.exe' }
+    foreach ($exe in @($gui, $cli)) {
         if (-not (Test-Path -LiteralPath (Join-Path $Bin $exe))) {
             throw "$Bin\$exe is missing; build first: powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1"
         }
@@ -169,7 +174,7 @@ try {
     if ($isDebug) { $mode = '--debug' }
     $deployArgs = @($mode, '--no-translations', '--no-compiler-runtime', '--no-opengl-sw', '--no-system-d3d-compiler',
                     '--dir', $Stage, '--libdir', $Stage, '--plugindir', (Join-Path $Stage 'plugins'), '--verbose', '0',
-                    (Join-Path $Stage 'lichii.exe'))
+                    (Join-Path $Stage $gui))
     & $windeployqt @deployArgs | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
     $qtConf = Join-Path $Stage 'qt.conf'
