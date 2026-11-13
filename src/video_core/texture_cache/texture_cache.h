@@ -1077,7 +1077,7 @@ bool TextureCache<P>::KeepTemplateTextures(std::span<const TextureHandleRead> re
                                   Tegra::Engines::Maxwell3D::Regs::SamplerBinding::ViaHeaderBinding;
     const bool native_tiling = gpu_memory->UsesNativeTiling();
     const auto host_of = [&](GPUVAddr address, size_t size) -> const u8* {
-        if ((address & Core::Memory::YUZU_PAGEMASK) + size > Core::Memory::YUZU_PAGESIZE) {
+        if ((address & Core::Memory::LICHII_PAGEMASK) + size > Core::Memory::LICHII_PAGESIZE) {
             return nullptr;
         }
         return gpu_memory->GetPointer(address);
