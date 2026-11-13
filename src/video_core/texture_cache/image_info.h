@@ -55,8 +55,6 @@ struct ImageInfo {
     bool is_sparse = false;
     // ASTC data whose blocks carry no alpha: re-compressed to BC1 instead of BC3 (half the size).
     bool astc_opaque = false;
-    // Made for a color or depth target (EDEN_NX2_RT_USAGE and its log).
-    bool render_target = false;
 };
 
 } // namespace VideoCommon
