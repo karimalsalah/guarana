@@ -605,9 +605,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
-            ui->action_Fullscreen->setChecked(
-                lp.fullscreen ||
-                (!lp.filepath.empty() && UISettings::values.guarana_fullscreen_on_launch.GetValue()));
+            ui->action_Fullscreen->setChecked(lp.fullscreen);
         }
 
         if (!lp.filepath.empty()) {

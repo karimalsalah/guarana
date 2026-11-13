@@ -131,6 +131,9 @@ Toast::Toast(QWidget* anchor_) : QLabel(nullptr), anchor{anchor_} {
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setFocusPolicy(Qt::NoFocus);
     setAlignment(Qt::AlignCenter);
+    setStyleSheet(QStringLiteral(
+        "QLabel#GuaranaToast { background-color: rgba(11, 16, 29, 235); color: #eef1f6; "
+        "border: 1px solid #2a3652; border-radius: 8px; padding: 8px 14px; }"));
     hide_timer.setSingleShot(true);
     connect(&hide_timer, &QTimer::timeout, this, &QWidget::hide);
 }
@@ -152,6 +155,7 @@ void Toast::ShowMessage(const QString& text, int duration_ms) {
 
 EmptyLibraryPanel::EmptyLibraryPanel(QWidget* parent) : QFrame(parent) {
     setObjectName(QStringLiteral("GuaranaEmptyPanel"));
+    setMinimumWidth(480);
     setMaximumWidth(560);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
 

@@ -19,7 +19,7 @@ class ConfigureGuarana : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ConfigureGuarana(QWidget* parent = nullptr);
+    explicit ConfigureGuarana(bool powered_on, QWidget* parent = nullptr);
     ~ConfigureGuarana() override;
 
     void ApplyConfiguration();
@@ -36,8 +36,12 @@ private:
 
     Common::Guarana::Mode shown_mode = Common::Guarana::Mode::Custom;
     Common::Guarana::Mode applied_mode = Common::Guarana::Mode::Custom;
-    bool shown_frame_gen = false;
     Settings::ResolutionSetup shown_resolution{};
+    // Set by the user and kept until the dialog closes: the Graphics page writes its own copy of
+    // these values on every apply, so this page writes again after it each time.
+    bool mode_touched = false;
+    bool frame_gen_touched = false;
+    bool resolution_touched = false;
 
     QPushButton* mode_buttons[3]{};
     QLabel* mode_heading = nullptr;

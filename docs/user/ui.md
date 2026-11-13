@@ -7,7 +7,7 @@ How Guarana's window behaves, what it shows while a game runs, and the keys and 
 - The title is `Guarana`, with the game's name added while it plays. Release builds show no build hash in the title; Help > About still shows the build. Development builds keep the long title.
 - The window icon is Guarana's.
 - Size and position are remembered for each monitor. Close Guarana on your TV, open it on your desk monitor, and each opens where you left it. The monitor you used last is used again when it is connected. Turn this off in Settings > General: **Remember window size and position per monitor**.
-- A game started from the launcher, from a shortcut or from the command line (`lichii -g <game>`) opens in borderless fullscreen. `-f` does the same with no game. Turn this off in Settings > General: **Start games in fullscreen**. Settings > Graphics > **Fullscreen mode** picks borderless or exclusive; borderless is the default on Windows.
+- A game started with `-f` (the launcher does this) opens in borderless fullscreen; `lichii -f -g <game>` from the command line does the same. Without `-f` a game opens in a window, as before. Settings > Graphics > **Fullscreen mode** picks borderless or exclusive; borderless is the default on Windows.
 
 ## While a game runs in fullscreen
 
@@ -38,13 +38,13 @@ Off by default. Switch it on with Ctrl + V or the View menu. The default **compa
 - the game's own frame rate, big;
 - the frame rate that reaches the screen once generated frames are added ("shown");
 - a line of the last 2 seconds of frame times: flat is even, a red stretch is a hitch;
-- whether frame generation is off, on, or on and adding frames now (and how many per second), and the current frame time.
+- frame generation as `FG off`, `FG on` or `FG on +N` (N generated frames per second), and the current frame time.
 
 The detailed overlay (CPU and GPU load, 5 second graph with min, median and max, upscaler tags) is still there: set `guarana_overlay_compact=false` in the config file. Drag the overlay to move it.
 
 ## The Guarana settings page
 
-Settings > Guarana holds what players change most, in plain words. Every other setting stays where it was; the page reads and writes the same values, so the Graphics page and this one never disagree.
+Settings > Guarana holds what players change most, in plain words. Every other setting stays where it was; the page reads and writes the same values. Changes made here are written when you press OK or Apply, after the Graphics page, so they win if both pages changed the same value in one visit. The resolution cannot be changed while a game runs.
 
 | Control | What it does |
 |---|---|

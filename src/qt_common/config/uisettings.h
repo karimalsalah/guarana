@@ -242,8 +242,6 @@ struct Values {
     // "screen name|base64 geometry;..." with the screen used last first
     Setting<std::string> guarana_window_geometry{linkage, {}, "guarana_window_geometry",
                                                  Category::Ui};
-    Setting<bool> guarana_fullscreen_on_launch{linkage, true, "guarana_fullscreen_on_launch",
-                                               Category::UiGeneral};
     Setting<bool> guarana_play_toast{linkage, true, "guarana_play_toast", Category::UiGeneral};
     // The mode picked on the Guarana settings page: custom, smooth, quality or battery
     Setting<std::string> guarana_mode{linkage, std::string{"custom"}, "guarana_mode",

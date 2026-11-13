@@ -12,7 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
-- Guarana window and play mode: Guarana Dark theme (new default), a Guarana settings page (play mode, frame generation, resolution, controller, report a problem), a compact brand performance overlay, per-monitor window memory, fullscreen on game launch with a menu hint, a clean release window title and icon, and a first-run panel on the empty game list. Settings: `guarana_remember_window`, `guarana_fullscreen_on_launch`, `guarana_play_toast`, `guarana_overlay_compact`, `guarana_mode`. See `docs/user/ui.md`.
+- Guarana window and play mode: Guarana Dark theme (new default), a Guarana settings page (play mode, frame generation, resolution, controller, report a problem), a compact brand performance overlay, per-monitor window memory, a menu hint when a game goes fullscreen, a clean release window title and icon, and a first-run panel on the empty game list. Settings: `guarana_remember_window`, `guarana_play_toast`, `guarana_overlay_compact`, `guarana_mode`. See `docs/user/ui.md`.
 
 - Launcher: after a session with at least a minute of gameplay, a card offers to share your numbers (game fps, frame pacing, device, driver) as a prefilled device report you review and submit yourself; a setting stops it asking.
 

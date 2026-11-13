@@ -396,12 +396,12 @@ void PerformanceOverlay::paintCompact(QPainter& painter) {
     QString generation;
     QColor generation_color = muted;
     if (!m_frameGenOn) {
-        generation = tr("Frame generation off");
+        generation = tr("FG off");
     } else if (m_generatedFps >= 0.5) {
-        generation = tr("Frame generation on, +%1 fps").arg(std::round(m_generatedFps), 0, 'f', 0);
+        generation = tr("FG on +%1").arg(std::round(m_generatedFps), 0, 'f', 0);
         generation_color = accent;
     } else {
-        generation = tr("Frame generation on, waiting");
+        generation = tr("FG on");
     }
     const qreal footer = Baseline(small_font, 94, 18);
     const QString ms_text =

@@ -527,9 +527,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Hides the mouse after 2s of inactivity."));
     INSERT(UISettings, guarana_remember_window, tr("Remember window size and position per monitor"),
            tr("Opens the window where you left it on the monitor you used last."));
-    INSERT(UISettings, guarana_fullscreen_on_launch, tr("Start games in fullscreen"),
-           tr("A game started from the launcher, a shortcut or the command line opens in "
-              "borderless fullscreen."));
     INSERT(UISettings, guarana_play_toast, tr("Show a hint when a game goes fullscreen"),
            tr("Shows for a few seconds which key or controller buttons bring the menu back."));
     INSERT(UISettings, check_for_updates, tr("Check for updates"),

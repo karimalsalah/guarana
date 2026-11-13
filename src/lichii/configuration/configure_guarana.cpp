@@ -93,7 +93,7 @@ QLabel* MakeHelp(QWidget* parent) {
 
 } // namespace
 
-ConfigureGuarana::ConfigureGuarana(QWidget* parent) : QWidget(parent) {
+ConfigureGuarana::ConfigureGuarana(bool powered_on, QWidget* parent) : QWidget(parent) {
     setAccessibleName(tr("Guarana"));
 
     auto* root = new QVBoxLayout(this);
@@ -168,9 +168,12 @@ ConfigureGuarana::ConfigureGuarana(QWidget* parent) : QWidget(parent) {
 
     applied_mode = shown_mode =
         Common::Guarana::ModeFromString(UISettings::values.guarana_mode.GetValue());
-    shown_frame_gen = Settings::values.frame_gen.GetValue();
-    frame_gen->setChecked(shown_frame_gen);
+    frame_gen->setChecked(Settings::values.frame_gen.GetValue());
     shown_resolution = Settings::values.resolution_setup.GetValue();
+    // The resolution cannot change while a game runs, as on the Graphics page
+    resolution->setEnabled(!powered_on);
+    connect(frame_gen, &QCheckBox::toggled, this, [this] { frame_gen_touched = true; });
+    connect(resolution, &QComboBox::activated, this, [this] { resolution_touched = true; });
 
     RetranslateUI();
 }
@@ -233,6 +236,7 @@ void ConfigureGuarana::RetranslateUI() {
 
 void ConfigureGuarana::SelectMode(Mode mode) {
     shown_mode = mode;
+    mode_touched = true;
     UpdateModeHelp();
 }
 
@@ -267,7 +271,7 @@ void ConfigureGuarana::UpdateModeHelp() {
 void ConfigureGuarana::ApplyConfiguration() {
     // Written last, and only when changed here, so the Graphics page's copy of a value cannot undo
     // this page and this page cannot undo a change made there.
-    if (shown_mode != applied_mode) {
+    if (mode_touched) {
         if (!WriteSwitches(shown_mode)) {
             QMessageBox::warning(this, tr("Guarana"),
                                  tr("The mode could not be saved: nx2_switches.txt in your "
@@ -278,17 +282,18 @@ void ConfigureGuarana::ApplyConfiguration() {
         if (shown_mode == Mode::Smooth) {
             Settings::values.frame_pacing_mode.SetValue(Settings::FramePacingMode::Target_Auto);
         }
-        LOG_INFO(Frontend, "Guarana mode: {}", Common::Guarana::ModeToString(shown_mode));
+        if (shown_mode != applied_mode) {
+            LOG_INFO(Frontend, "Guarana mode: {}", Common::Guarana::ModeToString(shown_mode));
+        }
         applied_mode = shown_mode;
         UpdateModeHelp();
     }
-    if (frame_gen->isChecked() != shown_frame_gen) {
-        shown_frame_gen = frame_gen->isChecked();
-        Settings::values.frame_gen.SetValue(shown_frame_gen);
+    if (frame_gen_touched) {
+        Settings::values.frame_gen.SetValue(frame_gen->isChecked());
     }
-    const auto picked = static_cast<Settings::ResolutionSetup>(resolution->currentData().toInt());
-    if (picked != shown_resolution) {
-        shown_resolution = picked;
-        Settings::values.resolution_setup.SetValue(picked);
+    if (resolution_touched && resolution->isEnabled()) {
+        shown_resolution =
+            static_cast<Settings::ResolutionSetup>(resolution->currentData().toInt());
+        Settings::values.resolution_setup.SetValue(shown_resolution);
     }
 }
