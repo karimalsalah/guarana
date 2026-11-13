@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #include <atomic>
 #include <optional>
 
@@ -45,6 +47,9 @@ public:
 
     [[nodiscard]] size_t GeneratedFrameCount() const;
 
+    /// Time between shown frames while frames are extrapolated, zero when they are not spaced.
+    [[nodiscard]] std::chrono::nanoseconds ShownFrameSpacing() const;
+
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
 
     [[nodiscard]] VideoCore::FrameGenStatus CurrentStatus() const {
@@ -54,6 +59,7 @@ public:
 
 private:
     void ProcessExtrapolated(const Device& device, Frame* frame);
+    void UpdateCadence();
     void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale);
     void DumpDebugImages(u64 count);
 
@@ -71,6 +77,13 @@ private:
     u64 extrapolation_missing{};
     u64 extrapolation_frames{};
     bool extrapolating{};
+    /// EDEN_NX2_CADENCE: real frames are held to the target rate / cadence_divisor (0: off).
+    u32 cadence_divisor{};
+    u32 cadence_slow_checks{};
+    u32 cadence_fast_checks{};
+    std::chrono::steady_clock::time_point cadence_checked{};
+    std::chrono::steady_clock::time_point real_frame_time{};
+    f32 real_interval_ms{}; ///< smoothed time between real frames
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};

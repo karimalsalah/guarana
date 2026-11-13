@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <variant>
@@ -149,6 +150,7 @@ private:
     RasterizerVulkan rasterizer;
 #ifdef HAS_LSFG
     FrameGen frame_gen;
+    std::chrono::steady_clock::time_point next_shown_slot{}; ///< when the next shown frame is due
 #endif
     std::optional<TurboMode> turbo_mode;
 

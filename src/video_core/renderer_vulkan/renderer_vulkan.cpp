@@ -364,6 +364,26 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     const auto presenting = trace ? std::chrono::steady_clock::now()
                                   : std::chrono::steady_clock::time_point{};
+#ifdef HAS_LSFG
+    // Predicted frames are shown one spacing apart after the real frame, and the real frame no
+    // sooner than one spacing after the last predicted frame of the frame before.
+    if (const auto spacing = frame_gen.ShownFrameSpacing();
+        spacing.count() != 0 && !predicted_frames.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        auto slot = now;
+        if (next_shown_slot > now && next_shown_slot - now < spacing) {
+            slot = next_shown_slot;
+        }
+        frame->present_at = slot;
+        for (Frame* predicted : predicted_frames) {
+            slot += spacing;
+            predicted->present_at = slot;
+        }
+        next_shown_slot = slot + spacing;
+    } else {
+        next_shown_slot = {};
+    }
+#endif
     {
         const VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::Present};
         present_manager.Present(frame);

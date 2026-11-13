@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "video_core/frame_budget.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
@@ -24,6 +26,24 @@ constexpr size_t COLOR_CHANNELS = 4;
 constexpr u64 LSFG_REQUIRED_FRAMES = 2;
 constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
 constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
+
+/// EDEN_NX2_CADENCE: with extrapolated frames, hold real frames to an even share of the target
+/// rate so that every shown frame lasts the same time. 1 chooses the share (60, 30, 20 or 15 real
+/// frames for a target of 60) from what the game sustains; 2 to 4 fix the divisor.
+[[nodiscard]] u32 CadenceSetting() {
+    static const u32 setting = [] {
+        const char* value = std::getenv("EDEN_NX2_CADENCE");
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
+    }();
+    return setting;
+}
+
+constexpr u32 CADENCE_MAX_DIVISOR = 4;
+
+[[nodiscard]] f32 CadenceTargetRate() {
+    const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
+    return rate != 0 ? static_cast<f32>(rate) : 60.0f;
+}
 
 [[nodiscard]] f32 ManualFlowScale() {
     return static_cast<f32>(Settings::values.frame_gen_flow_scale.GetValue()) / 100.0f;
@@ -216,6 +236,16 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame) {
     warm_streak = 0;
     extrapolation_frame = frame;
 
+    const auto now = std::chrono::steady_clock::now();
+    if (real_frame_time != std::chrono::steady_clock::time_point{}) {
+        const f32 interval = std::chrono::duration<f32, std::milli>(now - real_frame_time).count();
+        real_interval_ms = real_interval_ms > 0.0f && interval < 250.0f
+                               ? real_interval_ms + (interval - real_interval_ms) * 0.2f
+                               : interval;
+    }
+    real_frame_time = now;
+    UpdateCadence();
+
     if (!frame->storage_view) {
         state.store(VideoCore::FrameGenState::UnsupportedSurface, std::memory_order_relaxed);
         return;
@@ -353,7 +383,74 @@ size_t FrameGen::WantedGenerations(size_t capacity) {
         return 0;
     }
     plan = pacer.Plan(capacity);
+    if (extrapolating && cadence_divisor != 0) {
+        // Extrapolated frames cost next to nothing: always fill the cadence.
+        plan = {.generations = std::min<size_t>(capacity, cadence_divisor - 1), .warm = true};
+    }
     return plan.generations;
+}
+
+std::chrono::nanoseconds FrameGen::ShownFrameSpacing() const {
+    if (!extrapolating || !generated || last_generations == 0) {
+        return {};
+    }
+    if (cadence_divisor != 0) {
+        return std::chrono::nanoseconds{static_cast<s64>(1.0e9 / CadenceTargetRate())};
+    }
+    if (real_interval_ms <= 0.0f || real_interval_ms > 150.0f) {
+        return {};
+    }
+    return std::chrono::nanoseconds{static_cast<s64>(
+        real_interval_ms * 1.0e6f / static_cast<f32>(last_generations + 1))};
+}
+
+void FrameGen::UpdateCadence() {
+    const u32 setting = CadenceSetting();
+    if (setting == 0) {
+        return;
+    }
+    const f32 target = CadenceTargetRate();
+    const auto apply = [this, target](u32 divisor, const char* reason) {
+        if (divisor == cadence_divisor) {
+            return;
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Frame cadence: {:.0f} real frames shown as {:.0f} ({}), was {:.0f}",
+                 target / static_cast<f32>(divisor), target, reason,
+                 cadence_divisor != 0 ? target / static_cast<f32>(cadence_divisor) : 0.0f);
+        cadence_divisor = divisor;
+        cadence_slow_checks = 0;
+        cadence_fast_checks = 0;
+        VideoCore::FrameBudget::SetTargetFps(target / static_cast<f32>(divisor));
+    };
+    if (setting >= 2) {
+        apply(std::min(setting, CADENCE_MAX_DIVISOR), "fixed");
+        return;
+    }
+    if (cadence_divisor == 0) {
+        apply(3, "start");
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - cadence_checked < std::chrono::milliseconds{500}) {
+        return;
+    }
+    cadence_checked = now;
+    // What four in five frames took without the pacing wait, 0 while unknown.
+    const f64 work_ms = VideoCore::FrameBudget::RecentWorkMs();
+    if (work_ms <= 0.0) {
+        return;
+    }
+    const f64 budget_ms = 1000.0 * cadence_divisor / target;
+    const f64 faster_ms = 1000.0 * (cadence_divisor - 1) / target;
+    cadence_slow_checks = work_ms > budget_ms * 1.03 ? cadence_slow_checks + 1 : 0;
+    cadence_fast_checks =
+        cadence_divisor > 1 && work_ms < faster_ms * 0.90 ? cadence_fast_checks + 1 : 0;
+    if (cadence_slow_checks >= 3 && cadence_divisor < CADENCE_MAX_DIVISOR) {
+        apply(cadence_divisor + 1, "the frames take longer");
+    } else if (cadence_fast_checks >= 8) {
+        apply(cadence_divisor - 1, "the frames leave room");
+    }
 }
 
 size_t FrameGen::GeneratedFrameCount() const {
