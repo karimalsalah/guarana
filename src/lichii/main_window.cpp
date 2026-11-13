@@ -338,6 +338,8 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+#include "lichii/startup_checks.h"
+
 constexpr int default_mouse_hide_timeout = 2500;
 constexpr int default_input_update_timeout = 1;
 constexpr int EmuThreadStopTimeoutMs = 10'000;
@@ -397,6 +399,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QtCommon::Init(this);
     // From the process start: the Vulkan startup check (a child process) and Qt's start.
     Common::BootTiming::Mark("frontend: logging started");
+    if (const VulkanCheckOutcome& check = GetVulkanCheckOutcome(); check.end > 0.0) {
+        Common::BootTiming::Span(fmt::format("startup: Vulkan check {}", check.reason),
+                                 check.start, check.end);
+    }
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
