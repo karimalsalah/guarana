@@ -7,8 +7,10 @@
 #include <future>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
+#include "common/boot_timing.h"
 #include "common/common_types.h"
 #include "common/dynamic_library.h"
 #include "common/logging.h"
@@ -119,6 +121,10 @@ namespace {
 }
 
 void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const char*>& layers) {
+    if (layers.empty()) {
+        // Listing the layers makes the loader read every layer manifest again.
+        return;
+    }
     const std::optional layer_properties = vk::EnumerateInstanceLayerProperties(dld);
     if (!layer_properties) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties, disabling layers");
@@ -135,6 +141,17 @@ void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const 
         }
         return false;
     });
+}
+
+[[nodiscard]] std::string JoinNames(std::span<const char* const> names) {
+    std::string text;
+    for (const char* name : names) {
+        if (!text.empty()) {
+            text += ", ";
+        }
+        text += name;
+    }
+    return text.empty() ? std::string{"none"} : text;
 }
 } // Anonymous namespace
 
@@ -153,6 +170,8 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
+    // The loader finds its drivers and layers on the first enumeration.
+    const double listing_start = Common::BootTiming::Now();
     // Enumerate instance extensions exactly once. RequiredExtensions() used to enumerate a second
     // time internally; if the driver returned a different set between the two calls (a real TOCTOU
     // seen on some AMD iGPU drivers), an extension added to the list could be missing from the
@@ -177,10 +196,17 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
                   VK_VERSION_MAJOR(required_version), VK_VERSION_MINOR(required_version));
         throw vk::Exception(VK_ERROR_INCOMPATIBLE_DRIVER);
     }
+    Common::BootTiming::Mark("vulkan: instance extensions and layers listed", listing_start);
+    // All the emulator decides about the instance; the creation time below is the driver's.
+    LOG_INFO(Render_Vulkan, "Vulkan instance: loader {}.{}.{}, extensions: {}; layers: {}",
+             VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version),
+             VK_VERSION_PATCH(available_version), JoinNames(extensions), JoinNames(layers));
+    const double create_start = Common::BootTiming::Now();
     vk::Instance instance =
         std::async([&] {
             return vk::Instance::Create(available_version, layers, extensions, dld);
         }).get();
+    Common::BootTiming::Mark("vulkan: instance created", create_start);
     if (!vk::Load(*instance, dld)) {
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan instance function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);

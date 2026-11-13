@@ -96,6 +96,30 @@ bool TakeWarmBeforeStart();
 void RequestSkipWarm();
 bool TakeSkipWarm();
 
+/// Headless warm-up (eden-cli --warm-pipelines): while set, the renderer's disk cache load acts as
+/// a precache before the start that also builds every cached pipeline it can hold, waits for the
+/// background prebuild and saves the driver pipeline cache, so the process can exit when the load
+/// returns. Cached pipelines an earlier warm-up or precache built for this driver are not built
+/// again.
+void SetWarmOnly(bool warm_only);
+[[nodiscard]] bool WarmOnly();
+
+/// What the last load of a warm-up found, left by the renderer.
+struct WarmOnlyReport {
+    /// False: the cache was not built because the last boot ended while building it (or another
+    /// emulator is loading it); the load cleared that, so the next run builds.
+    bool built{};
+    /// Cached graphics pipelines for this device
+    size_t graphics_records{};
+    /// Cached graphics pipelines an earlier run had already built for this driver
+    size_t already_built{};
+    /// Cached graphics pipelines this pass held no room for (capture limits): another pass
+    /// builds them
+    size_t left{};
+};
+void ReportWarmOnly(const WarmOnlyReport& report);
+[[nodiscard]] WarmOnlyReport TakeWarmOnlyReport();
+
 /// The GPU driver, device and pipeline cache version pipelines were precached for.
 struct DriverStamp {
     u32 driver{};

@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -30,6 +31,13 @@ class Device;
 class Scheduler;
 class Swapchain;
 
+/// EDEN_NX2_FLUID. 0: off. 1: the present thread shows frames on a vblank clock, one per slot of
+/// round(refresh / 60) vblanks (16.7 ms at 60 or 120 Hz), and frame extrapolation records a
+/// prediction for each slot until the next real frame is due, as of the slot's own time. 2: the
+/// same, but each prediction is as of its slot less the latency a real frame can be shown at, so
+/// the real frame itself is shown when it is on time and predictions reach less far.
+[[nodiscard]] u32 FluidMode();
+
 struct Frame {
     u32 width;
     u32 height;
@@ -43,12 +51,24 @@ struct Frame {
     vk::ImageView storage_view;
     vk::Framebuffer framebuffer;
     vk::CommandBuffer cmdbuf;
+    /// EDEN_NX2_FLUID_QUEUE: the screen copy recorded for the dedicated queue.
+    vk::CommandBuffer fluid_cmdbuf;
     vk::Semaphore render_ready;
     vk::Fence present_done;
     bool storage_capable{};
     /// Time the present thread leaves before presenting the next frame. Frame generation sets it
     /// on generated frames, so they share the screen time evenly with the real ones.
     std::chrono::nanoseconds present_spacing{};
+    /// EDEN_NX2_FLUID: the slot (a vblank, PresentManager::FluidClock numbering) the frame is
+    /// shown at. 0: none, shown in arrival order. FLUID_NOT_SHOWN: a real frame only its
+    /// predictions show.
+    u64 fluid_slot{};
+    /// The real frame it is or was predicted from; a newer one's frame for a slot replaces it.
+    u64 fluid_batch{};
+    /// When that real frame was recorded.
+    std::chrono::steady_clock::time_point fluid_recorded{};
+    /// The scheduler tick whose completion finishes the frame's GPU work.
+    u64 gpu_tick{};
 #ifdef EGLANTINE_STREAMLINE
     // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
     bool frame_gen{};
@@ -57,8 +77,31 @@ struct Frame {
 #endif
 };
 
+inline constexpr u64 FLUID_NOT_SHOWN = ~u64{0};
+
 class PresentManager {
 public:
+    /// EDEN_NX2_FLUID: when the present thread shows frames, as of the vblank it last woke for.
+    /// Slots are the vblanks whose number is a multiple of divisor.
+    struct FluidClock {
+        std::chrono::steady_clock::time_point vblank{}; ///< when the present thread woke for it
+        u64 vblank_index{};
+        std::chrono::nanoseconds refresh{}; ///< zero until the present thread counted a vblank
+        u64 divisor{1};
+        std::chrono::nanoseconds lead{}; ///< a slot's frame is presented this long before it
+        std::chrono::nanoseconds latency{}; ///< from recording a real frame to its GPU work done
+
+        [[nodiscard]] bool Valid() const {
+            return refresh.count() > 0;
+        }
+
+        /// When the slot's vblank comes.
+        [[nodiscard]] std::chrono::steady_clock::time_point SlotTime(u64 slot) const;
+
+        /// The first slot whose frame is presented at or after time.
+        [[nodiscard]] u64 FirstSlotPresentedAfter(std::chrono::steady_clock::time_point time) const;
+    };
+
     PresentManager(const vk::Instance& instance,
                    Core::Frontend::EmuWindow& render_window,
                    const Device& device,
@@ -70,6 +113,20 @@ public:
 
     /// Returns the last used presentation frame
     Frame* GetRenderFrame();
+
+    /// EDEN_NX2_FLUID: a frame to predict into without waiting, or null when every free frame is
+    /// still in use by the GPU or only one is left (for the next real frame).
+    [[nodiscard]] Frame* TryGetRenderFrame();
+
+    /// Whether the present thread shows frames on the vblank clock (EDEN_NX2_FLUID); false once
+    /// its watchdog fell back to presenting in arrival order.
+    [[nodiscard]] bool Fluid() const {
+        return fluid_presenter && use_present_thread &&
+               !fluid_fallback.load(std::memory_order_relaxed);
+    }
+
+    /// Any thread: the vblank clock as of the present thread's last wake.
+    [[nodiscard]] FluidClock GetFluidClock() const;
 
     /// The time GetRenderFrame calls waited for a frame since the last call of this (the
     /// present thread holding the renderer back).
@@ -106,11 +163,62 @@ private:
 
     void PresentThread(std::stop_token token);
 
+    /// EDEN_NX2_FLUID: at every vblank, takes the frames sent, frees those no slot shows and
+    /// shows the frames without a slot in arrival order; at the vblank before each slot, shows
+    /// the newest real frame's frame for the slot whose GPU work is done. False when its watchdog
+    /// gave up: the thread then presents in arrival order as without FLUID.
+    bool FluidPresentThread(std::stop_token token);
+
+    /// Frames came but none was shown for FluidStallLimit, and frames still wait or keep coming.
+    [[nodiscard]] bool FluidStalled(std::chrono::steady_clock::time_point now) const;
+
+    /// Logs why, then hands the frames held to the arrival-order loop, for the rest of the session.
+    void FluidFallBack(std::chrono::steady_clock::time_point now);
+
+    /// Counts the vblanks since the last wake; returns the refresh period.
+    std::chrono::nanoseconds FluidCountVblanks(std::chrono::steady_clock::time_point wake,
+                                               std::chrono::nanoseconds reported);
+
+    /// Takes the frames sent, frees those only predictions show and answers WaitPresent.
+    void FluidTakeFrames(std::chrono::steady_clock::time_point now);
+
+    /// Watches the GPU work of real frames, gives the last shown frame back once its copy is
+    /// done, and frees frames whose slot passed or that a newer real frame's frame replaces.
+    void FluidRelease(std::chrono::steady_clock::time_point now);
+
+    /// Shows the oldest frame without a slot if it can be shown now; true if it was.
+    bool FluidPresentUnscheduled(std::chrono::steady_clock::time_point now);
+
+    /// Shows the slot's frame (none when !count, which passes the slot) and frees the rest up to
+    /// the slot.
+    void FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_point slot_time, bool count);
+
+    /// Copies the frame to the swapchain; it stays the frame showing until its copy is done.
+    /// Holds swapchain_mutex.
+    void FluidShow(Frame* frame, u64 shown_vblank);
+
+    /// Frees a frame that is not shown. Holds swapchain_mutex.
+    void FluidDiscard(Frame* frame);
+
+    void ReturnFrame(Frame* frame);
+
+    /// EDEN_NX2_SHOWN_STATS: logs the slots of every 10 s.
+    void FluidLogStats(std::chrono::steady_clock::time_point now, const char* source,
+                       std::chrono::nanoseconds period);
+
     void NoteShownFrame();
 
     void CopyToSwapchain(Frame* frame);
 
     void CopyToSwapchainImpl(Frame* frame);
+
+    /// EDEN_NX2_FLUID_QUEUE: whether this frame's screen copy runs on the dedicated queue.
+    [[nodiscard]] bool UseFluidQueue(const Frame* frame, VkExtent2D extent);
+
+    /// Copies the frame to the acquired swapchain image on the dedicated queue, waiting for the
+    /// acquire and render-done semaphores and signalling render_semaphore and the frame's fence.
+    void SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D extent,
+                         VkSemaphore render_semaphore);
 
     // Returns false after discarding the frame if creation or transfer cannot proceed.
     bool RecreateSwapchain(Frame* frame);
@@ -138,6 +246,8 @@ private:
     Swapchain& swapchain;
     vk::SurfaceKHR& surface;
     vk::CommandPool cmdpool;
+    vk::CommandPool fluid_cmdpool; ///< EDEN_NX2_FLUID_QUEUE: pool of the dedicated queue family
+    bool fluid_queue_mismatch_logged{};
     std::vector<Frame> frames;
     std::vector<f32> shown_intervals; ///< EDEN_NX2_SHOWN_STATS, present thread only
     std::chrono::steady_clock::time_point shown_last{};
@@ -155,6 +265,7 @@ private:
     u64 hdr_metadata_generation{}; ///< DisplayHdrMonitor generation of the metadata sent
     bool storage_supported;
     bool use_present_thread;
+    const bool fluid_presenter; ///< EDEN_NX2_FLUID: the present thread runs FluidPresentThread
     std::atomic<std::size_t> image_count{};
     std::atomic<std::size_t> swapchain_image_count{};
     std::atomic<VkFormat> swapchain_image_format{};
@@ -170,6 +281,61 @@ private:
     /// See TakeBlockedTime. Atomic: a composite can also run from a syncpoint action on
     /// another thread (GPU::RequestComposite).
     std::atomic<std::chrono::steady_clock::rep> blocked_time{};
+
+    mutable std::mutex fluid_clock_mutex;
+    FluidClock fluid_clock; ///< guarded by fluid_clock_mutex
+    u64 fluid_drain_requests{}; ///< guarded by queue_mutex: WaitPresent calls
+    u64 fluid_drains{};         ///< guarded by queue_mutex: those the present thread answered
+    /// EDEN_NX2_FLUID's watchdog fell back to arrival order. Set under queue_mutex.
+    std::atomic<bool> fluid_fallback{};
+
+    struct FluidWatch {
+        u64 tick;
+        std::chrono::steady_clock::time_point recorded;
+        std::chrono::steady_clock::time_point unready; ///< the last look found it not done
+    };
+    /// EDEN_NX2_FLUID, present thread only.
+    struct {
+        std::vector<Frame*> pending; ///< received, neither shown nor freed
+        std::vector<Frame*> freeing;
+        Frame* showing{}; ///< the last frame shown, until its copy is done
+        u64 showing_vblank{};
+        bool showing_late{};
+        u64 vblank{}; ///< vblanks counted, the last one woken for
+        u64 divisor{1};
+        std::chrono::steady_clock::time_point last_wake{};
+        std::array<s64, 15> intervals{}; ///< between the last wakes, in ns
+        size_t interval_count{};
+        size_t interval_next{};
+        u64 last_slot{}; ///< the last slot handled
+        u64 last_shown_vblank{};
+        u64 watched_batch{};
+        std::vector<FluidWatch> watches;
+        f64 latency_ns{};
+        /// Since when frames wait unshown (the watchdog): the first received after the last show,
+        /// or that show if frames were still held; zero when none.
+        std::chrono::steady_clock::time_point unshown_since{};
+        std::chrono::steady_clock::time_point last_received{};
+        u64 received{}; ///< since the thread started
+        u64 shown{};
+    } fluid;
+    /// EDEN_NX2_SHOWN_STATS with EDEN_NX2_FLUID, present thread only.
+    struct {
+        std::chrono::steady_clock::time_point since{};
+        u64 slots{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{}; ///< frames shown for 1, 2, 3 and 4+ refreshes
+        f64 age_ms{};
+        f64 latency_ms{};
+        u64 latency_samples{};
+    } fluid_stats;
 };
 
 } // namespace Vulkan

@@ -9,13 +9,15 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "common/scratch_buffer.h"
 #include "video_core/shader_cache_v2/cache_format.h"
 
 namespace VideoCommon::ShaderCacheV2 {
 
 /// A log read into memory; `parsed` points into `bytes`.
 struct LogFile {
-    std::vector<u8> bytes;
+    /// Not zeroed before the read: a log is hundreds of MB
+    Common::ScratchBuffer<u8> bytes;
     ParsedLog parsed;
 
     LogFile() = default;

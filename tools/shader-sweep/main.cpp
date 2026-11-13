@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -549,7 +550,17 @@ Shader::RuntimeInfo Runtime(std::span<const u8> key, Stage stage, Json& assumpti
     return info;
 }
 
+/// EDEN_NX2_GM=<bits>, the global memory routing experiment, as the Vulkan pipeline cache reads it
+u32 OfflineGlobalMemoryBits() {
+    using namespace Shader::Backend::SPIRV;
+    const char* const bits{std::getenv("EDEN_NX2_GM")};
+    return bits != nullptr ? static_cast<u32>(std::strtoul(bits, nullptr, 0)) &
+                                 (GM_HOIST | GM_NARROW | GM_REBASE | GM_NARROW_NO_FALLBACK)
+                           : 0U;
+}
+
 Shader::HostTranslateInfo OfflineHost() {
+    using namespace Shader::Backend::SPIRV;
     Shader::HostTranslateInfo host{};
     host.support_float64 = true;
     host.support_float16 = true;
@@ -558,12 +569,17 @@ Shader::HostTranslateInfo OfflineHost() {
     host.support_viewport_index_layer = true;
     host.support_geometry_shader_passthrough = true;
     host.support_handle_table_arrays = true;
+    const u32 global_memory{OfflineGlobalMemoryBits()};
+    constexpr u32 rebase_bits{GM_NARROW | GM_REBASE | GM_NARROW_NO_FALLBACK};
+    host.narrow_global_candidates = (global_memory & GM_NARROW) != 0;
+    host.rebase_loaded_pointers = (global_memory & rebase_bits) == rebase_bits;
     host.ApplyDescriptorLimitPolicy();
     return host;
 }
 
 Shader::Profile OfflineProfile(const Shader::HostTranslateInfo& host) {
     Shader::Profile profile{};
+    profile.global_memory_opt = OfflineGlobalMemoryBits();
     profile.supported_spirv = 0x00010400;
     profile.unified_descriptor_binding = true;
     profile.min_ssbo_alignment = host.min_ssbo_alignment;

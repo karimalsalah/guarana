@@ -65,6 +65,7 @@ add_executable(tests
     core/nup_validation.cpp
     core/nx_archive.cpp
     frontend_common/nx_archive.cpp
+    frontend_common/problem_report.cpp
     core/vfs_vector.cpp
     core/file_sys_parsers.cpp
     input_common/calibration_lifetime.cpp
@@ -92,6 +93,7 @@ add_executable(tests
     video_core/stale_targets.cpp
     video_core/host_memory_limit.cpp
     video_core/fire_emblem_upscale.cpp
+    video_core/shader_reuse.cpp
     video_core/dlss_contract.cpp
     video_core/dlss_mode.cpp
     video_core/frame_gen_choice.cpp

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "common/common_types.h"
@@ -65,7 +66,16 @@ enum class Decision {
                               std::string_view global_value, std::string_view default_value);
 
 /// Applies the title's preset for this GPU to Settings::values. Call it once the GPU is known,
-/// before the settings are read.
-void Apply(u64 title_id, const GpuInfo& gpu);
+/// before the settings are read. Returns what it did in one line, empty without a preset.
+std::string Apply(u64 title_id, const GpuInfo& gpu);
+
+/// Whether the title's first boot on this GPU gets the line ReportFirstBoot logs: Ocarina of
+/// Time on an Intel or AMD integrated GPU.
+[[nodiscard]] bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu);
+
+/// On the title's first boot on such a GPU, logs one Info line with the GPU and what the presets
+/// did (`summary`, from Apply). The titles reported are listed in the config folder.
+void ReportFirstBoot(u64 title_id, const GpuInfo& gpu, std::string_view gpu_name,
+                     std::string_view summary);
 
 } // namespace Core::GamePresets

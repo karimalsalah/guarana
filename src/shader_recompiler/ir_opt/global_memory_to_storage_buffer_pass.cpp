@@ -65,6 +65,23 @@ using StorageInstVector = small_vector<StorageInst, 24>;
 using StorageWritesSet =
     flat_set<StorageBufferAddr, std::less<StorageBufferAddr>, small_vector<StorageBufferAddr, 16>>;
 
+/// EDEN_NX2_GM bit 4: a native load whose address is a pointer loaded from a table entry plus an
+/// offset, to read from that pointer's buffer (see RebasedOffset)
+struct RebasedLoad {
+    StorageBufferAddr pointer;
+    IR::Inst* inst;
+    IR::Block* block;
+    /// The LoadGlobal64 of the table entry, and the extract of its low word the low address sums;
+    /// null when the address is the whole loaded value plus `offset`
+    IR::Inst* pointer_load;
+    IR::Inst* pointer_low;
+    /// The tracked low address (empty for a whole loaded value) and the immediate added to it
+    IR::U32 low;
+    s32 offset;
+    /// Narrowed (bit 2) when it is not rebased
+    bool narrowed;
+};
+
 struct StorageInfo {
     StorageBufferSet set;
     StorageInstVector to_replace;
@@ -111,6 +128,10 @@ struct StorageInfo {
     /// address is built on one of these pointers on every path (see NarrowCandidates).
     bool narrow{};
     std::vector<std::pair<IR::Inst*, small_vector<StorageBufferAddr, 4>>> narrowed;
+    /// HostTranslateInfo::rebase_loaded_pointers, and the loads that may read their pointer's
+    /// buffer directly, decided once every access is collected
+    bool rebase{};
+    std::vector<RebasedLoad> rebased;
 };
 
 /// Returns true when the instruction is a global memory instruction
@@ -1334,6 +1355,33 @@ small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_ad
     return candidates;
 }
 
+/// The descriptor of the pointer a LoadGlobal64 reads from the memory one constant buffer pointer
+/// points to, at an immediate offset
+std::optional<StorageBufferAddr> LoadedPointer(const IR::Inst* load) {
+    if (load->GetOpcode() != IR::Opcode::LoadGlobal64) {
+        return std::nullopt;
+    }
+    const auto holder_addr{TrackLowAddress(const_cast<IR::Inst*>(load))};
+    if (!holder_addr || holder_addr->value.IsImmediate() || holder_addr->imm_offset < 0 ||
+        !Common::IsAligned(holder_addr->imm_offset, 8)) {
+        return std::nullopt;
+    }
+    const IR::Inst* holder{holder_addr->value.InstRecursive()};
+    while (holder->GetOpcode() == IR::Opcode::CompositeExtractU32x2 &&
+           holder->Arg(1).IsImmediate() && holder->Arg(1).U32() == 0 &&
+           !holder->Arg(0).IsImmediate()) {
+        holder = holder->Arg(0).InstRecursive();
+    }
+    if ((holder->GetOpcode() != IR::Opcode::GetCbufU32 &&
+         holder->GetOpcode() != IR::Opcode::GetCbufU32x2) ||
+        !holder->Arg(0).IsImmediate() || !holder->Arg(1).IsImmediate()) {
+        return std::nullopt;
+    }
+    return StorageBufferAddr{.index = holder->Arg(0).U32(),
+                             .offset = holder->Arg(1).U32(),
+                             .indirect = static_cast<u32>(holder_addr->imm_offset)};
+}
+
 /// The pointers a low address is built on, when every path to it adds exactly one of
 /// `candidates` (what NativePointerCandidates found): then the address can only be in one of
 /// their buffers. Empty when a path's pointer is not known: a phi or select with an input that
@@ -1467,26 +1515,8 @@ private:
             return unknown;
         case IR::Opcode::LoadGlobal64: {
             // A pointer loaded from the memory one constant buffer pointer points to
-            const auto holder_addr{TrackLowAddress(const_cast<IR::Inst*>(inst))};
-            if (!holder_addr || holder_addr->value.IsImmediate() || holder_addr->imm_offset < 0 ||
-                !Common::IsAligned(holder_addr->imm_offset, 8)) {
-                return unknown;
-            }
-            const IR::Inst* holder{holder_addr->value.InstRecursive()};
-            while (holder->GetOpcode() == IR::Opcode::CompositeExtractU32x2 &&
-                   holder->Arg(1).IsImmediate() && holder->Arg(1).U32() == 0 &&
-                   !holder->Arg(0).IsImmediate()) {
-                holder = holder->Arg(0).InstRecursive();
-            }
-            if ((holder->GetOpcode() != IR::Opcode::GetCbufU32 &&
-                 holder->GetOpcode() != IR::Opcode::GetCbufU32x2) ||
-                !holder->Arg(0).IsImmediate() || !holder->Arg(1).IsImmediate()) {
-                return unknown;
-            }
-            return Pointer({.index = holder->Arg(0).U32(),
-                            .offset = holder->Arg(1).U32(),
-                            .indirect = static_cast<u32>(holder_addr->imm_offset)},
-                           Kind::Unknown);
+            const std::optional<StorageBufferAddr> pointer{LoadedPointer(inst)};
+            return pointer ? Pointer(*pointer, Kind::Unknown) : unknown;
         }
         case IR::Opcode::LoadGlobalS8:
         case IR::Opcode::LoadGlobalU8:
@@ -1508,6 +1538,151 @@ private:
     size_t cycles{};
 };
 
+/// EDEN_NX2_GM bit 4: whether a LoadGlobal64 reads the table entry `pointer`'s binding is made
+/// from: at the whole constant buffer pointer, its high word too, plus the entry's offset
+bool LoadsTableEntry(const IR::Inst* load, const StorageBufferAddr& pointer) {
+    if (LoadedPointer(load) != pointer) {
+        return false;
+    }
+    const auto holder_addr{TrackLowAddress(const_cast<IR::Inst*>(load))};
+    if (!holder_addr || holder_addr->high.IsImmediate()) {
+        return false;
+    }
+    const auto high{CbufWord(holder_addr->high.InstRecursive())};
+    return high && high->index == pointer.index && high->offset == pointer.offset + 4;
+}
+
+/// Visits the terms an addition tree (IAdd32 only) sums. False when it has over 64 nodes.
+template <typename Func>
+bool ForEachAddend(const IR::Value& value, Func&& func) {
+    small_vector<IR::Value, 16> pending{value};
+    for (size_t nodes = 0; !pending.empty(); ++nodes) {
+        if (nodes == 64) {
+            return false;
+        }
+        const IR::Value term{pending.back()};
+        pending.pop_back();
+        if (!term.IsImmediate() && term.InstRecursive()->GetOpcode() == IR::Opcode::IAdd32) {
+            const IR::Inst* const add{term.InstRecursive()};
+            pending.push_back(add->Arg(0));
+            pending.push_back(add->Arg(1));
+            continue;
+        }
+        func(term);
+    }
+    return true;
+}
+
+/// EDEN_NX2_GM bit 4: for an address NarrowCandidates built on `pointer` alone, the extract of
+/// the pointer's low word its low address sums, when that word comes from one load of the
+/// pointer's table entry and the high address sums the same load's high word. The address is then
+/// that loaded value plus an offset. Null otherwise.
+IR::Inst* RebaseBase(const LowAddrInfo& addr, const StorageBufferAddr& pointer) {
+    IR::Inst* pointer_low{};
+    bool repeated{};
+    const bool low_walked{ForEachAddend(addr.value, [&](const IR::Value& term) {
+        if (term.IsImmediate()) {
+            return;
+        }
+        IR::Inst* const inst{term.InstRecursive()};
+        if (inst->GetOpcode() != IR::Opcode::CompositeExtractU32x2 ||
+            !inst->Arg(1).IsImmediate() || inst->Arg(1).U32() != 0 ||
+            inst->Arg(0).IsImmediate() || LoadedPointer(inst->Arg(0).InstRecursive()) != pointer) {
+            return;
+        }
+        repeated |= pointer_low != nullptr;
+        pointer_low = inst;
+    })};
+    if (!low_walked || repeated || pointer_low == nullptr) {
+        return nullptr;
+    }
+    const IR::Inst* const load{pointer_low->Arg(0).InstRecursive()};
+    if (!LoadsTableEntry(load, pointer)) {
+        return nullptr;
+    }
+    bool high{};
+    const bool high_walked{ForEachAddend(addr.high, [&](const IR::Value& term) {
+        if (term.IsImmediate()) {
+            return;
+        }
+        const IR::Inst* const inst{term.InstRecursive()};
+        high |= inst->GetOpcode() == IR::Opcode::CompositeExtractU32x2 &&
+                inst->Arg(1).IsImmediate() && inst->Arg(1).U32() == 1 &&
+                !inst->Arg(0).IsImmediate() && inst->Arg(0).InstRecursive() == load;
+    })};
+    return high_walked && high ? pointer_low : nullptr;
+}
+
+/// EDEN_NX2_GM bit 4: a load from the whole value a LoadGlobal64 of a table entry read, plus an
+/// immediate below 2 GiB ([IAdd64(] PackUint2x32(value) [, imm)]). Its low address can't be
+/// tracked, so it stays global without a buffer; it reads the pointer's buffer if another access
+/// binds that.
+void CollectWholePointerLoad(IR::Block& block, IR::Inst& inst, StorageInfo& info) {
+    if (inst.GetOpcode() != IR::Opcode::LoadGlobal32 &&
+        inst.GetOpcode() != IR::Opcode::LoadGlobal64 &&
+        inst.GetOpcode() != IR::Opcode::LoadGlobal128) {
+        return;
+    }
+    IR::Value address{inst.Arg(0)};
+    u64 offset{};
+    if (!address.IsImmediate() && address.InstRecursive()->GetOpcode() == IR::Opcode::IAdd64 &&
+        address.InstRecursive()->Arg(1).IsImmediate()) {
+        offset = address.InstRecursive()->Arg(1).U64();
+        address = address.InstRecursive()->Arg(0);
+    }
+    if (address.IsImmediate() || offset > 0x7fffffff ||
+        address.InstRecursive()->GetOpcode() != IR::Opcode::PackUint2x32 ||
+        address.InstRecursive()->Arg(0).IsImmediate()) {
+        return;
+    }
+    IR::Inst* const load{address.InstRecursive()->Arg(0).InstRecursive()};
+    const std::optional<StorageBufferAddr> pointer{LoadedPointer(load)};
+    if (!pointer || !LoadsTableEntry(load, *pointer)) {
+        return;
+    }
+    info.rebased.push_back(RebasedLoad{
+        .pointer = *pointer,
+        .inst = &inst,
+        .block = &block,
+        .pointer_load = load,
+        .pointer_low = nullptr,
+        .low = {},
+        .offset = static_cast<s32>(offset),
+        .narrowed = false,
+    });
+}
+
+/// EDEN_NX2_GM bit 4: the global memory instructions a bindless texture handle is computed from.
+/// The texture pass tracks handles through what it finds there, so these are not rebased.
+std::unordered_set<const IR::Inst*> HandleSources(const IR::Program& program) {
+    std::unordered_set<const IR::Inst*> visited;
+    std::vector<const IR::Inst*> pending;
+    const auto enqueue{[&](const IR::Value& value) {
+        if (!value.IsImmediate() && visited.insert(value.InstRecursive()).second) {
+            pending.push_back(value.InstRecursive());
+        }
+    }};
+    for (const IR::Block* const block : program.blocks) {
+        for (const IR::Inst& inst : block->Instructions()) {
+            if (IR::NameOf(inst.GetOpcode()).starts_with("Bindless")) {
+                enqueue(inst.Arg(0));
+            }
+        }
+    }
+    std::unordered_set<const IR::Inst*> sources;
+    while (!pending.empty()) {
+        const IR::Inst* const inst{pending.back()};
+        pending.pop_back();
+        if (IsGlobalMemory(*inst)) {
+            sources.insert(inst);
+        }
+        for (size_t arg = 0; arg < inst->NumArgs(); ++arg) {
+            enqueue(inst->Arg(arg));
+        }
+    }
+    return sources;
+}
+
 /// Collects the storage buffer used by a global memory instruction and the instruction itself.
 /// Returns false when the access stays global without a buffer.
 bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, Environment& env,
@@ -1524,6 +1699,9 @@ bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
     const std::optional<LowAddrInfo> low_addr_info{TrackLowAddress(&inst)};
     if (!low_addr_info) {
         // Failed to track the low address, use NVN fallbacks
+        if (info.rebase && env.IsNativeProgram()) {
+            CollectWholePointerLoad(block, inst, info);
+        }
         return false;
     }
     // First try to find storage buffers in the NVN address
@@ -1614,7 +1792,24 @@ bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
                         std::ranges::all_of(pointers, [&info](const StorageBufferAddr& pointer) {
                             return info.set.find(pointer) != info.set.end();
                         })) {
-                        info.narrowed.emplace_back(&inst, std::move(pointers));
+                        IR::Inst* const pointer_low{
+                            info.rebase && pointers.size() == 1
+                                ? RebaseBase(*low_addr_info, pointers.front())
+                                : nullptr};
+                        if (pointer_low != nullptr) {
+                            info.rebased.push_back(RebasedLoad{
+                                .pointer = pointers.front(),
+                                .inst = &inst,
+                                .block = &block,
+                                .pointer_load = pointer_low->Arg(0).InstRecursive(),
+                                .pointer_low = pointer_low,
+                                .low = low_addr_info->value,
+                                .offset = low_addr_info->imm_offset,
+                                .narrowed = true,
+                            });
+                        } else {
+                            info.narrowed.emplace_back(&inst, std::move(pointers));
+                        }
                     }
                 }
                 return true;
@@ -2168,6 +2363,20 @@ IR::U32 StorageOffset(IR::Block& block, IR::Inst& inst, StorageBufferAddr buffer
     return ir.ISub(offset, low_cbuf);
 }
 
+/// EDEN_NX2_GM bit 4: the offset in bytes of a rebased load in its pointer's binding, which starts
+/// at the pointer aligned down, the base the run-time search subtracts
+IR::U32 RebasedOffset(const RebasedLoad& load, u32 alignment) {
+    IR::IREmitter ir{*load.block, IR::Block::InstructionList::s_iterator_to(*load.inst)};
+    const IR::U32 pointer_low{load.pointer_low != nullptr
+                                  ? IR::U32{load.pointer_low}
+                                  : IR::U32{ir.CompositeExtract(IR::Value{load.pointer_load}, 0)}};
+    IR::U32 low{load.pointer_low != nullptr ? load.low : pointer_low};
+    if (load.offset != 0) {
+        low = ir.IAdd(low, ir.Imm32(load.offset));
+    }
+    return ir.ISub(low, ir.BitwiseAnd(pointer_low, ir.Imm32(~(alignment - 1U))));
+}
+
 /// Replace a global memory load instruction with its storage buffer equivalent
 void ReplaceLoad(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
                  const IR::U32& offset) {
@@ -2285,6 +2494,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
     TrackingConditions conditions{program};
     StorageInfo info;
     info.narrow = host_info.narrow_global_candidates;
+    info.rebase = host_info.rebase_loaded_pointers;
     // Without 64-bit integers the backend cannot route global accesses among bound buffers.
     info.bind_competing_loaded = host_info.support_int64;
     info.iterator_words = CollectIteratorWords(program);
@@ -2310,6 +2520,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         paired.atomic_pointers = std::move(info.atomic_pointers);
         paired.bind_competing_loaded = false;
         paired.narrow = info.narrow;
+        paired.rebase = info.rebase;
         info = std::move(paired);
         collect();
     }
@@ -2321,6 +2532,7 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
         with_tables.bind_competing_loaded = info.bind_competing_loaded;
         with_tables.tables_enabled = true;
         with_tables.narrow = info.narrow;
+        with_tables.rebase = info.rebase;
         with_tables.table_budget = max_ssbos - info.set.size();
         with_tables.counted = info.set;
         std::swap(info, with_tables);
@@ -2373,6 +2585,28 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
                                                                   : StorageWriteExtent{},
         });
     }
+    // EDEN_NX2_GM bit 4: a load whose address is a pointer loaded from a table entry plus an
+    // offset reads that pointer's buffer at the address minus the loaded pointer's low word
+    // aligned down. That is the offset the search of bit 2 computes for its one buffer, without
+    // its comparison: an address below the binding reads out of its bounds instead of as zero
+    // (bit 8). Only for read-only pointers whose table the program does not store to (the binding
+    // is made from the entry when the draw is recorded), and not for loads a texture handle comes
+    // from; the others are narrowed as before.
+    std::vector<RebasedLoad> rebased;
+    if (!info.rebased.empty()) {
+        const std::unordered_set<const IR::Inst*> handle_sources{HandleSources(program)};
+        for (const RebasedLoad& load : info.rebased) {
+            const StorageBufferAddr holder{.index = load.pointer.index,
+                                           .offset = load.pointer.offset};
+            if (!handle_sources.contains(load.inst) && info.set.contains(load.pointer) &&
+                !info.writes.contains(load.pointer) && !info.writes.contains(holder)) {
+                rebased.push_back(load);
+            } else if (load.narrowed) {
+                info.narrowed.emplace_back(load.inst,
+                                           small_vector<StorageBufferAddr, 4>{load.pointer});
+            }
+        }
+    }
     // EDEN_NX2_GM bit 2: a load that stayed global names, in its flags, the descriptors its
     // address can only be in (a byte each, index + 1, zero after the last), for the backend to
     // search only those. Only read-only buffers of loaded pointers: those are bound from the
@@ -2393,6 +2627,12 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
             shift += 8;
         }
         inst->SetFlags(flags);
+    }
+    for (const RebasedLoad& load : rebased) {
+        const auto it{info.set.find(load.pointer)};
+        const IR::U32 index{IR::Value{static_cast<u32>(info.set.index_of(it))}};
+        const IR::U32 offset{RebasedOffset(load, u32(host_info.min_ssbo_alignment))};
+        Replace(*load.block, *load.inst, index, offset);
     }
     for (const StorageInst& storage_inst : info.to_replace) {
         const StorageBufferAddr storage_buffer{storage_inst.storage_buffer};

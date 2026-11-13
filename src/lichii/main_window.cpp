@@ -45,6 +45,7 @@
 #include "util/util.h"
 #include "lichii/game/game_list.h"
 #include "lichii/nup_dialogs.h"
+#include "lichii/problem_report.h"
 #include "lichii/recommended_settings_dialog.h"
 #include "lichii/shader_warm_dialog.h"
 #include "lichii/whats_new_dialog.h"
@@ -142,8 +143,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #endif
 
 // Common //
+#include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
+#include "lichii/configuration/controller_auto_configure.h"
 #include "common/memory_detect.h"
 #include "common/nextendo.h"
 #include "common/scm_rev.h"
@@ -336,6 +339,8 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+#include "lichii/startup_checks.h"
+
 constexpr int default_mouse_hide_timeout = 2500;
 constexpr int default_input_update_timeout = 1;
 constexpr int EmuThreadStopTimeoutMs = 10'000;
@@ -393,6 +398,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
+    // From the process start: the Vulkan startup check (a child process) and Qt's start.
+    Common::BootTiming::Mark("frontend: logging started");
+    if (const VulkanCheckOutcome& check = GetVulkanCheckOutcome(); check.end > 0.0) {
+        Common::BootTiming::Span(fmt::format("startup: Vulkan check {}", check.reason),
+                                 check.start, check.end);
+    }
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
@@ -455,6 +466,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     UpdateWindowTitle();
 
     show();
+    Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {
@@ -496,6 +508,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
     game_list->PopulateAsync(UISettings::values.game_dirs);
+    Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
 
     if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
         UISettings::values.show_whats_new.GetValue()) {
@@ -513,9 +526,31 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(&mouse_hide_timer, &QTimer::timeout, this, &MainWindow::HideMouseCursor);
     connect(ui->menubar, &QMenuBar::hovered, this, &MainWindow::ShowMouseCursor);
 
+    // Auto-map player 1 to a connected gamepad (on first pump and on every hotplug)
+    ControllerAutoConfigure::Install(*input_subsystem, QtCommon::system->HIDCore(),
+                                     [this] { config->SaveAllValues(); });
+
     update_input_timer.setInterval(default_input_update_timeout);
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
+
+    // Parsed before the Vulkan devices are listed: a game started from the command line (a
+    // launcher or a shortcut) boots without the list.
+    std::optional<Core::LaunchParams> launch_params;
+    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
+        QList<QByteArray> qba{};
+        for (auto const& e : args)
+            qba.push_back(e.toUtf8());
+        std::vector<char*> args_cstr{};
+        for (auto& e : qba)
+            args_cstr.push_back(e.data());
+
+        launch_params = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(),
+                                                args_cstr.data(), nullptr);
+    }
+    const bool direct_launch =
+        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
+                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
 
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
@@ -531,8 +566,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         UpdateAPIText();
         renderer_status_button->setDisabled(true);
         renderer_status_button->setChecked(false);
+    } else if (direct_launch) {
+        Common::BootTiming::Mark(
+            "frontend: Vulkan device list left to the settings dialogs (direct launch)");
     } else {
-        VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+        ListVulkanDevices(false);
     }
 
     // On macOS, SDL video would pump AppKit events alongside Qt and disrupt native menus.
@@ -559,15 +597,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
-    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
-        QList<QByteArray> qba{};
-        for (auto const& e : args)
-            qba.push_back(e.toUtf8());
-        std::vector<char*> args_cstr{};
-        for (auto& e : qba)
-            args_cstr.push_back(e.data());
-
-        auto const lp = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(), args_cstr.data(), nullptr);
+    if (launch_params) {
+        auto const& lp = *launch_params;
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
@@ -1629,6 +1660,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Stop, &MainWindow::OnStopGame);
     connect_menu(ui->action_Open_Mods_Page, &MainWindow::OnOpenModsPage);
     connect_menu(ui->action_Open_UserHandbook, &MainWindow::OnOpenUserHandbook);
+    connect_menu(ui->action_Report_Problem, &MainWindow::OnReportProblem);
     connect_menu(ui->action_Restart, &MainWindow::OnRestartGame);
     connect_menu(ui->action_Configure, &MainWindow::OnConfigure);
     connect_menu(ui->action_Configure_Current_Game, &MainWindow::OnConfigurePerGame);
@@ -2149,10 +2181,12 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     game_list->SetScanEnabled(false);
     QElapsedTimer boot_timer;
     boot_timer.start();
+    Common::BootTiming::Mark("boot: game boot requested");
     SCOPE_EXIT {
         boot_in_progress = false;
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
+        Common::BootTiming::Mark("boot: launch finished, the loading screen waits for the game");
         if (!emulation_running && !close_pending) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
@@ -2194,6 +2228,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     const auto v_file = Core::GetGameFileFromPath(QtCommon::vfs, filename.toUtf8().constData());
     const auto loader =
         Loader::GetLoader(*QtCommon::system, v_file, params.program_id, params.program_index);
+    Common::BootTiming::Mark(
+        loader != nullptr
+            ? fmt::format("boot: {} loader ready", Loader::GetFileTypeString(loader->GetFileType()))
+            : std::string{"boot: no loader for the file"});
 
     if (loader != nullptr && loader->ReadProgramId(title_id) == Loader::ResultStatus::Success &&
         type == StartGameType::Normal) {
@@ -2260,11 +2298,13 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     QElapsedTimer load_timer;
     load_timer.start();
+    Common::BootTiming::Mark("boot: settings applied, core load starting");
     if (!LoadROM(filename, params)) {
         LOG_ERROR(Frontend, "Core load failed: elapsed_ms={}", load_timer.elapsed());
         return;
     }
     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
+    Common::BootTiming::Mark("boot: core load done");
 
     const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
     if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {
@@ -3694,6 +3734,14 @@ void MainWindow::OnOpenUserHandbook() {
     OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
 }
 
+void MainWindow::OnReportProblem() {
+    ProblemReport::Context context{.session = report_session};
+    for (const VkDeviceInfo::Record& record : vk_device_records) {
+        context.vulkan_devices << QString::fromStdString(record.name);
+    }
+    ProblemReport::Run(this, context);
+}
+
 void MainWindow::ToggleFullscreen() {
     if (!emulation_running) {
         return;
@@ -3922,7 +3970,27 @@ void MainWindow::ToggleShowGameName() {
     game_list->RefreshGameDirectory();
 }
 
+void MainWindow::ListVulkanDevices(bool for_dialog) {
+    if (vk_device_records_listed || UISettings::values.has_broken_vulkan) {
+        return;
+    }
+    vk_device_records_listed = true;
+    const double start = Common::BootTiming::Now();
+    if (for_dialog) {
+        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+    }
+    VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+    if (for_dialog) {
+        QApplication::restoreOverrideCursor();
+    }
+    Common::BootTiming::Mark(for_dialog
+                                 ? "frontend: Vulkan devices listed when a settings dialog opened"
+                                 : "frontend: Vulkan devices listed for the settings",
+                             start);
+}
+
 void MainWindow::OnConfigure() {
+    ListVulkanDevices(true);
     const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
@@ -4221,6 +4289,7 @@ void MainWindow::OnConfigurePerGame() {
 }
 
 void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_name) {
+    ListVulkanDevices(true);
     Settings::SetConfiguringGlobal(false);
     ConfigurePerGame dialog(this, title_id, file_name, vk_device_records, *QtCommon::system);
     dialog.LoadFromFile(Core::GetGameFileFromPath(QtCommon::vfs, file_name));
@@ -5982,7 +6051,7 @@ static QPalette LichiiPalette() {
 }
 
 void MainWindow::UpdateMenuIcons() {
-    const std::array<std::pair<QAction*, const char*>, 55> icons{{
+    const std::array<std::pair<QAction*, const char*>, 56> icons{{
         {ui->action_Install_File_NAND, "download"},
         {ui->action_Load_File, "file"},
         {ui->action_Load_Folder, "folder"},
@@ -6033,6 +6102,7 @@ void MainWindow::UpdateMenuIcons() {
         {ui->action_Launch_PhotoViewer, "image"},
         {ui->action_Open_Mods_Page, "puzzle"},
         {ui->action_Open_UserHandbook, "help"},
+        {ui->action_Report_Problem, "bug"},
         {ui->action_Apply_Recommended_Settings, "wand"},
         {ui->action_Restore_Previous_Settings, "restart"},
         {ui->action_Whats_New, "sparkles"},

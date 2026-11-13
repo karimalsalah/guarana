@@ -6,8 +6,14 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <system_error>
 
+#include <fmt/format.h>
+
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
 
@@ -40,17 +46,29 @@ constexpr std::array PRESETS{
     },
 };
 
+struct FirstBootTitle {
+    u64 title_id{};
+    std::string_view name;
+};
+
+// Titles whose first boot on an Intel or AMD integrated GPU gets one line with what the presets
+// did, so that a first report shows the starting point.
+constexpr std::array FIRST_BOOT_TITLES{
+    FirstBootTitle{.title_id = 0x0400486024DEC000, .name = "Ocarina of Time"},
+};
+
 bool Enabled() {
     const char* off = std::getenv("EDEN_NX2_NO_PRESETS");
     return Settings::values.auto_presets.GetValue() && (off == nullptr || off[0] != '1');
 }
 
-void ApplySetting(const Preset& preset, const SettingValue& item) {
+/// Returns the outcome for the summary line.
+std::string ApplySetting(const Preset& preset, const SettingValue& item) {
     const auto& by_key = Settings::values.linkage.by_key;
     const auto it = by_key.find(std::string{item.label});
     if (it == by_key.end() || !it->second->Switchable()) {
         LOG_ERROR(Core, "Preset {}: {} is not a per-game setting", preset.reason, item.label);
-        return;
+        return fmt::format("{} is not a per-game setting", item.label);
     }
     Settings::BasicSetting& setting = *it->second;
     switch (Decide(item.value, !setting.UsingGlobal(), setting.ToStringGlobal(),
@@ -60,22 +78,26 @@ void ApplySetting(const Preset& preset, const SettingValue& item) {
         setting.LoadString(std::string{item.value});
         Settings::HoldPresetValue(setting);
         LOG_INFO(Core, "Preset {}: {}={}", preset.reason, item.label, setting.ToString());
-        break;
+        return fmt::format("{}={}", item.label, setting.ToString());
     case Decision::AlreadySet:
         LOG_INFO(Core, "Preset {}: {}={} (already set)", preset.reason, item.label, item.value);
-        break;
+        return fmt::format("{}={} (already set)", item.label, item.value);
     case Decision::UserPerGame:
         LOG_INFO(Core, "Preset {}: {}={} skipped, the game's configuration sets {}",
                  preset.reason, item.label, item.value, setting.ToString());
-        break;
+        return fmt::format("{}={} skipped (game configuration: {})", item.label, item.value,
+                           setting.ToString());
     case Decision::UserGlobal:
         LOG_INFO(Core, "Preset {}: {}={} skipped, the global configuration sets {}",
                  preset.reason, item.label, item.value, setting.ToStringGlobal());
-        break;
+        return fmt::format("{}={} skipped (global configuration: {})", item.label, item.value,
+                           setting.ToStringGlobal());
     }
+    return {};
 }
 
-void ReportAddon(const Preset& preset, std::string_view addon) {
+/// Returns the outcome for the summary line.
+std::string ReportAddon(const Preset& preset, std::string_view addon) {
     const auto& all = Settings::values.disabled_addons;
     const auto it = all.find(preset.title_id);
     const bool disabled =
@@ -85,9 +107,14 @@ void ReportAddon(const Preset& preset, std::string_view addon) {
     if (disabled) {
         LOG_INFO(Core, "Preset {}: add-on \"{}\" skipped, it is disabled in Add-Ons",
                  preset.reason, addon);
-    } else {
-        LOG_INFO(Core, "Preset {}: add-on \"{}\" enabled", preset.reason, addon);
+        return fmt::format("add-on \"{}\" skipped (disabled in Add-Ons)", addon);
     }
+    LOG_INFO(Core, "Preset {}: add-on \"{}\" enabled", preset.reason, addon);
+    return fmt::format("add-on \"{}\" enabled", addon);
+}
+
+std::filesystem::path FirstBootList() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "presets_first_boot.txt";
 }
 
 } // Anonymous namespace
@@ -120,20 +147,67 @@ Decision Decide(std::string_view preset_value, bool per_game, std::string_view g
     return global_value == default_value ? Decision::Apply : Decision::UserGlobal;
 }
 
-void Apply(u64 title_id, const GpuInfo& gpu) {
+std::string Apply(u64 title_id, const GpuInfo& gpu) {
     const Preset* const preset = Find(PRESETS, title_id, gpu);
     if (preset == nullptr) {
-        return;
+        return {};
     }
     if (!Enabled()) {
         LOG_INFO(Core, "Preset {}: not used, automatic presets are off", preset->reason);
-        return;
+        return fmt::format("preset \"{}\" not used, automatic presets are off", preset->reason);
     }
+    std::string summary = fmt::format("preset \"{}\":", preset->reason);
+    std::string_view separator = " ";
     for (const SettingValue& item : preset->settings) {
-        ApplySetting(*preset, item);
+        summary += separator;
+        summary += ApplySetting(*preset, item);
+        separator = ", ";
     }
     for (const std::string_view addon : preset->addons) {
-        ReportAddon(*preset, addon);
+        summary += separator;
+        summary += ReportAddon(*preset, addon);
+        separator = ", ";
+    }
+    return summary;
+}
+
+bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {
+    return gpu.integrated &&
+           (gpu.vendor == GameSettings::GPUVendor::Intel ||
+            gpu.vendor == GameSettings::GPUVendor::AMD) &&
+           std::ranges::any_of(FIRST_BOOT_TITLES, [title_id](const FirstBootTitle& title) {
+               return title.title_id == title_id;
+           });
+}
+
+void ReportFirstBoot(u64 title_id, const GpuInfo& gpu, std::string_view gpu_name,
+                     std::string_view summary) {
+    if (!ReportsFirstBoot(title_id, gpu)) {
+        return;
+    }
+    const auto title = std::ranges::find_if(FIRST_BOOT_TITLES, [title_id](const auto& entry) {
+        return entry.title_id == title_id;
+    });
+    const std::string id = fmt::format("{:016X}", title_id);
+    const std::filesystem::path list = FirstBootList();
+    {
+        std::ifstream file{list};
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line == id) {
+                return;
+            }
+        }
+    }
+    LOG_INFO(Core, "First boot of {} on {} ({} integrated GPU{}): {}", title->name, gpu_name,
+             gpu.vendor == GameSettings::GPUVendor::Intel ? "Intel" : "AMD",
+             gpu.software_tensor_math ? " without matrix cores" : "",
+             summary.empty() ? std::string_view{"no preset for this GPU, settings as configured"}
+                             : summary);
+    std::error_code error;
+    if (std::filesystem::is_directory(list.parent_path(), error)) {
+        std::ofstream file{list, std::ios::app};
+        file << id << '\n';
     }
 }
 

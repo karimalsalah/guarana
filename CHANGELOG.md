@@ -10,6 +10,31 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- FLUID presenter (`EDEN_NX2_FLUID=1`, opt-in, experimental): frames are shown on the display's vblank clock, and frame generation records a prediction for each slot, so generated frames get even 16.7 ms pacing. On the Arc 140T the title screen showed 601 of 601 slots on time (p50 16.7 ms, 100% within 2 ms of the median), and Hyrule Field had p5 16.4, p50 16.7 and p95 33.5 ms with 75% of frames within 2 ms, against 33 to 54% without it. With `EDEN_NX2_CADENCE` it also locks real frames to their slot. See [docs/switches.md](docs/switches.md).
+- Controllers: player 1 is configured automatically for a connected gamepad on start and when one is plugged in. Turn it off in the advanced input settings.
+- Help > Report a Problem writes a zip with the log and system details, scrubbed of user names and paths, and opens a prefilled GitHub issue; a link over 2000 characters is retried shorter and then copied.
+- `eden-cli --warm-pipelines <title id>` builds a title's cached shader pipelines into the driver caches without booting the game or needing the game file. On the Arc 140T it built 4,515 pipelines and programs in 155 s. See [docs/warm-up.md](docs/warm-up.md).
+- Opt-in experiments, all off by default and described in [docs/switches.md](docs/switches.md): `EDEN_NX2_GM=15` (bit 4: loads through a loaded pointer skip the run-time buffer search), `EDEN_NX2_UMA` bits 32 and 64 (copies of command list pages in runs, batched buffer copies), `EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES` and `EDEN_NX2_EARLY_AFTER` (early read-back downloads), `EDEN_NX2_SHADER_REUSE=1` (graphics pipelines reuse translated shaders, from upstream pull request [#1378](https://github.com/zortos293/Lichii/pull/1378)), and `EDEN_NX2_FLUID_QUEUE` (a queue of its own for the FLUID screen copy; a net loss on the Arc 140T, kept for testing).
+- `EDEN_NX2_CACHE_SAFE=1` (opt-in): on Intel's Windows driver, reads of the driver pipeline cache wait for running builds, which avoids a driver crash (IGCIT #1614), and unchanged cache saves are skipped.
+
+### Changed
+
+- Faster boot: the Vulkan check process is skipped when it passed with the same drivers, a direct game launch leaves the Vulkan device list to the settings, a NUP's table of contents is read once per session, and boot phases are timed in the log.
+- Ocarina of Time's first boot on an Intel or AMD integrated GPU logs one line with what the game presets did.
+- The swapchain logs its present mode, and the Vulkan instance logs what it asks for and lists no layers when none is asked for.
+- The shader tool `tools/shader-sweep` reads `EDEN_NX2_GM` like the emulator.
+
+### Fixed
+
+- `eden-cli` output redirected to a file or a pipe is kept instead of lost.
+- The Report a Problem window compiles again (a name shadowed the dialog's form layout).
+- A GPU puller torn down while waiting no longer leaves stale semaphore waiters behind (upstream [#1592](https://github.com/zortos293/Lichii/pull/1592)).
+- Windows: the loading screen no longer freezes in borderless fullscreen (upstream [#1558](https://github.com/zortos293/Lichii/pull/1558)).
+- Logging no longer ends the emulator when formatting fails while the host is out of memory (upstream [#1475](https://github.com/zortos293/Lichii/pull/1475)).
+- MSVC builds: the selected user index is cast to the launch parameter type (upstream [#1596](https://github.com/zortos293/Lichii/pull/1596)).
+
 ## [20.0.2]
 
 ### Fixed

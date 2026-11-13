@@ -119,7 +119,8 @@ distances. Descriptor aliasing and native 8/16-bit storage access stay disabled 
 exercise the compiler's portable fallbacks. Integer fragment attachments always use
 typed outputs. Default emulator shader settings apply, with resolution scaling inactive.
 This is an offline compiler exercise, not a driver-specific golden shader or proof of
-correct in-game rendering.
+correct in-game rendering. `EDEN_NX2_GM=<bits>` sets the global memory routing experiment
+as the Vulkan pipeline cache reads it (see `vk_pipeline_cache.cpp`); unset, it is off.
 
 ## Results
 

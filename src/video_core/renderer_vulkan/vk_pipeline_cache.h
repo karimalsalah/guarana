@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
 #include "common/container/unordered_map.h"
@@ -37,6 +38,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_prebuild.h"
+#include "video_core/renderer_vulkan/vk_shader_reuse.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_cache_v2/cache.h"
@@ -186,6 +188,11 @@ private:
     /// Releases the pools' contents and keeps a few for later builds
     void ReturnPools(std::shared_ptr<ShaderPools> pools);
 
+    /// Shaders of an earlier graphics pipeline that fit `envs` (vk_shader_reuse.h), or null.
+    [[nodiscard]] std::shared_ptr<const ReusableShaders> FindReusableShaders(
+        const ShaderTranslationKey& key, std::span<Shader::Environment* const> envs,
+        u64 pipeline_hash);
+
     [[nodiscard]] bool StaleNullPointerSlot(const ComputePipelineCacheEntry& entry) const;
 
     /// Translates the current compute program, binding the pointers in keep_pointers whatever
@@ -232,8 +239,16 @@ private:
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
 
-    void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
-                                      const vk::PipelineCache& pipeline_cache, u32 cache_version);
+    /// Writes the driver pipeline cache to its file and returns the size of its data. Where its
+    /// reads are serialized against builds (Device::SerializesPipelineCacheReads), a cache that
+    /// holds what the file does is not written again: nothing was built since the file was read
+    /// or written or, with `skip_same_size`, its size is the one the file holds (the exit's save
+    /// doesn't take that guess). There, with `max_lock_wait`, each of a few tries a second apart
+    /// waits that long for the running builds, and the save is dropped when none gets the lock.
+    size_t SerializeVulkanPipelineCache(
+        const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
+        u32 cache_version, bool skip_same_size = false,
+        std::optional<std::chrono::milliseconds> max_lock_wait = std::nullopt);
 
     vk::PipelineCache LoadVulkanPipelineCache(const std::filesystem::path& filename,
                                               u32 expected_cache_version);
@@ -242,7 +257,8 @@ private:
 
     /// Queues one write of the driver pipeline cache file on the serialization thread, with no
     /// throttle. For the end of a precache: its builds never reach the timed flush, which counts
-    /// only pipelines built during play.
+    /// only pipelines built during play. Where reads are serialized against builds, it writes it
+    /// here instead, before the background prebuild starts.
     void QueueVulkanPipelineCacheSave();
 
     /// One build of the shader precache: a pipeline built and destroyed
@@ -278,6 +294,7 @@ private:
     VideoCore::ShaderNotify& shader_notify;
     bool use_asynchronous_shaders{};
     bool use_vulkan_pipeline_cache{};
+    const bool use_shader_reuse;
     /// The pipelines' builds, the prebuild and the precache. Declared before the pipelines, whose
     /// builds it runs.
     std::optional<VideoCommon::ShaderJobScheduler> shader_jobs;
@@ -317,6 +334,7 @@ private:
     ShaderPools main_pools;
     std::mutex spare_pools_mutex;
     std::vector<std::shared_ptr<ShaderPools>> spare_pools;
+    ShaderReuseCache shader_reuse;
 
     Shader::Profile profile;
     Shader::HostTranslateInfo host_info;
@@ -341,6 +359,12 @@ private:
 
     std::filesystem::path vulkan_pipeline_cache_filename;
     vk::PipelineCache vulkan_pipeline_cache;
+    /// One save of the driver pipeline cache at a time (they share a temporary file), and what
+    /// its file holds: the cache's size as the driver gave it and Device::PipelineCacheBuilds
+    /// when the file was read or written
+    std::mutex vulkan_cache_save_mutex;
+    size_t saved_cache_size{};
+    u64 saved_cache_builds{};
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};

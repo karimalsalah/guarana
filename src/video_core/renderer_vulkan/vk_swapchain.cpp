@@ -20,6 +20,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
@@ -119,6 +120,10 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
     Settings::VSyncMode setting = [has_imm, has_mailbox]() {
         // Choose Mailbox or Immediate if unlocked and those modes are supported
         const auto mode = Settings::values.vsync_mode.GetValue();
+        if (FluidMode() != 0) {
+            // The FLUID presenter times each present to be shown at the next vblank.
+            return Settings::VSyncMode::Fifo;
+        }
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
         }
@@ -158,6 +163,21 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
         return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
     default:
         return VK_PRESENT_MODE_FIFO_KHR;
+    }
+}
+
+const char* PresentModeName(VkPresentModeKHR mode) {
+    switch (mode) {
+    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+        return "IMMEDIATE";
+    case VK_PRESENT_MODE_MAILBOX_KHR:
+        return "MAILBOX";
+    case VK_PRESENT_MODE_FIFO_KHR:
+        return "FIFO";
+    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+        return "FIFO_RELAXED";
+    default:
+        return "other";
     }
 }
 
@@ -274,7 +294,7 @@ bool Swapchain::Create(
     return true;
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush) {
+bool Swapchain::AcquireNextImage(bool may_flush, bool pace) {
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);
@@ -319,15 +339,19 @@ bool Swapchain::AcquireNextImage(bool may_flush) {
     }
     };
 
+    // The FLUID presenter keeps its own time, and the last copy to an image is done before it
+    // presents again.
+    if (pace) {
 #ifdef __ANDROID__
-    if (android_get_device_api_level() >= 30) {
-        scheduler.Wait(resource_ticks[image_index], 0.0, may_flush);
-    } else {
-        wait_with_frame_pacing();
-    }
+        if (android_get_device_api_level() >= 30) {
+            scheduler.Wait(resource_ticks[image_index], 0.0, may_flush);
+        } else {
+            wait_with_frame_pacing();
+        }
 #else
-    wait_with_frame_pacing();
+        wait_with_frame_pacing();
 #endif
+    }
 
     resource_ticks[image_index] = scheduler.CurrentTick();
 
@@ -441,10 +465,20 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     };
     const u32 graphics_family{device.GetGraphicsFamily()};
     const u32 present_family{device.GetPresentFamily()};
-    const std::array<u32, 2> queue_indices{graphics_family, present_family};
-    if (graphics_family != present_family) {
+    // The families that touch the images: the renderer's, the presenting one and, with
+    // EDEN_NX2_FLUID_QUEUE, the one that copies to the screen.
+    std::array<u32, 3> queue_indices{graphics_family};
+    u32 queue_index_count = 1;
+    for (const u32 family : {present_family, device.HasFluidQueue() ? device.GetFluidFamily()
+                                                                    : graphics_family}) {
+        if (std::find(queue_indices.begin(), queue_indices.begin() + queue_index_count, family) ==
+            queue_indices.begin() + queue_index_count) {
+            queue_indices[queue_index_count++] = family;
+        }
+    }
+    if (queue_index_count > 1) {
         swapchain_ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        swapchain_ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+        swapchain_ci.queueFamilyIndexCount = queue_index_count;
         swapchain_ci.pQueueFamilyIndices = queue_indices.data();
     }
     // According to Vulkan spec, when using VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR,
@@ -498,6 +532,16 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
 
     images = swapchain.GetImages();
     image_count = static_cast<u32>(images.size());
+    if (present_mode != logged_present_mode || image_count != logged_image_count) {
+        logged_present_mode = present_mode;
+        logged_image_count = image_count;
+        LOG_INFO(Render_Vulkan,
+                 "Swapchain present mode {} with {} images (vsync setting {}, frame generation "
+                 "{}, EDEN_NX2_FLUID {})",
+                 PresentModeName(present_mode), image_count,
+                 Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
+                 Settings::values.frame_gen.GetValue() ? "on" : "off", FluidMode());
+    }
 #ifdef __ANDROID__
     // Android is already ordered the same as Switch.
     image_view_format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -507,6 +551,26 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         image_view_format = surface_format.format;
     }
+
+    // Frame generation asks for FIFO (or FIFO relaxed) whatever the vsync setting, unless DLSS-G
+    // presents the frames itself.
+    std::string supported_modes;
+    for (const VkPresentModeKHR mode : present_modes) {
+        if (!supported_modes.empty()) {
+            supported_modes += ", ";
+        }
+        supported_modes += string_VkPresentModeKHR(mode);
+    }
+    LOG_INFO(Render_Vulkan,
+             "Swapchain: {}, {} images ({} asked, surface min {} max {}), {}x{} {} {}; surface "
+             "present modes: {}; vsync setting {}, frame generation {}{}",
+             string_VkPresentModeKHR(present_mode), image_count, requested_image_count,
+             capabilities.minImageCount, capabilities.maxImageCount, extent.width, extent.height,
+             string_VkFormat(surface_format.format),
+             string_VkColorSpaceKHR(surface_format.colorSpace), supported_modes,
+             Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
+             Settings::values.frame_gen.GetValue() ? "on" : "off",
+             FrameGenPresents(surface_format.format) ? ", DLSS-G presents" : "");
 }
 
 void Swapchain::CreateSemaphores() {

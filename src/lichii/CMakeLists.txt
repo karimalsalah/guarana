@@ -100,6 +100,8 @@ add_executable(lichii
     configuration/configure_hotkeys.cpp
     configuration/configure_hotkeys.h
     configuration/configure_hotkeys.ui
+    configuration/controller_auto_configure.cpp
+    configuration/controller_auto_configure.h
     configuration/configure_input.cpp
     configuration/configure_input.h
     configuration/configure_input.ui
@@ -241,6 +243,7 @@ add_executable(lichii
     lichii.rc
     migration_dialog.h migration_dialog.cpp
     nup_dialogs.h nup_dialogs.cpp
+    problem_report.h problem_report.cpp
     shader_warm_dialog.h shader_warm_dialog.cpp
     recommended_settings_dialog.h recommended_settings_dialog.cpp
     whats_new_dialog.h whats_new_dialog.cpp
@@ -435,9 +438,8 @@ target_link_libraries(lichii PRIVATE common core input_common frontend_common ne
 target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(lichii PRIVATE ZLIB::ZLIB)
-if (WIN32)
-    target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
-endif()
+# Help > Report a Problem zips the logs (qt_common/util/compress.h) on every platform.
+target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
 target_link_libraries(lichii PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
     target_link_libraries(lichii PRIVATE glad)

@@ -7,11 +7,13 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include "common/container/unordered_map.h"
@@ -323,7 +325,31 @@ public:
 
     /// Returns the main present queue.
     vk::Queue GetPresentQueue() const {
-        return present_queue;
+        return fluid_queue_presents && IsFluidQueueActive() ? fluid_queue : present_queue;
+    }
+
+    /// EDEN_NX2_FLUID_QUEUE: whether the FLUID presenter's copy has a queue of its own.
+    bool HasFluidQueue() const {
+        return has_fluid_queue;
+    }
+
+    /// Whether the dedicated queue is in use: it exists and the presenter has not given it up.
+    bool IsFluidQueueActive() const {
+        return has_fluid_queue && fluid_queue_enabled.load(std::memory_order_relaxed);
+    }
+
+    /// The presenter's watchdog: copies and presents go back to the graphics queue (the images stay
+    /// shared between the families).
+    void DisableFluidQueue() const {
+        fluid_queue_enabled.store(false, std::memory_order_relaxed);
+    }
+
+    vk::Queue GetFluidQueue() const {
+        return fluid_queue;
+    }
+
+    u32 GetFluidFamily() const {
+        return fluid_family;
     }
 
     /// Returns main graphics queue family index.
@@ -406,6 +432,53 @@ public:
     /// Windows driver crashes in vkGetPipelineCacheData when a build is running.
     bool CanReadPipelineCacheDuringBuilds() const {
         return GetDriverID() != VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
+    }
+
+    /// Where it can't (IGCIT #1614), reads of a pipeline cache wait for the builds into it, and
+    /// hold back new ones, so that the cache can be saved during play as well.
+    /// Opt-in, EDEN_NX2_CACHE_SAFE=1 (its boot deadlock is not fixed): without it such a driver's
+    /// cache is read only when nothing is expected to build, as before.
+    bool SerializesPipelineCacheReads() const {
+        static const bool disabled = [] {
+            const char* value = std::getenv("EDEN_NX2_CACHE_SAFE");
+            return value == nullptr || value[0] != '1'; // opt-in (EDEN_NX2_CACHE_SAFE=1) until its boot deadlock is fixed
+        }();
+        return !disabled && !CanReadPipelineCacheDuringBuilds();
+    }
+
+    /// Held by each pipeline build into a VkPipelineCache: shared where reads are serialized
+    /// (SerializesPipelineCacheReads), nothing elsewhere. Never taken twice by one thread.
+    [[nodiscard]] std::shared_lock<std::shared_timed_mutex> LockPipelineCacheForBuild() const {
+        std::shared_lock<std::shared_timed_mutex> lock;
+        if (SerializesPipelineCacheReads()) {
+            lock = std::shared_lock{pipeline_cache_mutex};
+        }
+        // Counted once the lock is held: a read sees every build counted before it
+        pipeline_cache_builds.fetch_add(1, std::memory_order_relaxed);
+        return lock;
+    }
+
+    /// Held by each read of a VkPipelineCache (vkGetPipelineCacheData): exclusive where reads are
+    /// serialized, nothing elsewhere. New builds wait while it waits for the running ones; with
+    /// `max_wait` it gives up after that long, owning nothing.
+    [[nodiscard]] std::unique_lock<std::shared_timed_mutex> LockPipelineCacheForRead(
+        std::optional<std::chrono::milliseconds> max_wait = std::nullopt) const {
+        if (!SerializesPipelineCacheReads()) {
+            return {};
+        }
+        if (!max_wait) {
+            return std::unique_lock{pipeline_cache_mutex};
+        }
+        std::unique_lock lock{pipeline_cache_mutex, std::defer_lock};
+        static_cast<void>(lock.try_lock_for(*max_wait));
+        return lock;
+    }
+
+    /// Pipeline builds into a VkPipelineCache so far (LockPipelineCacheForBuild). Read under
+    /// LockPipelineCacheForRead where reads are serialized, it counts exactly the builds that
+    /// ended before the read.
+    u64 PipelineCacheBuilds() const {
+        return pipeline_cache_builds.load(std::memory_order_relaxed);
     }
 
     /// Returns true for tile-based deferred renderers.
@@ -1383,11 +1456,18 @@ private:
     VmaAllocator allocator{};    ///< VMA allocator.
     mutable std::mutex separate_pools_mutex;
     mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
+    mutable std::shared_timed_mutex pipeline_cache_mutex; ///< LockPipelineCacheForBuild/ForRead
+    mutable std::atomic<u64> pipeline_cache_builds{}; ///< PipelineCacheBuilds
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
+    vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
+    u32 fluid_family{};
+    bool has_fluid_queue{};
+    bool fluid_queue_presents{}; ///< presents come from the fluid queue too
+    mutable std::atomic<bool> fluid_queue_enabled{true};
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.

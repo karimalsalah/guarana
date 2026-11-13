@@ -216,6 +216,17 @@ public:
         return uma_direct;
     }
 
+    /// EDEN_NX2_UMA bit 32 (BufferCache::Nx2CopyListPages).
+    [[nodiscard]] bool MergesListPageRuns() const noexcept {
+        return uma_list_runs;
+    }
+
+    /// The call site the next CopyBuffer is timed under (gpu_costs emu rows buffer_copy.<site>
+    /// and buffer_upload_batch.<site>). CopyBuffer goes back to Other.
+    void SetCopySite(VideoCommon::BufferCopySite site) noexcept {
+        copy_site = site;
+    }
+
     void FreeDeferredStagingBuffer(StagingBufferRef& ref);
 
     void PreCopyBarrier();
@@ -405,6 +416,9 @@ private:
     bool uma_coalesce{};
     bool uma_direct{};
     bool uma_generations{};
+    bool uma_list_runs{};
+    bool uma_batch_copies{};
+    VideoCommon::BufferCopySite copy_site{}; ///< SetCopySite's, for the next CopyBuffer
     struct UmaUploads {
         u64 direct{};
         u64 direct_bytes{};

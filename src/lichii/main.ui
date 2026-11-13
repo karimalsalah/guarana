@@ -233,6 +233,7 @@
      <string>&amp;Help</string>
     </property>
     <addaction name="action_Report_Compatibility"/>
+    <addaction name="action_Report_Problem"/>
     <addaction name="action_Open_Mods_Page"/>
     <addaction name="action_Open_UserHandbook"/>
     <addaction name="separator"/>
@@ -409,6 +410,11 @@
    </property>
    <property name="text">
     <string>Load/Remove &amp;Amiibo...</string>
+   </property>
+  </action>
+  <action name="action_Report_Problem">
+   <property name="text">
+    <string>&amp;Report a Problem...</string>
    </property>
   </action>
   <action name="action_Open_Mods_Page">

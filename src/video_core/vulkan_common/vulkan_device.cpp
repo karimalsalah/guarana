@@ -404,6 +404,21 @@ std::vector<const char*> ExtensionListForVulkan(
     return output;
 }
 
+/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE (experimental, off unless set): the FLUID presenter's
+/// screen copy gets a queue of its own. 1: the queue at high global priority, also presenting.
+/// 2: default priority. 3: the copy only, presents stay on the original queue. 4: the queue is
+/// created but nothing uses it. On the Arc 140T (driver 9175), presenting from the compute family
+/// (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost 17% of
+/// the real frame rate in Hyrule Field (20.0 against 24.0 fps).
+[[nodiscard]] u32 FluidQueueMode() {
+    const char* fluid = std::getenv("EDEN_NX2_FLUID");
+    if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
+        return 0;
+    }
+    const char* queue = std::getenv("EDEN_NX2_FLUID_QUEUE");
+    return queue == nullptr ? 0U : static_cast<u32>(std::strtoul(queue, nullptr, 10));
+}
+
 constexpr u32 NvidiaDriverVersion(u32 major, u32 minor, u32 secondary) {
     return (major << 22) | (minor << 14) | (secondary << 6);
 }
@@ -554,6 +569,68 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 
     SetupFamilies(surface);
     auto queue_cis = GetDeviceQueueCreateInfos();
+
+    // EDEN_NX2_FLUID_QUEUE: one queue of another compute or transfer family for the presenter's
+    // screen copy, at high global priority when the driver allows it.
+    static constexpr float FLUID_QUEUE_PRIORITY = 1.0f;
+    VkDeviceQueueGlobalPriorityCreateInfoKHR fluid_global_priority{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR,
+        .pNext = nullptr,
+        .globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR,
+    };
+    bool fluid_high_priority = false;
+    bool fluid_presents = false;
+    size_t fluid_queue_ci = 0;
+    const u32 fluid_queue_mode = FluidQueueMode();
+    if (fluid_queue_mode != 0) {
+        const std::vector family_properties = physical.GetQueueFamilyProperties();
+        std::optional<u32> chosen;
+        int chosen_score = -1;
+        for (u32 index = 0; index < static_cast<u32>(family_properties.size()); ++index) {
+            const VkQueueFamilyProperties& family = family_properties[index];
+            if (index == graphics_family || index == present_family || family.queueCount == 0 ||
+                (family.queueFlags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) == 0) {
+                continue;
+            }
+            const bool presents = surface && physical.GetSurfaceSupportKHR(index, surface);
+            const int score = (presents ? 2 : 0) + ((family.queueFlags & VK_QUEUE_COMPUTE_BIT) ? 1 : 0);
+            if (score > chosen_score) {
+                chosen = index;
+                chosen_score = score;
+                fluid_presents = presents && fluid_queue_mode != 3;
+            }
+        }
+        if (chosen) {
+            fluid_family = *chosen;
+            has_fluid_queue = true;
+            const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
+            fluid_high_priority =
+                fluid_queue_mode != 2 &&
+                (supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
+                 supported_extensions.contains(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)) &&
+                std::ranges::find(priorities, VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) !=
+                    priorities.end();
+            if (fluid_high_priority) {
+                loaded_extensions.insert(
+                    supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)
+                        ? VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME
+                        : VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
+            }
+            fluid_queue_ci = queue_cis.size();
+            queue_cis.push_back(VkDeviceQueueCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = fluid_high_priority ? &fluid_global_priority : nullptr,
+                .flags = 0,
+                .queueFamilyIndex = fluid_family,
+                .queueCount = 1,
+                .pQueuePriorities = &FLUID_QUEUE_PRIORITY,
+            });
+        } else {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID_QUEUE: no compute or transfer queue family besides the "
+                     "graphics and present ones; presenting from the graphics queue");
+        }
+    }
 
     // GetSuitability has already configured the linked list of features for us.
     // Reuse it here.
@@ -927,10 +1004,37 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         }
     }
 #endif
-    logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    try {
+        logical = vk::Device::Create(physical, queue_cis,
+                                     ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    } catch (const vk::Exception& exception) {
+        // High global priority can need privileges the process lacks: take the default.
+        if (!(has_fluid_queue && fluid_high_priority &&
+              exception.GetResult() == VK_ERROR_NOT_PERMITTED_KHR)) {
+            throw;
+        }
+        fluid_high_priority = false;
+        queue_cis[fluid_queue_ci].pNext = nullptr;
+        logical = vk::Device::Create(physical, queue_cis,
+                                     ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    }
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
+    if (has_fluid_queue) {
+        fluid_queue = logical.GetQueue(fluid_family);
+        fluid_queue_presents = fluid_presents;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_FLUID_QUEUE {}: the present copy runs on queue family {} index 0 at {} "
+                 "priority, presents from {}",
+                 fluid_queue_mode, fluid_family, fluid_high_priority ? "high global" : "default",
+                 fluid_presents ? "that queue" : "the original present queue after a semaphore "
+                                                 "hand-over");
+        if (fluid_queue_mode == 4) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_QUEUE 4: the queue is left unused");
+            has_fluid_queue = false;
+        }
+    }
 
 #ifdef EGLANTINE_STREAMLINE
     if (streamline_extensions) {

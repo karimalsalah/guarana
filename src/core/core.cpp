@@ -15,6 +15,7 @@
 #include "game_settings.h"
 #include "common/cpu_features.h"
 #include "audio_core/audio_core.h"
+#include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/literals.h"
 #include "common/logging.h"
@@ -442,8 +443,11 @@ struct System::Impl {
     }
 
     SystemResultStatus SetupForApplicationProcess(System& system, Frontend::EmuWindow& emu_window) {
+        Common::BootTiming::Mark("core: system setup started");
         host1x_core.emplace(system);
+        Common::BootTiming::Mark("core: host1x ready, creating the GPU and renderer");
         VideoCore::CreateGPU(gpu_core, emu_window, system);
+        Common::BootTiming::Mark("core: GPU and renderer created");
         if (!gpu_core)
             return SystemResultStatus::ErrorVideoCore;
 
@@ -465,9 +469,31 @@ struct System::Impl {
         return SystemResultStatus::Success;
     }
 
+    /// The video side of Load without a program: kernel and device memory, the GPU and its
+    /// renderer. The program id and the game overrides are set as Load sets them.
+    SystemResultStatus SetupHeadlessVideo(System& system, Frontend::EmuWindow& emu_window,
+                                          u64 title_id) {
+        Settings::SetCurrentProgramID(title_id);
+        Settings::SetCurrentProgramIsSwitch2(false);
+        Settings::SetAstcRecompressionOverride(std::nullopt);
+        Settings::ClearPresetValues();
+        if (const auto kernel_result = InitializeKernel(system);
+            kernel_result != SystemResultStatus::Success) {
+            return kernel_result;
+        }
+        host1x_core.emplace(system);
+        VideoCore::CreateGPU(gpu_core, emu_window, system);
+        if (!gpu_core) {
+            return SystemResultStatus::ErrorVideoCore;
+        }
+        GameSettings::LoadOverrides(title_id, gpu_core->Renderer());
+        return SystemResultStatus::Success;
+    }
+
     /// Creates the program's process and sets up the rest of the system to run it.
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
         VideoCommon::StutterTrace::BootMarker("boot_start");
+        Common::BootTiming::Mark("core: load started");
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
@@ -478,6 +504,7 @@ struct System::Impl {
                                      params.program_id, params.program_index)
                 : std::nullopt;
         const bool switch2_program = switch2_program_id.has_value();
+        Common::BootTiming::Mark("core: program platform found");
         Kernel::KSystemControl::SetApplicationProgramId(switch2_program_id.value_or(0));
         Settings::SetCurrentProgramIsSwitch2(switch2_program);
         Settings::SetAstcRecompressionOverride(std::nullopt);
@@ -529,6 +556,7 @@ struct System::Impl {
         if (kernel_result != SystemResultStatus::Success) {
             return kernel_result;
         }
+        Common::BootTiming::Mark("core: kernel initialized");
 
         if (params.applet_type == Service::AM::AppletType::Application) {
             current_application_filepath = filepath;
@@ -554,6 +582,7 @@ struct System::Impl {
             ShutdownMainProcess();
             return SystemResultStatus::ErrorGetLoader;
         }
+        Common::BootTiming::Mark("core: application process created (loader, modules, RomFS)");
 
         if (app_loader->ReadProgramId(params.program_id) != Loader::ResultStatus::Success) {
             LOG_ERROR(Core, "Failed to find program id for ROM!");
@@ -631,6 +660,7 @@ struct System::Impl {
         Nx2Sampler::StartFromEnvironment();
         Common::PowerTuning::LogState();
         power_session = Nx2PowerSession::MaybeStart(system);
+        Common::BootTiming::Mark("core: load done");
         return SystemResultStatus::Success;
     }
 
@@ -889,6 +919,10 @@ void System::InitializeDebugger() {
 SystemResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,
                                 Service::AM::FrontendAppletParameters& params) {
     return impl->Load(*this, emu_window, filepath, params);
+}
+
+SystemResultStatus System::SetupHeadlessVideo(Frontend::EmuWindow& emu_window, u64 title_id) {
+    return impl->SetupHeadlessVideo(*this, emu_window, title_id);
 }
 
 bool System::IsPoweredOn() const {
