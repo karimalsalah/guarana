@@ -66,8 +66,33 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
 }
 
 /// EDEN_NX2_FLUID: a slot's frame is presented this long after the vblank before the slot, so a
-/// present a few ms early or late still lands on the slot's vblank.
-constexpr std::chrono::nanoseconds FluidPresentOffset{3'500'000};
+/// present a few ms early or late still lands on the slot's vblank. EDEN_NX2_FLUID_OFFSET_US=<us>
+/// (500 to 8000) moves it: with the DXGI vblank wait the wake already follows the vblank, so about
+/// 1000 gives the screen copy 7.3 ms before its flip at 120 Hz instead of 4.8.
+[[nodiscard]] std::chrono::nanoseconds FluidPresentOffsetFor() {
+    static const std::chrono::nanoseconds offset = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_OFFSET_US");
+        if (value == nullptr) {
+            return std::chrono::nanoseconds{3'500'000};
+        }
+        const long us = std::clamp(std::strtol(value, nullptr, 10), 500L, 8000L);
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_OFFSET_US={}: slot frames go out {} us after the vblank before them", us, us);
+        return std::chrono::nanoseconds{static_cast<s64>(us) * 1000};
+    }();
+    return offset;
+}
+
+/// EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1: with the screen copy on its own queue (EDEN_NX2_FLUID_QUEUE
+/// 3 or 5), the present thread waits on the copy's fence before presenting on the graphics queue,
+/// so the present's wait on the copy's semaphore is already met and cannot hold the graphics
+/// queue's later work.
+[[nodiscard]] bool FluidQueueHostWait() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_QUEUE_HOST_WAIT");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
 /// Real frames whose GPU work is watched at once.
 constexpr size_t FluidWatches = 8;
 /// The watchdog: frames came and none was shown for this long.
@@ -685,7 +710,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         }
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
         VideoCore::AutopilotFeed::SetRefreshPeriod(period);
-        const auto offset = (std::min)(FluidPresentOffset, period * 42 / 100);
+        const auto offset = (std::min)(FluidPresentOffsetFor(), period * 42 / 100);
         {
             std::scoped_lock lock{fluid_clock_mutex};
             fluid_clock = FluidClock{
@@ -1441,6 +1466,11 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     if (UseFluidQueue(frame, extent)) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
+        if (FluidQueueHostWait()) {
+            // A copy still running after this long is late anyway: present and move on.
+            static constexpr u64 HostWaitNs = 12'000'000;
+            void(frame->present_done.Wait(HostWaitNs));
+        }
     } else {
         const vk::CommandBuffer cmdbuf{frame->cmdbuf};
         cmdbuf.Begin({
