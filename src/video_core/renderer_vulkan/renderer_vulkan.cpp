@@ -225,6 +225,20 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     const vk::PhysicalDevice physical_device(devices[device_index], dld);
+    {
+        // The game's switch defaults go in before the device reads its switches (it picks
+        // extensions by some of them).
+        const VkPhysicalDeviceProperties properties = physical_device.GetProperties();
+        using Core::GameSettings::GPUVendor;
+        const GPUVendor vendor = properties.vendorID == 0x8086   ? GPUVendor::Intel
+                                 : properties.vendorID == 0x1002 ? GPUVendor::AMD
+                                 : properties.vendorID == 0x10DE ? GPUVendor::Nvidia
+                                                                 : GPUVendor::Unknown;
+        void(Core::GamePresets::ApplySwitchDefaults(
+            Settings::GetCurrentProgramID(),
+            {.vendor = vendor,
+             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU}));
+    }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {
         if (std::uncaught_exceptions() == 0) {

@@ -174,6 +174,32 @@ TEST_CASE("A game preset sums up what it did in one line", "[core][game_presets]
     CHECK(Apply(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}).empty());
 }
 
+TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches", "[core][game_presets]") {
+    const auto names = [](std::span<const SwitchValue> items) {
+        std::string joined;
+        for (const SwitchValue& item : items) {
+            joined += std::string{item.name} + "=" + std::string{item.value} + " ";
+        }
+        return joined;
+    };
+#ifdef _WIN32
+    const std::string intel = names(SwitchDefaults(OcarinaTitleId, Arc140T));
+    CHECK(intel.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_GPL=1 ") != std::string::npos);
+    const std::string amd = names(SwitchDefaults(
+        OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));
+    CHECK(amd.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
+    CHECK(amd.find("EDEN_NX2_GPL") == std::string::npos);
+#else
+    CHECK(SwitchDefaults(OcarinaTitleId, Arc140T).empty());
+#endif
+    // Discrete GPUs and other games keep the switches as they are.
+    CHECK(SwitchDefaults(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}).empty());
+    CHECK(SwitchDefaults(OcarinaTitleId, {.vendor = GPUVendor::Intel, .integrated = false}).empty());
+    CHECK(SwitchDefaults(0x0100152000022000, Arc140T).empty());
+}
+
 TEST_CASE("Ocarina of Time's first boot on an integrated GPU is reported", "[core][game_presets]") {
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, Arc140T));
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));

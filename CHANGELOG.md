@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Changed
+
+- **Ocarina of Time is smooth out of the box on Windows integrated GPUs.** Frame generation is on (3 frames per real frame toward 60, predicted from the game's motion) and the pacing measured best is the default: the vblank-locked presenter showing each real frame (`EDEN_NX2_FLUID=2`), 20 real frames a second, one per game tick (`EDEN_NX2_CADENCE=3`), early read-backs and, on Intel, pipeline library fast links. In Hyrule Field on the Arc 140T, slots shown on time went from 430 to 536 of 600 and evenly paced frames from 62% to 88% against the earlier presenter setting. Only for settings and switches left at their defaults; `EDEN_NX2_NO_PRESETS=1` or Automatic presets off turns it off. See "Defaults for Ocarina of Time" in [docs/switches.md](docs/switches.md).
+
 ## [20.2.0] - 2026-11-13
 
 ### Added
