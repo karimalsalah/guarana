@@ -65,6 +65,9 @@ struct Frame {
     u64 fluid_slot{};
     /// The real frame it is or was predicted from; a newer one's frame for a slot replaces it.
     u64 fluid_batch{};
+    /// A real frame no prediction follows (a camera cut, no motion, HDR): frames predicted from
+    /// older real frames are stale once it is shown.
+    bool fluid_final{};
     /// When that real frame was recorded.
     std::chrono::steady_clock::time_point fluid_recorded{};
     /// The scheduler tick whose completion finishes the frame's GPU work.
@@ -123,6 +126,17 @@ public:
     [[nodiscard]] bool Fluid() const {
         return fluid_presenter && use_present_thread &&
                !fluid_fallback.load(std::memory_order_relaxed);
+    }
+
+    /// Renderer thread: one real frame's predictions were recorded (counted for the Fluid
+    /// presenter line). `predictable`: the frame could be predicted from; `cut_short`: the frame
+    /// pool had none to spare for a slot the batch covers; `capped`: the prediction limit ended
+    /// the batch before its last slot.
+    void NoteFluidBatch(bool predictable, bool cut_short, bool capped) {
+        ++fluid_batches;
+        fluid_unpredictable += predictable ? 0 : 1;
+        fluid_cut_short += cut_short ? 1 : 0;
+        fluid_capped += capped ? 1 : 0;
     }
 
     /// Any thread: the vblank clock as of the present thread's last wake.
@@ -288,6 +302,10 @@ private:
     u64 fluid_drains{};         ///< guarded by queue_mutex: those the present thread answered
     /// EDEN_NX2_FLUID's watchdog fell back to arrival order. Set under queue_mutex.
     std::atomic<bool> fluid_fallback{};
+    std::atomic<u64> fluid_batches{};
+    std::atomic<u64> fluid_unpredictable{};
+    std::atomic<u64> fluid_cut_short{};
+    std::atomic<u64> fluid_capped{};
 
     struct FluidWatch {
         u64 tick;
@@ -310,6 +328,7 @@ private:
         u64 last_slot{}; ///< the last slot handled
         u64 last_shown_vblank{};
         u64 watched_batch{};
+        u64 newest_batch{}; ///< the newest real frame's batch received
         std::vector<FluidWatch> watches;
         f64 latency_ns{};
         /// Since when frames wait unshown (the watchdog): the first received after the last show,
@@ -325,6 +344,11 @@ private:
         u64 slots{};
         u64 hits{};
         u64 no_frame{};
+        u64 not_done{};   ///< of no_frame: a frame was scheduled for the slot, its GPU work was not done
+        u64 uncovered{};  ///< of no_frame: no frame was scheduled for the slot
+        u64 rolled{};     ///< late or blocked frames moved to the next slot instead of dropped
+        u64 spare{};      ///< shown frames predicted from an older real frame than the newest
+        u64 stale{};      ///< frames dropped as older than a real frame no prediction follows
         u64 queued{};
         u64 overslept{};
         u64 in_order{};

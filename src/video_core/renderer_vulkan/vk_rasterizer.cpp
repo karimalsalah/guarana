@@ -2198,6 +2198,14 @@ void RasterizerVulkan::OotNetworkBypassed(u32 output_tic) {
                              oot_tonemapped_extent.width == oot_guide_scene_extent.width &&
                              oot_tonemapped_extent.height == oot_guide_scene_extent.height;
     oot_guide_reference = same_pixels ? oot_tonemapped_view : VkImageView{};
+    if (!oot_guide_scene && ExtrapolationRequested()) {
+        const char* reason = "no usable scene copy (missing, rescaled, not B10G11R11_FLOAT, "
+                             "multisampled or a sub-range of an image)";
+        if (std::exchange(oot_hud_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Frame extrapolation: no HUD mask for frame {}: {}",
+                     render_trace_frame, reason);
+        }
+    }
 }
 
 void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline) {
@@ -4670,6 +4678,24 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         image_view->format == VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM) {
         oot_hud_composite = info.image_view;
         oot_hud_frame = render_trace_frame;
+    }
+    if (ExtrapolationRequested() && oot_guide_frame == render_trace_frame && oot_guide_scene &&
+        !oot_guide_reference && oot_hud_frame != render_trace_frame) {
+        // The extrapolation's HUD mask needs the presented image next to the scene copy.
+        const char* reason = !info.image_view ? "no presented image view"
+                             : scaled         ? "the presented image is rescaled"
+                             : info.width != oot_guide_scene_extent.width ||
+                                   info.height != oot_guide_scene_extent.height
+                                 ? "the presented image and the scene differ in size"
+                                 : image_view->format !=
+                                           VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM
+                                     ? "the presented image is not A8B8G8R8_UNORM"
+                                     : "an unknown condition";
+        if (std::exchange(oot_hud_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Frame extrapolation: no HUD mask for frame {} ({}x{} presented, "
+                     "{}x{} scene): {}", render_trace_frame, info.width, info.height,
+                     oot_guide_scene_extent.width, oot_guide_scene_extent.height, reason);
+        }
     }
     // EDEN_NX2_OOT_FSR_ANY: a frame with a scene and no dispatch known as the game's upscale,
     // logged as TryOcarinaUpscale logs the frames it leaves to the game.

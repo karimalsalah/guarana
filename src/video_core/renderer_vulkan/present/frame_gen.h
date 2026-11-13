@@ -111,6 +111,8 @@ private:
     Frame* extrapolation_frame{}; ///< the real frame of this composite
     u64 extrapolation_cuts{};
     u64 extrapolation_missing{};
+    u64 extrapolation_hud{};     ///< frames this period with a HUD mask
+    u64 extrapolation_usable_frames{}; ///< frames this period that could be predicted
     u64 extrapolation_frames{};
     bool extrapolating{};
     /// This frame has motion to extrapolate (no camera cut).
