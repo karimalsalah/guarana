@@ -20,6 +20,11 @@
 // GpuSplit::WaitForWrites); macros whose code reads memory into their FIFO run on the back
 // instead (Maxwell3D::FrontRunOnBack).
 //
+// EDEN_NX2_READ_FAST=1 (experimental, off): an async read's sync operation does not queue behind
+// the split's front queue and back ring. The reading thread hands it to the back directly
+// (GpuSplit::RequestReadLane); the back runs it between two ring entries, ahead of the work
+// still queued. Reads of what the guest saw complete are unaffected (see GPU::Impl::OnCPURead).
+//
 // Diagnostics, off unless set:
 // - EDEN_NX2_READ_CHECK=n: 1 in n read downloads (1 checks them all) is compared with a
 //   synchronous flush's copy taken at the same point of the GPU's work
@@ -35,6 +40,12 @@ namespace VideoCore::AsyncReadback {
 
 inline std::atomic<u64> g_read_check_every{ParseReadCheck(std::getenv("EDEN_NX2_READ_CHECK"))};
 inline std::atomic<bool> g_dma_read_verify{std::getenv("EDEN_NX2_DMA_READ_VERIFY") != nullptr};
+
+/// EDEN_NX2_READ_FAST: unset, 0 or not a number is off.
+[[nodiscard]] inline bool ParseReadFast(const char* value) {
+    return value != nullptr && std::strtoull(value, nullptr, 10) != 0;
+}
+inline std::atomic<bool> g_read_fast{ParseReadFast(std::getenv("EDEN_NX2_READ_FAST"))};
 
 /// A number from an environment value clamped to [low, high]; unset or not a number gives
 /// `fallback`.
@@ -70,6 +81,7 @@ inline void ReadSwitch() {
                              std::memory_order_relaxed);
     g_dma_read_verify.store(std::getenv("EDEN_NX2_DMA_READ_VERIFY") != nullptr,
                             std::memory_order_relaxed);
+    g_read_fast.store(ParseReadFast(std::getenv("EDEN_NX2_READ_FAST")), std::memory_order_relaxed);
     g_early_submit.store(ParseClamped(std::getenv("EDEN_NX2_EARLY_SUBMIT"), 0, 0, 3),
                          std::memory_order_relaxed);
     g_early_pages.store(ParseClamped(std::getenv("EDEN_NX2_EARLY_PAGES"), 64, 8, 4096),
@@ -93,9 +105,28 @@ inline void ReadSwitch() {
     return g_read_check_every.load(std::memory_order_relaxed);
 }
 
+[[nodiscard]] inline bool ReadFast() {
+    return g_read_fast.load(std::memory_order_relaxed);
+}
+
 [[nodiscard]] inline bool DmaReadVerify() {
     return g_dma_read_verify.load(std::memory_order_relaxed);
 }
+
+/// Why an async read could not take the fast path (EDEN_NX2_READ_FAST) and used the ordinary
+/// sync operation instead.
+enum class FastMiss : u8 {
+    NoBack,      ///< The split's back thread is not running (split off, not started, or stopped)
+    GpuThread,   ///< Asked on the front or back thread, which cannot wait for the back
+    BackStopped, ///< The back stopped while the request waited: it was taken back and re-queued
+    Count,
+};
+
+inline constexpr std::array<const char*, static_cast<size_t>(FastMiss::Count)> fast_miss_names{
+    "no running back",
+    "asked on a GPU thread",
+    "back stopped while waiting",
+};
 
 /// Who wrote a read download to guest memory, named by the read check's mismatch lines.
 enum class Landing : u8 {
@@ -194,6 +225,15 @@ struct Counters {
     /// Pages the read-back table dropped to make room, and its size at the last learning
     std::atomic<u64> table_evictions{};
     std::atomic<u64> table_pages{};
+    /// EDEN_NX2_READ_FAST: sync operations run ahead of the back's queue (hits), those that
+    /// could not (misses, by FastMiss), hits that found the back's ring empty up to their
+    /// position (nothing to skip), and the time the back then needed to reach the position the
+    /// ring had when each was requested, counted from when the hit ran: what the ordinary sync
+    /// operation would have waited for in the ring at least (the front's queue is not counted)
+    std::atomic<u64> fast_hits{};
+    std::atomic<u64> fast_no_backlog{};
+    std::array<std::atomic<u64>, static_cast<size_t>(FastMiss::Count)> fast_misses{};
+    std::atomic<u64> fast_saved_ns{};
     std::atomic<u64> window_start{};
 };
 
@@ -217,6 +257,10 @@ inline void CountSyncOp(u64 ns) {
     while (ns > max && !g_counters.sync_max_ns.compare_exchange_weak(max, ns,
                                                                      std::memory_order_relaxed)) {
     }
+}
+
+inline void CountFastMiss(FastMiss reason) {
+    Add(g_counters.fast_misses[static_cast<size_t>(reason)], 1);
 }
 
 /// WaitForHostRead waited ns for the back to submit the tick it then waited on.
@@ -344,6 +388,15 @@ inline void MaybeReport() {
     const u64 pages_frame = take(c.early_pages_frame);
     const u64 table_evictions = take(c.table_evictions);
     const u64 table_pages = c.table_pages.load(std::memory_order_relaxed);
+    const u64 fast_hits = take(c.fast_hits);
+    const u64 fast_no_backlog = take(c.fast_no_backlog);
+    const u64 fast_saved_ns = take(c.fast_saved_ns);
+    std::array<u64, static_cast<size_t>(FastMiss::Count)> fast_misses{};
+    u64 fast_missed = 0;
+    for (size_t i = 0; i < fast_misses.size(); ++i) {
+        fast_misses[i] = take(c.fast_misses[i]);
+        fast_missed += fast_misses[i];
+    }
     constexpr auto async = static_cast<size_t>(Read::Async);
     constexpr auto in_flight = static_cast<size_t>(Read::InFlight);
     LOG_INFO(HW_GPU,
@@ -353,14 +406,19 @@ inline void MaybeReport() {
              "times, {:.1f} ms (the rest of the fence wait is the host GPU) | early downloads "
              "recorded {:.0f} ({:.1f} KiB), {:.0f} submitted at once, {:.0f} refused by a limit; pages queued after a dispatch {:.0f}, after a draw {:.0f}, "
              "at the frame's end {:.0f} | read-back table {} pages, {:.0f} evicted (EARLY_SUBMIT={}, EARLY_PAGES={}, "
-             "EARLY_AFTER={})",
+             "EARLY_AFTER={}) | read fast path (READ_FAST={}): {:.0f} hits ({:.0f} of them with the ring "
+             "empty up to the read), {:.0f} misses ({}: {:.0f}, {}: {:.0f}, {}: {:.0f}), {:.1f} ms "
+             "saved (ring backlog skipped, a lower bound)",
              per_second(sync_ops), ms_per_second(sync_ns), static_cast<double>(sync_max_ns) / 1e6,
              per_second(early_waits), ms_per_second(early_wait_ns), per_second(submit_waits),
              ms_per_second(submit_wait_ns), per_second(early_recorded),
              per_second(early_bytes) / 1024.0, per_second(early_flushes),
              per_second(early_refused), per_second(pages_dispatch), per_second(pages_draw),
              per_second(pages_frame), table_pages, per_second(table_evictions), EarlySubmit(),
-             EarlyPages(), EarlyAfter());
+             EarlyPages(), EarlyAfter(), ReadFast() ? 1 : 0, per_second(fast_hits),
+             per_second(fast_no_backlog), per_second(fast_missed), fast_miss_names[0],
+             per_second(fast_misses[0]), fast_miss_names[1], per_second(fast_misses[1]),
+             fast_miss_names[2], per_second(fast_misses[2]), ms_per_second(fast_saved_ns));
     LOG_INFO(HW_GPU,
              "Async read-back per second: reads {:.0f} async ({:.1f} ms), {:.0f} only waited for a "
              "download on its way ({:.1f} ms) | GPU thread in read flushes {:.1f} ms | readers "

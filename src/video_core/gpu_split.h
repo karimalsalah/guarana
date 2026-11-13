@@ -14,6 +14,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
@@ -166,6 +167,34 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
+    /// Called on the back between entries, and at once when it waits for work, after
+    /// RequestReadLane: runs the reads' sync operations ahead of the queued work (GPU::OnCPURead,
+    /// EDEN_NX2_READ_FAST).
+    void SetReadLaneHook(void (*hook)(void*), void* argument) {
+        read_lane_hook = hook;
+        read_lane_argument = argument;
+    }
+    /// Any thread: asks the back to call the read lane hook before its next entry. Returns false
+    /// (and does nothing) when the back is not running or has no hook: the caller uses the
+    /// ordinary queue then. A true return can still go unserved if the back stops meanwhile.
+    [[nodiscard]] bool RequestReadLane() {
+        if (!back_running.load(std::memory_order_acquire) || read_lane_hook == nullptr) {
+            return false;
+        }
+        read_lane_requested.store(true, std::memory_order_seq_cst);
+        wake.fetch_add(1, std::memory_order_seq_cst);
+        wake.notify_one();
+        return true;
+    }
+    /// Any thread: the ring position the front has published so far (the entries a read lane
+    /// request skips are those the back has not run past it).
+    [[nodiscard]] u64 PublishedPosition() const {
+        return published.load(std::memory_order_acquire);
+    }
+    /// Back thread, from the read lane hook: a read was served at `served_ns` (AsyncReadback::Now)
+    /// ahead of the entries up to `target` (PublishedPosition when it was requested). Counts the
+    /// time the back then takes to run past `target` as saved.
+    void NoteReadServed(u64 target, u64 served_ns);
     /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);
@@ -487,6 +516,10 @@ private:
     }
 
     void BackLoop(std::stop_token stop_token);
+    /// Back thread: runs the read lane's requests (RequestReadLane), `position` entries in.
+    void ServeReadLane(u64 position);
+    /// Back thread: counts the reads served ahead of entries that the back has now run (position).
+    void SettleReadShadows(u64 position);
     /// Runs the entry at `entry` (of the `words` published before the ring's end), returns its size.
     size_t Execute(const u64* entry, size_t words);
 
@@ -532,6 +565,14 @@ private:
 
     // Back side, in its own block.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};
+    /// Reads served ahead of the ring (NoteReadServed) until the back runs past their target.
+    struct ReadShadow {
+        u64 target;
+        u64 served_ns;
+    };
+    std::vector<ReadShadow> read_shadows;
+    /// The back's position while it serves the read lane.
+    u64 read_lane_position{};
 
     /// Whether the back is done with the Vulkan scheduler until it gets more work: set after its
     /// idle hook ran, cleared before it executes entries.
@@ -545,6 +586,9 @@ private:
     static inline thread_local bool on_gpu_thread{};
     void (*idle_hook)(void*){};
     void* idle_argument{};
+    void (*read_lane_hook)(void*){};
+    void* read_lane_argument{};
+    alignas(64) std::atomic<bool> read_lane_requested{};
     alignas(64) std::atomic<bool> hook_requested{};
     std::atomic<bool> back_running{};
     std::atomic<bool> back_quiet{true};
