@@ -54,6 +54,8 @@ struct KernelProgram {
     IR::Program program;
     TestEnvironment env;
     bool int64{true};
+    bool narrow{}; ///< EDEN_NX2_GM bit 2 (HostTranslateInfo::narrow_global_candidates)
+    bool rebase{}; ///< EDEN_NX2_GM bit 4 (HostTranslateInfo::rebase_loaded_pointers)
     u32 storage_buffer_limit{};     ///< The stage's storage buffer limit, none when 0
     u32 set_storage_buffer_limit{}; ///< The descriptor set's storage buffer limit, none when 0
 
@@ -67,6 +69,8 @@ struct KernelProgram {
         Shader::HostTranslateInfo host{};
         host.min_ssbo_alignment = 16;
         host.support_int64 = int64;
+        host.narrow_global_candidates = narrow;
+        host.rebase_loaded_pointers = rebase;
         host.max_per_stage_descriptor_storage_buffers = storage_buffer_limit;
         host.max_descriptor_set_storage_buffers = set_storage_buffer_limit;
         Shader::Optimization::GlobalMemoryToStorageBufferPass(env, program, host);
@@ -626,4 +630,162 @@ TEST_CASE("NVN fallback descriptors use guest slots rather than compact binding 
     auto reversed = descriptors;
     std::ranges::reverse(reversed);
     CHECK(selected(reversed) == std::vector<u32>{0x400, 0x340});
+}
+
+/// Ocarina of Time's foliage mesh program 3509ed3aadb5171e reads every per-instance value
+/// through a pointer loaded from a fixed slot of a pointer table. Here the slot is *c0[0x30] +
+/// 0x20: a record at the pointer plus a lane offset carried into the high word, and a field at
+/// the whole pointer plus 4.
+struct LoadedPointerRecords {
+    KernelProgram fixture;
+    IR::IREmitter ir{fixture.entry};
+    IR::Value pointer;
+    IR::U32 pointer_low;
+    IR::U32 low;
+
+    explicit LoadedPointerRecords(bool rebase) {
+        fixture.env.native = true;
+        fixture.narrow = true;
+        fixture.rebase = rebase;
+        const IR::U64 slot{
+            ir.IAdd(Address(ir, Word(ir, 0x30), Word(ir, 0x34)), ir.Imm64(u64{0x20}))};
+        pointer = ir.LoadGlobal64(slot);
+        pointer_low = IR::U32{ir.CompositeExtract(pointer, 0)};
+    }
+
+    /// The record; its high word adds the pointer's high word, or c0[0x34] instead
+    IR::Value LoadRecord(bool pointer_high = true) {
+        low = ir.IAdd(pointer_low, ir.ShiftLeftLogical(ir.LocalInvocationIdX(), ir.Imm32(4)));
+        const IR::U32 carry{ir.Select(ir.GetCarryFromOp(low), ir.Imm32(1), ir.Imm32(0))};
+        const IR::U32 high{pointer_high ? IR::U32{ir.CompositeExtract(pointer, 1)}
+                                        : Word(ir, 0x34)};
+        return ir.LoadGlobal128(Address(ir, low, ir.IAdd(high, carry)));
+    }
+
+    void LoadField() {
+        static_cast<void>(ir.LoadGlobal32(ir.IAdd(ir.PackUint2x32(pointer), ir.Imm64(u64{4}))));
+    }
+
+    const IR::Inst* Find(IR::Opcode opcode) const {
+        const auto& insts{fixture.entry.Instructions()};
+        const auto it{std::ranges::find_if(
+            insts, [=](const IR::Inst& inst) { return inst.GetOpcode() == opcode; })};
+        return it == insts.end() ? nullptr : &*it;
+    }
+
+    std::ptrdiff_t Count(IR::Opcode opcode) const {
+        return std::ranges::count_if(fixture.entry.Instructions(), [=](const IR::Inst& inst) {
+            return inst.GetOpcode() == opcode;
+        });
+    }
+};
+
+TEST_CASE("Loads built on one loaded pointer read its buffer at an offset computed at compile time",
+          "[shader][storage_buffer]") {
+    // EDEN_NX2_GM bit 4. Without it (bit 2 only) the record searches the pointer's buffer and the
+    // field, whose low address isn't tracked, every buffer.
+    const bool rebase = GENERATE(false, true);
+    CAPTURE(rebase);
+    LoadedPointerRecords program{rebase};
+    program.LoadRecord();
+    program.LoadField();
+
+    CHECK(program.fixture.TrackedOffsets() == std::vector<u32>{0x30, 0x30});
+    const auto& descriptors{program.fixture.program.info.storage_buffers_descriptors};
+    REQUIRE(descriptors.size() == 2);
+    // Binding 0 is the pointer in the table entry, binding 1 the table
+    CHECK(descriptors[0].indirect_offset == 0x20);
+    CHECK_FALSE(descriptors[0].is_written);
+    CHECK(descriptors[1].indirect_offset == ~0U);
+    CHECK(program.Count(IR::Opcode::LoadStorage64) == 1);
+    if (!rebase) {
+        const IR::Inst* const record{program.Find(IR::Opcode::LoadGlobal128)};
+        REQUIRE(record != nullptr);
+        CHECK(record->Flags<u32>() == 1);
+        CHECK(program.Count(IR::Opcode::LoadGlobal32) == 1);
+        CHECK(program.Count(IR::Opcode::LoadStorage128) == 0);
+        return;
+    }
+    CHECK(program.Count(IR::Opcode::LoadGlobal128) == 0);
+    CHECK(program.Count(IR::Opcode::LoadGlobal32) == 0);
+
+    // The record's address minus the pointer's low word aligned down, where the binding starts
+    const IR::Inst* const record{program.Find(IR::Opcode::LoadStorage128)};
+    REQUIRE(record != nullptr);
+    CHECK(record->Arg(0).U32() == 0);
+    CHECK(record->Flags<u32>() == 0);
+    const IR::Inst* const offset{record->Arg(1).InstRecursive()};
+    REQUIRE(offset->GetOpcode() == IR::Opcode::ISub32);
+    CHECK(offset->Arg(0).InstRecursive() == program.low.InstRecursive());
+    const IR::Inst* const base{offset->Arg(1).InstRecursive()};
+    REQUIRE(base->GetOpcode() == IR::Opcode::BitwiseAnd32);
+    CHECK(base->Arg(0).InstRecursive() == program.pointer_low.InstRecursive());
+    CHECK(base->Arg(1).U32() == ~15U);
+
+    // The field 4 bytes past the same pointer, rebased the same way
+    const IR::Inst* const field{program.Find(IR::Opcode::LoadStorage32)};
+    REQUIRE(field != nullptr);
+    CHECK(field->Arg(0).U32() == 0);
+    const IR::Inst* const field_offset{field->Arg(1).InstRecursive()};
+    REQUIRE(field_offset->GetOpcode() == IR::Opcode::ISub32);
+    const IR::Inst* const field_low{field_offset->Arg(0).InstRecursive()};
+    REQUIRE(field_low->GetOpcode() == IR::Opcode::IAdd32);
+    CHECK(field_low->Arg(1).U32() == 4);
+    const IR::Inst* const word{field_low->Arg(0).InstRecursive()};
+    REQUIRE(word->GetOpcode() == IR::Opcode::CompositeExtractU32x2);
+    CHECK(word->Arg(0).InstRecursive()->GetOpcode() == IR::Opcode::LoadStorage64);
+    const IR::Inst* const field_base{field_offset->Arg(1).InstRecursive()};
+    REQUIRE(field_base->GetOpcode() == IR::Opcode::BitwiseAnd32);
+    CHECK(field_base->Arg(0).InstRecursive() == word);
+}
+
+TEST_CASE("Loads through a loaded pointer keep their search where a rebase is not proven",
+          "[shader][storage_buffer]") {
+    LoadedPointerRecords program{true};
+    IR::IREmitter& ir{program.ir};
+    // Bit 2's flags for the record: 1 searches binding 0, 0 every buffer
+    u32 record_flags{1};
+    bool field_rebased{};
+    SECTION("A store to the pointer's buffer") {
+        program.LoadRecord();
+        ir.WriteGlobal32(Address(ir, ir.IAdd(program.pointer_low, ir.Imm32(0x100)),
+                                 IR::U32{ir.CompositeExtract(program.pointer, 1)}),
+                         ir.Imm32(1));
+        record_flags = 0;
+    }
+    SECTION("A store to the table") {
+        program.LoadRecord();
+        ir.WriteGlobal32(Address(ir, Word(ir, 0x30), Word(ir, 0x34)), ir.Imm32(0));
+    }
+    SECTION("A high word that is not the pointer's") {
+        program.LoadRecord(false);
+        field_rebased = true;
+    }
+    SECTION("A texture handle in the record") {
+        // The texture pass tracks the handle through the load as it is
+        const IR::Value values{program.LoadRecord()};
+        static_cast<void>(ir.ImageRead(ir.CompositeExtract(values, 0),
+                                       ir.CompositeConstruct(ir.Imm32(0), ir.Imm32(0)),
+                                       IR::TextureInstInfo{}));
+        field_rebased = true;
+    }
+    program.LoadField();
+    static_cast<void>(program.fixture.TrackedOffsets());
+
+    const IR::Inst* const record{program.Find(IR::Opcode::LoadGlobal128)};
+    REQUIRE(record != nullptr);
+    CHECK(record->Flags<u32>() == record_flags);
+    CHECK(program.Count(IR::Opcode::LoadStorage128) == 0);
+    CHECK(program.Count(IR::Opcode::LoadGlobal32) == (field_rebased ? 0 : 1));
+    CHECK(program.Count(IR::Opcode::LoadStorage32) == (field_rebased ? 1 : 0));
+}
+
+TEST_CASE("Loads at a whole loaded pointer stay global when nothing binds its buffer",
+          "[shader][storage_buffer]") {
+    LoadedPointerRecords program{true};
+    program.LoadField();
+
+    CHECK(program.fixture.TrackedOffsets() == std::vector<u32>{0x30});
+    CHECK(program.Count(IR::Opcode::LoadGlobal32) == 1);
+    CHECK(program.Count(IR::Opcode::LoadStorage32) == 0);
 }
