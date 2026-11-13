@@ -26,4 +26,12 @@ namespace Vulkan {
     Core::Frontend::WindowSystemType window_type = Core::Frontend::WindowSystemType::Headless,
     bool enable_validation = false);
 
+/**
+ * Starts creating the instance on another thread, to be taken by the next CreateInstance of the
+ * same window type and validation setting (the renderer's, later in the boot). Does nothing
+ * unless EDEN_NX2_BOOT_ASYNC=1, on Android or with Streamline. A failure or a different setting
+ * leaves CreateInstance creating its own.
+ */
+void PrecreateInstance(Core::Frontend::WindowSystemType window_type, bool enable_validation);
+
 } // namespace Vulkan
