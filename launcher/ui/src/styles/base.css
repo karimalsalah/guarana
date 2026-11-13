@@ -1,0 +1,378 @@
+/* Reset, app shell, typography, focus, view transitions, boot splash. */
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html {
+  height: 100%;
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font: 400 var(--fs-md)/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img, svg { display: block; max-width: 100%; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+p { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+a:hover { color: var(--accent-2); text-decoration-thickness: 2px; }
+
+h1, h2, h3, h4, h5, h6 { margin: 0; line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
+h1 {
+  font-family: var(--font-display);
+  font-size: var(--fs-2xl);
+  font-weight: 750;
+  letter-spacing: -0.028em;
+  line-height: 1.08;
+}
+h1:focus { outline: none; }
+code, kbd, pre { font-family: var(--mono); font-size: 0.9em; }
+code { padding: 0.1em 0.38em; border-radius: 6px; background: var(--surface-3); overflow-wrap: anywhere; }
+pre { margin: 0; padding: 12px 14px; overflow-x: auto; border-radius: var(--r-sm); background: var(--surface-2); line-height: 1.5; }
+pre code { padding: 0; background: none; }
+
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: -80px;
+  z-index: 2000;
+  padding: 10px 14px;
+  border: 2px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 650;
+}
+.skip-link:focus { top: 12px; }
+
+.noscript { padding: 24px; color: var(--text); }
+
+/* ---- App shell ------------------------------------------------------------------------------ */
+
+#app {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+#app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(64rem 36rem at 8% -14%, var(--bg-glow-1), transparent 70%),
+    radial-gradient(50rem 32rem at 104% 112%, var(--bg-glow-2), transparent 70%);
+}
+
+main {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  /* Keeps focused controls clear of the sticky action bar when they scroll into view. */
+  scroll-padding: 24px 0 112px;
+  view-transition-name: main;
+}
+main:focus { outline: none; }
+
+.outlet { min-height: 100%; }
+
+.screen {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+}
+/* Full-bleed stages (intro, launch) ignore the content column. */
+.screen.intro,
+.screen.launch { max-width: none; margin: 0; padding: 0; }
+
+html[data-chrome="none"] .topbar,
+html[data-chrome="none"] .bottombar { display: none; }
+
+/* ---- Top bar --------------------------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 64px;
+  padding: 0 20px 0 24px;
+  view-transition-name: topbar;
+}
+
+.brand { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+.brand-mark { width: 30px; height: 30px; }
+.brand-name { font-family: var(--font-display); font-weight: 800; font-size: 1.125rem; letter-spacing: -0.02em; }
+.mark-leaf { fill: var(--leaf); }
+:root[data-theme="light"] .brand .mark-leaf { fill: #2fbf71; }
+
+.tabs { display: flex; align-items: center; gap: 6px; margin-left: 12px; }
+.tabs-list { position: relative; display: flex; gap: 2px; }
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 650;
+  cursor: pointer;
+  transition: color var(--dur-2) var(--ease-out), background-color var(--dur-2) var(--ease-out);
+}
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.tab[aria-current="page"] { color: var(--text); }
+.tab-indicator {
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--grad-ember);
+  transform-origin: 0 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 360ms var(--ease-spring), opacity var(--dur-2) linear;
+}
+.tab-hint { display: none; color: var(--muted); }
+html[data-pad-hints] .tab-hint { display: inline-flex; }
+
+.setup-steps { display: flex; align-items: center; gap: 10px; margin-left: 12px; color: var(--muted); font-size: var(--fs-sm); }
+.setup-steps[hidden] { display: none; }
+.steps-kicker { font-weight: 750; color: var(--text); }
+.steps-dots { display: inline-flex; gap: 6px; }
+.steps-dots i { width: 22px; height: 4px; border-radius: 4px; background: var(--border-strong); transition: background-color var(--dur-3) var(--ease-out); }
+.setup-steps[data-step="1"] .steps-dots i:nth-child(1),
+.setup-steps[data-step="2"] .steps-dots i { background: var(--ember-1); }
+
+.topbar-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.loading-bar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1500;
+  width: 100%;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-2) linear;
+}
+.loading-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--grad-ember);
+}
+.loading-bar.is-on { opacity: 1; }
+.loading-bar.is-on::after { animation: loading-sweep 900ms ease-in-out infinite; }
+@keyframes loading-sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+/* ---- Footer ------------------------------------------------------------------------------------ */
+
+.bottombar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 40px;
+  padding: 0 24px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  view-transition-name: bottombar;
+}
+.footer-versions { font-variant-numeric: tabular-nums; }
+.footer-links { display: flex; align-items: center; gap: 14px; }
+.footer-link {
+  padding: 6px 2px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+  cursor: pointer;
+}
+.footer-link:hover { color: var(--text); text-decoration: underline; }
+.pad-hints { display: none; margin-left: auto; align-items: center; gap: 16px; color: var(--text-2); }
+html[data-pad-hints] .pad-hints { display: flex; }
+.pad-hint { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- Focus ------------------------------------------------------------------------------------ */
+/* Keyboard and pad users get one moving halo; mouse users get none. */
+
+:focus-visible { outline: 3px solid var(--halo); outline-offset: 2px; }
+html[data-input="keys"] :focus-visible,
+html[data-input="pad"] :focus { outline: none; }
+
+#focus-halo {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1800;
+  width: 0;
+  height: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow:
+    0 0 0 2px var(--halo),
+    0 0 0 6px color-mix(in srgb, var(--halo) 22%, transparent),
+    0 0 26px 4px color-mix(in srgb, var(--halo) 30%, transparent);
+  transition:
+    transform 240ms var(--ease-spring),
+    width 240ms var(--ease-spring),
+    height 240ms var(--ease-spring),
+    border-radius 240ms var(--ease-out),
+    opacity 160ms var(--ease-out);
+  will-change: transform;
+}
+#focus-halo.is-on { opacity: 1; }
+#focus-halo.no-anim { transition: none; }
+html[data-input="mouse"] #focus-halo { opacity: 0; }
+html[data-reduced] #focus-halo { transition: opacity 120ms linear; }
+
+/* ---- View transitions ------------------------------------------------------------------------ */
+
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; }
+
+::view-transition-group(main) { animation-duration: var(--dur-screen); animation-timing-function: var(--ease-emph); }
+::view-transition-group(topbar),
+::view-transition-group(bottombar) { animation-duration: var(--dur-3); }
+
+html[data-vt="forward"]::view-transition-old(main) { animation: vt-out-left 200ms var(--ease-in) both; }
+html[data-vt="forward"]::view-transition-new(main) { animation: vt-in-right var(--dur-screen) var(--ease-spring) 60ms both; }
+html[data-vt="back"]::view-transition-old(main) { animation: vt-out-right 200ms var(--ease-in) both; }
+html[data-vt="back"]::view-transition-new(main) { animation: vt-in-left var(--dur-screen) var(--ease-spring) 60ms both; }
+html[data-vt="tab-right"]::view-transition-old(main) { animation: vt-out-left-sm 180ms var(--ease-in) both; }
+html[data-vt="tab-right"]::view-transition-new(main) { animation: vt-in-right-sm 360ms var(--ease-spring) 40ms both; }
+html[data-vt="tab-left"]::view-transition-old(main) { animation: vt-out-right-sm 180ms var(--ease-in) both; }
+html[data-vt="tab-left"]::view-transition-new(main) { animation: vt-in-left-sm 360ms var(--ease-spring) 40ms both; }
+html[data-vt="fade"]::view-transition-old(main) { animation: vt-fade-out 160ms linear both; }
+html[data-vt="fade"]::view-transition-new(main) { animation: vt-fade-in 260ms var(--ease-out) 60ms both; }
+
+/* Launch: the hero card's art and title morph into the full-window stage. */
+/* The top bar hides for the stage, so main jumps to full height: keep the old image where it was (64 px top bar). */
+html[data-vt="launch"]::view-transition-old(main) { height: 100%; object-fit: none; object-position: 50% 64px; animation: vt-fade-out 260ms var(--ease-out) both; }
+html[data-vt="launch"]::view-transition-new(main) { animation: vt-fade-in 420ms var(--ease-out) 260ms both; }
+html[data-vt="launch"]::view-transition-group(main) { animation-duration: 0s; }
+html[data-vt="launch"]::view-transition-group(hero-art) { animation-duration: var(--dur-hero); animation-timing-function: var(--ease-emph); }
+html[data-vt="launch"]::view-transition-group(hero-title) { animation-duration: 640ms; animation-timing-function: var(--ease-emph); }
+::view-transition-old(hero-art),
+::view-transition-new(hero-art) { height: 100%; object-fit: cover; }
+::view-transition-old(hero-title),
+::view-transition-new(hero-title) { height: 100%; object-fit: contain; object-position: left center; }
+/* Text at two sizes never overlaps cleanly, so the titles hand over instead of cross-fading in place. */
+html[data-vt="launch"]::view-transition-old(hero-title) { animation: vt-fade-out 200ms var(--ease-out) both; }
+html[data-vt="launch"]::view-transition-new(hero-title) { animation: vt-fade-in 380ms var(--ease-out) 240ms both; }
+
+/* Return from a game: fade up from black. */
+html[data-vt="return"]::view-transition-old(main) { animation: vt-fade-out 520ms var(--ease-out) both; }
+html[data-vt="return"]::view-transition-new(main) { animation: vt-return-in 640ms var(--ease-emph) both; }
+html[data-vt="return"]::view-transition-group(main) { animation-duration: 0s; }
+
+/* Theme: circular reveal from the toggle. The whole page is one snapshot for this one. */
+html[data-vt="theme"] main,
+html[data-vt="theme"] .topbar,
+html[data-vt="theme"] .bottombar { view-transition-name: none; }
+html[data-vt="theme"]::view-transition-new(root) { animation: theme-reveal 560ms var(--ease-emph) both; }
+
+@keyframes vt-out-left { to { opacity: 0; transform: translateX(-36px); } }
+@keyframes vt-in-right { from { opacity: 0; transform: translateX(56px); } }
+@keyframes vt-out-right { to { opacity: 0; transform: translateX(36px); } }
+@keyframes vt-in-left { from { opacity: 0; transform: translateX(-56px); } }
+@keyframes vt-out-left-sm { to { opacity: 0; transform: translateX(-18px); } }
+@keyframes vt-in-right-sm { from { opacity: 0; transform: translateX(28px); } }
+@keyframes vt-out-right-sm { to { opacity: 0; transform: translateX(18px); } }
+@keyframes vt-in-left-sm { from { opacity: 0; transform: translateX(-28px); } }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-fade-in { from { opacity: 0; } }
+@keyframes vt-return-in { from { opacity: 0; transform: scale(1.04); } }
+@keyframes theme-reveal {
+  from { clip-path: circle(0 at var(--reveal-x, 100%) var(--reveal-y, 0)); }
+  to { clip-path: circle(150vmax at var(--reveal-x, 100%) var(--reveal-y, 0)); }
+}
+
+/* ---- Pause switch ----------------------------------------------------------------------------- */
+/* data-paused: a game is running or the window is hidden. data-idle: window unfocused. */
+
+html[data-paused] *,
+html[data-paused] *::before,
+html[data-paused] *::after { animation-play-state: paused !important; }
+html[data-idle] .ambient,
+html[data-idle] .ambient * { animation-play-state: paused !important; }
+
+/* ---- Reduced motion --------------------------------------------------------------------------- */
+
+html[data-reduced] *,
+html[data-reduced] *::before,
+html[data-reduced] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0ms !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* ---- Boot splash -------------------------------------------------------------------------------- */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(60% 60% at 50% 45%, #111b36 0%, #070b14 70%);
+  transition: opacity 420ms var(--ease-out), visibility 0s linear 420ms;
+}
+.boot.is-done { opacity: 0; visibility: hidden; }
+.boot { grid-template-rows: 1fr auto 1fr; justify-items: center; }
+.boot-mark { grid-row: 2; width: 96px; height: 96px; animation: boot-breathe 1.6s ease-in-out infinite; }
+.boot-status { grid-row: 3; align-self: start; margin: 22px 0 0; min-height: 3em; color: #9aa3b5; font: 500 0.9375rem/1.5 var(--font); text-align: center; }
+.boot-status strong { display: block; color: #eef1f6; font-weight: 650; }
+@keyframes boot-breathe { 50% { transform: scale(1.04); opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) { .boot-mark { animation: none; } }
+
+.boot-error { display: grid; place-items: center; min-height: 100vh; }
+.boot-error-card { max-width: 560px; display: grid; gap: 14px; padding: 32px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.boot-error-icon { color: var(--warn); }
+.boot-error-icon .icon { width: 36px; height: 36px; }
+.boot-error-detail { white-space: pre-wrap; color: var(--text-2); font-size: var(--fs-sm); }

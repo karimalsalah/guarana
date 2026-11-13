@@ -1,0 +1,363 @@
+# Guarana: full reference
+
+> Open-source (GPL-3.0-or-later) Nintendo Switch 2 emulator fork tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next. This file collects every fact on https://karimalsalah.github.io/guarana/ in plain text. Updated 2026-11-13.
+
+## What it is
+
+- A downstream fork of Lichii (https://github.com/zortos293/Lichii). Lineage: Guarana <- Lichii <- Eglantine (https://github.com/Eglantine-Community/Eglantine) <- Eden (https://git.eden-emu.dev/eden-emu/eden) <- yuzu.
+- Focus: laptops and handhelds without a gaming graphics card. Intel Arc integrated GPUs first, AMD Radeon integrated-GPU handhelds next.
+- Work areas: frame pacing, frame generation by extrapolation, GPU fixes that show a measured gain on a verified scene, ThinLTO + PGO release builds.
+- Tested platform: Windows 11 x64.
+- Official download: https://github.com/karimalsalah/guarana/releases/latest (GitHub Releases only; the website never hosts downloads).
+
+## What it is not
+
+- It contains no encryption keys, no firmware and no games. Users dump them from a Switch 2 and games they own.
+- It is not affiliated with, endorsed or sponsored by Nintendo, Intel, AMD, ASUS, Lenovo, Microsoft, MSI or Valve.
+- It is not a general speed-up: the measured gain is from one scene on one laptop.
+- It has not been measured by the maintainers on any handheld yet, nor on Linux, SteamOS or macOS.
+
+## Measured results (with caveats)
+
+- Machine for every row: Intel Core Ultra 9 285H, Intel Arc 140T, Intel driver 32.0.101.9175, Windows 11.
+- Verified scene: The Legend of Zelda: Ocarina of Time, Hyrule Field. Global-memory routing fix (EDEN_NX2_GM=11), frame generation off: 14.75 -> 22.83 game fps. Foliage draw GPU time: 15.7 -> 5.8 ms.
+- Play configuration, frame generation on: previous build 19.6 game fps; v20 about 26.7 game fps. Different spots, so not an A/B comparison of the builds.
+- Game fps = frames per second the game itself renders. Generated frames are never counted.
+- Verified scene = the run's scene check passed before frames were counted.
+- Caveat: one laptop, one scene. Other games, scenes, drivers, power limits and machines will differ.
+- Third-party reports (other builds, not verified by us): about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Ryzen Z2 Extreme, Radeon 890M-class GPU; https://github.com/zortos293/Lichii/issues/1433), where the report's author found the emulator's GPU threads waiting on each other, not the GPU, to be the limit; Arc 140V 22-24 fps during gameplay (AlfaDev23's build).
+- Machine-readable data: https://karimalsalah.github.io/guarana/data/benchmarks.json
+
+## How frame pacing and frame generation work
+
+- Frame pacing is how evenly frames reach the screen. With frame generation on, each generated frame keeps the screen for an equal share of the time between real frames. Some micro-stutter remains; the fix in progress is a presenter locked to the display's vblank (16.67 ms per frame at 60 Hz).
+- Frame generation extrapolates: after the game renders a frame, the next frames are predicted by moving its pixels along the game's own motion vectors. Nothing waits for a future frame, so no latency is added (interpolation would have to hold the newest frame back). The HUD is handled separately so it doesn't smear.
+- Motion data is wired up for Ocarina of Time only so far. Frame generation pauses while HDR output is active.
+- What the global-memory routing fix does: shader loads from global memory used to search every bound buffer at run time; with EDEN_NX2_GM=11, buffer base addresses are computed once and each load searches only the buffers its address can come from.
+
+## Known issues
+
+- Pacing micro-stutter: fix in progress (vblank-locked 16.67 ms presenter).
+- First visit to an area hitches while shaders compile; later visits load them from the cache.
+- Intel driver cache race: fix in progress.
+
+## Setup (Windows 11)
+
+1. Download the latest release from https://github.com/karimalsalah/guarana/releases/latest.
+2. Extract the whole archive into a folder you can write to.
+3. Start the emulator and point it at keys, firmware and games dumped from hardware you own.
+4. Switches are off unless set. Add EDEN_NX2_GM=11 to nx2_switches.txt next to the emulator. For frame generation: Graphics settings > Enable Frame Generation on, Target Frame Rate 60, and EDEN_NX2_EXTRAPOLATE=1 (Ocarina of Time only).
+5. Let shaders compile (first visits hitch), then send a device report: https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml
+
+## Devices
+
+Status meanings: Tested = measured by the maintainers on this build. Community reports = reported by others, on other builds, not verified. Untested = no reports yet.
+
+### Intel Arc 140T (Tested)
+
+Page: https://karimalsalah.github.io/guarana/devices/arc-140t.html
+
+Arc 140T is the only GPU Guarana has measured so far. Every number on this site comes from one laptop with a Core Ultra 9 285H, Arc 140T and Intel driver 32.0.101.9175.
+
+- Global-memory routing fix (EDEN_NX2_GM=11), frame generation off: 14.75 → 22.83 game fps in Hyrule Field, The Legend of Zelda: Ocarina of Time. The foliage draw fell from 15.7 to 5.8 ms of GPU time.
+- Play configuration with frame generation on: the previous build ran at 19.6 game fps and v20 at about 26.7. They were measured at different spots, so they are not an A/B comparison.
+- One laptop and one scene. Laptops with other power limits or memory will land elsewhere, so send a report either way.
+- GPU architecture: Xe-LPG+ (Arrow Lake-H integrated graphics, with XMX matrix engines)
+- GPU size: 8 Xe-cores, up to 2.35 GHz on the Core Ultra 9 285H
+- Memory: No dedicated video memory: shares system RAM (dual-channel DDR5-6400 or LPDDR5X-8400, depending on the laptop)
+- Power: Core Ultra 9 285H: 45 W base, up to 115 W turbo. Each laptop sets its own sustained limit.
+- Found in: Laptops with Core Ultra 200H processors that list Arc 140T graphics, such as the Core Ultra 9 285H
+- Driver: Intel graphics driver for Windows; our numbers use 32.0.101.9175
+- Note: A fix for an Intel driver cache race is in progress.
+
+### Intel Arc 140V (Community reports)
+
+Page: https://karimalsalah.github.io/guarana/devices/arc-140v.html
+
+Arc 140V is the Xe2 GPU in Lunar Lake laptops and in handhelds like the MSI Claw 8 AI+. We haven't measured it ourselves; one community report exists, on a different build.
+
+- Third-party report: 22–24 fps during gameplay on AlfaDev23's build, not on Guarana. We haven't verified it, and it isn't comparable to our Arc 140T rows.
+- No Guarana measurement yet. If you have an Arc 140V device, your report would be the first.
+- GPU architecture: Xe2 (Lunar Lake integrated graphics, with XMX matrix engines)
+- GPU size: 8 Xe2-cores, up to 1.95 GHz on the Core Ultra 7 258V
+- Memory: 16 or 32 GB LPDDR5X-8533 on the processor package, shared by CPU and GPU; not upgradeable
+- Power: Core Ultra 7 258V: 17 W base, up to 37 W turbo
+- Found in: Core Ultra 200V laptops; handhelds such as the MSI Claw 8 AI+
+- Driver: Intel graphics driver for Windows
+- Note: Arc 140V (Xe2) is a different architecture from the tested Arc 140T (Xe-LPG+). Results from one don't carry over to the other.
+
+### Intel Arc (Meteor Lake) (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/meteor-lake-arc.html
+
+Core Ultra Series 1 H processors (Meteor Lake) carry the first Xe-LPG Arc iGPU. Nobody has reported Guarana results on it yet.
+
+- Untested. Send a report: yours would be the first.
+- GPU architecture: Xe-LPG (no XMX matrix engines)
+- GPU size: Up to 8 Xe-cores (7 on Core Ultra 5 H models), up to 2.25 GHz on the Core Ultra 7 155H
+- Memory: Shares system RAM. Intel uses the Arc name only with dual-channel memory of at least 16 GB; otherwise the GPU shows up as Intel Graphics.
+- Power: H-series: 28 W base on the Core Ultra 7 155H, up to 115 W turbo; laptops set their own limits
+- Found in: Core Ultra 5, 7 and 9 H laptops (Series 1); the MSI Claw A1M handheld
+- Driver: Intel graphics driver for Windows
+- Note: Xe-LPG is the predecessor of the tested Arc 140T's Xe-LPG+. Results from the 140T don't carry over automatically.
+
+### Intel Arc B390 (Panther Lake) (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/panther-lake-arc-b390.html
+
+Arc B390 is the 12-core Xe3 iGPU in Core Ultra Series 3 (Panther Lake) laptops, the largest Intel iGPU on this list. No reports yet.
+
+- Untested. Send a report: yours would be the first.
+- GPU architecture: Xe3 (Panther Lake integrated graphics, with XMX matrix engines)
+- GPU size: 12 Xe3-cores, up to 2.5 GHz on the Core Ultra X9 388H
+- Memory: Shares system RAM: LPDDR5X up to 9600 MT/s on the Core Ultra X9 388H
+- Power: Core Ultra X9 388H: 25 W base, up to 80 W turbo
+- Found in: Laptops with the Core Ultra X9 388H and other Core Ultra Series 3 chips that list Arc B390 graphics
+- Driver: Intel graphics driver for Windows
+- Note: Xe3 is newer than anything we've tested. Report the exact driver version with any result.
+
+### AMD Radeon 780M (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/radeon-780m.html
+
+The 12-CU RDNA 3 GPU in Ryzen 7040 and 8040 laptops is also the GPU of the Ryzen Z1 Extreme (ROG Ally, ROG Ally X, Legion Go) and the Ryzen Z2. AMD handhelds are Guarana's next target; this GPU is untested so far.
+
+- Untested. Send a report: yours would be the first.
+- GPU architecture: RDNA 3
+- GPU size: 12 compute units, up to 2.7 GHz (Ryzen 7 7840U, Ryzen Z1 Extreme)
+- Memory: Shares system RAM (DDR5 or LPDDR5X); the firmware reserves part of it as dedicated video memory
+- Power: Laptops: 15–30 W (U-series). Ryzen Z1 Extreme handhelds: 9–30 W. Ryzen Z2: 15–30 W
+- Found in: Ryzen 7 7840U/HS, 8840U/HS and similar laptops; ROG Ally, ROG Ally X and Legion Go (Z1 Extreme); Legion Go 2 base model (Ryzen Z2)
+- Driver: AMD Software: Adrenalin Edition (Windows)
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+
+### AMD Radeon 890M (Community reports)
+
+Page: https://karimalsalah.github.io/guarana/devices/radeon-890m.html
+
+The 16-CU RDNA 3.5 GPU of Ryzen AI 9 HX 370 laptops. Ryzen Z2 Extreme handhelds (ROG Xbox Ally X, Legion Go 2) carry a GPU of the same class. One community report exists, from a ROG Xbox Ally X on the upstream Lichii tracker.
+
+- Third-party report: about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Ryzen Z2 Extreme, Radeon 890M-class GPU), in Lichii issue #1433. Its author found the emulator's own GPU threads waiting on each other to be the limit, not the GPU. Not measured by us.
+- No Guarana measurement yet, and no report from an 890M laptop.
+- GPU architecture: RDNA 3.5
+- GPU size: 16 compute units, up to 2.9 GHz (Ryzen AI 9 HX 370)
+- Memory: Shares system RAM (DDR5 or LPDDR5X); the firmware reserves part of it as dedicated video memory
+- Power: Ryzen AI 9 HX 370: 15–54 W configurable. Ryzen Z2 Extreme handhelds: 15–35 W
+- Found in: Ryzen AI 9 HX 370 and 375 laptops; ROG Xbox Ally X and Legion Go 2 (Ryzen Z2 Extreme, same 16-CU RDNA 3.5 class)
+- Driver: AMD Software: Adrenalin Edition (Windows)
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+
+### AMD Radeon 8060S (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/radeon-8060s.html
+
+Strix Halo's 40-CU RDNA 3.5 GPU with a 256-bit memory bus is the largest integrated GPU on this list. No reports yet.
+
+- Untested. Send a report: yours would be the first.
+- GPU architecture: RDNA 3.5
+- GPU size: 40 compute units, up to 2.9 GHz
+- Memory: 256-bit LPDDR5X-8000, up to 128 GB, shared by CPU and GPU
+- Power: 45–120 W configurable
+- Found in: Ryzen AI Max+ 395 laptops, tablets and mini PCs
+- Driver: AMD Software: Adrenalin Edition (Windows)
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+
+### MSI Claw 8 AI+ (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/msi-claw-8-ai-plus.html
+
+An 8-inch Lunar Lake handheld with Intel Arc 140V. Intel Arc handhelds are Guarana's first target, but nobody has reported this device yet.
+
+- Untested on this device.
+- Its GPU has one third-party report on another build (22–24 fps during gameplay, AlfaDev23's build). It may not come from a Claw. See the Arc 140V page.
+- Processor: Intel Core Ultra 7 258V (Lunar Lake)
+- GPU: Intel Arc 140V: Xe2, 8 Xe2-cores (Arc 140V page)
+- Memory: 32 GB LPDDR5X-8533 on the processor package, shared by CPU and GPU
+- Power: 17 W base, up to 37 W turbo (Intel's figures for the 258V); MSI's modes set the limit
+- Screen and battery: 8-inch 1920×1200 at 120 Hz; 80 Wh
+- OS: Windows 11
+
+### MSI Claw A1M (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/msi-claw-a1m.html
+
+MSI's first Claw uses Meteor Lake (Core Ultra Series 1) with Xe-LPG Arc graphics and 16 GB of shared memory. Nobody has reported it yet.
+
+- Untested. Send a report: yours would be the first.
+- Processor: Intel Core Ultra 7 155H or Core Ultra 5 135H (Meteor Lake)
+- GPU: Intel Arc (Xe-LPG): 8 Xe-cores on the 155H, 7 on the 135H (Meteor Lake Arc page)
+- Memory: 16 GB LPDDR5-6400, shared by CPU and GPU
+- Power: 28 W base for the Core Ultra 7 155H; MSI's modes set the device limit
+- Screen and battery: 7-inch 1920×1080 at 120 Hz; 53 Wh
+- OS: Windows 11
+- Note: With 16 GB of RAM on Windows, enlarge the page file. Upstream Lichii found that a small page file can make shader builds fail in Ocarina of Time on 16 GB machines (see the AMD notes).
+
+### ASUS ROG Ally X (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/rog-ally-x.html
+
+The 2024 ROG Ally X pairs the Ryzen Z1 Extreme (a Radeon 780M-class GPU) with 24 GB of memory. AMD handhelds are Guarana's next target; this one is untested so far.
+
+- Untested. Send a report: yours would be the first.
+- Processor: AMD Ryzen Z1 Extreme: 8 Zen 4 cores, 16 threads
+- GPU: RDNA 3, 12 compute units, up to 2.7 GHz (Radeon 780M class)
+- Memory: 24 GB LPDDR5X-7500, shared by CPU and GPU
+- Power: 9–30 W; Turbo mode reaches 30 W on AC power (ASUS)
+- Screen and battery: 7-inch 1920×1080 at 120 Hz; 80 Wh
+- OS: Windows 11
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+
+### ASUS ROG Xbox Ally X (Community reports)
+
+Page: https://karimalsalah.github.io/guarana/devices/rog-xbox-ally-x.html
+
+The 2025 ROG Xbox Ally X uses the Ryzen AI Z2 Extreme, whose GPU is in the same class as the Radeon 890M (16 RDNA 3.5 compute units). One community report exists, on the upstream Lichii tracker; Guarana itself hasn't been measured on it.
+
+- Third-party report: about 30 fps in Ocarina of Time on this handheld, in Lichii issue #1433. Its author found the emulator's own GPU threads waiting on each other to be the limit, not the GPU. Not measured by us.
+- No Guarana measurement yet. A report from your Ally X would be the first.
+- Processor: AMD Ryzen AI Z2 Extreme: 8 Zen 5 cores (3 Zen 5 + 5 Zen 5c), 16 threads
+- GPU: RDNA 3.5, 16 compute units (Radeon 890M class)
+- Memory: 24 GB LPDDR5X-8000, shared by CPU and GPU
+- Power: 15–35 W configurable (Ryzen AI Z2 Extreme)
+- Screen and battery: 7-inch 1920×1080 at 120 Hz; 80 Wh
+- OS: Windows 11 with the Xbox full screen experience
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+
+### Lenovo Legion Go 2 (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/legion-go-2.html
+
+Lenovo's 2025 handheld comes with a Ryzen Z2 Extreme (Radeon 890M class) or a Ryzen Z2 (Radeon 780M class). Untested so far; say which model you have when you report.
+
+- Untested on this device. Send a report: yours would be the first.
+- The Z2 Extreme chip has one third-party report from another handheld: about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Lichii #1433). Different cooling and power limits can change the result.
+- Processor: AMD Ryzen Z2 Extreme (8 Zen 5 cores) or Ryzen Z2 (8 Zen 4 cores)
+- GPU: Z2 Extreme: RDNA 3.5, 16 compute units (Radeon 890M class). Z2: RDNA 3, 12 compute units (Radeon 780M class)
+- Memory: Up to 32 GB LPDDR5X-8000 (16 GB on Ryzen Z2 models), shared by CPU and GPU
+- Power: Z2 Extreme: 15–35 W configurable. Z2: 15–30 W
+- Screen and battery: 8.8-inch 1920×1200 OLED at 144 Hz; 74 Wh
+- OS: Windows 11
+- Note: Switch 2 games are written for an NVIDIA GPU, and AMD drivers expose emulation gaps differently. Upstream Lichii keeps notes on AMD GPUs, with the fixes so far and the open reports: read them before filing a bug.
+- Note: When you compare frame rates, set the log filter to *:Error. Info-level logging costs CPU time in busy scenes (from the same notes).
+- Note: On the 16 GB Ryzen Z2 model, enlarge the Windows page file. Upstream Lichii found that a small page file can make shader builds fail in Ocarina of Time on 16 GB machines (see the AMD notes).
+
+### Steam Deck (Untested)
+
+Page: https://karimalsalah.github.io/guarana/devices/steam-deck.html
+
+Steam Deck has the smallest power budget on this list (4–15 W) and runs SteamOS, a Linux system. Guarana is tested on Windows 11 only, so the Deck is untested.
+
+- Untested. A report is useful even if it fails: say what happened.
+- Processor: AMD custom APU: 4 Zen 2 cores (8 threads), 2.4–3.5 GHz
+- GPU architecture: RDNA 2
+- GPU size: 8 compute units, 1.0–1.6 GHz
+- Memory: 16 GB LPDDR5 (5500 MT/s on LCD models, 6400 MT/s on OLED), shared by CPU and GPU
+- Power: 4–15 W for the whole APU
+- OS and driver: SteamOS (Linux) with the Mesa RADV Vulkan driver
+- Note: We test on Windows 11 only. If a release lists a Linux build, we haven't tested it on SteamOS.
+- Note: 16 GB is shared by the system, the emulator and the GPU: close everything else before you test.
+
+Starting point for every untested device (untuned, from the Arc 140T setup): plug in and use the highest performance mode; current graphics driver; EDEN_NX2_GM=11; frame generation on with target 60 and EDEN_NX2_EXTRAPOLATE=1 for Ocarina of Time; judge smoothness after the first shader-compiling pass.
+
+## FAQ
+
+### What is Guarana?
+
+Guarana is a free, open-source Nintendo Switch 2 emulator tuned for integrated GPUs: Intel Arc iGPU laptops and handhelds first, AMD Radeon iGPU handhelds next. It is a fork of Lichii, which builds on Eglantine, Eden and yuzu. The work focuses on frame pacing, frame generation and GPU fixes measured on real hardware, tested on Windows 11.
+
+### Is there a Switch 2 emulator for Intel Arc integrated graphics?
+
+Yes: that is what Guarana is tuned for. On a Core Ultra 9 285H laptop with Arc 140T (driver 32.0.101.9175), the global-memory routing fix took Ocarina of Time's Hyrule Field from 14.75 to 22.83 game fps with frame generation off. That is one laptop and one scene; see the device pages for other Arc GPUs.
+
+### Does it run on handhelds like the ROG Ally, MSI Claw or Legion Go?
+
+Not measured by us yet. Handhelds are a target (Intel Arc ones first, then AMD Radeon ones). One handheld has a third-party report: about 30 fps in Ocarina of Time on a ROG Xbox Ally X, on the upstream Lichii tracker (#1433). The Arc 140V GPU of the MSI Claw 8 AI+ has another third-party report, on a different build. Every other handheld is untested: see the device pages and send a report.
+
+### Will it run on a low-end PC?
+
+It is built for PCs without a gaming graphics card, but Switch 2 emulation is still demanding. Our only measured result is 22.83 game fps in an outdoor scene on a Core Ultra 9 285H laptop. Older or lower-power integrated GPUs are untested, so we can't promise playable speeds there. Try it and send a report.
+
+### How does frame generation work, and does it add input lag?
+
+Guarana extrapolates: after the game renders a frame, it predicts the following frames by moving pixels along the game's own motion vectors. Nothing waits for a future frame, so it adds no latency, unlike interpolation, which has to hold the newest frame back. The HUD is handled separately so text and menus don't smear. Motion data is wired up for Ocarina of Time only so far, and frame generation pauses while HDR output is active.
+
+### Does Guarana have smooth frame pacing?
+
+Smooth pacing is the goal, and it isn't finished. With frame generation on, each generated frame keeps the screen for an equal share of the time between real frames, but some micro-stutter remains. The fix in progress is a presenter locked to the display's vblank, so frames change every 16.67 ms on a 60 Hz screen. Separately, the first visit to an area can hitch while shaders compile.
+
+### What does game fps mean on this site?
+
+Game fps is how many frames per second the game itself renders. Generated frames are not counted, so frame generation can't inflate the number. With frame generation on, you see more frames than the game fps.
+
+### Does Guarana include keys, firmware or games?
+
+No. You dump keys, firmware and games from a Switch 2 and games you own. The project doesn't help anyone get them elsewhere, and requests for them are closed.
+
+### Is Guarana legal?
+
+Guarana is open-source software (GPL-3.0-or-later) that contains no Nintendo keys, firmware or games, and it isn't affiliated with Nintendo. Laws on emulation and on copying your own games differ by country, so this isn't legal advice. See the legal page.
+
+### What do I need to run it?
+
+A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file.
+
+### Which graphics driver should I use?
+
+A current stable driver from Intel or AMD. Our Intel numbers use 32.0.101.9175, and a fix for an Intel driver cache race is in progress. Results can change between driver versions, so put your exact version in every report.
+
+### Which games work?
+
+Every number on this site comes from The Legend of Zelda: Ocarina of Time, which is also the only game with extrapolated frame generation so far. Guarana follows upstream Lichii, so other games may run, but we haven't measured them. Tell us what you find.
+
+### Why does it stutter the first time I enter an area?
+
+The emulator compiles shaders the first time it meets each effect, and the first visit pays for that. Later visits load them from the cache. A remaining pacing micro-stutter has its own fix in progress.
+
+### Does it run on Linux, SteamOS or macOS?
+
+We test on Windows 11 only. If a release lists builds for other systems, we haven't tested them; reports from Linux and Steam Deck users are welcome.
+
+### How is Guarana different from Lichii?
+
+Guarana is a downstream fork focused on integrated GPUs. It adds the global-memory routing fix, extrapolated frame generation and frame pacing work, and changes ship only with a measured gain on a verified scene. Fixes that aren't specific to integrated GPUs should go to upstream Lichii first.
+
+### How do I send a device report?
+
+Open the device report form on GitHub. Include your device, CPU and GPU, driver version, power mode, the game and spot you tested, the switches you set, and the game fps. Untested devices need this most.
+
+### Can AI coding agents contribute?
+
+Yes. AGENTS.md explains the rules, issues labeled agent-ready are scoped for agents, every pull request is built and tested free in CI, and an opt-in debug MCP server lets an agent read status, frame times, screenshots and logs from a running game. See Contribute.
+
+### Is Guarana affiliated with Nintendo, Intel or AMD?
+
+No. It is an independent open-source project. Product names are used only to say what it runs on.
+
+### Where is the official download?
+
+Only on the GitHub releases page of github.com/karimalsalah/guarana. This website links there and never hosts downloads itself. Ignore other sites that offer Guarana downloads.
+
+## Contributing
+
+- Device reports: https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml (device, driver version, power mode, build and switches, game and spot, game fps).
+- Agent-ready issues: https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready
+- Every pull request is built and tested free by GitHub Actions on Windows (clang-cl) and Linux (GCC); the Windows test build is kept 14 days and linked in a comment on the pull request.
+- Claude Code: claude mcp add guarana-debug -- python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545
+- AGENTS.md (rules for coding agents): https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md
+- Debug MCP server: start the emulator with EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545 (loopback only, off unless set); tools/nx2/debug_mcp.py is a stdio MCP server exposing status, frame_times, screenshot, log_tail, log_filter, capture_frame, reject_shaders, input and input_sequence, among others. Docs: https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md
+- Bench harness: tools/bench/bench.py runs one scene the same way on any machine, checks the scene against a reference screenshot and writes one JSON row per run (Python 3.9+, no other dependencies). Docs: https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md
+- Quality bar: ship only changes with a measured gain on a verified scene; drop disproven switches; claim only numbers you have, next to their baseline; driver-bug fixes need before/after evidence; correctness first.
+- Changes that aren't specific to integrated GPUs go to upstream Lichii first.
+
+## Legal
+
+- No keys, firmware or games are included or linked. Requests for them are closed.
+- Not affiliated with Nintendo. Nintendo Switch 2 is a trademark of Nintendo; other product names belong to their owners and are used only to describe compatibility (nominative use). The logo is original.
+- License: GPL-3.0-or-later. Source files keep their original copyright and SPDX notices.
+- Takedowns: through GitHub's DMCA process (https://docs.github.com/en/site-policy/content-removal-policies/dmca-takedown-policy); other rights concerns via an issue.
+- Privacy: the site sets no cookies and runs no analytics; GitHub Pages logs IP addresses for security.

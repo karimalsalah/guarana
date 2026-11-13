@@ -96,6 +96,16 @@
     <priority>0.6</priority>
   </url>
   <url>
+    <loc>https://karimalsalah.github.io/guarana/wins.html</loc>
+    <lastmod>2026-11-13</lastmod>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://karimalsalah.github.io/guarana/legacy.html</loc>
+    <lastmod>2026-11-13</lastmod>
+    <priority>0.5</priority>
+  </url>
+  <url>
     <loc>https://karimalsalah.github.io/guarana/legal.html</loc>
     <lastmod>2026-11-13</lastmod>
     <priority>0.6</priority>

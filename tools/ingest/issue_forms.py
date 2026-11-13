@@ -18,7 +18,7 @@ FORM_LABELS = (
     # device-report.yml
     "Before submitting", "Device", "Form factor", "CPU", "Graphics card", "GPU driver", "RAM",
     "Operating system", "Power source", "Power mode", "Emulator build", "Game", "Scene",
-    "Settings and switches", "Results", "tools/bench rows", "Screenshot", "Anything else",
+    "Settings and switches", "Results", "tools/bench rows", "Screenshot", "Anything else", "Credit me as",
     # crash.yml, game_bug.yml, visual_bug.yml, ui_bug.yml
     "Regression", "Last known working build", "Steps to reproduce", "Log / crash dump",
     # agent-task.yml

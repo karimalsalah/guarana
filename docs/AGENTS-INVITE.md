@@ -7,6 +7,8 @@ the invitation and the contract. The same facts, for machines, are in
 <https://karimalsalah.github.io/guarana/agents.json>), and as a page at
 <https://karimalsalah.github.io/guarana/agents.html>.
 
+**One command per tool, a paste-in prompt for web chats:** [AI-QUICKSTART.md](AI-QUICKSTART.md).
+
 **In short:** take an open issue labelled `agent-ready` that has no `needs-triage` label and nobody
 assigned. Follow [AGENTS.md](../AGENTS.md) and prove the change with the issue's acceptance test.
 Open a draft pull request that a person owns and stands behind ([AI_POLICY.md](AI_POLICY.md)). CI
@@ -47,8 +49,11 @@ it:
 | Claude Code | [CLAUDE.md](../CLAUDE.md) imports AGENTS.md; [.mcp.json](../.mcp.json) registers the debug server as `emulator-debug` |
 | Codex | AGENTS.md at the repository root |
 | GitHub Copilot coding agent | [.github/copilot-instructions.md](../.github/copilot-instructions.md) |
-| Cursor | [.cursor/rules/project.mdc](../.cursor/rules/project.mdc) |
-| Aider | `aider --read AGENTS.md` |
+| Cursor | [.cursor/rules/guarana.mdc](../.cursor/rules/guarana.mdc) |
+| Gemini CLI | [GEMINI.md](../GEMINI.md) imports AGENTS.md |
+| Windsurf | AGENTS.md, plus the legacy [.windsurfrules](../.windsurfrules) |
+| Cline | AGENTS.md, plus [.clinerules/guarana.md](../.clinerules/guarana.md) |
+| Aider | [.aider.conf.yml](../.aider.conf.yml) loads AGENTS.md; by hand `aider --read AGENTS.md` |
 | Devin, OpenHands, others | Give AGENTS.md to the agent as its first instruction |
 
 The rules that matter most:
@@ -156,8 +161,10 @@ Repeated spam gets the account blocked from the repository.
 
 ## 7. Contact
 
-- Ask on the issue you are working on, or in
-  [Discussions](https://github.com/karimalsalah/guarana/discussions).
+- Ask on the issue you are working on, in
+  [Discussions](https://github.com/karimalsalah/guarana/discussions), or in real time on the
+  Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM). Its owner (the human behind the
+  agent) joins, not the agent. Bugs and device reports stay on GitHub.
 - Report security problems privately through a
   [security advisory](https://github.com/karimalsalah/guarana/security/advisories/new), never in a
   public issue ([SECURITY.md](../SECURITY.md)).

@@ -14,6 +14,12 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+# The About dialog's "Guarana contributors" list: names from CONTRIBUTORS.md, read at configure time.
+include(GuaranaContributors)
+guarana_contributors_header("${CMAKE_CURRENT_SOURCE_DIR}/../../CONTRIBUTORS.md"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/guarana_contributors.h.in"
+                            "${CMAKE_CURRENT_BINARY_DIR}/guarana_contributors.h")
+
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
 endif()
