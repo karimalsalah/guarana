@@ -413,9 +413,10 @@ std::vector<const char*> ExtensionListForVulkan(
 /// rendering without preempting it. On the Arc 140T (driver 9175), presenting from the compute
 /// family (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost
 /// 17% of the real frame rate in Hyrule Field (20.0 against 24.0 fps) in one unpaired run.
-/// 6: as 5 on the GPU's copy engine, a transfer-only family, when there is one: the copy no longer
-/// shares the shader cores with the game's rendering (on the Arc 140T family 1 is compute, which
-/// does, and family 2 transfer only). 7: as 6, also presenting from that queue.
+/// 6: as 5 on the GPU's copy engine, a transfer-only family, when there is one, so the copy does
+/// not share the shader cores with the game's rendering (on the Arc 140T family 1 is compute and
+/// family 2 transfer only). 7: as 6, also presenting from that queue. Both not yet measured in a
+/// paired run.
 [[nodiscard]] u32 FluidQueueMode() {
     const char* fluid = std::getenv("EDEN_NX2_FLUID");
     if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {

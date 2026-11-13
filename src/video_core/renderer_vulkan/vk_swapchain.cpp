@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <limits>
 #include <mutex>
@@ -372,8 +373,16 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
         .pImageIndices = &image_index,
         .pResults = nullptr,
     };
+    const auto lock_start = std::chrono::steady_clock::now();
     std::scoped_lock lock{scheduler.submit_mutex};
-    switch (const VkResult result = present_queue.Present(present_info)) {
+    const auto locked = std::chrono::steady_clock::now();
+    const VkResult present_result = present_queue.Present(present_info);
+    last_present_lock_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(locked - lock_start).count();
+    last_present_call_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - locked)
+                               .count();
+    switch (const VkResult result = present_result) {
     case VK_SUCCESS:
         break;
     case VK_SUBOPTIMAL_KHR:
