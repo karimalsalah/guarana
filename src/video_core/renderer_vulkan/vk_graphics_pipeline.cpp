@@ -207,33 +207,6 @@ RenderPassKey MakeRenderPassKey(const FixedPipelineState& state, const Device& d
     return key;
 }
 
-/// EDEN_NX2_DEPTH_OPTIMAL: draws sample images as GENERAL. A draw that samples its own depth
-/// attachment makes its framebuffer keep that attachment in GENERAL, and one that samples a depth
-/// image a pass has in its attachment layout returns it to GENERAL first.
-void PrepareSampledDepthLayouts(TextureCache& texture_cache, Scheduler& scheduler,
-                                std::span<const VideoCommon::ImageViewInOut> views) {
-    if (Scheduler::DepthOptimalMode() == 0) {
-        return;
-    }
-    Framebuffer* const framebuffer = texture_cache.GetFramebuffer();
-    const VkImage own_depth = framebuffer->DepthImage();
-    for (const VideoCommon::ImageViewInOut& view : views) {
-        if (!view.id) {
-            continue;
-        }
-        const VkImage image = texture_cache.GetImageView(view.id).ImageHandle();
-        if (image == VK_NULL_HANDLE) {
-            continue;
-        }
-        if (image == own_depth) {
-            framebuffer->NoteDepthSampledInPass();
-        }
-        if (scheduler.IsDepthInAttachmentLayout(image)) {
-            scheduler.ReleaseDepthForSampling(image);
-        }
-    }
-}
-
 size_t NumAttachments(const FixedPipelineState& state) {
     size_t num{};
     for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
@@ -1533,7 +1506,6 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         Profile::Scope scope{Profile::Zone::RenderTargets};
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{views.data(), views.size()};
-        PrepareSampledDepthLayouts(texture_cache, scheduler, view_span);
         texture_cache.CheckFeedbackLoop(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
@@ -1709,7 +1681,6 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         Profile::Scope scope{Profile::Zone::RenderTargets};
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{delta_views};
-        PrepareSampledDepthLayouts(texture_cache, scheduler, view_span);
         texture_cache.CheckFeedbackLoop(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
@@ -1985,7 +1956,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
         });
     }
-    scheduler.RequestDrawRenderpass(texture_cache.GetFramebuffer());
+    scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }

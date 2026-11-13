@@ -3316,7 +3316,7 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
         return;
     }
 
-    scheduler->RequestOutsideRenderPassImageContext(*original_image);
+    scheduler->RequestOutsideRenderPassOperationContext();
     auto vk_copies = TransformBufferImageCopies(copies, offset, aspect_mask);
     const VkBuffer src_buffer = buffer;
     const VkImage vk_image = *original_image;
@@ -5185,16 +5185,15 @@ void Framebuffer::MarkResolveShadowsUpToDate() const {
 
 VkRenderPass Framebuffer::RenderPassVariant(u32 color_clear_mask, bool depth_stencil_clear,
                                             u32 color_discard_mask,
-                                            bool depth_stencil_discard, u8 depth_layout) const {
+                                            bool depth_stencil_discard) const {
     if (color_clear_mask == 0 && !depth_stencil_clear && color_discard_mask == 0 &&
-        !depth_stencil_discard && depth_layout == 0) {
+        !depth_stencil_discard) {
         return renderpass;
     }
     static_assert(NUM_RT <= 8);
     const u32 variant_key = color_clear_mask | (color_discard_mask << 8) |
                             (static_cast<u32>(depth_stencil_clear) << 16) |
-                            (static_cast<u32>(depth_stencil_discard) << 17) |
-                            (static_cast<u32>(depth_layout) << 18);
+                            (static_cast<u32>(depth_stencil_discard) << 17);
     for (u32 index = 0; index < num_memoized_variants; ++index) {
         if (variant_keys[index] == variant_key) {
             return variant_render_passes[index];
@@ -5205,7 +5204,6 @@ VkRenderPass Framebuffer::RenderPassVariant(u32 color_clear_mask, bool depth_ste
     key.depth_stencil_clear = depth_stencil_clear;
     key.color_discard_mask = color_discard_mask;
     key.depth_stencil_discard = depth_stencil_discard;
-    key.depth_layout = depth_layout;
     const VkRenderPass variant = render_pass_cache->Get(key);
     if (num_memoized_variants < variant_keys.size()) {
         variant_keys[num_memoized_variants] = variant_key;
