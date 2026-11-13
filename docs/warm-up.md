@@ -1,13 +1,13 @@
 # Headless pipeline warm-up
 
-`eden-cli --warm-pipelines <title id>` builds a title's cached shader pipelines into the GPU driver's caches without booting the game and without the game file. Run it after an install or a driver update, so the first start of the game does not pay for the driver compiles (measured on the Arc iGPU: async pipeline builds take 400 to 1000 ms each on Intel's driver, and the 6007 cached pipelines of Ocarina of Time take 5.85 s at boot).
+`guarana-cli --warm-pipelines <title id>` (`eden-cli` before v20.2) builds a title's cached shader pipelines into the GPU driver's caches without booting the game and without the game file. Run it after an install or a driver update, so the first start of the game does not pay for the driver compiles (measured on the Arc iGPU: async pipeline builds take 400 to 1000 ms each on Intel's driver, and the 6007 cached pipelines of Ocarina of Time take 5.85 s at boot).
 
 Status: measured on the Arc 140T, a full run built 4,515 pipelines and programs in 155 s. See "Risks" below.
 
 ## Command line
 
 ```
-eden-cli --warm-pipelines 0400486024DEC000 [-c <config file>] [-n]
+guarana-cli --warm-pipelines 0400486024DEC000 [-c <config file>] [-n]
 ```
 
 - `<title id>`: 16 hex digits (`0x` allowed): the folder name under the shader directory, `<shader dir>/<title id>/` (`lichii-cache.v2.bin`, `vulkan_pipelines.*`, the driver blobs).
@@ -73,7 +73,7 @@ Use a time limit that matches the machine; the first run is the long one (minute
 - At most 1 GiB of captured shader environments are held for the precache and 256 MiB for the prebuild per pass. A bigger cache is built in extra passes (up to 8, each takes what the last left); if a pass takes nothing new the run ends with code 4.
 - The driver cache is saved when the run ends; a crash of the driver in the middle loses the run's builds (not the cache before it).
 - On Intel's Windows driver the driver cache save waits for the running builds (`Device::SerializesPipelineCacheReads`); the prebuild is held until the precache's save, as at boot.
-- The Qt frontend does not have the option; it is a mode of the SDL frontend `eden-cli`.
+- The Qt frontend does not have the option; it is a mode of the SDL frontend `guarana-cli` (`eden-cli` before v20.2).
 
 ## Boot without the wait (`EDEN_NX2_BOOT_ASYNC=1`)
 
@@ -125,5 +125,5 @@ Arc 140T setup of [switches.md](switches.md), Ocarina of Time (0400486024DEC000)
 2. `Nx2Boot` events (`tools/nx2/cache_metrics.py parse <log>` keeps events it does not know): `shader_load_end` (`queued=` is the compute programs plus the graphics boot builds in both variants), `boot_async_end`, `first_frame`, with the commit and peak commit: B holds the log and the queued pipelines longer.
 3. `Nx2StutterSummary` every 10 s: `builds` (pipelines built on the GPU thread, which B must not raise in the first minute), the lookup counts (`GraphicsBackground`: pipelines taken from the queue, the async boot ones included; `GraphicsPrebuilt`: found built in the cache; `GraphicsRecorded` and `GraphicsNew`: built by the draw), and the frame-time histogram. In B the first 30 s after release are the cost: read the frames over 33 ms (`Nx2Stutter` lines, top cause "pipeline wait") against A's same minute. Expect `GraphicsBackground` to carry most of what A had as `GraphicsPrebuilt`.
 4. Cold, then warm: with the shader cache and the driver cache deleted (the first boot builds from nothing and writes the records), a second boot (records exist, driver cache warm: the warm case above), and a third, which uses the order and the built-in-play records the second wrote. In the log: `pipelines recent sessions built during play, N of them added to the boot builds` and, in `Nx2StutterSummary`, the builds of the third boot against the second.
-5. Warm-up: `eden-cli --warm-pipelines 0400486024DEC000` on a cleared driver cache: the final `warm:` line (155 s for 4515 pipelines and programs measured). Kill it halfway (`taskkill /f`) and run it again: the `already built` count of the final line should be about what the first run had built (to the last 500), and the run should end in about the remaining share of the time. A third run ends within seconds with `0 left`.
+5. Warm-up: `guarana-cli --warm-pipelines 0400486024DEC000` on a cleared driver cache: the final `warm:` line (155 s for 4515 pipelines and programs measured). Kill it halfway (`taskkill /f`) and run it again: the `already built` count of the final line should be about what the first run had built (to the last 500), and the run should end in about the remaining share of the time. A third run ends within seconds with `0 left`.
 6. Correctness: B's first minute of play against A at the same points (`capture_frame` at three route points: no missing objects), the `Shader cache v2` lines the same in A and B except for `incomplete` records, and no `Device loss`. After killing the emulator during the async builds (`taskkill /f` in the first seconds), the next boot must log `the last boot ended while building cached pipelines; building none at boot this time`: that is the guard working.

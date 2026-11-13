@@ -24,6 +24,9 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 
 | Pull request | Author | Change |
 |---|---|---|
+| [#1173](https://github.com/zortos293/Lichii/pull/1173) | [PantACRO4life](https://github.com/PantACRO4life) | Graphics pipelines linked from per-stage `VK_EXT_graphics_pipeline_library` parts (`EDEN_NX2_GPL`), with the create state gathered in one struct |
+| [#1177](https://github.com/zortos293/Lichii/pull/1177) | [PantACRO4life](https://github.com/PantACRO4life) | Optimized links of the libraries built in the background and swapped in at a later draw (`EDEN_NX2_GPL_OPTIMIZE`); libraries released with the pipelines that used them; libraries only with independent interpolation decoration and five bound descriptor sets |
+| [#1185](https://github.com/zortos293/Lichii/pull/1185) | [justin-wq1337](https://github.com/justin-wq1337), [PantACRO4life](https://github.com/PantACRO4life) | Libraries linked optimized on AMD's Windows driver, where fast links draw white fringes (`EDEN_NX2_GPL_FAST_LINK`) |
 | [#948](https://github.com/zortos293/Lichii/pull/948) | [danieljesus](https://github.com/danieljesus) | ASTC textures with uneven mips stay in BC on integrated GPUs and cards under 6 GiB; the threshold compares against the heap size, not the budget |
 | [#933](https://github.com/zortos293/Lichii/pull/933) | mstampfli | A suspended list copy is polled without a kernel call each time |
 | [#1155](https://github.com/zortos293/Lichii/pull/1155) | [PantACRO4life](https://github.com/PantACRO4life) | Texture descriptors are flushed one by one when the pool runs past the GPU address space |
