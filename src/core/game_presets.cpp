@@ -45,7 +45,11 @@ constexpr std::array OCARINA_SOFTWARE_TENSOR_SETTINGS{
 // predicts under one frame interval ahead, CADENCE=3 holds real frames to the game's 20 Hz tick,
 // EXTRAPOLATE predicts from the game's motion vectors, EARLY_* download read-backs early. Against
 // FLUID=1 in one paired session: slots shown on time 430 to 536 of 600, evenly paced frames 62%
-// to 88%. GPL (pipeline library fast links) only on Intel, where it was measured.
+// to 88%. FLUID_QUEUE=5 with HOST_WAIT copies each frame to the screen on a queue of its own, so
+// the copy does not wait behind the game's rendering, and BUDGET_HOLD_RES keeps the resolution
+// from rising into the freed GPU time: frames that reached the screen late went from about 200
+// per 10 s to 0, slots on time to 586-599 of 600. GPL (pipeline library fast links) only on
+// Intel, where it was measured.
 #ifdef _WIN32
 constexpr std::array OCARINA_IGPU_SWITCHES{
     SwitchValue{"EDEN_NX2_FLUID", "2"},
@@ -54,6 +58,9 @@ constexpr std::array OCARINA_IGPU_SWITCHES{
     SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
     SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
     SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
 };
 constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
     SwitchValue{"EDEN_NX2_FLUID", "2"},
@@ -62,6 +69,9 @@ constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
     SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
     SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
     SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
     SwitchValue{"EDEN_NX2_GPL", "1"},
 };
 constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;

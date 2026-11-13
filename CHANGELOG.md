@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Changed
+
+- **Ocarina of Time's frames reach the screen on time.** On Windows integrated GPUs the screen copy now runs on a queue of its own (`EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1`) and the frame budget no longer raises the resolution into the cadence's headroom (`EDEN_NX2_BUDGET_HOLD_RES=1`), by default. In Hyrule Field on the Arc 140T, frames that reached the screen after their refresh went from about 200 per 10 s to 0, and slots shown on time from 475-491 to up to 599 of 600 with 99.5% of frames evenly paced (two paired rounds).
+
 ### Added
 
 - Frame pacing experiments, off by default and described in [docs/switches.md](docs/switches.md): `EDEN_NX2_QUEUE_LIMIT` (keeps the GPU queue short so screen copies and read-backs wait less), `EDEN_NX2_FLUID_OFFSET_US` (the screen copy's window before its flip), `EDEN_NX2_FLUID_SPLIT_SUBMIT` (the real frame goes to the GPU before its predictions), `EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT` (a default-priority copy queue that cannot stall rendering) and `EDEN_NX2_BUDGET_HOLD_RES`; and `EDEN_NX2_EXTRAPOLATE_HUD_FILL`, which stops the band of scenery beside the HUD from lagging in predicted frames.

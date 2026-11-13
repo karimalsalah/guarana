@@ -187,6 +187,8 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
     CHECK(intel.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
     CHECK(intel.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
     CHECK(intel.find("EDEN_NX2_GPL=1 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_FLUID_QUEUE=5 ") != std::string::npos);
+    CHECK(intel.find("EDEN_NX2_BUDGET_HOLD_RES=1 ") != std::string::npos);
     const std::string amd = names(SwitchDefaults(
         OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));
     CHECK(amd.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
