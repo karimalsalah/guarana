@@ -196,6 +196,155 @@ Shader::AttributeType AttributeType(const FixedPipelineState& state, size_t inde
     return Shader::AttributeType::Disabled;
 }
 
+Shader::InputTopology MaxwellToInputTopology(Maxwell::PrimitiveTopology topology) {
+    switch (topology) {
+    case Maxwell::PrimitiveTopology::Points:
+        return Shader::InputTopology::Points;
+    case Maxwell::PrimitiveTopology::Lines:
+    case Maxwell::PrimitiveTopology::LineLoop:
+    case Maxwell::PrimitiveTopology::LineStrip:
+        return Shader::InputTopology::Lines;
+    case Maxwell::PrimitiveTopology::Triangles:
+    case Maxwell::PrimitiveTopology::TriangleStrip:
+    case Maxwell::PrimitiveTopology::TriangleFan:
+    case Maxwell::PrimitiveTopology::Quads:
+    case Maxwell::PrimitiveTopology::QuadStrip:
+    case Maxwell::PrimitiveTopology::Polygon:
+    case Maxwell::PrimitiveTopology::Patches:
+        return Shader::InputTopology::Triangles;
+    case Maxwell::PrimitiveTopology::LinesAdjacency:
+    case Maxwell::PrimitiveTopology::LineStripAdjacency:
+        return Shader::InputTopology::LinesAdjacency;
+    case Maxwell::PrimitiveTopology::TrianglesAdjacency:
+    case Maxwell::PrimitiveTopology::TriangleStripAdjacency:
+        return Shader::InputTopology::TrianglesAdjacency;
+    }
+    return {};
+}
+
+Shader::TessPrimitive MaxwellToTessPrimitive(u32 raw) {
+    switch (static_cast<Maxwell::Tessellation::DomainType>(raw)) {
+    case Maxwell::Tessellation::DomainType::Isolines:
+        return Shader::TessPrimitive::Isolines;
+    case Maxwell::Tessellation::DomainType::Triangles:
+        return Shader::TessPrimitive::Triangles;
+    case Maxwell::Tessellation::DomainType::Quads:
+        return Shader::TessPrimitive::Quads;
+    }
+    ASSERT(false);
+    return Shader::TessPrimitive::Triangles;
+}
+
+Shader::TessSpacing MaxwellToTessSpacing(u32 raw) {
+    switch (static_cast<Maxwell::Tessellation::Spacing>(raw)) {
+    case Maxwell::Tessellation::Spacing::Integer:
+        return Shader::TessSpacing::Equal;
+    case Maxwell::Tessellation::Spacing::FractionalOdd:
+        return Shader::TessSpacing::FractionalOdd;
+    case Maxwell::Tessellation::Spacing::FractionalEven:
+        return Shader::TessSpacing::FractionalEven;
+    }
+    ASSERT(false);
+    return Shader::TessSpacing::Equal;
+}
+
+Shader::AttributeType ColorOutputType(u8 render_target_format) {
+    const auto format = static_cast<Tegra::RenderTargetFormat>(render_target_format);
+    if (format == Tegra::RenderTargetFormat::NONE) {
+        return Shader::AttributeType::Float;
+    }
+    const auto pixel_format = VideoCore::Surface::PixelFormatFromRenderTargetFormat(format);
+    if (!VideoCore::Surface::IsPixelFormatInteger(pixel_format)) {
+        return Shader::AttributeType::Float;
+    }
+    return VideoCore::Surface::IsPixelFormatSignedInteger(pixel_format)
+               ? Shader::AttributeType::SignedInt
+               : Shader::AttributeType::UnsignedInt;
+}
+
+// What translation and SPIR-V emission read of a pipeline key, plus the settings they read
+// (see vk_shader_reuse.h). MakeRuntimeInfo and the layer passthrough only get this key, so
+// nothing they use can be left out of it. A field is only filled when a stage of the pipeline
+// reads it: pipelines differing in state their shaders ignore then share the shaders.
+ShaderTranslationKey MakeShaderTranslationKey(const GraphicsPipelineCacheKey& pipeline_key,
+                                              std::span<Shader::Environment* const> envs,
+                                              const Device& device) {
+    const FixedPipelineState& state{pipeline_key.state};
+    const bool has_tessellation_eval{std::ranges::any_of(envs, [](const Shader::Environment* env) {
+        return env->ShaderStage() == Shader::Stage::TessellationEval;
+    })};
+    const bool has_geometry{pipeline_key.unique_hashes[4] != 0};
+    const bool has_fragment{pipeline_key.unique_hashes[5] != 0};
+    const bool has_mesh{std::ranges::any_of(envs, [](const Shader::Environment* env) {
+        return env->ShaderStage() == Shader::Stage::Mesh;
+    })};
+
+    ShaderTranslationKey key{};
+    key.unique_hashes = pipeline_key.unique_hashes;
+    key.input_topology = MaxwellToInputTopology(state.topology);
+    key.passthrough_topology = MaxwellToOutputTopology(state.topology);
+    key.convert_depth_mode = state.ndc_minus_one_to_one != 0;
+    key.force_early_z = state.early_z != 0;
+    key.y_negate = state.y_negate != 0;
+
+    if (state.dynamic_vertex_input) {
+        for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
+            key.generic_input_types[index] = AttributeType(state, index);
+        }
+    } else {
+        std::ranges::transform(state.attributes, key.generic_input_types.begin(),
+                               &CastAttributeType);
+    }
+    // A fixed point size is written by the last vertex stage when points are drawn, by a
+    // geometry stage that outputs points (a generated passthrough one outputs what is drawn) and
+    // by a mesh stage that outputs points.
+    if (key.input_topology == Shader::InputTopology::Points || has_geometry || has_mesh) {
+        key.point_size = state.point_size;
+    }
+    if (state.xfb_enabled) {
+        if (device.IsExtTransformFeedbackSupported()) {
+            key.xfb_enabled = true;
+            key.xfb_state = state.xfb_state;
+        } else {
+            LOG_WARNING(Render_Vulkan, "XFB requested in pipeline key but device lacks VK_EXT_transform_feedback; ignoring XFB decorations");
+        }
+    }
+    if (has_tessellation_eval) {
+        key.tess_clockwise = state.tessellation_clockwise != 0;
+        key.tess_primitive = MaxwellToTessPrimitive(state.tessellation_primitive.Value());
+        key.tess_spacing = MaxwellToTessSpacing(state.tessellation_spacing);
+    }
+    if (has_fragment) {
+        key.alpha_test_func = MaxwellToCompareFunction(
+            state.UnpackComparisonOp(state.alpha_test_func.Value()));
+        key.alpha_test_reference = state.alpha_test_ref;
+        key.dual_source_blend = state.attachment0_dual_source_blend != 0;
+        key.xfb_requested = state.xfb_enabled != 0;
+        if (device.IsMoltenVK()) {
+            std::ranges::transform(state.color_formats, key.color_output_types.begin(),
+                                   &ColorOutputType);
+        }
+    }
+
+    const auto& resolution{Settings::values.resolution_info};
+    key.resolution_up_scale = resolution.up_scale;
+    key.resolution_down_shift = resolution.down_shift;
+    key.rescaling_active = resolution.active;
+    key.renderer_debug = Settings::values.renderer_debug.GetValue();
+    key.disable_shader_loop_safety_checks =
+        Settings::values.disable_shader_loop_safety_checks.GetValue();
+    key.fix_bloom_effects = Settings::values.fix_bloom_effects.GetValue();
+    return key;
+}
+
+void SetTransformFeedback(Shader::RuntimeInfo& info, const ShaderTranslationKey& key) {
+    if (key.xfb_enabled) {
+        auto [varyings, count] = VideoCommon::MakeTransformFeedbackVaryings(key.xfb_state);
+        info.xfb_varyings = varyings;
+        info.xfb_count = count;
+    }
+}
+
 // Switch 2 geometry shaders may write all 32 generic outputs next to Position and Layer: 133
 // components where Vulkan devices allow 128 (maxGeometryOutputComponents). AMD's Windows driver
 // closed the emulator compiling such a shader at the Mario Tennis Fever match start. Drop the
@@ -220,10 +369,9 @@ void PruneUnreadGeometryOutputs(Shader::IR::Program& geometry, const Shader::IR:
 }
 
 Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> programs,
-                                    const GraphicsPipelineCacheKey& key,
+                                    const ShaderTranslationKey& key,
                                     const Shader::IR::Program& program,
-                                    const Shader::IR::Program* previous_program,
-                                    const Vulkan::Device& device) {
+                                    const Shader::IR::Program* previous_program) {
     Shader::RuntimeInfo info;
     if (previous_program) {
         info.previous_stage_stores = previous_program->info.stores;
@@ -244,66 +392,25 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     }
     const Shader::Stage stage{program.stage};
     const bool has_geometry{key.unique_hashes[4] != 0 && !programs[4].is_geometry_passthrough};
-    const bool gl_ndc{key.state.ndc_minus_one_to_one != 0};
-    const float point_size{std::bit_cast<float>(key.state.point_size)};
+    const float point_size{std::bit_cast<float>(key.point_size)};
     switch (stage) {
     case Shader::Stage::VertexB:
         if (!has_geometry) {
-            if (key.state.topology == Maxwell::PrimitiveTopology::Points) {
+            if (key.input_topology == Shader::InputTopology::Points) {
                 info.fixed_state_point_size = point_size;
             }
-            if (key.state.xfb_enabled) {
-                if (device.IsExtTransformFeedbackSupported()) {
-                    auto [varyings, count] =
-                        VideoCommon::MakeTransformFeedbackVaryings(key.state.xfb_state);
-                    info.xfb_varyings = varyings;
-                    info.xfb_count = count;
-                } else {
-                    LOG_WARNING(Render_Vulkan, "XFB requested in pipeline key but device lacks VK_EXT_transform_feedback; ignoring XFB decorations");
-                }
-            }
-            info.convert_depth_mode = gl_ndc;
+            SetTransformFeedback(info, key);
+            info.convert_depth_mode = key.convert_depth_mode;
         }
-        if (key.state.dynamic_vertex_input) {
-            for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
-                info.generic_input_types[index] = AttributeType(key.state, index);
-            }
-        } else {
-            std::ranges::transform(key.state.attributes, info.generic_input_types.begin(),
-                                   &CastAttributeType);
-        }
+        info.generic_input_types = key.generic_input_types;
         break;
     case Shader::Stage::TessellationEval:
-        info.tess_clockwise = key.state.tessellation_clockwise != 0;
-        info.tess_primitive = [&key] {
-            const u32 raw{key.state.tessellation_primitive.Value()};
-            switch (static_cast<Maxwell::Tessellation::DomainType>(raw)) {
-            case Maxwell::Tessellation::DomainType::Isolines:
-                return Shader::TessPrimitive::Isolines;
-            case Maxwell::Tessellation::DomainType::Triangles:
-                return Shader::TessPrimitive::Triangles;
-            case Maxwell::Tessellation::DomainType::Quads:
-                return Shader::TessPrimitive::Quads;
-            }
-            ASSERT(false);
-            return Shader::TessPrimitive::Triangles;
-        }();
-        info.tess_spacing = [&] {
-            const u32 raw{key.state.tessellation_spacing};
-            switch (static_cast<Maxwell::Tessellation::Spacing>(raw)) {
-            case Maxwell::Tessellation::Spacing::Integer:
-                return Shader::TessSpacing::Equal;
-            case Maxwell::Tessellation::Spacing::FractionalOdd:
-                return Shader::TessSpacing::FractionalOdd;
-            case Maxwell::Tessellation::Spacing::FractionalEven:
-                return Shader::TessSpacing::FractionalEven;
-            }
-            ASSERT(false);
-            return Shader::TessSpacing::Equal;
-        }();
+        info.tess_clockwise = key.tess_clockwise;
+        info.tess_primitive = key.tess_primitive;
+        info.tess_spacing = key.tess_spacing;
         break;
     case Shader::Stage::Mesh:
-        info.convert_depth_mode = gl_ndc;
+        info.convert_depth_mode = key.convert_depth_mode;
         if (program.mesh.topology == 0) {
             info.fixed_state_point_size = point_size;
         }
@@ -312,84 +419,27 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
         if (program.output_topology == Shader::OutputTopology::PointList) {
             info.fixed_state_point_size = point_size;
         }
-        if (key.state.xfb_enabled != 0) {
-            if (device.IsExtTransformFeedbackSupported()) {
-                auto [varyings, count] =
-                    VideoCommon::MakeTransformFeedbackVaryings(key.state.xfb_state);
-                info.xfb_varyings = varyings;
-                info.xfb_count = count;
-            } else {
-                LOG_WARNING(Render_Vulkan, "XFB requested in pipeline key but device lacks VK_EXT_transform_feedback; ignoring XFB decorations");
-            }
-        }
-        info.convert_depth_mode = gl_ndc;
+        SetTransformFeedback(info, key);
+        info.convert_depth_mode = key.convert_depth_mode;
         break;
-    case Shader::Stage::Fragment: {
-        info.alpha_test_func = MaxwellToCompareFunction(
-            key.state.UnpackComparisonOp(key.state.alpha_test_func.Value()));
-        info.alpha_test_reference = std::bit_cast<float>(key.state.alpha_test_ref);
-
-        info.dual_source_blend = key.state.attachment0_dual_source_blend != 0;
-
-        if (device.IsMoltenVK()) {
-            for (size_t i = 0; i < 8; ++i) {
-                const auto format = static_cast<Tegra::RenderTargetFormat>(key.state.color_formats[i]);
-                if (format == Tegra::RenderTargetFormat::NONE) {
-                    info.color_output_types[i] = Shader::AttributeType::Float;
-                    continue;
-                }
-                const auto pixel_format = VideoCore::Surface::PixelFormatFromRenderTargetFormat(format);
-                if (VideoCore::Surface::IsPixelFormatInteger(pixel_format)) {
-                    if (VideoCore::Surface::IsPixelFormatSignedInteger(pixel_format)) {
-                        info.color_output_types[i] = Shader::AttributeType::SignedInt;
-                    } else {
-                        info.color_output_types[i] = Shader::AttributeType::UnsignedInt;
-                    }
-                } else {
-                    info.color_output_types[i] = Shader::AttributeType::Float;
-                }
-            }
-        }
+    case Shader::Stage::Fragment:
+        info.alpha_test_func = key.alpha_test_func;
+        info.alpha_test_reference = std::bit_cast<float>(key.alpha_test_reference);
+        info.dual_source_blend = key.dual_source_blend;
+        info.color_output_types = key.color_output_types;
         break;
-    }
     default:
         break;
     }
-    switch (key.state.topology) {
-    case Maxwell::PrimitiveTopology::Points:
-        info.input_topology = Shader::InputTopology::Points;
-        break;
-    case Maxwell::PrimitiveTopology::Lines:
-    case Maxwell::PrimitiveTopology::LineLoop:
-    case Maxwell::PrimitiveTopology::LineStrip:
-        info.input_topology = Shader::InputTopology::Lines;
-        break;
-    case Maxwell::PrimitiveTopology::Triangles:
-    case Maxwell::PrimitiveTopology::TriangleStrip:
-    case Maxwell::PrimitiveTopology::TriangleFan:
-    case Maxwell::PrimitiveTopology::Quads:
-    case Maxwell::PrimitiveTopology::QuadStrip:
-    case Maxwell::PrimitiveTopology::Polygon:
-    case Maxwell::PrimitiveTopology::Patches:
-        info.input_topology = Shader::InputTopology::Triangles;
-        break;
-    case Maxwell::PrimitiveTopology::LinesAdjacency:
-    case Maxwell::PrimitiveTopology::LineStripAdjacency:
-        info.input_topology = Shader::InputTopology::LinesAdjacency;
-        break;
-    case Maxwell::PrimitiveTopology::TrianglesAdjacency:
-    case Maxwell::PrimitiveTopology::TriangleStripAdjacency:
-        info.input_topology = Shader::InputTopology::TrianglesAdjacency;
-        break;
-    }
-    info.force_early_z = key.state.early_z != 0;
-    info.y_negate = key.state.y_negate != 0;
+    info.input_topology = key.input_topology;
+    info.force_early_z = key.force_early_z;
+    info.y_negate = key.y_negate;
     // Transform feedback would capture the scaled values, a passthrough geometry shader doesn't
     // scale the outputs it writes itself, and indexed attribute reads in the fragment stage don't
     // undo the scaling, so all three keep native noperspective interpolation.
     const bool geometry_passthrough{key.unique_hashes[4] != 0 &&
                                     programs[4].is_geometry_passthrough};
-    if (key.unique_hashes[5] != 0 && !geometry_passthrough && key.state.xfb_enabled == 0 &&
+    if (key.unique_hashes[5] != 0 && !geometry_passthrough && !key.xfb_requested &&
         !programs[5].info.loads_indexed_attributes) {
         const bool has_tess{key.unique_hashes[3] != 0};
         const bool last_pre_raster{
@@ -548,6 +598,64 @@ bool TakesPrepassSplit(const GraphicsPipelineCacheKey& key,
                  key.Hash(), fragment_hash, reason);
     }
     return false;
+}
+
+// Graphics pipelines do not reuse shaders on AMD's proprietary Windows driver.
+constexpr bool IsAmdProprietaryWindows(VkDriverId driver_id) {
+#ifdef _WIN32
+    return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
+#else
+    return false;
+#endif
+}
+
+// Shaders this tree builds from more than the translation key: a native mesh or task program
+// reads the pipeline state (culling, outputs), and a pipeline of a prepass split hash takes two
+// more fragment shaders. Those pipelines neither look up nor add reusable shaders.
+bool ShadersFitReuse(const GraphicsPipelineCacheKey& key,
+                     std::span<Shader::Environment* const> envs) {
+    if (VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5])) {
+        return false;
+    }
+    return std::ranges::none_of(envs, [](const Shader::Environment* env) {
+        return env->ShaderStage() == Shader::Stage::Mesh ||
+               env->ShaderStage() == Shader::Stage::Task;
+    });
+}
+
+// EDEN_NX2_SHADER_REUSE=1 turns the reuse on (default off: unproven on Intel), except on AMD's
+// proprietary Windows driver.
+bool ShaderReuseEnabled(VkDriverId driver_id) {
+    const char* const value = std::getenv("EDEN_NX2_SHADER_REUSE");
+    return value != nullptr && value[0] == '1' && !IsAmdProprietaryWindows(driver_id);
+}
+
+// Nx2Perf::Verify(): a pipeline that found reusable shaders is translated anyway, and its SPIR-V
+// must match theirs.
+void VerifyReusedShaders(const ReusableShaders& reused, std::span<const std::vector<u32>> spirv,
+                         u64 pipeline_hash) {
+    const std::array<std::vector<u32>, Maxwell::MaxShaderStage> reused_spirv{reused.Spirv()};
+    for (size_t stage = 0; stage < spirv.size(); ++stage) {
+        if (spirv[stage] != reused_spirv[stage]) {
+            LOG_ERROR(Render_Vulkan,
+                      "Nx2Perf shader_reuse: pipeline {:016x} stage {} SPIR-V differs from the "
+                      "reused shaders",
+                      pipeline_hash, stage);
+        }
+    }
+}
+
+// The constant buffer slots each program's environment bound as storage buffer pointers.
+VideoCommon::EvictedPointerSlots::Slots MappedPointers(
+    const GraphicsPipelineCacheKey& key, std::span<Shader::Environment* const> envs) {
+    static_assert(VideoCommon::EvictedPointerSlots::NumPrograms == Maxwell::MaxShaderProgram);
+    VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    for (size_t index = 0, mapped_env = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (key.unique_hashes[index] != 0) {
+            mapped_pointers[index] = envs[mapped_env++]->MappedStoragePointerKeys();
+        }
+    }
+    return mapped_pointers;
 }
 
 /// SPIR-V emission of run-time pipelines: graphics on the GPU thread, graphics on workers and
@@ -719,6 +827,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
       use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue() &&
                                 !device_.DriverCachesPipelines()},
+      use_shader_reuse{ShaderReuseEnabled(device_.GetDriverID())},
       serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background) {
     // A sixty-fourth of the RAM (16 GB: 256 MB), about 25 KB per evicted pipeline
     const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
@@ -1371,6 +1480,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         shader_cache_v2 = nullptr;
         cache_v2.reset();
         pipeline_binaries.reset();
+        if (VideoCommon::ShaderWarm::WarmOnly()) {
+            // A pass of the headless warm-up reads the records again: those the last pass had no
+            // room for are built now.
+            disk_pipelines.clear();
+        }
     }
 
     namespace StutterTrace = VideoCommon::StutterTrace;
@@ -1454,9 +1568,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     // With the shader precache this boot, the cached graphics pipelines skipped below are built
     // on the loading screen too, unless an earlier precache built them for this driver.
     namespace ShaderWarm = VideoCommon::ShaderWarm;
+    // A headless warm-up (eden-cli --warm-pipelines) is a precache that also builds the rest.
     const bool precache =
-        ShaderWarm::PrecacheBeforeStart(Settings::values.precache_shaders.GetValue(),
-                                        ShaderWarm::TakeWarmBeforeStart()) &&
+        (ShaderWarm::PrecacheBeforeStart(Settings::values.precache_shaders.GetValue(),
+                                         ShaderWarm::TakeWarmBeforeStart()) ||
+         ShaderWarm::WarmOnly()) &&
         build_at_boot;
     std::unordered_set<u64> precached_pipelines;
     if (precache) {
@@ -1601,6 +1717,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                                     std::unordered_set<u64> precached_pipelines,
                                     bool build_at_boot) {
     namespace CacheV2 = VideoCommon::ShaderCacheV2;
+    namespace ShaderWarm = VideoCommon::ShaderWarm;
     namespace StutterTrace = VideoCommon::StutterTrace;
     using CacheV2::RecordKind;
     using VideoCommon::ShaderJobPriority;
@@ -1665,6 +1782,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     std::vector<PrecacheJob> precache_graphics;
     u64 precache_capture_bytes = 0;
     std::vector<CacheV2::ProgramRecord> stale_programs;
+    const bool warm_only = ShaderWarm::WarmOnly();
+    size_t warm_already_built = 0;
+    size_t warm_left = 0;
     for (const CacheV2::LogRecord& record : log->parsed.live) {
         if (record.kind != RecordKind::Program) {
             continue;
@@ -1856,6 +1976,11 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             boot_graphics.emplace_back(index, *key);
             continue;
         }
+        if (warm_only && precached_pipelines.contains(hash)) {
+            // Built into the driver's cache for this driver by an earlier warm-up or precache
+            ++warm_already_built;
+            continue;
+        }
         ++skipped_pipelines;
         const u64 bytes = record.payload.size();
         std::vector<u8> payload(record.payload.begin(), record.payload.end());
@@ -1881,6 +2006,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         } else if (bytes <= PrebuildCaptureLimit - prebuild_bytes) {
             prebuild_bytes += bytes;
             prebuild.push_back({*key, std::move(payload)});
+        } else {
+            ++warm_left;
         }
     }
 
@@ -2100,6 +2227,28 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         start_prebuild();
         LOG_INFO(Render_Vulkan, "{} cached graphics pipelines admitted for background prebuild",
                  deferred_pipelines);
+    }
+    if (warm_only) {
+        // The process ends when this returns: wait for the background builds too (a stop cancels
+        // them) and save the driver's cache with them in it.
+        if (scheduled_prebuild) {
+            scheduled_prebuild->Batch().Wait();
+        }
+        if (!stop_loading.stop_requested()) {
+            serialization_thread.WaitForRequests();
+            if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
+                last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                                   vulkan_pipeline_cache,
+                                                                   CACHE_VERSION, true),
+                                      std::memory_order_relaxed);
+            }
+        }
+        ShaderWarm::ReportWarmOnly({
+            .built = build_at_boot,
+            .graphics_records = graphics_records,
+            .already_built = warm_already_built,
+            .left = warm_left,
+        });
     }
 }
 
@@ -2818,6 +2967,28 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     ParallelTranslation* parallel) try {
     auto hash = key.Hash();
     LOG_DEBUG(Render_Vulkan, "{:#016x}", hash);
+    const bool reuse_shaders{use_shader_reuse && ShadersFitReuse(key, envs)};
+    const ShaderTranslationKey translation_key{MakeShaderTranslationKey(key, envs, device)};
+    const std::shared_ptr<const ReusableShaders> reused{
+        reuse_shaders ? FindReusableShaders(translation_key, envs, hash) : nullptr};
+    if (reused && !VideoCommon::Nx2Perf::Verify()) {
+        auto pipeline = std::make_unique<GraphicsPipeline>(
+            scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, pipeline_binaries.get(),
+            &shader_notify, device, descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring,
+            draw_templates, BuildQueue(build_in_parallel, reused->SpirvBytes()), statistics,
+            render_pass_cache, key, std::array<std::vector<u32>, Maxwell::MaxShaderStage>{}, reused->InfoPointers(),
+            [reused] { return reused->Spirv(); });
+        pipeline->SetMappedPointers(MappedPointers(key, envs));
+        return pipeline;
+    }
+    // With reuse on, translation asks the environments through recorders: their answers tell
+    // which later pipelines these shaders fit.
+    boost::container::static_vector<RecordingEnvironment, Maxwell::MaxShaderProgram> recorders;
+    boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram>
+        translation_envs;
+    for (Shader::Environment* const env : envs) {
+        translation_envs.push_back(reuse_shaders ? &recorders.emplace_back(*env) : env);
+    }
     // Declared before the programs, whose IR they hold
     std::vector<std::shared_ptr<ShaderPools>> stage_pools;
     SCOPE_EXIT {
@@ -2834,7 +3005,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             if (key.unique_hashes[index] == 0) {
                 continue;
             }
-            Shader::Environment& env{*envs[stage_env++]};
+            Shader::Environment& env{*translation_envs[stage_env++]};
             if (index == static_cast<size_t>(Maxwell::ShaderType::Geometry) &&
                 !device.IsGeometryShaderSupported() && env.IsNativeProgram()) {
                 continue; // The pipeline is skipped below before this stage is needed
@@ -2868,15 +3039,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         const bool is_emulated_stage = layer_source_program != nullptr &&
                                        index == static_cast<u32>(Maxwell::ShaderType::Geometry);
         if (key.unique_hashes[index] == 0 && is_emulated_stage) {
-            auto topology = MaxwellToOutputTopology(key.state.topology);
             programs[index] = GenerateGeometryPassthrough(pools.inst, pools.block, host_info,
-                                                          *layer_source_program, topology);
+                                                          *layer_source_program,
+                                                          translation_key.passthrough_topology);
             continue;
         }
         if (key.unique_hashes[index] == 0) {
             continue;
         }
-        Shader::Environment& env{*envs[env_index]};
+        Shader::Environment& env{*translation_envs[env_index]};
         ++env_index;
         if (index == static_cast<size_t>(Maxwell::ShaderType::Geometry) &&
             !device.IsGeometryShaderSupported() && env.IsNativeProgram()) {
@@ -3176,7 +3347,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             return nullptr;
         }
 
-        auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage, device)};
+        auto runtime_info{MakeRuntimeInfo(programs, translation_key, program, previous_stage)};
         if (mesh_emulation && (program.stage == Shader::Stage::Mesh ||
                                program.stage == Shader::Stage::Task)) {
             runtime_info.mesh_as_compute = true;
@@ -3249,6 +3420,24 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         }
         previous_stage = &program;
     }
+    if (reused) {
+        VerifyReusedShaders(*reused, defer_emission ? reference_spirv : stage_spirv, hash);
+    }
+    // Mesh emulation is built from the programs on every pipeline, and code past the cached range
+    // is in no unique hash (nor in the disk records of the pipelines that would reuse it).
+    std::shared_ptr<ReusableShaders> reusable;
+    if (reuse_shaders && !mesh_emulation &&
+        std::ranges::none_of(envs, &Shader::Environment::ReadUnboundInstructions)) {
+        reusable = std::make_shared<ReusableShaders>();
+        for (size_t stage = 0; stage < infos.size(); ++stage) {
+            if (infos[stage]) {
+                reusable->infos[stage] = *infos[stage];
+            }
+        }
+        for (RecordingEnvironment& recorder : recorders) {
+            reusable->reads.push_back(recorder.TakeReads());
+        }
+    }
     std::function<std::array<std::vector<u32>, Maxwell::MaxShaderStage>()> emit_stages;
     if (defer_emission) {
         auto job = std::make_shared<DeferredStages>();
@@ -3265,7 +3454,8 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                 infos[stage] = &job->programs[stage + 1].info;
             }
         }
-        emit_stages = [this, job = std::move(job), hashes = key.unique_hashes]() mutable {
+        emit_stages = [this, job = std::move(job), hashes = key.unique_hashes,
+                       reusable = std::move(reusable), translation_key]() mutable {
             const auto begin = std::chrono::steady_clock::now();
             std::array<std::vector<u32>, Maxwell::MaxShaderStage> spirv;
             Shader::Backend::Bindings stage_binding;
@@ -3292,15 +3482,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                 ReturnPools(std::move(stage));
             }
             AddRuntimeSpirvTime(1, begin);
+            if (reusable) {
+                reusable->SetSpirv(spirv);
+                shader_reuse.Add(translation_key, std::move(reusable));
+            }
             return spirv;
         };
-    }
-    static_assert(VideoCommon::EvictedPointerSlots::NumPrograms == Maxwell::MaxShaderProgram);
-    VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
-    for (size_t index = 0, mapped_env = 0; index < Maxwell::MaxShaderProgram; ++index) {
-        if (key.unique_hashes[index] != 0) {
-            mapped_pointers[index] = envs[mapped_env++]->MappedStoragePointerKeys();
-        }
+    } else if (reusable) {
+        reusable->SetSpirv(stage_spirv);
+        shader_reuse.Add(translation_key, std::move(reusable));
     }
     auto pipeline = std::make_unique<GraphicsPipeline>(
         scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, pipeline_binaries.get(),
@@ -3308,7 +3498,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         draw_templates, BuildQueue(build_in_parallel, defer_emission ? deferred_ir_bytes : 0),
         statistics, render_pass_cache, key, std::move(stage_spirv), infos, std::move(emit_stages),
         std::move(mesh_emulation), std::move(prepass_shaders));
-    pipeline->SetMappedPointers(std::move(mapped_pointers));
+    pipeline->SetMappedPointers(MappedPointers(key, envs));
     return pipeline;
 
 } catch (const Shader::Exception& exception) {
@@ -3332,6 +3522,25 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     }
     LOG_ERROR(Render_Vulkan, "{}", exception.what());
     return nullptr;
+}
+
+std::shared_ptr<const ReusableShaders> PipelineCache::FindReusableShaders(
+    const ShaderTranslationKey& key, std::span<Shader::Environment* const> envs,
+    u64 pipeline_hash) {
+    if (!use_shader_reuse) {
+        return nullptr;
+    }
+    std::shared_ptr<const ReusableShaders> shaders{shader_reuse.Find(key, envs)};
+    if (shaders && Settings::values.dump_guest_shaders) {
+        // What CreateGraphicsPipeline dumps for a pipeline it translates.
+        size_t env_index{0};
+        for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+            if (key.unique_hashes[index] != 0) {
+                envs[env_index++]->Dump(pipeline_hash, key.unique_hashes[index]);
+            }
+        }
+    }
+    return shaders;
 }
 
 namespace {

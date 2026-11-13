@@ -279,3 +279,20 @@ TEST_CASE("ShaderPrecache: programs that cannot be lowered are refused", "[video
     REQUIRE(ShaderWarm::LowerProgram(no_exit, lowered).has_value());
     REQUIRE(lowered.code.empty());
 }
+
+TEST_CASE("ShaderPrecache: a headless warm-up leaves its report once", "[video_core]") {
+    REQUIRE_FALSE(ShaderWarm::WarmOnly());
+    ShaderWarm::SetWarmOnly(true);
+    REQUIRE(ShaderWarm::WarmOnly());
+    ShaderWarm::SetWarmOnly(false);
+    REQUIRE_FALSE(ShaderWarm::WarmOnly());
+
+    ShaderWarm::ReportWarmOnly({.built = true, .graphics_records = 7, .already_built = 3, .left = 1});
+    const auto report = ShaderWarm::TakeWarmOnlyReport();
+    REQUIRE(report.built);
+    REQUIRE(report.graphics_records == 7);
+    REQUIRE(report.already_built == 3);
+    REQUIRE(report.left == 1);
+    // Taken: the next load that reports nothing reads as not built
+    REQUIRE_FALSE(ShaderWarm::TakeWarmOnlyReport().built);
+}
