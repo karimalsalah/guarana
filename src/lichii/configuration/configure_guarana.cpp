@@ -117,9 +117,9 @@ ConfigureGuarana::ConfigureGuarana(bool powered_on, QWidget* parent) : QWidget(p
     card->addWidget(mode_help);
     mode_note = MakeHelp(this);
     card->addWidget(mode_note);
-    constexpr Mode modes[] = {Mode::Smooth, Mode::Quality, Mode::Battery};
+    static constexpr Mode modes[] = {Mode::Smooth, Mode::Quality, Mode::Battery};
     for (int i = 0; i < 3; ++i) {
-        connect(mode_buttons[i], &QPushButton::clicked, this, [this, i, modes](bool checked) {
+        connect(mode_buttons[i], &QPushButton::clicked, this, [this, i](bool checked) {
             SelectMode(checked ? modes[i] : Mode::Custom);
         });
     }
