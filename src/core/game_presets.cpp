@@ -229,6 +229,9 @@ std::span<const SwitchValue> SwitchDefaults([[maybe_unused]] u64 title_id,
         }
     }
 #endif
+    // TODO(measure): defaults by device class (gpu.device_class) go here, and settings presets by
+    // class with a device_class in GpuMatch. Each needs a paired run on a verified scene of that
+    // class first (AGENTS.md, rule 1); until then the class changes nothing.
     return {};
 }
 

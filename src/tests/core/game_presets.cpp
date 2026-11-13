@@ -202,6 +202,23 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
     CHECK(SwitchDefaults(0x0100152000022000, Arc140T).empty());
 }
 
+TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {
+    using Common::DeviceClass;
+    const Preset* const preset = Find(Presets(), OcarinaTitleId, Arc140T);
+    const std::span<const SwitchValue> switches = SwitchDefaults(OcarinaTitleId, Arc140T);
+    for (const DeviceClass device_class :
+         {DeviceClass::Unknown, DeviceClass::IntegratedLowPower, DeviceClass::Integrated,
+          DeviceClass::DiscreteEntry, DeviceClass::DiscreteHigh}) {
+        GpuInfo gpu = Arc140T;
+        gpu.device_class = device_class;
+        CHECK(Find(Presets(), OcarinaTitleId, gpu) == preset);
+        const std::span<const SwitchValue> with_class = SwitchDefaults(OcarinaTitleId, gpu);
+        CHECK(with_class.data() == switches.data());
+        CHECK(with_class.size() == switches.size());
+        CHECK(ReportsFirstBoot(OcarinaTitleId, gpu));
+    }
+}
+
 TEST_CASE("Ocarina of Time's first boot on an integrated GPU is reported", "[core][game_presets]") {
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, Arc140T));
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));

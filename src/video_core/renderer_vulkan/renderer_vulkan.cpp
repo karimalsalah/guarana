@@ -16,11 +16,13 @@
 #include <fmt/ranges.h>
 
 #include "common/boot_timing.h"
+#include "common/device_profile.h"
 #include "common/display_hdr.h"
 #include "common/logging.h"
 #include <ranges>
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/vblank_clock.h"
 #include "core/core_timing.h"
 #include "core/game_presets.h"
 #include "core/frontend/graphics_context.h"
@@ -193,6 +195,57 @@ VkSurfaceFormatKHR ChooseOutputFormat(const vk::PhysicalDevice& physical, VkSurf
 #endif
 }
 
+Common::GpuKind GpuKindOf(VkPhysicalDeviceType type) {
+    switch (type) {
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        return Common::GpuKind::Integrated;
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        return Common::GpuKind::Discrete;
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+        return Common::GpuKind::Virtual;
+    case VK_PHYSICAL_DEVICE_TYPE_CPU:
+        return Common::GpuKind::Cpu;
+    default:
+        return Common::GpuKind::Unknown;
+    }
+}
+
+// The machine as the device profile records it: the host's part, and the GPU as the physical
+// device reports it. The memory is read from the heaps, as the device collects its own figures
+// after its capability callback, and those are budgets. The driver version and the display are
+// left to the caller.
+Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
+    Common::DeviceProfile profile = Common::DetectHostProfile();
+    const VkPhysicalDeviceProperties properties = physical.GetProperties();
+    const VkPhysicalDeviceMemoryProperties memory =
+        physical.GetMemoryProperties().memoryProperties;
+    profile.gpu.vendor_id = properties.vendorID;
+    profile.gpu.model = properties.deviceName;
+    profile.gpu.kind = GpuKindOf(properties.deviceType);
+    u32 local_heaps = 0;
+    for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+            ++local_heaps;
+            profile.gpu.local_memory =
+                (std::max)(profile.gpu.local_memory, memory.memoryHeaps[heap].size);
+        }
+    }
+    profile.gpu.uma =
+        Common::IsUnifiedMemory(profile.gpu.kind, memory.memoryHeapCount, local_heaps);
+    return profile;
+}
+
+Common::DeviceClass DeviceClassOf(const vk::PhysicalDevice& physical) {
+    return Common::Classify(DeviceProfileOf(physical)).device_class;
+}
+
+// The refresh rate of the display the window is on, where the host says (Windows); 0 elsewhere.
+double DisplayRefreshHz(void* window) {
+    const Common::VblankClock display{window};
+    const auto period = display.ReportedPeriod().count();
+    return period > 0 ? 1.0e9 / static_cast<double>(period) : 0.0;
+}
+
 // Game presets match on the GPU's capabilities and set values the device and the renderer read
 // while they are built.
 void ApplyGamePresets(const Device& device) {
@@ -220,6 +273,7 @@ void ApplyGamePresets(const Device& device) {
         .integrated = device.IsIntegrated(),
         .software_tensor_math =
             !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
+        .device_class = DeviceClassOf(device.GetPhysical()),
     };
     const std::string summary = Core::GamePresets::Apply(program_id, gpu);
     Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
@@ -251,7 +305,8 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         void(Core::GamePresets::ApplySwitchDefaults(
             Settings::GetCurrentProgramID(),
             {.vendor = vendor,
-             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU}));
+             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
+             .device_class = DeviceClassOf(physical_device)}));
     }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {
@@ -805,6 +860,12 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
+    // What the machine is, in one line (docs/DEVICES.md).
+    Common::DeviceProfile machine = DeviceProfileOf(device.GetPhysical());
+    machine.gpu.driver = GetDriverVersion(device);
+    machine.refresh_hz = DisplayRefreshHz(render_window.GetWindowInfo().render_surface);
+    LOG_INFO(Render_Vulkan, "Device profile: {}",
+             Common::DescribeDeviceProfile(machine, Common::Classify(machine)));
     if (VideoCommon::RenderTrace::Enabled()) {
         LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                  Settings::values.log_filter.GetValue());

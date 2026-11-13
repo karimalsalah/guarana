@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "common/common_types.h"
+#include "common/device_profile.h"
 #include "core/game_settings.h"
 
 // Settings a game is known to run better with on a kind of GPU, for the ones the user left alone.
@@ -21,6 +22,8 @@ struct GpuInfo {
     /// The guest's tensor operations (HMMA) have no cooperative matrix shape to run on, so they
     /// are emulated with scalar shader math.
     bool software_tensor_math{};
+    /// The machine's device class (Common::Classify). No preset or switch default uses it yet.
+    Common::DeviceClass device_class{Common::DeviceClass::Unknown};
 };
 
 /// What a preset asks of the GPU. Unknown takes any vendor, a false flag takes either state.
