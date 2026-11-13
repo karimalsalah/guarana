@@ -386,7 +386,7 @@ private:
     /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
     void FillStates(PipelineStates& states) const;
 
-    vk::Pipeline MakePipeline(VkRenderPass render_pass, bool fast);
+    vk::Pipeline MakePipeline(VkRenderPass render_pass);
 
     /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then links them
     /// with this pipeline's vertex input and fragment output parts. False when a library
@@ -484,9 +484,8 @@ private:
     vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
-    /// Optimized link (GplOptimizeEnabled) or fast first build (FastFirstBuildEnabled): the
-    /// optimized pipeline once its build is done, and the first one kept alive after the swap for
-    /// the command buffers that bound it.
+    /// Optimized link (GplOptimizeEnabled): the optimized pipeline once its build is done, and
+    /// the first one kept alive after the swap for the command buffers that bound it.
     vk::Pipeline optimized_pipeline;
     vk::Pipeline retired_pipeline;
     std::atomic_bool optimized_ready{};

@@ -708,45 +708,8 @@ GraphicsPipeline::GraphicsPipeline(
                 for (vk::ShaderModule& module : spv_modules) {
                     module.reset();
                 }
-            } else if (FastFirstBuildEnabled() && worker_only_build && build_jobs &&
-                       !mesh_emulation) {
-                // Mesh emulation builds its compute pipelines inside MakePipeline, so
-                // it is built once.
-                // Draw with the unoptimized pipeline as soon as the driver returns it; the
-                // optimized one follows as a Background job and takes its place at a later draw
-                // (ConfigureDraw). The modules stay until then. A job still queued when the
-                // pipeline goes is dropped.
-                const auto fast_begin = std::chrono::steady_clock::now();
-                pipeline = MakePipeline(render_pass, true);
-                const double fast_ms = std::chrono::duration<double, std::milli>(
-                                           std::chrono::steady_clock::now() - fast_begin)
-                                           .count();
-                optimized_build.emplace(
-                    PipelineBuildQueue{
-                        .jobs = build_jobs,
-                        .priority = VideoCommon::ShaderJobPriority::Background,
-                    },
-                    [this, render_pass, fast_ms] {
-                    const auto optimized_begin = std::chrono::steady_clock::now();
-                    optimized_pipeline = MakePipeline(render_pass, false);
-                    for (vk::ShaderModule& module : spv_modules) {
-                        module.reset();
-                    }
-                    optimized_ready.store(true, std::memory_order_release);
-                    const double optimized_ms =
-                        std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - optimized_begin)
-                            .count();
-                    static std::atomic<u32> logged{};
-                    if (optimized_ms > 100.0 || fast_ms > 100.0 || logged.fetch_add(1) < 400) {
-                        LOG_INFO(Render_Vulkan,
-                                 "Nx2Perf fast_first: {:016x} fast build {:.1f} ms, "
-                                 "optimized build {:.1f} ms",
-                                 key.Hash(), fast_ms, optimized_ms);
-                    }
-                });
             } else {
-                pipeline = MakePipeline(render_pass, false);
+                pipeline = MakePipeline(render_pass);
             }
         } catch (const Shader::Exception& exception) {
             LOG_ERROR(Render_Vulkan, "Graphics pipeline {:016x}: {}", key.Hash(), exception.what());
@@ -762,18 +725,15 @@ GraphicsPipeline::GraphicsPipeline(
             throw;
         }
         // Read by the GPU thread once the build is marked done; `pipeline` itself may be swapped
-        // later on the scheduler thread (fast first build, optimized link).
+        // later on the scheduler thread (optimized link).
         has_pipeline = static_cast<bool>(pipeline);
         if (pipeline_statistics) {
             pipeline_statistics->Collect(device, *pipeline);
         }
         // Nothing reads the shader modules once the pipeline exists, and the driver keeps a copy
-        // of each one's SPIR-V while it lives (title 1: ~1,500 pipelines, 2-5 modules each). A
-        // pending optimized build still needs them and resets them itself.
-        if (!optimized_build) {
-            for (vk::ShaderModule& module : spv_modules) {
-                module.reset();
-            }
+        // of each one's SPIR-V while it lives (title 1: ~1,500 pipelines, 2-5 modules each).
+        for (vk::ShaderModule& module : spv_modules) {
+            module.reset();
         }
         if (worker_only_build) {
             const auto elapsed = std::chrono::steady_clock::now() - begin;
@@ -1584,9 +1544,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     }
     // Only once the first build is done: until then its thread may still read `pipeline`.
     if (IsBuilt() && optimized_ready.load(std::memory_order_acquire) && !optimized_bound) {
-        // Optimized link or fast first build: the optimized pipeline is in. Swap on the scheduler
-        // thread, in order with the draws recorded so far, and bind again; the first one stays
-        // alive for the command buffers that bound it.
+        // The optimized pipeline is in. Swap on the scheduler thread, in order with the draws
+        // recorded so far, and bind again; the first one stays alive for the command buffers
+        // that bound it.
         optimized_bound = true;
         scheduler.ForgetGraphicsPipeline(this);
         scheduler.Record([this](vk::CommandBuffer) {
@@ -2140,9 +2100,9 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
     };
 }
 
-/// Builds the monolithic pipeline from every stage module, unoptimized when `fast` is set. Null
-/// for a mesh pipeline on a device without mesh shaders.
-vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast) {
+/// Builds the monolithic pipeline from every stage module. Null for a mesh pipeline on a device
+/// without mesh shaders.
+vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return {};
     }
@@ -2265,9 +2225,6 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
     if (uses_descriptor_buffer) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
-    if (fast) {
-        flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
-    }
 
     const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
     const auto trace_begin = std::chrono::steady_clock::now();
@@ -2297,12 +2254,10 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     };
-    // A fast first build's unoptimized pipeline stays out of the pipeline binaries: the
-    // optimized build that follows is the one kept under the key.
     vk::Pipeline created =
-        binaries && !fast
-            ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, GraphicsRecordKey(key))
-            : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
+        binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
+                                                    GraphicsRecordKey(key))
+                 : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
     TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
@@ -2713,7 +2668,7 @@ void GraphicsPipeline::FallBackToMonolithic(VkRenderPass render_pass) {
     shader_libraries = {};
     vertex_input_library.reset();
     fragment_output_library.reset();
-    pipeline = MakePipeline(render_pass, false);
+    pipeline = MakePipeline(render_pass);
 }
 
 void GraphicsPipeline::Validate() {

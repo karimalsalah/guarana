@@ -56,8 +56,3 @@ EDEN_NX2_FENCE_BATCH=1
 # Threads of those optimized links, at low priority (default 1). =0 runs them as background jobs
 # of the shader build workers instead.
 #EDEN_NX2_GPL_OPTIMIZE_THREADS=1
-
-# Graphics and compute pipelines built while the game runs are first built unoptimized
-# (DISABLE_OPTIMIZATION) and drawn with; the optimized build follows in the background and
-# replaces them at a later draw. Some drivers (NVIDIA) ignore the unoptimized request.
-#EDEN_NX2_FAST_FIRST=1
