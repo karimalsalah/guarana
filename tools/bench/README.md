@@ -103,8 +103,7 @@ with `"paired": true` also runs as `<name><suffix>` with the suite's `paired.env
 `suite` takes the options of `run` and prints a comparison table at the end; rows go to the same
 `.jsonl`, with the suite's name in `suite`.
 
-`igpu-switches.json` measures the switches that may help integrated GPUs (`EDEN_NX2_MESH_CULL`,
-`EDEN_NX2_VRS`, `EDEN_NX2_SPIN_SCALE`, `EDEN_NX2_ECO_BACKGROUND`, `EDEN_NX2_LOW_MEMORY`) against
+`igpu-switches.json` measures the switches that may help integrated GPUs (`EDEN_NX2_VRS`, `EDEN_NX2_SPIN_SCALE`, `EDEN_NX2_ECO_BACKGROUND`, `EDEN_NX2_LOW_MEMORY`) against
 the baseline; the ones that change GPU work are paired with a traced twin
 (`EDEN_DKB_FRAME_TRACE=1`). Tracing costs time, so traced rows are compared with
 `baseline-trace` only.

@@ -348,15 +348,6 @@ public:
         mapped_pointers = std::move(slots);
     }
 
-    /// Mesh pipeline whose mesh program reads the viewport for its small triangle test
-    /// (Shader::RuntimeInfo::mesh_cull).
-    [[nodiscard]] bool UsesMeshCullViewport() const noexcept {
-        return std::ranges::any_of(stage_infos, &Shader::Info::uses_mesh_cull_viewport);
-    }
-
-    /// Records viewport 0 (x, y, width, height in host pixels) for that test.
-    void PushMeshCullViewport(const std::array<f32, 4>& viewport);
-
     /// Moves out the SPIR-V kept after the build, with the stage infos: for a built pipeline being
     /// evicted
     [[nodiscard]] KeptGraphicsStages TakeKeptStages();

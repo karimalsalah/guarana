@@ -442,13 +442,6 @@ public:
     std::vector<MeshLineTarget> mesh_primitive_targets;
     std::array<Id, 2> mesh_outputs_marker{};
     std::array<Id, 4> mesh_tasks_marker{};
-    /// Culling added to a native mesh program (the MESH_CULL_* bits it can take), its
-    /// CullPrimitiveEXT output, one "a triangle is left" word per invocation and the viewport
-    /// push constant.
-    u32 mesh_cull{};
-    Id mesh_cull_primitive{};
-    Id mesh_cull_any{};
-    Id mesh_cull_viewport{};
     /// Mesh emulation (RuntimeInfo::mesh_as_compute): the output storage buffer and the
     /// pointer type to one of its words.
     Id mesh_output_buffer{};

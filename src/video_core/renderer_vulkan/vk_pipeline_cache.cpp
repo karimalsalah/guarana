@@ -464,45 +464,6 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     return info;
 }
 
-/// The culling (Profile::mesh_cull) a native mesh program can add with this pipeline state.
-u32 MeshCullBits(u32 wanted, const FixedPipelineState& state, const Device& device,
-                 const Shader::MeshInfo& mesh) {
-    using namespace Shader::Backend::SPIRV;
-    if (wanted == 0) {
-        return 0;
-    }
-    // The tests read clip space x, y and w as the program wrote them: only y may be negated, in
-    // viewport 0 or, for a program that picks its viewports, in all of them.
-    const auto component = [&state](size_t viewport, u32 shift) {
-        return static_cast<Maxwell::ViewportSwizzle>((state.viewport_swizzles[viewport] >> shift) &
-                                                     7);
-    };
-    const bool picks_viewport{std::ranges::any_of(mesh.primitive_lines, [](u32 line) {
-        return line == static_cast<u32>(Shader::IR::Attribute::ViewportIndex) ||
-               line == static_cast<u32>(Shader::IR::Attribute::ViewportMask);
-    })};
-    const size_t num_viewports{picks_viewport ? state.viewport_swizzles.size() : 1};
-    for (size_t viewport = 0; viewport < num_viewports; ++viewport) {
-        const Maxwell::ViewportSwizzle viewport_y{component(viewport, 4)};
-        if (component(viewport, 0) != Maxwell::ViewportSwizzle::PositiveX ||
-            (viewport_y != Maxwell::ViewportSwizzle::PositiveY &&
-             viewport_y != Maxwell::ViewportSwizzle::NegativeY) ||
-            component(viewport, 12) != Maxwell::ViewportSwizzle::PositiveW) {
-            return wanted & MESH_CULL_EMPTY;
-        }
-    }
-    const Maxwell::ViewportSwizzle y{component(0, 4)};
-    // Small triangles: only filled, single-sampled triangles are sampled at pixel centres alone,
-    // and the viewport pushed for the test has to be the whole of the transform after clipping.
-    if (state.msaa_mode.Value() != Tegra::Texture::MsaaMode::Msaa1x1 ||
-        FixedPipelineState::UnpackPolygonMode(state.polygon_mode) != Maxwell::PolygonMode::Fill ||
-        state.conservative_raster_enable != 0 ||
-        (y == Maxwell::ViewportSwizzle::NegativeY && device.IsNvViewportSwizzleSupported())) {
-        wanted &= ~MESH_CULL_SMALL;
-    }
-    return wanted;
-}
-
 /// EDEN_NX2_PREPASS_INVARIANT=1, read once: the stages before the fragment one of a pipeline with
 /// a prepass split decorate Position as Invariant, should the two passes' depths ever differ.
 bool PrepassInvariantPosition() {
@@ -587,7 +548,7 @@ constexpr bool IsAmdProprietaryWindows(VkDriverId driver_id) {
 }
 
 // Shaders this tree builds from more than the translation key: a native mesh or task program
-// reads the pipeline state (culling, outputs), and a pipeline of a prepass split hash takes two
+// reads the pipeline state, and a pipeline of a prepass split hash takes two
 // more fragment shaders. Those pipelines neither look up nor add reusable shaders.
 bool ShadersFitReuse(const GraphicsPipelineCacheKey& key,
                      std::span<Shader::Environment* const> envs) {
@@ -991,23 +952,12 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                      ? "gather from shared memory"
                      : "keep their shuffles (tensor cores in use, or no full 32-lane subgroups)");
     }
-    // EDEN_NX2_MESH_CULL=<bits> (experiment): native mesh programs cull their triangles. 1 drops
-    // those outside the frustum, 2 those that cover no pixel centre, 4 emits no outputs for a
-    // workgroup with no triangle left; 7 is all three.
     if (const char* const density = std::getenv("EDEN_NX2_TASK_DENSITY")) {
         profile.mesh_task_percent =
             (std::min)(static_cast<u32>(std::strtoul(density, nullptr, 0)), u32{100});
         LOG_INFO(Render_Vulkan, "EDEN_NX2_TASK_DENSITY: task programs ask for {}% of their mesh "
                                 "workgroups",
                  profile.mesh_task_percent);
-    }
-    static const char* const mesh_cull{std::getenv("EDEN_NX2_MESH_CULL")};
-    if (mesh_cull != nullptr) {
-        using namespace Shader::Backend::SPIRV;
-        profile.mesh_cull = static_cast<u32>(std::strtoul(mesh_cull, nullptr, 0)) &
-                            (MESH_CULL_FRUSTUM | MESH_CULL_SMALL | MESH_CULL_EMPTY);
-        LOG_INFO(Render_Vulkan, "EDEN_NX2_MESH_CULL={}: mesh program culling bits {}", mesh_cull,
-                 profile.mesh_cull);
     }
     // EDEN_NX2_GM=<bits> (experiment): cheaper run-time routing of global memory accesses that
     // stay global. 1 computes the buffer base addresses once per invocation instead of in every
@@ -3394,12 +3344,6 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                     mesh_emulation->has_task ? mesh_emulation->args_binding : ~0U,
                     runtime_info.convert_depth_mode && !profile.support_native_ndc);
             }
-        }
-        if (!mesh_emulation && program.stage == Shader::Stage::Mesh) {
-            runtime_info.mesh_cull = MeshCullBits(profile.mesh_cull, key.state, device, program.mesh);
-            // The pipeline pushes the viewport the small triangle test reads.
-            program.info.uses_mesh_cull_viewport =
-                (runtime_info.mesh_cull & Shader::Backend::SPIRV::MESH_CULL_SMALL) != 0;
         }
         if (prepass_shaders && prepass_shaders->invariant_position &&
             program.stage != Shader::Stage::Fragment) {

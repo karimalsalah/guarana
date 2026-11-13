@@ -32,15 +32,6 @@ constexpr u32 RESCALING_LAYOUT_WORDS_OFFSET = offsetof(RescalingLayout, rescalin
 constexpr u32 RESCALING_LAYOUT_DOWN_FACTOR_OFFSET = offsetof(RescalingLayout, down_factor);
 constexpr u32 RENDERAREA_LAYOUT_OFFSET = offsetof(RenderAreaLayout, render_area);
 
-/// Culling the epilogue of a native mesh program can add (Profile and RuntimeInfo mesh_cull).
-constexpr u32 MESH_CULL_FRUSTUM = 1; ///< triangles outside one of the x, y or w clip planes
-constexpr u32 MESH_CULL_SMALL = 2;   ///< triangles whose bounding box holds no pixel centre
-constexpr u32 MESH_CULL_EMPTY = 4;   ///< no outputs for a workgroup with no triangle left
-/// Push constant of the small triangle test: viewport 0 (x, y, width, height) in host pixels.
-/// It takes the last sizeof(RenderAreaLayout) bytes of the pipeline layout's range, which the
-/// render area (at offset 0) leaves unused.
-constexpr u32 MESH_CULL_VIEWPORT_OFFSET = sizeof(RescalingLayout);
-
 /// Cheaper run-time routing of global memory accesses (Profile::global_memory_opt).
 constexpr u32 GM_HOIST = 1;  ///< buffer base addresses are computed once, at the start of main
 constexpr u32 GM_NARROW = 2; ///< a load searches only the buffers the storage buffer pass named
