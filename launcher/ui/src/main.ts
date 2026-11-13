@@ -6,6 +6,7 @@ import { installText } from "./format";
 import { activeKind, initGamepad, syncPadAttribute } from "./gamepad";
 import { icon } from "./icons";
 import { configureIntents, initInput } from "./input";
+import { initLaunchRequests } from "./launch-requests";
 import { initMotion, setPaused } from "./motion";
 import { back, cycleTab, go, preload, type ScreenId } from "./router";
 import { hideBoot, mountShell, refreshVersions } from "./shell";
@@ -81,6 +82,8 @@ async function boot(): Promise<void> {
   }
   hideBoot();
   void refreshVersions(shell);
+  // A game file opened from Explorer or a guarana:// link, now or later.
+  initLaunchRequests();
 }
 
 function bootError(message: string): void {

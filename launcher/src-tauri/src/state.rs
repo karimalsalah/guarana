@@ -43,6 +43,9 @@ pub struct Persisted {
     /// `mtime:len` of the last log session looked at, so one session is offered once.
     #[serde(default)]
     pub share_session_key: Option<String>,
+    /// Windows notifications when shaders are ready or an update is installed (off by default).
+    #[serde(default)]
+    pub notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +65,8 @@ pub struct AppState {
     pub controllers: Arc<Mutex<Vec<Controller>>>,
     pub system_cache: Mutex<Option<(Instant, SystemInfo)>>,
     pub warm: Mutex<crate::warm::WarmState>,
+    /// A game Explorer or a `guarana://` link asked for, until the UI takes it.
+    pub launch_request: Mutex<Option<crate::open::LaunchRequest>>,
 }
 
 impl AppState {
@@ -73,6 +78,7 @@ impl AppState {
             controllers: Arc::new(Mutex::new(Vec::new())),
             system_cache: Mutex::new(None),
             warm: Mutex::new(crate::warm::WarmState::default()),
+            launch_request: Mutex::new(None),
         }
     }
 

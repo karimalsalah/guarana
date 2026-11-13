@@ -487,6 +487,19 @@ function modeCard(ctx: ScreenContext): HTMLElement {
   });
   void api.getShareStatus().then((st) => shareToggle.setAttribute("aria-checked", String(st.enabled)), () => undefined);
   void events.shareChanged((st) => shareToggle.setAttribute("aria-checked", String(st.enabled)), ctx.signal).catch(() => undefined);
+  const notifyToggle = switchControl({
+    checked: false,
+    label: "Windows notifications",
+    onChange: (on) =>
+      void api
+        .setNotifications(on)
+        .then((n) => notifyToggle.setAttribute("aria-checked", String(n.enabled)))
+        .catch((e: unknown) => {
+          toast(errorText(e), { tone: "fail" });
+          void api.getNotifications().then((n) => notifyToggle.setAttribute("aria-checked", String(n.enabled)), () => undefined);
+        }),
+  });
+  void api.getNotifications().then((n) => notifyToggle.setAttribute("aria-checked", String(n.enabled)), () => undefined);
   const historyList = h("ul", { class: "autopilot-history" });
   const communityEl = h("p", { class: "fine" });
   const advanced = h(
@@ -518,6 +531,17 @@ function modeCard(ctx: ScreenContext): HTMLElement {
           h("p", { class: "toggle-help", text: "After a game with a minute or more of play, Home offers to open a prefilled device report. Nothing is sent until you submit it on GitHub." }),
         ),
         h("div", { class: "toggle-control" }, shareToggle),
+      ),
+      h(
+        "div",
+        { class: "toggle-row" },
+        h(
+          "div",
+          { class: "toggle-text" },
+          h("p", { class: "toggle-label", text: "Windows notifications" }),
+          h("p", { class: "toggle-help", text: "A Windows notification when shaders are ready or an update is installed, while the launcher is in the background." }),
+        ),
+        h("div", { class: "toggle-control" }, notifyToggle),
       ),
       communityEl,
       h(

@@ -186,6 +186,19 @@ export interface GameExited {
   seconds: number;
 }
 
+/** take_launch_request: a game file Explorer opened with Guarana, or a guarana:// link. */
+export interface LaunchRequest {
+  source: "file" | "link";
+  /** Checked by the backend; start it with launch_game and its path. */
+  game: Game | null;
+  /** Why it cannot start (missing file, a link outside the game folders...). */
+  error: string | null;
+}
+
+export interface Notifications {
+  enabled: boolean;
+}
+
 /** Payload of warm://progress (warm_shaders, and the automatic run after a GPU driver change). */
 export interface WarmProgress {
   title_id: string;

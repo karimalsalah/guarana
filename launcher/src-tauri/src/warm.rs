@@ -22,7 +22,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::{self, AppState};
 use crate::util::{self, CmdResult, Context};
-use crate::{paths, system};
+use crate::{notify, paths, system, taskbar};
 
 pub const EVENT: &str = "warm://progress";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -233,6 +233,7 @@ pub fn run(app: &AppHandle, title_id: &str, auto: bool) -> CmdResult<WarmResult>
         w.running = Some(RunningWarm { title_id: tid.clone(), auto, percent: percent.clone(), stop: stop.clone() });
     }
     let _guard = RunningGuard(&st.warm);
+    let _taskbar = taskbar::Guard::new(app, taskbar::Job::Warm);
     // guarana-cli rewrites the configuration it is given (it saves what it read).
     let _ = util::backup_file(&config);
     keep_game_log();
@@ -248,6 +249,11 @@ pub fn run(app: &AppHandle, title_id: &str, auto: bool) -> CmdResult<WarmResult>
 
 #[allow(clippy::too_many_arguments)]
 fn emit(app: &AppHandle, tid: &str, stage: &str, pass: u32, percent: u32, done: u64, total: u64, seconds: f64, auto: bool, message: Option<String>) {
+    match stage {
+        "done" => taskbar::clear(app, taskbar::Job::Warm),
+        "ready" | "retry" => taskbar::set(app, taskbar::Job::Warm, None),
+        _ => taskbar::set(app, taskbar::Job::Warm, Some(u64::from(percent))),
+    }
     let _ = app.emit(
         EVENT,
         WarmProgress {
@@ -444,12 +450,14 @@ fn auto_blocking(app: &AppHandle) {
     if let Ok(mut w) = st.warm.lock() {
         w.auto_interrupted = false;
     }
+    let mut ready = 0;
     for tid in titles {
         if util::emulator_running() {
             mark_interrupted(app);
             return;
         }
         match run(app, &tid, true) {
+            Ok(r) if r.status == "done" => ready += 1,
             Ok(r) if r.status == "stopped" => {
                 let by_user = st.warm.lock().map(|mut w| std::mem::take(&mut w.user_stopped)).unwrap_or(false);
                 if by_user {
@@ -471,6 +479,7 @@ fn auto_blocking(app: &AppHandle) {
         }
     }
     let _ = st.update(|s| s.last_warm_driver = Some(key));
+    notify::driver_warm_finished(app, ready);
 }
 
 fn mark_interrupted(app: &AppHandle) {
