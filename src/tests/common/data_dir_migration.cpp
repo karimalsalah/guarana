@@ -239,9 +239,9 @@ TEST_CASE("Copied configs point at the new folder", "[fs][guarana]") {
     }
 
     SECTION("backslashes, Qt's doubled backslashes and quotes") {
-        CHECK(M::RewriteIniPaths("a=C:\Users\A\AppData\Roaming\lichii\nand\n", roots) ==
+        CHECK(M::RewriteIniPaths("a=C:\\Users\\A\\AppData\\Roaming\\lichii\\nand\n", roots) ==
               "a=C:/Users/A/AppData/Roaming/guarana/nand\n");
-        CHECK(M::RewriteIniPaths("a=C:\\Users\\A\\AppData\\Roaming\\lichii\n", roots) ==
+        CHECK(M::RewriteIniPaths("a=C:\\\\Users\\\\A\\\\AppData\\\\Roaming\\\\lichii\n", roots) ==
               "a=C:/Users/A/AppData/Roaming/guarana\n");
         CHECK(M::RewriteIniPaths("a=\"C:/Users/A/AppData/Roaming/lichii/x, y\"", roots) ==
               "a=\"C:/Users/A/AppData/Roaming/guarana/x, y\"");
