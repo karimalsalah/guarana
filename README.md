@@ -99,7 +99,7 @@ and `SHA256SUMS` to check them. Every number on this page was measured on Window
 
 More for Ocarina of Time: the [controller guide](docs/user/Controllers.md), the [Dynamic FPS add-on](docs/nx2/ocarina-dynamic-fps.md), the [anti-aliasing network bypass](docs/nx2/oot-network-bypass.md) and the opt-in `EDEN_NX2_POWER_POLICY=igpu` (experimental, not measured yet).
 
-Settings, saves and caches live in `%APPDATA%\guarana`, and on first start Guarana moves your settings over automatically from the old `%APPDATA%\lichii` folder (the old folder stays in place). On Linux the folder is `guarana` in your config directory (`$XDG_CONFIG_HOME/guarana`).
+Settings, saves and caches live in `%APPDATA%\guarana`, and on first start Guarana copies your settings, saves and caches from the old `%APPDATA%\lichii` folder and points the copied settings at the new one (the old folder stays as it was). On Linux the folder is `guarana` in your config directory (`$XDG_CONFIG_HOME/guarana`).
 Put your own switch lines in `%APPDATA%\guarana\nx2_switches.txt`, not the copy next to `guarana.exe`. Every switch is in [docs/switches.md](docs/switches.md).
 Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
 
