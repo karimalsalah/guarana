@@ -2,10 +2,13 @@
 
 ## Where to ask
 
-- **Questions and setup help**: [Discussions](https://github.com/karimalsalah/guarana/discussions). Search first; someone may have had the same driver or game problem.
-- **Bugs, device results, performance ideas, tasks**: [issues](https://github.com/karimalsalah/guarana/issues/new/choose), through the form that fits. The forms ask for what we need to act on a report.
+- **Chat, setup help and quick questions**: the Guarana Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM). Contributors answer in real time. Same rules as here: no keys, firmware or games, ever.
+- **Questions that deserve a lasting answer**: [Discussions](https://github.com/karimalsalah/guarana/discussions). Search first; someone may have had the same driver or game problem.
+- **Bugs, device results, performance ideas, tasks** stay on GitHub, not on Discord: [issues](https://github.com/karimalsalah/guarana/issues/new/choose), through the form that fits. The forms ask for what we need to act on a report.
 - **Security problems**: privately, as [SECURITY.md](SECURITY.md) explains.
 - **Documentation**: [docs/](docs), and for the `EDEN_NX2_*` switches [docs/switches.md](docs/switches.md).
+
+Anyone can claim to be staff in a chat: nobody from the project will ask you for a password, a key, or a download outside this repository.
 
 Download Guarana only from this repository's [releases page](https://github.com/karimalsalah/guarana/releases). Builds offered anywhere else are not ours.
 

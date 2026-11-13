@@ -87,6 +87,12 @@ Runs once per new issue, reads only the reporter's own words, and adds labels:
 | `needs-info` and one comment | A crash reported without a log, through a bug form, a device report or an issue without a form. Agent tasks, performance ideas and feature requests that only mention a crash are not asked. The comment asks politely for `eden_log.txt`, says where it is and how to remove the user name from its paths, and asks for no dumps, keys or game files. `label-issues.yml` already asks when the crash form's log field is empty, so triage asks in every other case and the two never both comment |
 | `agent-ready` | An agent task whose acceptance test says something checkable (not "n/a" or "tbd"), with a goal and files, and not marked Large. `needs-triage` stays until a maintainer removes it; agents take only issues without it |
 
+**Solve it with AI.** On an `agent-ready` task and on a bug report the same comment (still at most one) also holds a 
+"Solve it with AI" block: the Claude Code one-liner `claude "Read AGENTS.md, then fix <issue URL>"` and links that open 
+claude.ai (`https://claude.ai/new?q=`) and ChatGPT (`https://chatgpt.com/?q=`) with a prompt typed in. The prompt names the issue 
+by its URL and points at `llms-full.txt` (built by `pages.yml`); it carries none of the issue's text, and a link over 2000 characters 
+is left out. Other tools: [AI-QUICKSTART.md](AI-QUICKSTART.md).
+
 It never removes a label, closes, locks or marks an issue stale.
 
 ## 3. Ingest (`ingest-reports.yml`)

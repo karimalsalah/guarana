@@ -1,5 +1,7 @@
 **Languages:** [English](../../README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Русский](README.ru.md) · [العربية](README.ar.md) · [Index](README.md)
 
+**Discord:** [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM)
+
 # Guarana translations
 
 These are short translations of the English [README](../../README.md). They cover what Guarana is, the measured result, a quick start, the legal note about keys, firmware and games, how to contribute, and links.

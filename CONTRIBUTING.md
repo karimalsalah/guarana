@@ -2,7 +2,9 @@
 
 Guarana makes the Lichii Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
 
-Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Questions go to [Discussions](https://github.com/karimalsalah/guarana/discussions).
+Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Chat, setup help and "is anyone on this?" go to the Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM); questions that deserve a lasting answer go to [Discussions](https://github.com/karimalsalah/guarana/discussions). Bugs and device reports stay on GitHub so they can be tracked.
+
+Using an AI tool? [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md) gets Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline or a plain web chat from zero to a pull request, one command each.
 
 ## Five-minute start
 
@@ -75,4 +77,8 @@ Guarana is a fork of [zortos293/Lichii](https://github.com/zortos293/Lichii). Be
 - Contributions are under GPL-3.0-or-later, the project's licence ([LICENSE.txt](LICENSE.txt)); keep the SPDX notices of the files you touch.
 - Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
-Everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+## Credit
+
+Every merged pull request is credited for good: your name goes on the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html) and in [CONTRIBUTORS.md](CONTRIBUTORS.md), rebuilt daily from the git history. Authors of `Co-authored-by:` trailers count too, and so do ported fixes (credit the original author). AI tools you used are listed as tools, not as people; the person who owns the pull request is the contributor.
+
+Everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md), on Discord too.
