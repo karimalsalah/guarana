@@ -66,7 +66,6 @@ Known issues of `EDEN_NX2_GM`:
 | `EDEN_NX2_IGPU_VRAM_MIB` | MiB | The integrated GPU's memory share instead of 4 GiB (6 GiB with aggressive VRAM use), within the same heap and budget bounds. | No verified-scene measurement. | `video_core/vulkan_common/vulkan_device.cpp` |
 | `EDEN_NX2_MESH_CULL` | Bits; `7` is all | Native mesh programs cull their triangles: `1` outside the frustum, `2` covering no pixel centre, `4` no outputs for a workgroup with no triangle left. | Slower on the Arc 140T scene: 12.2 fps against 14.47 fps for its baseline (row `r4-cull1`). | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, mesh emission in `shader_recompiler/backend/spirv/emit_spirv_mesh.cpp` |
 | `EDEN_NX2_MESH_OUT`, `EDEN_NX2_MESH_VRS_PX` | Bits; pixels | Cheaper native mesh outputs. `1`: no output for components the fragment stage never reads. `2`: triangles with a bounding box under `MESH_VRS_PX` pixels (default 4) shade at 2x2 (needs `VRS` and `MESH_CULL` bit 2). `8`: one store per output vector. `16`: only as many vertices as the primitives use. `4` does nothing. | Slower on the Arc 140T scene: bits 16 and 8, 13.4 fps against 16.1 fps (row `k-count-vec`). | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `shader_recompiler/backend/spirv/emit_spirv_mesh.cpp` |
-| `EDEN_NX2_MESH_SIMD` | `8`, `16`, `32` | The subgroup size of every native task and mesh stage (Intel picks SIMD16 by itself). | No gain beyond the run-to-run spread on the Arc 140T scene. | `video_core/renderer_vulkan/vk_graphics_pipeline.cpp` |
 | `EDEN_NX2_TASK_DENSITY` | `0` to `100` | Native task programs launch only this percentage of their mesh workgroups. Geometry goes missing: a probe of what the mesh work costs, not a setting to play with. | Not a performance switch. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp` |
 | `EDEN_NX2_PREPASS_HASHES` | `<hash>,...` | Alpha-test prepass split: draws of the listed fragment shaders run first as a depth-only pass that keeps only their discards, then shade once per visible pixel with an equal depth test. Live: `set_prepass`. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `video_core/nx2_debug_control.cpp` |
 | `EDEN_NX2_PREPASS_FORCE`, `EDEN_NX2_PREPASS_INVARIANT` | `1` | With `PREPASS_HASHES`: take the split even with an earlier stage that writes storage or with the samples-passed counter on; decorate Position as invariant in split pipelines. | See `PREPASS_HASHES`. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp` |
@@ -107,3 +106,11 @@ Known issues of `EDEN_NX2_GM`:
 | `EDEN_NX2_REJECT_HASH` | Rejecting shaders by hash; `tools/bench` probes use it live (`reject_shaders`). |
 | `EDEN_NX2_FRAME_DUMP` | Frame dumps; the debug server's `capture_frame` uses the same code. |
 | `EDEN_NX2_GPU_PROFILE`, `EDEN_NX2_STUTTER_TRACE`, `EDEN_DKB_FRAME_TRACE` | Where frame time goes and which frames hitch. `tools/bench` suites pair GPU-work variants with an `EDEN_DKB_FRAME_TRACE` twin. |
+
+## Removed experiments
+
+Switches Guarana added and then removed because a paired run showed no gain, or harm. The code is gone; `git log -S` finds it.
+
+| Switch | What it did | Why removed |
+|---|---|---|
+| `EDEN_NX2_MESH_SIMD` | Forced the subgroup size (8, 16 or 32) of native task and mesh stages. | No gain beyond the run-to-run spread on the Arc 140T scene (lab rows m-simd8/16/32: 15.4, 15.9, 15.7 fps against 15.9 for j-base). |
