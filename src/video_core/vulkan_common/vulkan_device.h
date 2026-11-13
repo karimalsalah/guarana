@@ -841,23 +841,6 @@ FN_MAX_LIMIT_LIST
                features.fragment_shading_rate.pipelineFragmentShadingRate;
     }
 
-    /// Returns true if native mesh programs may write PrimitiveShadingRateKHR (EDEN_NX2_VRS and
-    /// EDEN_NX2_MESH_OUT bit 2). Guest pipelines have several viewports, so it needs that limit.
-    bool IsMeshPrimitiveShadingRateSupported() const {
-        return IsKhrFragmentShadingRateSupported() && IsExtMeshShaderSupported() &&
-               features.fragment_shading_rate.primitiveFragmentShadingRate &&
-               features.mesh_shader.primitiveFragmentShadingRateMeshShader &&
-               properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports;
-    }
-
-    /// Returns how a mesh program's per-primitive rate combines with the per-draw one: the
-    /// coarser of the two where the device can, else the primitive's.
-    VkFragmentShadingRateCombinerOpKHR MeshPrimitiveRateCombiner() const {
-        return properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps
-                   ? VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR
-                   : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
-    }
-
     /// Returns the largest supported fragment size that fits in the wanted one.
     VkExtent2D ClampFragmentShadingRate(VkExtent2D wanted) const;
 
