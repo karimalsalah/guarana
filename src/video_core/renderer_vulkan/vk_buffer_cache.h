@@ -166,7 +166,7 @@ public:
     /// (EDEN_NX2_HITCH_FINISH_TRACE).
     void Finish(std::source_location location = std::source_location::current());
 
-    void FinishForHostRead();
+    void FinishForHostRead(std::source_location location = std::source_location::current());
 
     /// FinishForHostRead without the wait: submits, and returns the tick to wait for.
     u64 SubmitForHostRead();
