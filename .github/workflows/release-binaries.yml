@@ -825,6 +825,17 @@ jobs:
           name: release-notes
           path: notes
 
+      # The licence texts travel inside every zip (GPL-3.0: binaries ship with the licence).
+      - name: Check out the licence texts
+        uses: actions/checkout@v5
+        with:
+          path: src
+          sparse-checkout: |
+            LICENSE.txt
+            LEGAL.md
+            LICENSES
+          sparse-checkout-cone-mode: false
+
       # lichii-<commit>-<platform>.<ext> becomes <APP>-<version>-<platform>.<ext>; each Windows bin
       # folder is zipped as <APP>-<version>-<platform>.zip.
       - name: Package release files
@@ -842,6 +853,10 @@ jobs:
                 cp "$file" "dist/$APP-$VERSION-${base#lichii-"$GITHUB_SHA"-}"
               done
             else
+              cp src/LICENSE.txt src/LEGAL.md "$artifact"
+              cp -r src/LICENSES "$artifact"
+              printf '%s %s\nSource code: %s/%s/tree/%s\nLicence: GPL-3.0-or-later (LICENSE.txt); other components: LICENSES/.\nNo keys, firmware or games are included or provided; see LEGAL.md.\n' \
+                "$APP" "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > "$artifact/SOURCE.txt"
               (cd "$artifact" && zip -qr "$GITHUB_WORKSPACE/dist/$APP-$VERSION-$platform.zip" .)
             fi
           done
