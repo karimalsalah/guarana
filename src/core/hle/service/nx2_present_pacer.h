@@ -52,6 +52,16 @@ public:
         return {*last_deadline, reset};
     }
 
+    /**
+     * Moves the deadlines to come by @p shift, later when positive: a phase correction that
+     * keeps the interval.
+     */
+    void Shift(Clock::duration shift) {
+        if (last_deadline) {
+            *last_deadline += shift;
+        }
+    }
+
 private:
     std::optional<Clock::time_point> last_deadline;
 };

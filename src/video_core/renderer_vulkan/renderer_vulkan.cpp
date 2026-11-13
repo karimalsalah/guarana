@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include "core/frontend/graphics_context.h"
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/present.h"
 #include "video_core/render_trace.h"
@@ -68,6 +70,8 @@ constexpr f64 FLUID_REAL_ADVANCE = 0.1;
 /// Predictions reach at most this many frame intervals ahead.
 constexpr f64 FLUID_MAX_ADVANCE = 3.0;
 constexpr size_t FLUID_MAX_PREDICTIONS = 6;
+/// EDEN_NX2_CADENCE: real frames are paced to be done this long before their slot's present.
+constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
 
 [[nodiscard]] VkExtent2D GuestExtent(std::span<const Tegra::FramebufferConfig> framebuffers) {
     if (framebuffers.empty()) {
@@ -480,6 +484,26 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     const f32 interval = frame_gen.FluidInterval();
     if (interval <= 0.0f || !frame_gen.CanPredict()) {
         return;
+    }
+    const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                          std::memory_order_relaxed)) *
+                      1.0e-9f;
+    if (frame_gen.CadenceActive() && paced > 0.0f &&
+        std::abs(frame_gen.FrameInterval() - paced) <= paced * 0.05f) {
+        // EDEN_NX2_CADENCE paces the guest's presents, and the game keeps to it: move them, an
+        // eighth of the way a frame, towards real frames whose GPU work is done just before
+        // their first slot.
+        const s64 slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+        const s64 slack = duration_cast<nanoseconds>(slots.SlotTime(first) - slots.lead -
+                                                     (recorded + slots.latency))
+                              .count();
+        s64 error = slack - FLUID_PHASE_MARGIN_NS;
+        if (error > slot_ns / 2) {
+            // Nearer the slot before: be earlier.
+            error -= slot_ns;
+        }
+        Tegra::g_nx2_present_phase_shift_ns.fetch_add(
+            std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
     }
     const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
     // Through the slot the next real frame is expected for: one spare covers it coming late.
