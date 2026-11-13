@@ -315,6 +315,11 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat 
     extrapolation_usable = usable;
     extrapolation_missing += extrapolation_source ? 0 : 1;
     extrapolation_cuts += extrapolation_source && extrapolation_source->cut ? 1 : 0;
+    extrapolation_usable_frames += usable ? 1 : 0;
+    extrapolation_hud += usable && extrapolation_source->hud_reference != VK_NULL_HANDLE &&
+                                 extrapolation_source->hud_composite != VK_NULL_HANDLE
+                             ? 1
+                             : 0;
     // A cadence holds real frames only while frames are predicted: menus and cut scenes without
     // motion data run at the game's own rate.
     unusable_streak = usable ? 0 : unusable_streak + 1;
@@ -334,11 +339,12 @@ void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat 
     if (++extrapolation_frames % EXTRAPOLATION_LOG_INTERVAL == 0) {
         LOG_INFO(Render_Vulkan,
                  "Frame extrapolation: {} frames, {} without motion, {} camera cuts, {} planned "
-                 "per frame, HUD kept {}",
+                 "per frame, HUD mask on {} of {} predictable frames",
                  EXTRAPOLATION_LOG_INTERVAL, extrapolation_missing, extrapolation_cuts,
-                 plan.generations,
-                 extrapolation_source && extrapolation_source->hud_reference != VK_NULL_HANDLE);
+                 plan.generations, extrapolation_hud, extrapolation_usable_frames);
         extrapolation_missing = 0;
+        extrapolation_hud = 0;
+        extrapolation_usable_frames = 0;
         extrapolation_cuts = 0;
     }
 }

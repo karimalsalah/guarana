@@ -401,6 +401,7 @@ private:
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_hud_frame; ///< oot_hud_composite is this frame's image with the HUD
     VkImageView oot_hud_composite{};
+    const char* oot_hud_reason{}; ///< why the last frame with a scene had no HUD composite
     std::unique_ptr<class OcarinaMotionGuide> oot_guide;
     bool oot_guide_failed{};
     const char* oot_guide_reason{}; ///< why the last frame got no guide
