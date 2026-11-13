@@ -48,7 +48,7 @@ constexpr size_t MAX_FRAMES_IN_FLIGHT = 7;
 /// next one (six at 120 for 20 real frames), while the last real frame's predictions still wait
 /// for their slots. Only extrapolated frames use the frames past MAX_FRAMES_IN_FLIGHT; Lossless
 /// Scaling's generation targets stop there (FrameGen::GenerateInto).
-constexpr size_t FLUID_HIGH_RATE_FRAMES = 12;
+constexpr size_t FLUID_HIGH_RATE_FRAMES = 16;
 constexpr size_t FLUID_MAX_FRAMES = 16;
 
 /// The rate EDEN_NX2_FLUID shows frames at: EDEN_NX2_SHOWN_RATE=<hz> (30 to 240) if set, else the
@@ -1495,8 +1495,10 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
         if (FluidQueueHostWait()) {
             // A copy still running after this long is late anyway: present and move on.
-            static constexpr u64 HostWaitNs = 12'000'000;
-            void(frame->present_done.Wait(HostWaitNs));
+            // At 120 a slot is 8.3 ms: a longer wait would make the present thread sleep through
+            // the next slot.
+            const u64 host_wait_ns = FluidShownRate() > 75.0 ? 4'000'000 : 12'000'000;
+            void(frame->present_done.Wait(host_wait_ns));
         }
     } else {
         const vk::CommandBuffer cmdbuf{frame->cmdbuf};
