@@ -6040,7 +6040,7 @@ Przeciągnij punkty, aby zmienić pozycję, lub kliknij dwukrotnie komórki tabe
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="32"/>
-        <source>Creating a room failed. Please retry. Restarting Eden might be necessary.</source>
+        <source>Creating a room failed. Please retry. Restarting Guarana might be necessary.</source>
         <translation>Nie udało się utworzyć pokoju. Spróbuj ponownie. Może być konieczne ponowne uruchomienie Edena.</translation>
     </message>
     <message>
@@ -6050,7 +6050,7 @@ Przeciągnij punkty, aby zmienić pozycję, lub kliknij dwukrotnie komórki tabe
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="37"/>
-        <source>Version mismatch! Please update to the latest version of Eden. If the problem persists, contact the room host and ask them to update the server.</source>
+        <source>Version mismatch! Please update to the latest version of Guarana. If the problem persists, contact the room host and ask them to update the server.</source>
         <translation>Niezgodność wersji! Zaktualizuj do najnowszej dostępnej wersji. Jeśli problem będzie się powtarzał, skontaktuj się z hostem pokoju i poproś o aktualizację serwera.</translation>
     </message>
     <message>
@@ -6522,9 +6522,9 @@ Przejdź do sekcji Konfiguracja -&gt; System -&gt; Sieć i dokonaj wyboru.</tran
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/host_room.cpp" line="187"/>
-        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Eden account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
+        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Guarana account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
 Debug Message: </source>
-        <translation>Nie udało się ogłosić pokoju w publicznym lobby. Aby udostępnić pokój publicznie, musisz mieć ważne konto Eden skonfigurowane w Emulacja -&gt; Konfiguracja -&gt; Internet. Jeśli nie chcesz publikować pokoju w publicznym lobby, wybierz opcję Niepubliczny.
+        <translation>Nie udało się ogłosić pokoju w publicznym lobby. Aby udostępnić pokój publicznie, musisz mieć ważne konto Guarana skonfigurowane w Emulacja -&gt; Konfiguracja -&gt; Internet. Jeśli nie chcesz publikować pokoju w publicznym lobby, wybierz opcję Niepubliczny.
 Komunikat debugowania: </translation>
     </message>
 </context>
@@ -6892,8 +6892,8 @@ Komunikat debugowania: </translation>
     <name>MainWindow</name>
     <message>
         <location filename="../../src/lichii/main.ui" line="14"/>
-        <source>Lichii</source>
-        <translation>Lichii</translation>
+        <source>Guarana</source>
+        <translation>Guarana</translation>
     </message>
     <message>
         <location filename="../../src/lichii/main.ui" line="53"/>
@@ -7447,7 +7447,7 @@ Komunikat debugowania: </translation>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1839"/>
-        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;How to access log files&lt;/a&gt;.</source>
+        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;How to access log files&lt;/a&gt;.</source>
         <translation type="unfinished"/>
     </message>
     <message>
@@ -9437,8 +9437,8 @@ p, li { white-space: pre-wrap; }
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="328"/>
-        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Eden has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
-        <translation>MOGĄ WYSTĄPIĆ NIEOCZEKIWANE PROBLEMY, JEŚLI TEGO NIE PRZECZYTASZ!&lt;br&gt;Eden wykrył następujące katalogi zapisów bez przypisanego profilu:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Kliknij „OK”, aby otworzyć folder zapisów i naprawić profile.&lt;br&gt;Wskazówka: skopiuj zawartość największego lub ostatnio modyfikowanego folderu w inne miejsce, usuń wszystkie osierocone profile, a następnie przenieś skopiowaną zawartość do właściwego profilu.&lt;br&gt;&lt;br&gt;Nadal masz wątpliwości? Zobacz&lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;tronę pomocy&lt;/a&gt;.&lt;br&gt;</translation>
+        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Guarana has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
+        <translation>MOGĄ WYSTĄPIĆ NIEOCZEKIWANE PROBLEMY, JEŚLI TEGO NIE PRZECZYTASZ!&lt;br&gt;Guarana wykrył następujące katalogi zapisów bez przypisanego profilu:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Kliknij „OK”, aby otworzyć folder zapisów i naprawić profile.&lt;br&gt;Wskazówka: skopiuj zawartość największego lub ostatnio modyfikowanego folderu w inne miejsce, usuń wszystkie osierocone profile, a następnie przenieś skopiowaną zawartość do właściwego profilu.&lt;br&gt;&lt;br&gt;Nadal masz wątpliwości? Zobacz&lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;tronę pomocy&lt;/a&gt;.&lt;br&gt;</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="347"/>
@@ -9586,7 +9586,7 @@ Wykonaj to tylko, jeśli w 100% chcesz usunąć te dane.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="501"/>
-        <source>Install decryption keys and restart Eden before attempting to install firmware.</source>
+        <source>Install decryption keys and restart Guarana before attempting to install firmware.</source>
         <translation type="unfinished"/>
     </message>
     <message>
@@ -10072,8 +10072,8 @@ Most mods are RomFS mods, but patches (.pchtxt) are typically ExeFS mods.</sourc
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="96"/>
-        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Eden or re-install firmware.</source>
-        <translation>Instalacja firmware’u została anulowana — firmware może być w złym stanie lub uszkodzony. Uruchom ponownie Eden lub zainstaluj firmware ponownie.</translation>
+        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Guarana or re-install firmware.</source>
+        <translation>Instalacja firmware’u została anulowana — firmware może być w złym stanie lub uszkodzony. Uruchom ponownie Guarana lub zainstaluj firmware ponownie.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="101"/>

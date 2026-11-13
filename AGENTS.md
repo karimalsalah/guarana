@@ -1,5 +1,124 @@
 # AGENTS
 
+## Guarana: read this first
+
+Guarana is a fork of [Lichii](https://github.com/zortos293/Lichii) (branch `nx2`), the Nintendo Switch 2 emulator in the yuzu, Eden, Eglantine and Lichii line, licensed GPL-3.0-or-later. It is for integrated GPUs: Intel Arc iGPUs first (Arc 140T, Arc 140V, Meteor Lake, Panther Lake), then the AMD Radeon 780M and 890M in handhelds. It aims at even frame pacing (steady frame times, not only a higher average) and at frame generation that fits an iGPU's power budget.
+
+This section is the fork's. Everything under "Upstream Lichii guidance" is upstream's `AGENTS.md`, kept as it is so that upstream merges stay clean. Where the two disagree, this section wins:
+
+- Our upstream is zortos293/Lichii. "Before writing a fix" below names Eglantine, which is Lichii's own upstream: check Lichii first, then Eglantine.
+- Experiment switches may land on `main` behind a default-off `EDEN_NX2_*` switch with a row in `docs/switches.md`. Upstream keeps them off its `nx2` ("Toggles and merging").
+- The PC, paths and scripts below (`C:/lx`, `build-fix.sh`, `C:/Users/Zortos/...`) and the model split are the upstream owner's setup. Use the commands in this section instead.
+
+### Rules
+
+1. **Ship only a measured gain on a verified scene.** A verified scene is a `tools/bench` row with `"valid": true` and `"scene_ok": true`: the benchmark checked the game was where the row says. A gain is a paired A/B from one session, baseline and change back to back, with the baseline shown next to the result. A run on the wrong scene is not a result, whatever its fps.
+2. **Experiments are `EDEN_NX2_*` environment switches, off by default.** Unset (or `0`) leaves the behaviour exactly as before. A switch that did not help in a paired run is removed, or stays off and says so in `docs/switches.md`.
+3. **Document every `EDEN_NX2_*` switch** you add, change or remove in [docs/switches.md](docs/switches.md), in the same pull request: values, status (proven, experimental or diagnostic), measured effect, code location.
+4. **Correctness before speed.** A speed-up that can change the image needs a scene check and a known-issues note. A driver-bug fix needs a before and after screenshot or log, even without an fps gain.
+5. **Never commit** anything in the list under "Never commit".
+
+### Repo map
+
+| Path | Contents |
+|---|---|
+| `src/core` | HLE kernel and services, the Switch 2 (`nx2`) services, the debug server (`debugger/nx2_debug_server.cpp`, `debugger/nx2_debug_tools.cpp`), game presets (`game_presets.cpp`), the session power policy (`nx2_power_session.cpp`) |
+| `src/video_core` | GPU emulation and the Vulkan renderer: buffer and texture caches, `renderer_vulkan/present/` (frame generation, extrapolation, cadence), frame budget, shading-rate governor, `nx2_uma.h` |
+| `src/shader_recompiler` | Maxwell and Ampere programs to SPIR-V. `EDEN_NX2_GM` lives in `ir_opt/global_memory_to_storage_buffer_pass.cpp` and `backend/spirv/` |
+| `src/common` | Settings, logging, host memory, power meter, policy, governor and tuning |
+| `src/lichii`, `src/qt_common` | The Qt frontend (`guarana.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
+| `src/lichii_cmd` | The SDL frontend (`guarana-cli`) |
+| `src/frontend_common` | Shared frontend code, config, the update checker (off in our release builds) |
+| `src/tests` | Catch2 unit tests, built with `-DLICHII_TESTS=ON` into `build/bin/tests` and a few smaller test programs |
+| `tools/nx2` | The debug server's MCP adapter (`debug_mcp.py`), the shader sweep, frame dump index, pipeline statistics, cache metrics, and their `test_*.py` |
+| `tools/bench` | The cross-machine benchmark (`bench.py`), the play launcher (`play.py`), scenes, suites, variants, profiles and results |
+| `tools/shader-sweep` | The offline shader compiler the sweep drives; builds on its own |
+| `scripts` | One-command build and test scripts for Windows and Linux (see "Build") |
+| `tools/windows`, `tools/ci` | CI toolchain installers; CI helper scripts such as `changelog-section.sh` |
+| `docs` | `switches.md`, `LANES.md`, `nx2/debug-mcp.md`, `Build.md`, `Coding.md`. `CI.md` describes Eglantine's pipeline, not ours; its PGO retraining steps still apply |
+| `dist` | `nx2_switches.txt` (shipped next to the executable), icons, desktop files |
+| `.github` | Workflows, issue forms, `labels.yml` |
+| `*.profdata` | PGO profiles: `lichii-windows.profdata` (clang-cl), `eglantine.profdata` (Linux clang) |
+
+### Build
+
+One command from a fresh clone, from the repository root. The scripts check the prerequisites, install what they can under `.deps/`, and say how to get the rest; their headers list the options.
+
+| | Release build (as the release workflow) | Unit and tool tests (as build-check) |
+|---|---|---|
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` | `powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1` |
+| Linux | `bash scripts/build-linux.sh` | `bash scripts/run-tests.sh` |
+
+Without the scripts, the same build CI checks. Windows, PowerShell: Visual Studio 2022 with "Desktop development with C++", LLVM 22 with `clang-cl` on `PATH` (CI pins 22.1.8; `tools/windows/install-llvm.ps1` runs only in CI), CMake, Ninja and the Vulkan SDK; the configure step downloads Qt, SDL3 and FFmpeg.
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force; & ./tools/windows/load-msvc-env.ps1; cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DLICHII_TESTS=ON; if ($?) { cmake --build build --parallel }; if ($?) { ctest --test-dir build --output-on-failure }
+```
+
+Linux, bash, after installing your distribution's packages from [docs/Deps.md](docs/Deps.md) (CI's Ubuntu 24.04 list is in `build-check.yml`; CI takes Qt 6.8.3 from `install-qt-action`, so point `CMAKE_PREFIX_PATH` at a Qt of your own if the distribution's is older):
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLICHII_TESTS=ON && cmake --build build --parallel "$(nproc)" && ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+```
+
+When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/guarana` (`guarana.exe`) and `bin/guarana-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
+
+### Verify a change
+
+Without the game, on any machine:
+
+1. **Unit tests.** Put a test next to the logic you changed in `src/tests/<area>/` and add it to `src/tests/CMakeLists.txt`; `src/tests/video_core/frame_budget.cpp` and `src/tests/common/power_governor.cpp` show the pattern. Build with `-DLICHII_TESTS=ON` and run `ctest`.
+2. **Python tools.** No build needed: `python3 -I tools/bench/test_bench.py`, `python3 tools/nx2/test_debug_mcp.py`, `python3 tools/nx2/test_cache_metrics.py`, `python3 tools/nx2/test_cache_bench.py`. The `linux-gcc` job runs the `tools/nx2` ones.
+3. **Shader changes.** Build `tools/shader-sweep` on its own and run its tests (`tools/shader-sweep/README.md`): synthetic cases and three small captured programs, no game needed. With a local corpus of native dumps and caches, run `tools/nx2/shader_sweep.py` before and after (`--contexts-from` the earlier `results.json`) and compare the two `summary.md`: no new failures. A corpus is game data: it stays on the machine that dumped it.
+4. **CI.** Every pull request builds Linux GCC and Windows clang-cl with `-Werror` and runs the tests. The Windows build is uploaded as `guarana-pr<N>-<commit>-windows-x86_64` (kept 14 days) and linked in a comment on the pull request, so a tester with the game can try it without building anything.
+
+With the game, on the owner's or a tester's machine:
+
+1. **Debug server.** The owner starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`. Agents never start or stop the emulator. Ask it questions with `python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"frame_times","params":{"seconds":10}}'` (also `status`, `screenshot`, `gpu_costs`, `reject_shaders`), or run the script without `--call` as an MCP server. The methods and their limits are in `docs/nx2/debug-mcp.md`; the etiquette is in "Live debug server" below.
+2. **Benchmark.** `python -I tools/bench/bench.py run --variant tools/bench/variants/baseline.json --variant <yours>.json ...` on a scene with a reference image, or a suite (`tools/bench/README.md`). Compare with `bench.py compare`. Only rows that are valid with `scene_ok: true` count.
+3. **Report** the rows in the pull request's table and in the switch's row in `docs/switches.md`.
+
+### Lanes
+
+| Branch | Takes | CI |
+|---|---|---|
+| `main` | Reviewed pull requests; always green | build-check; nightly pre-release when it moved |
+| `release/vX.Y` | Fixes only, for stabilizing X.Y | build-check; a `vX.Y.Z` tag on it publishes the release |
+| `hotfix/*` | One fix, branched from a release tag; merged into its release branch and forward-ported to `main` | build-check |
+| `exp/*` | Experiments, behind default-off switches | build-check and the Windows test build |
+| `upstream` | Nothing: a mirror of zortos293/Lichii `nx2`, moved only by `upstream-sync.yml` | The sync opens a merge pull request into `main` |
+
+Details, release steps and what to do when the sync stops: [docs/LANES.md](docs/LANES.md).
+
+### Never commit
+
+- Keys (`prod.keys`, `title.keys`, any `*.keys`), firmware, NAND and SD card contents (`nand/`, `sdmc/`), saves.
+- Game files in any container (`.nsp`, `.xci`, `.nca`, `.nup`, `.nsz`, `.xcz`) and anything taken from them: RomFS or ExeFS contents, textures, models, audio, video, game code.
+- Dumps: shader dumps (`EDEN_NX2_SHADER_DUMP`), frame dumps and debug server captures, RenderDoc captures (`.rdc`), crash and memory dumps (`.dmp`), `EDEN_NX2_PIPELINE_STATS` output.
+- Shader and pipeline caches, the emulator's or the driver's.
+- Logs that carry user names or paths (`eden_log.txt`, `tools/bench/results/logs/`). `tools/bench` rows are scrubbed and are meant to be committed.
+- Personal data of anyone: names that are not commit authors, host names, serial numbers, IP or MAC addresses, account or console IDs.
+- Secrets and raw profiles: tokens, signing keys, `*.profraw`.
+
+The synthetic containers in `src/tests/core/nx_fixtures/` are generated test data (see its README), not game files. `.gitignore` covers the common names; it is a safety net, not a licence.
+
+### Commits and pull requests
+
+- Subject: `area: change`, imperative, at most 72 characters, for example `vulkan: keep vertex input dynamic state on Intel 101.x drivers`. The area is the subsystem: `vulkan`, `shader_recompiler`, `texture_cache`, `buffer_cache`, `core`, `kernel`, `frontend`, `bench`, `ci`, `docs`.
+- Body: what changed and why. For performance: the scene, device, driver and power mode, before and after (fps, p50 and p99 frame time, or the draw's GPU ms), and how many paired runs. Name every switch added and its default.
+- One topic per pull request, with its tests, its `docs/switches.md` rows and a `CHANGELOG.md` line under `[Unreleased]`. Fill in the template.
+
+### Upstream first
+
+- **Look before you write.** Search zortos293/Lichii (`nx2`, open and closed pull requests, issues) for the game and the symptom, then Eglantine-Community/Eglantine the same way: `gh pr list -R zortos293/Lichii --state all --search "<symptom>"`, `gh issue list -R zortos293/Lichii --state all --search "<game>"`, `gh pr diff <n> -R zortos293/Lichii`. Read the diffs, not only the titles.
+- **Port, do not rewrite.** Cherry-pick with `-x`, or keep the author with a `Co-authored-by:` trailer; cite the pull request or commit in the body. An upstream pull request we carry before it is merged goes into `CREDITS.md`.
+- **Send fixes back.** A fix that is not specific to integrated GPUs or to our switches goes to zortos293/Lichii as a pull request from a branch based on its `nx2`, without our branding or unrelated switches. Link it from ours.
+- **Merge upstream through the `upstream` branch** and its sync pull request, with a merge commit. Never commit to `upstream`.
+
+---
+
+## Upstream Lichii guidance
+
 See `docs/Coding.md` for technical coding guidance.
 
 Keep comments to a reasonable level. Do not overexplain or add/remove comments from unrelated parts of the codebase.

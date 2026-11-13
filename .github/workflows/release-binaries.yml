@@ -1,74 +1,202 @@
 name: release-binaries
 
+# Builds every platform and publishes the binaries as a GitHub release:
+# - a vX.Y.Z or vX.Y.Z-<pre-release> tag pushed by a maintainer: a release named after the tag,
+#   with its CHANGELOG.md section as the notes (docs/LANES.md, "Releases");
+# - nightly.yml calls it for the rolling "nightly" pre-release of main;
+# - by hand: an existing tag again (its release gets the new files), or any branch as workflow
+#   artifacts only.
+# On the way to a release (docs/SIGNING.md): the Windows programs are Authenticode-signed when the
+# signing secrets are set, before they are zipped and checksummed, and every file gets a build
+# provenance attestation before it is uploaded.
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
+      tag:
+        description: Existing vX.Y.Z tag to build again; empty builds the selected branch or tag
+        type: string
+        default: ""
       publish_release:
-        description: Publish the binaries as a GitHub release
+        description: Publish the tag's binaries as its GitHub release (branches are never published)
         type: boolean
         default: true
-  push:
-    branches:
-      - nx2-experimental
-    # A binary only changes when build inputs change; docs-only pushes skip the build.
-    paths:
-      - "src/**"
-      # Test-only changes cannot change a binary: the build configures with BUILD_TESTING=OFF and
-      # LICHII_TESTS=OFF below, so a push that only touches src/tests has nothing to rebuild.
-      - "!src/tests/**"
-      - "CMakeLists.txt"
-      - "CMakeModules/**"
-      - "externals/**"
-      - "dist/**"
-      - "tools/**"
-      - ".patch/**"
-      - "cpmfile.json"
-      - "*.profdata"
-      - ".github/workflows/release-binaries.yml"
+  workflow_call:
+    inputs:
+      channel:
+        description: Only "nightly"
+        type: string
+        required: true
+      ref:
+        description: Commit to build
+        type: string
+        required: true
 
 permissions:
   contents: read
 
-# Clang major the Linux PGO build uses, from apt.llvm.org. A profile is written by a current clang
-# and an older reader refuses it, so this has to stay at or above whatever produced
-# eglantine.profdata; bump it when a refreshed profile needs a newer LLVM.
 env:
+  # Clang major the Linux PGO build uses, from apt.llvm.org. A profile is written by a current clang
+  # and an older reader refuses it, so this has to stay at or above whatever produced
+  # eglantine.profdata; bump it when a refreshed profile needs a newer LLVM.
   PGO_LLVM_VERSION: "23"
+  # Release files are named <APP>-<version>-<platform>.<ext>; APP_NAME titles the release.
+  APP: "guarana"
+  APP_NAME: "Guarana"
 
-# A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
-# a later push replaces it, so the newest commit builds as soon as the running one is done.
+# A running build is never cancelled: it finishes and publishes. Another run of the same tag or
+# channel meanwhile waits for it.
 concurrency:
-  group: release-binaries-${{ github.ref }}
+  group: release-binaries-${{ inputs.channel || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  prepare-release:
+  prepare:
     name: Prepare release
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    timeout-minutes: 10
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+      refspec: ${{ steps.plan.outputs.refspec }}
+      build_tag: ${{ steps.plan.outputs.build_tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
     steps:
-      - name: Prepare release tag
-        if: github.event_name == 'push' || inputs.publish_release
+      # channel: release (a vX.Y.Z tag), nightly (from nightly.yml) or test (a branch, never
+      # published). version names the files: X.Y.Z[-pre] for a tag, "nightly", or test-<commit>.
+      - name: Decide what to build
+        id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          CALL_CHANNEL: ${{ inputs.channel }}
+          CALL_REF: ${{ inputs.ref }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DISPATCH_PUBLISH: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
-          tag="build-${GITHUB_RUN_NUMBER}"
-          if tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null); then
-            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-              echo "Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
+          CALL_CHANNEL=${CALL_CHANNEL:-} CALL_REF=${CALL_REF:-}
+          DISPATCH_TAG=${DISPATCH_TAG:-} DISPATCH_PUBLISH=${DISPATCH_PUBLISH:-}
+          prerelease=false
+          if [ "$CALL_CHANNEL" = nightly ]; then
+            channel=nightly tag=nightly version=nightly sha=$CALL_REF refspec=main
+            build_tag=nightly publish=true prerelease=true
+          elif [ -n "$DISPATCH_TAG" ] || [ "$GITHUB_REF_TYPE" = tag ]; then
+            channel=release
+            tag=${DISPATCH_TAG:-$GITHUB_REF_NAME}
+            re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'
+            if ! [[ "$tag" =~ $re ]]; then
+              echo "::error::$tag is not a release tag: use vX.Y.Z or vX.Y.Z-rcN (docs/LANES.md)"
               exit 1
             fi
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+            version=${tag#v} refspec=$tag build_tag=$tag
+            case "$version" in *-*) prerelease=true ;; esac
+            publish=true
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$DISPATCH_PUBLISH" != true ]; then
+              publish=false
+            fi
+          elif [ -n "$CALL_CHANNEL" ]; then
+            echo "::error::Unknown channel $CALL_CHANNEL"
+            exit 1
           else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
+            channel=test tag= sha=$GITHUB_SHA version="test-${GITHUB_SHA::7}" refspec=$GITHUB_REF_NAME
+            build_tag= publish=false
           fi
+          {
+            echo "channel=$channel"
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "sha=$sha"
+            echo "refspec=$refspec"
+            echo "build_tag=$build_tag"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $channel $version from $sha (publish: $publish)"
+
+      # Root files (CHANGELOG.md) and tools/ci at the tagged commit; tools/ingest is what
+      # tools/ci/thanks.py imports (github_api.py).
+      - name: Check out CHANGELOG.md
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.plan.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            tools/ci
+            tools/ingest
+
+      # Checked before anything is built: a tag without notes fails here, not after the builds.
+      - name: Write the release notes
+        if: steps.plan.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          SHA: ${{ steps.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p notes
+          blank() { [ -z "$(tr -d '[:space:]' <<< "$1")" ]; }
+          if [ "$CHANNEL" = release ]; then
+            # vX.Y.Z-rcN uses its own section when CHANGELOG.md has one, else the X.Y.Z section.
+            section=$(bash tools/ci/changelog-section.sh "$VERSION")
+            if blank "$section" && [ "$VERSION" != "${VERSION%%-*}" ]; then
+              section=$(bash tools/ci/changelog-section.sh "${VERSION%%-*}")
+            fi
+            if blank "$section"; then
+              want="'## [$VERSION]'"
+              if [ "$VERSION" != "${VERSION%%-*}" ]; then want+=" or '## [${VERSION%%-*}]'"; fi
+              echo "::error file=CHANGELOG.md::CHANGELOG.md at $TAG has no non-empty $want section. Add it, move the tag to that commit and push the tag again."
+              exit 1
+            fi
+            if [ "$VERSION" != "${VERSION%%-*}" ]; then
+              printf '> **Pre-release of %s.** Test it and report problems before the final release.\n\n' "${VERSION%%-*}"
+            fi > notes/changes.md
+            printf '%s\n' "$section" >> notes/changes.md
+            # Every section ends by thanking the people with a commit or a Co-authored-by trailer
+            # since the previous release tag (people only, like the hall of fame).
+            thanks=$(python3 -I tools/ci/thanks.py --repo "$GITHUB_REPOSITORY" --head "$SHA" --tag "$TAG") || thanks=
+            if [ -n "$thanks" ]; then printf '\n%s\n' "$thanks" >> notes/changes.md; fi
+          else
+            previous=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2> /dev/null) || previous=
+            {
+              printf 'Automatic build of `main` at %s (%s UTC).\n\n' "$SHA" "$(date -u '+%F %H:%M')"
+              printf '**Not a release.** Nightly builds change every day and can break. Report problems with the commit above.\n\n'
+              if [ -n "$previous" ] && [ "$previous" != "$SHA" ]; then
+                printf '## Changes since the previous nightly\n\n'
+                changes=$(gh api "repos/$GITHUB_REPOSITORY/compare/$previous...$SHA" \
+                  --jq '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:7] + ")"') ||
+                  changes="- The previous nightly ($previous) could not be compared with this one."
+                printf '%s\n' "$changes" | tail -n 100
+                printf '\n'
+                thanks=$(python3 -I tools/ci/thanks.py --repo "$GITHUB_REPOSITORY" --head "$SHA" --base "$previous") || thanks=
+                if [ -n "$thanks" ]; then printf '%s\n\n' "$thanks"; fi
+              fi
+            } > notes/changes.md
+          fi
+          cat notes/changes.md
+
+      - name: Upload the release notes
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: notes/changes.md
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     name: ${{ matrix.platform }} binary
-    needs: prepare-release
+    needs: prepare
     runs-on: ${{ matrix.runner }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -76,12 +204,22 @@ jobs:
       CCACHE_COMPILERCHECK: content
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
       SCCACHE_CACHE_SIZE: 3G
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_SHA: ${{ needs.prepare.outputs.sha }}
+      # Baked into the binaries. Not build-N: CMakeModules/GenerateSCMRev.cmake and the update
+      # checker only treat build-N as a published build, and the checker asks zortos293/Lichii.
+      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
+      NIGHTLY_BUILD: ${{ needs.prepare.outputs.channel == 'nightly' && 'ON' || 'OFF' }}
     strategy:
       fail-fast: false
       matrix:
+        # march: the x86-64 packages target x86-64-v3 (AVX2: Intel Haswell, AMD Zen and newer), as
+        # scripts/build-windows.ps1 and scripts/build-linux.sh build them; remove it from a row to
+        # build for any x86-64 CPU.
         include:
           - platform: linux-x86_64
             runner: ubuntu-24.04
+            march: x86-64-v3
           # The Linux -pgo builds are the same programs compiled by clang against the repo's
           # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
           # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
@@ -91,12 +229,15 @@ jobs:
           - platform: linux-x86_64-pgo
             runner: ubuntu-24.04
             pgo: true
+            march: x86-64-v3
           - platform: windows-x86_64
             runner: windows-2022
+            march: x86-64-v3
           - platform: windows-x86_64-pgo
             runner: windows-2022
             pgo: true
             profile: lichii-windows.profdata
+            march: x86-64-v3
           - platform: linux-aarch64
             runner: ubuntu-24.04-arm
           - platform: linux-aarch64-pgo
@@ -108,6 +249,24 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      # GetSCMRev (externals/cmake-modules) reads these files instead of asking git: a tag's build
+      # reports the tag as its version, a nightly reports main and the commit.
+      - name: Write version files
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REFSPEC: ${{ needs.prepare.outputs.refspec }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BUILD_SHA" > GIT-COMMIT
+          printf '%s' "$REFSPEC" > GIT-REFSPEC
+          printf '%s' "${TAG:-$REFSPEC}" > GIT-TAG
+          if [ "$CHANNEL" = release ]; then printf '%s' "$TAG" > GIT-RELEASE; fi
 
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'linux')
@@ -268,6 +427,8 @@ jobs:
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-${{ github.sha }}-
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-
 
+      # The update checker stays off: it asks zortos293/Lichii for releases (GenerateSCMRev.cmake)
+      # and understands only build-N tags, so it could offer upstream's builds to this fork's users.
       - name: Configure Linux
         if: startsWith(matrix.platform, 'linux')
         shell: bash
@@ -286,23 +447,27 @@ jobs:
             -DLICHII_USE_BUNDLED_SDL3=ON
             -DVulkanHeaders_FORCE_BUNDLED=ON
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
-            -DENABLE_UPDATE_CHECKER=ON
-            -DLICHII_BUILD_TAG=build-${{ github.run_number }}
+            -DENABLE_UPDATE_CHECKER=OFF
+            "-DLICHII_BUILD_TAG=$BUILD_TAG"
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }}
+            "-DNIGHTLY_BUILD=$NIGHTLY_BUILD"
             -DUSE_DISCORD_PRESENCE=OFF
             -DUSE_CCACHE=ON
           )
+          cflags=""
+          if [ -n '${{ matrix.march }}' ]; then cflags="-march=${{ matrix.march }}"; fi
           if [ '${{ matrix.pgo }}' = 'true' ]; then
             # Same flags Eden's CI passes for its clang PGO build.
-            profile="-fprofile-use=$PWD/eglantine.profdata -Wno-backend-plugin \
+            cflags+=" -fprofile-use=$PWD/eglantine.profdata -Wno-backend-plugin \
               -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
             flags+=(
               "-DCMAKE_C_COMPILER=clang-$PGO_LLVM_VERSION"
               "-DCMAKE_CXX_COMPILER=clang++-$PGO_LLVM_VERSION"
               "-DCMAKE_EXE_LINKER_FLAGS=-B/usr/lib/llvm-$PGO_LLVM_VERSION/bin -fuse-ld=lld"
-              "-DCMAKE_C_FLAGS=$profile"
-              "-DCMAKE_CXX_FLAGS=$profile"
             )
+          fi
+          if [ -n "$cflags" ]; then
+            flags+=("-DCMAKE_C_FLAGS=$cflags" "-DCMAKE_CXX_FLAGS=$cflags")
           fi
           cmake -S . -B build/release -G Ninja "${flags[@]}"
 
@@ -314,7 +479,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin"
+          # /Z7 keeps debug info in the objects (sccache caches it); the linker writes guarana.pdb,
+          # published as a separate symbols archive so crash dumps from users can be symbolized.
+          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin /Z7"
+          if [ -n '${{ matrix.march }}' ]; then flags+=" -march=${{ matrix.march }}"; fi
           if [ -n '${{ matrix.profile }}' ]; then
             flags+=" -fprofile-use=$(cygpath -m "$PWD/${{ matrix.profile }}")"
             flags+=" -Wno-error=profile-instr-out-of-date -Wno-error=profile-instr-unprofiled"
@@ -330,9 +498,10 @@ jobs:
             -DLICHII_USE_BUNDLED_QT=OFF \
             -DENABLE_QT_TRANSLATION=ON \
             -DLICHII_USE_BUNDLED_SDL3=ON \
-            -DENABLE_UPDATE_CHECKER=ON \
-            -DLICHII_BUILD_TAG=build-${{ github.run_number }} \
+            -DENABLE_UPDATE_CHECKER=OFF \
+            "-DLICHII_BUILD_TAG=$BUILD_TAG" \
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
+            "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
@@ -341,7 +510,8 @@ jobs:
             "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
             "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
             "-DCMAKE_C_FLAGS=$flags" \
-            "-DCMAKE_CXX_FLAGS=-EHsc $flags"
+            "-DCMAKE_CXX_FLAGS=-EHsc $flags" \
+            "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG:FULL /OPT:REF /OPT:ICF"
 
       - name: Configure macOS
         if: startsWith(matrix.platform, 'macos')
@@ -361,9 +531,10 @@ jobs:
             "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" \
             -DVulkanHeaders_FORCE_BUNDLED=ON \
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
-            -DENABLE_UPDATE_CHECKER=ON \
-            -DLICHII_BUILD_TAG=build-${{ github.run_number }} \
+            -DENABLE_UPDATE_CHECKER=OFF \
+            "-DLICHII_BUILD_TAG=$BUILD_TAG" \
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
+            "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DUSE_CCACHE=ON
 
@@ -374,13 +545,12 @@ jobs:
           path: .cache/cpm
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
+      # lichii-updater exists only with ENABLE_UPDATE_CHECKER (src/CMakeLists.txt), which is off.
       - name: Build
         shell: bash
         run: |
           if command -v ccache > /dev/null; then ccache --zero-stats; else sccache --zero-stats; fi
-          targets="lichii lichii-cmd"
-          if [[ "${{ matrix.platform }}" == windows* ]]; then targets="$targets lichii-updater"; fi
-          cmake --build build/release --target $targets --parallel
+          cmake --build build/release --target lichii lichii-cmd --parallel
           if command -v ccache > /dev/null; then ccache --show-stats; else sccache --show-stats; fi
 
       - name: Stop sccache on Windows
@@ -425,16 +595,20 @@ jobs:
       # need except the base system ones (glibc, X11/Wayland client libraries, the GPU driver and
       # Vulkan loader), and its Qt plugin adds the Qt libraries and platform plugins. The AppImage
       # packs that folder into one file; the tar.gz holds the same folder for systems without FUSE,
-      # with lichii and eden-cli links at its top. Both run on glibc 2.39+ systems. A tar.gz of the
+      # with guarana and guarana-cli links at its top. Both run on glibc 2.39+ systems. A tar.gz of the
       # bare programs needed the Qt 6.8 they were built against installed system-wide (#901).
+      # Files are named guarana-<commit>-<platform> here; the publish job gives them release names.
       - name: Package Linux AppImage and tar.gz
         if: startsWith(matrix.platform, 'linux')
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/lichii
-          test -x build/release/bin/eden-cli
-          strip build/release/bin/lichii build/release/bin/eden-cli
+          # guarana and guarana-cli; a build from before the rename has lichii and eden-cli.
+          gui=guarana; [ -x build/release/bin/$gui ] || gui=lichii
+          cli=guarana-cli; [ -x build/release/bin/$cli ] || cli=eden-cli
+          test -x build/release/bin/$gui
+          test -x build/release/bin/$cli
+          strip build/release/bin/$gui build/release/bin/$cli
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
           arch=$(uname -m)   # aarch64 or x86_64
@@ -443,17 +617,21 @@ jobs:
           curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
           https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage
           chmod +x "$tools"/*.AppImage
-          # The desktop file names its icon io.github.zortos293.lichii.
+          # The desktop file names its icon io.github.zortos293.lichii (the app id keeps its name).
           icon="$RUNNER_TEMP/io.github.zortos293.lichii.png"
           cp dist/lichii.png "$icon"
+          # linuxdeploy needs the desktop file's Exec to be a bundled program: point it at the one built.
+          desktop="$RUNNER_TEMP/io.github.zortos293.lichii.desktop"
+          sed -e "s|^TryExec=.*|TryExec=$gui|" -e "s|^Exec=[^ ]*|Exec=$gui|" \
+            dist/io.github.zortos293.lichii.desktop > "$desktop"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
           # Include Wayland platform plugins and their graphics/shell integrations.
           export EXTRA_QT_MODULES=waylandcompositor
           export EXTRA_PLATFORM_PLUGINS='libqwayland-egl.so;libqwayland-generic.so'
-          # Embedded in the AppImage metadata; matches the release tag (build-N) plus the commit.
-          export LDAI_VERSION="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
-          export LDAI_OUTPUT="lichii-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+          # Embedded in the AppImage metadata: the release version plus the commit.
+          export LDAI_VERSION="${VERSION}-${BUILD_SHA::7}"
+          export LDAI_OUTPUT="guarana-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
           export ARCH="$arch"
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses
@@ -466,44 +644,115 @@ jobs:
             fsr4_library=(--library "$RUNNER_TEMP/fsr4-vk/$fsr4")
           fi
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
-            --executable build/release/bin/lichii \
-            --executable build/release/bin/eden-cli \
+            --executable build/release/bin/$gui \
+            --executable build/release/bin/$cli \
             "${fsr4_library[@]}" \
-            --desktop-file dist/io.github.zortos293.lichii.desktop \
+            --desktop-file "$desktop" \
             --icon-file "$icon" \
             --plugin qt \
             --output appimage
           test -s "$LDAI_OUTPUT"
           ls -la "$LDAI_OUTPUT"
           test -f AppDir/usr/bin/qt.conf
-          mv AppDir lichii
-          ln -s usr/bin/lichii lichii/lichii
-          ln -s usr/bin/eden-cli lichii/eden-cli
-          tar -czf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" lichii
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
+          mv AppDir guarana
+          ln -s usr/bin/$gui guarana/guarana
+          ln -s usr/bin/$cli guarana/guarana-cli
+          tar -czf "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" guarana
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
           # Both x86-64 packages must carry fsr4-vk and its licences.
           if [ "$arch" = x86_64 ]; then
-            test "$(tar -tzf "lichii-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
-              grep -cFx -e "lichii/usr/lib/$fsr4" -e lichii/usr/share/licenses/fsr4-vk/LICENSE \
-                -e lichii/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
+            test "$(tar -tzf "guarana-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" |
+              grep -cFx -e "guarana/usr/lib/$fsr4" -e guarana/usr/share/licenses/fsr4-vk/LICENSE \
+                -e guarana/usr/share/licenses/fsr4-vk/AMD-FidelityFX-SDK-license.md)" = 3
             extract="$RUNNER_TEMP/appimage-check"
             mkdir -p "$extract"
             (cd "$extract" &&
               "$GITHUB_WORKSPACE/$LDAI_OUTPUT" --appimage-extract "usr/lib/$fsr4" > /dev/null)
-            cmp "$extract/squashfs-root/usr/lib/$fsr4" "lichii/usr/lib/$fsr4"
-            nm -D --defined-only "lichii/usr/lib/$fsr4" | grep -w ffxCreateContext
+            cmp "$extract/squashfs-root/usr/lib/$fsr4" "guarana/usr/lib/$fsr4"
+            nm -D --defined-only "guarana/usr/lib/$fsr4" | grep -w ffxCreateContext
           fi
 
       - name: Package Windows binary
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
-          foreach ($exe in 'lichii.exe', 'eden-cli.exe') {
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/release/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/release/bin/$cli")) { $cli = 'eden-cli.exe' }
+          foreach ($exe in $gui, $cli) {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations build/release/bin/lichii.exe
+          windeployqt --release --no-translations "build/release/bin/$gui"
+          New-Item -ItemType Directory -Force build/release/symbols | Out-Null
+          Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
+
+      # Authenticode signing of the two programs (docs/SIGNING.md) in builds that are published,
+      # before they are uploaded, zipped and checksummed. It needs all six signing secrets: with
+      # none set it is skipped with a notice, with only some set it is skipped with a warning.
+      - name: Check the signing secrets
+        id: signing
+        if: startsWith(matrix.platform, 'windows') && needs.prepare.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          # Whether each secret is set; the values themselves never reach this step.
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_ARTIFACT_SIGNING_PROFILE: ${{ secrets.ARTIFACT_SIGNING_PROFILE != '' }}
+        run: |
+          $names = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE'
+          $missing = @($names | Where-Object { [Environment]::GetEnvironmentVariable("HAS_$_") -ne 'true' })
+          if ($missing.Count -eq $names.Count) {
+            Write-Output '::notice::Authenticode signing is off: no signing secrets are set (docs/SIGNING.md)'
+            exit 0
+          }
+          if ($missing.Count -gt 0) {
+            Write-Output "::warning::Authenticode signing is off: $($missing -join ', ') not set (docs/SIGNING.md)"
+            exit 0
+          }
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/release/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/release/bin/$cli")) { $cli = 'eden-cli.exe' }
+          $files = foreach ($exe in $gui, $cli) { (Resolve-Path "build/release/bin/$exe").Path }
+          'enabled=true' | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "files=$($files -join ',')" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # Azure Artifact Signing, formerly Trusted Signing: this action was azure/trusted-signing-action.
+      # Pinned to a commit, and the only step that gets the secrets.
+      - name: Sign the Windows programs
+        if: steps.signing.outputs.enabled == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.signing.outputs.files }}
+          description: ${{ env.APP_NAME }}
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+
+      - name: Check the signatures
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          FILES: ${{ steps.signing.outputs.files }}
+        run: |
+          foreach ($file in $env:FILES -split ',') {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            Write-Output "$($signature.Status)  $sha  $file"
+            if ($signature.Status -ne 'Valid') { throw "$file is not validly signed: $($signature.StatusMessage)" }
+          }
 
       # A self-contained app bundle: macdeployqt copies Qt and every other Homebrew library both
       # programs load into the bundle, then the leftover Homebrew and build-tree search paths are
@@ -514,12 +763,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app=build/release/bin/lichii.app
-          test -x "$app/Contents/MacOS/lichii"
-          test -x build/release/bin/eden-cli
-          cp build/release/bin/eden-cli "$app/Contents/MacOS/eden-cli"
+          # guarana.app with guarana and guarana-cli; a build from before the rename has
+          # lichii.app, lichii and eden-cli. The bundle ships as guarana.app either way.
+          app=build/release/bin/guarana.app
+          gui=guarana
+          if [ ! -d "$app" ]; then
+            mv build/release/bin/lichii.app "$app"
+            gui=lichii
+          fi
+          cli=guarana-cli; [ -x build/release/bin/$cli ] || cli=eden-cli
+          test -x "$app/Contents/MacOS/$gui"
+          test -x build/release/bin/$cli
+          cp build/release/bin/$cli "$app/Contents/MacOS/$cli"
           "$(brew --prefix qt@6)/bin/macdeployqt" "$app" \
-            -executable="$app/Contents/MacOS/eden-cli" -libpath="$(brew --prefix)/lib" \
+            -executable="$app/Contents/MacOS/$cli" -libpath="$(brew --prefix)/lib" \
             -always-overwrite -verbose=1
           # Qt's virtual keyboard input plugin pulls in the QML stack, which the emulator doesn't use.
           rm -f "$app/Contents/PlugIns/platforminputcontexts/libqtvirtualkeyboardplugin.dylib"
@@ -533,7 +790,7 @@ jobs:
               done
           done
           # Libraries that load their dependencies through @rpath find them in the bundle.
-          for program in lichii eden-cli; do
+          for program in "$gui" "$cli"; do
             install_name_tool -add_rpath @executable_path/../Frameworks \
               "$app/Contents/MacOS/$program" 2> /dev/null
           done
@@ -561,19 +818,19 @@ jobs:
           codesign --force --deep --sign - "$app"
           if [ -f dist/eglantine.entitlements ]; then
             codesign --force --sign - --entitlements dist/eglantine.entitlements \
-              "$app/Contents/MacOS/eden-cli"
+              "$app/Contents/MacOS/$cli"
             codesign --force --sign - --entitlements dist/eglantine.entitlements "$app"
           fi
           codesign --verify --deep --strict "$app"
-          ditto -c -k --keepParent "$app" "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          # Also ship a .dmg (drag lichii.app onto Applications).
+          ditto -c -k --keepParent "$app" "guarana-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          # Also ship a .dmg (drag guarana.app onto Applications).
           dmgdir=$(mktemp -d)
-          ditto "$app" "$dmgdir/lichii.app"
+          ditto "$app" "$dmgdir/guarana.app"
           ln -s /Applications "$dmgdir/Applications"
-          hdiutil create -volname "Lichii" -srcfolder "$dmgdir" -ov -format UDZO \
-            "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
-          ls -la "lichii-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          hdiutil create -volname "$APP_NAME" -srcfolder "$dmgdir" -ov -format UDZO \
+            "guarana-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          ls -la "guarana-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
 
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.
@@ -581,9 +838,20 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
+          retention-days: 7
+
+      # Debug symbols for crash reports: llvm-symbolizer --obj=guarana.exe with guarana.pdb next to it
+      # (lichii.exe and lichii.pdb in a build from before the rename; the *.pdb glob above moves either).
+      - name: Upload Windows symbols
+        if: startsWith(matrix.platform, 'windows')
+        uses: actions/upload-artifact@v7
+        with:
+          name: guarana-${{ matrix.platform }}-symbols-${{ github.sha }}
+          path: build/release/symbols/
+          if-no-files-found: warn
           retention-days: 7
 
       # Both Linux files go in one artifact: the tar.gz and the AppImage.
@@ -591,10 +859,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.tar.gz
-            lichii-${{ github.sha }}-${{ matrix.platform }}.AppImage
+            guarana-${{ github.sha }}-${{ matrix.platform }}.tar.gz
+            guarana-${{ github.sha }}-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -604,145 +872,186 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-${{ matrix.platform }}-${{ github.sha }}
+          name: guarana-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            lichii-${{ github.sha }}-${{ matrix.platform }}.zip
-            lichii-${{ github.sha }}-${{ matrix.platform }}.dmg
+            guarana-${{ github.sha }}-${{ matrix.platform }}.zip
+            guarana-${{ github.sha }}-${{ matrix.platform }}.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
-  # Publishes every binary as a GitHub pre-release once every platform built: on pushes to
-  # nx2-experimental, and on manual runs unless "Publish the binaries as a GitHub release" is
-  # unticked.
-  release:
+  # Publishes every platform's files, SHA256SUMS.txt and the notes once every platform built: a
+  # tag's release (a pre-release for vX.Y.Z-<pre>), or the rolling nightly pre-release.
+  publish:
     name: Publish release
-    needs: build
-    if: github.event_name == 'push' || inputs.publish_release
+    needs: [prepare, build]
+    # Publishes what built: one platform failing (say a Linux toolchain break) does not hold back the
+    # rest. A release without a Windows binary is refused below.
+    if: ${{ !cancelled() && needs.prepare.outputs.publish == 'true' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
+      # Build provenance (docs/SIGNING.md): the run's Sigstore certificate and the attestation.
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_SHA: ${{ needs.prepare.outputs.sha }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
     steps:
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
-          pattern: lichii-*-${{ github.sha }}
+          pattern: guarana-*-${{ github.sha }}
           path: artifacts
 
+      - name: Require a Windows binary
+        shell: bash
+        run: |
+          if ! compgen -G "artifacts/guarana-windows-*" > /dev/null; then
+            echo "::error::No Windows binary was built; not publishing"
+            exit 1
+          fi
+          echo "Built platforms:"; ls artifacts
+
+      - name: Download the release notes
+        uses: actions/download-artifact@v7
+        with:
+          name: release-notes
+          path: notes
+
+      # The licence texts travel inside every zip (GPL-3.0: binaries ship with the licence).
+      - name: Check out the licence texts
+        uses: actions/checkout@v5
+        with:
+          path: src
+          sparse-checkout: |
+            LICENSE.txt
+            LEGAL.md
+            LICENSES
+          sparse-checkout-cone-mode: false
+
+      # guarana-<commit>-<platform>.<ext> becomes <APP>-<version>-<platform>.<ext>; each Windows bin
+      # folder is zipped as <APP>-<version>-<platform>.zip.
       - name: Package release files
         shell: bash
         run: |
           set -euo pipefail
           mkdir dist
-          # Asset names drop the commit sha: the release tag already identifies the build, and
-          # stable names let the notes table link to them.
-          strip_sha() { sed "s/-${GITHUB_SHA}//" <<< "$1"; }
           for artifact in artifacts/*/; do
-            name=$(basename "$artifact")
-            if compgen -G "$artifact*.AppImage" > /dev/null; then
-              # Linux: ship the AppImage and the tar.gz as they are.
-              for file in "$artifact"*.AppImage "$artifact"*.tar.gz; do
-                cp "$file" "dist/$(strip_sha "$(basename "$file")")"
-              done
-            elif compgen -G "$artifact*.zip" > /dev/null; then
-              for file in "$artifact"*.zip "$artifact"*.dmg; do
-                [[ -e "$file" ]] && cp "$file" "dist/$(strip_sha "$(basename "$file")")"
+            name=$(basename "$artifact")            # guarana-<platform>-<commit>
+            platform=${name#guarana-}
+            platform=${platform%-"$GITHUB_SHA"}
+            if compgen -G "$artifact*.AppImage" > /dev/null || compgen -G "$artifact*.dmg" > /dev/null; then
+              for file in "$artifact"*; do
+                base=$(basename "$file")
+                cp "$file" "dist/$APP-$VERSION-${base#guarana-"$GITHUB_SHA"-}"
               done
             else
-              (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/dist/$(strip_sha "$name").zip" .)
+              cp src/LICENSE.txt src/LEGAL.md "$artifact"
+              cp -r src/LICENSES "$artifact"
+              printf '%s %s\nSource code: %s/%s/tree/%s\nLicence: GPL-3.0-or-later (LICENSE.txt); other components: LICENSES/.\nNo keys, firmware or games are included or provided; see LEGAL.md.\n' \
+                "$APP" "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > "$artifact/SOURCE.txt"
+              (cd "$artifact" && zip -qr "$GITHUB_WORKSPACE/dist/$APP-$VERSION-$platform.zip" .)
             fi
           done
+          (cd dist && sha256sum -- * > ../SHA256SUMS.txt)
+          mv SHA256SUMS.txt dist/
           ls -la dist
+          cat dist/SHA256SUMS.txt
 
-      - name: Create release
+      # Signed SLSA build provenance for every file the release gets, SHA256SUMS.txt included. It
+      # comes after the signing and the checksums, so it covers the files as published.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
+      - name: Write release notes
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/build-${GITHUB_RUN_NUMBER}" --jq '.object.sha')
-          if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-            echo "Release tag build-${GITHUB_RUN_NUMBER} points to $tag_sha instead of $GITHUB_SHA"
-            exit 1
-          fi
-          tag="build-${GITHUB_RUN_NUMBER}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
-
-          link() { [[ -e "dist/$2" ]] && echo "[$1](${base}/$2)" || true; }
-          appimage_tar() {
-            local appimage tar
-            appimage=$(link AppImage "$1.AppImage")
-            tar=$(link tar.gz "$1.tar.gz")
-            echo "${appimage}${appimage:+${tar:+ · }}${tar}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          asset() { printf '%s-%s-%s' "$APP" "$VERSION" "$1"; }
+          link() { if [ -e "dist/$2" ]; then printf '[%s](%s/%s)' "$1" "$base" "$2"; fi; return 0; }
+          pair() {
+            local a b
+            a=$(link "$1" "$2")
+            b=$(link "$3" "$4")
+            if [ -n "$a" ] && [ -n "$b" ]; then printf '%s · %s' "$a" "$b"; else printf '%s%s' "$a" "$b"; fi
           }
-          has_pgo=$(compgen -G 'dist/*-pgo.*' || true)
-          row() {
-            [[ -z "$2$3" ]] && return 0
-            if [[ -n "$has_pgo" ]]; then echo "| $1 | $2 | $3 | $4 |"; else echo "| $1 | $2 | $4 |"; fi
-          }
-          table() {
-            local rows
-            rows=$(cat)
-            [[ -z "$rows" ]] && return 0
-            if [[ -n "$has_pgo" ]]; then
-              printf '| Build Type | Standard | PGO (Recommended) | Notes |\n| --- | --- | --- | --- |\n'
-            else
-              printf '| Build Type | Standard | Notes |\n| --- | --- | --- |\n'
-            fi
-            echo "$rows"
-          }
-          pgo_note=""
-          if [[ -n "$has_pgo" ]]; then
-            pgo_note="The PGO builds are the same programs compiled with profile-guided optimization. Linux uses clang with Eglantine's profile; Windows uses clang-cl and ThinLTO with a profile trained in Lichii on Ocarina of Time, so other games gain less. Prefer them when your CPU supports it."
-          fi
+          linux() { pair AppImage "$(asset "$1").AppImage" tar.gz "$(asset "$1").tar.gz"; }
+          {
+            cat notes/changes.md
+            echo
+            echo "## Downloads"
+            echo
+            echo "| Platform | Standard | PGO (recommended) |"
+            echo "| --- | --- | --- |"
+            echo "| Windows x86_64 | $(link zip "$(asset windows-x86_64).zip") | $(link zip "$(asset windows-x86_64-pgo).zip") |"
+            echo "| Linux x86_64 | $(linux linux-x86_64) | $(linux linux-x86_64-pgo) |"
+            echo "| Linux aarch64 | $(linux linux-aarch64) | $(linux linux-aarch64-pgo) |"
+            echo "| macOS arm64 | $(pair zip "$(asset macos-arm64).zip" dmg "$(asset macos-arm64).dmg") | |"
+            echo
+            cat <<'EOF'
+          - **Windows**: extract the whole zip into a folder you can write to and run `@WIN_GUI@` (`@WIN_CLI@` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
+          - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `guarana/guarana`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
+          - **macOS** 15 or newer, Apple Silicon. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine guarana.app`.
+          - **Checksums**: `SHA256SUMS.txt`. Check with `sha256sum -c SHA256SUMS.txt` (Linux), `shasum -a 256 -c SHA256SUMS.txt` (macOS) or `Get-FileHash <file>` (PowerShell).
+          - **Provenance**: every file has a signed build provenance attestation; check a download with `gh attestation verify <file> --repo @REPO@`. Signatures and the other checks: [docs/SIGNING.md](@SERVER@/@REPO@/blob/HEAD/docs/SIGNING.md).
 
-          cat > notes.md <<EOF
-          Automatic build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}.
-
-          ## Linux
-
-          Linux packages come as an AppImage and a tar.gz. Both are self-contained and need glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Debian 13, Arch). The tar.gz holds the same files unpacked, for systems without FUSE: extract it and run \`lichii/lichii\`.
-
-          $({
-            row amd64 "$(appimage_tar lichii-linux-x86_64)" "$(appimage_tar lichii-linux-x86_64-pgo)" "Make the AppImage executable (\`chmod +x\`) and run it"
-            row "ARM (aarch64)" "$(appimage_tar lichii-linux-aarch64)" "$(appimage_tar lichii-linux-aarch64-pgo)" ""
-          } | table)
-
-          ## Windows
-
-          Windows packages are in-place zip files: extract and run \`lichii.exe\`, or \`eden-cli.exe\` from a terminal.
-
-          $({
-            row "amd64 / x86_64" "$(link zip lichii-windows-x86_64.zip)" "$(link "PGO zip" lichii-windows-x86_64-pgo.zip)" "Both built with clang-cl and ThinLTO; the PGO zip adds a profile trained on Ocarina of Time"
-          } | table)
-
-          ## macOS
-
-          $(row "arm64 (Apple Silicon)" "$(link zip lichii-macos-arm64.zip)" "" "macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine lichii.app\`. \`eden-cli\` is inside the app, in \`Contents/MacOS\`" | table)
-
-          ${pgo_note}
+          No keys, firmware or games are included or provided. Dump your own from hardware you own; see LEGAL.md.
           EOF
+          } > release-notes.md
+          # The Windows programs are guarana.exe and guarana-cli.exe, or lichii.exe and eden-cli.exe
+          # in a build from before the rename: name the ones in the zip.
+          win_gui=guarana.exe win_cli=guarana-cli.exe
+          if ! compgen -G "artifacts/guarana-windows-*/guarana.exe" > /dev/null; then
+            win_gui=lichii.exe win_cli=eden-cli.exe
+          fi
+          sed -i -e "s/@WIN_GUI@/$win_gui/g" -e "s/@WIN_CLI@/$win_cli/g" \
+            -e "s|@REPO@|$GITHUB_REPOSITORY|g" -e "s|@SERVER@|$GITHUB_SERVER_URL|g" release-notes.md
+          cat release-notes.md
 
-          gh release create "${tag}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --prerelease \
-            --title "Lichii ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
-            --notes-file notes.md
-
-      # LICHII_BUILD_TAG is baked into every binary as build-<run number>, and the update checker
-      # compares release tags against it. A release whose tag or title names another run would be
-      # skipped or offered wrongly, so fail the run instead of leaving it published.
-      - name: Verify the release tag matches the run number
+      - name: Publish
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          expected="build-${GITHUB_RUN_NUMBER}"
-          published_tag=$(gh release view "$expected" --repo "${GITHUB_REPOSITORY}" --json tagName --jq '.tagName')
-          published_title=$(gh release view "$expected" --repo "${GITHUB_REPOSITORY}" --json name --jq '.name')
-          if [ "$published_tag" != "$expected" ] || [[ "$published_title" != *" build ${GITHUB_RUN_NUMBER} ("* ]]; then
-            echo "Release is tagged '$published_tag' and titled '$published_title', expected tag $expected and a title naming build ${GITHUB_RUN_NUMBER}"
-            exit 1
+          if [ "$CHANNEL" = nightly ]; then
+            # Rolling: the previous nightly and its tag go, and the new tag points at this commit.
+            gh release delete nightly --cleanup-tag --yes 2> /dev/null || true
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly" 2> /dev/null || true
+            gh release create nightly dist/* --target "$BUILD_SHA" --prerelease \
+              --title "$APP_NAME nightly $(date -u +%F) (${BUILD_SHA::7})" --notes-file release-notes.md
+          elif gh release view "$TAG" > /dev/null 2>&1; then
+            # A rebuild of a published tag replaces its files and notes.
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file release-notes.md
+          else
+            flags=()
+            if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" dist/* --verify-tag --title "$APP_NAME $TAG" \
+              --notes-file release-notes.md "${flags[@]}"
           fi
+
+  # The Windows installer (launcher/), with this release's Windows build bundled, attached to the
+  # same release with its SHA-256 added to SHA256SUMS.txt, signed and attested like the rest.
+  installer:
+    name: Windows installer
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    # A called workflow gets no more than this: id-token and attestations for its provenance.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/launcher.yml
+    # For the signing secrets (docs/SIGNING.md).
+    secrets: inherit
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}

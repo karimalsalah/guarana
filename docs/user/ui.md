@@ -7,7 +7,7 @@ How Guarana's window behaves, what it shows while a game runs, and the keys and 
 - The title is `Guarana`, with the game's name added while it plays. Release builds show no build hash in the title; Help > About still shows the build. Development builds keep the long title.
 - The window icon is Guarana's.
 - Size and position are remembered for each monitor. Close Guarana on your TV, open it on your desk monitor, and each opens where you left it. The monitor you used last is used again when it is connected. Turn this off in Settings > General: **Remember window size and position per monitor**.
-- A game started with `-f` (the launcher does this) opens in borderless fullscreen; `lichii -f -g <game>` from the command line does the same. Without `-f` a game opens in a window, as before. Settings > Graphics > **Fullscreen mode** picks borderless or exclusive; borderless is the default on Windows.
+- A game started with `-f` (the launcher does this) opens in borderless fullscreen; `guarana -f -g <game>` from the command line does the same. Without `-f` a game opens in a window, as before. Settings > Graphics > **Fullscreen mode** picks borderless or exclusive; borderless is the default on Windows.
 
 ## While a game runs in fullscreen
 
@@ -48,7 +48,7 @@ Settings > Guarana holds what players change most, in plain words. Every other s
 
 | Control | What it does |
 |---|---|
-| Play mode: Smooth | Steers frame timing to your display (`EDEN_NX2_AUTOPILOT`, `EDEN_NX2_CADENCE`) and sets Frame pacing to Auto. |
+| Play mode: Smooth | The pacing measured best in Ocarina of Time on an Arc 140T: the vblank-locked presenter predicting from when a frame can be shown (`EDEN_NX2_FLUID=2`), real frames held to 20 per second, one per game tick (`EDEN_NX2_CADENCE=3`), predicted frames (`EDEN_NX2_EXTRAPOLATE`), pipeline library links (`EDEN_NX2_GPL`) and early read-backs (`EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES=256`, `EDEN_NX2_EARLY_AFTER=1`). In Hyrule Field, slots shown on time went from 72% to 89% and evenly paced frames from 62% to 88% (one paired session). Sets Frame pacing to Auto. |
 | Play mode: Quality | Nothing steers or holds the graphics back; removes the switches the other modes wrote. Pair it with a higher resolution. |
 | Play mode: Battery | Turns processor boost off while a game runs so the graphics get the power, quiets background workers, steers frame timing (`EDEN_NX2_POWER_POLICY=igpu`, `EDEN_NX2_ECO_BACKGROUND`, `EDEN_NX2_AUTOPILOT`). |
 | Frame generation | The same switch as the status bar button and Graphics > Frame generation. |
@@ -56,7 +56,7 @@ Settings > Guarana holds what players change most, in plain words. Every other s
 | Controller | Opens the Controls page. |
 | Report a problem | The same as Help > Report a problem. Guarana sends nothing; it builds a zip and opens the issue form. |
 
-A play mode is written to a marked block at the top of `nx2_switches.txt` in your Guarana folder (`%APPDATA%\lichii` on Windows), and takes effect the next time you start Guarana. A line you add below the block wins over it, and a real environment variable wins over the file. Choosing no mode removes the block. Nothing outside the block is touched.
+A play mode is written to a marked block at the top of `nx2_switches.txt` in your Guarana folder (`%APPDATA%\guarana` on Windows), and takes effect the next time you start Guarana. A line you add below the block wins over it, and a real environment variable wins over the file. Choosing no mode removes the block. Nothing outside the block is touched.
 
 ## First run
 

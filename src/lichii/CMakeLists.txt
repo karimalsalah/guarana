@@ -14,6 +14,12 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+# The About dialog's "Guarana contributors" list: names from CONTRIBUTORS.md, read at configure time.
+include(GuaranaContributors)
+guarana_contributors_header("${CMAKE_CURRENT_SOURCE_DIR}/../../CONTRIBUTORS.md"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/guarana_contributors.h.in"
+                            "${CMAKE_CURRENT_BINARY_DIR}/guarana_contributors.h")
+
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
 endif()
@@ -436,9 +442,8 @@ target_link_libraries(lichii PRIVATE common core input_common frontend_common ne
 target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(lichii PRIVATE ZLIB::ZLIB)
-if (WIN32)
-    target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
-endif()
+# Help > Report a Problem zips the logs (qt_common/util/compress.h) on every platform.
+target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
 target_link_libraries(lichii PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
     target_link_libraries(lichii PRIVATE glad)

@@ -27,6 +27,7 @@ jobs:
             };
 
             const gameLabels = {
+              "Ocarina of Time": "Ocarina of Time",
               "Mario Kart World": "Mario Kart",
               "Donkey Kong Bananza": "DKB",
               "Fire Emblem": "Fire Emblem",
@@ -48,7 +49,15 @@ jobs:
               if (/nvidia/i.test(gpu)) labels.add("NVIDIA");
               else if (/amd/i.test(gpu)) labels.add("AMD");
               else if (/intel/i.test(gpu)) labels.add("INTEL");
+
+              // The integrated GPUs this fork tunes for (the forms' "Graphics card" options)
+              if (/intel/i.test(gpu) && /arc/i.test(gpu)) labels.add("intel-arc");
+              if (/amd/i.test(gpu) && /integrated|[0-9]{3}M\b|Z[12]\b/i.test(gpu)) labels.add("amd-igpu");
+              if (/handheld/i.test(gpu)) labels.add("handheld");
             }
+
+            // Device reports
+            if (/handheld/i.test(get("Form factor") || "")) labels.add("handheld");
 
             // OS
             const os = get("Operating system");
@@ -64,18 +73,7 @@ jobs:
             }
             if (get("Last known working build")) labels.add("needs-bisect");
 
-            // Crash without log
-            const isCrash = (context.payload.issue.labels || []).some(
-              (l) => l.name.toLowerCase() === "crash"
-            );
-            if (isCrash && !get("Log / crash dump")) {
-              labels.add("needs-info");
-              await github.rest.issues.createComment({
-                ...context.repo,
-                issue_number: context.issue.number,
-                body: "Thanks for the report! Please attach the log / crash dump so we can investigate.",
-              });
-            }
+            // A crash without a log is asked for once, by the triage workflow (tools/ingest/triage.py).
 
             if (labels.size) {
               await github.rest.issues.addLabels({

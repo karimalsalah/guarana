@@ -610,18 +610,6 @@ bool FrameGen::CanPredict() const {
            extrapolation_frame != nullptr && extrapolation_frame->storage_view;
 }
 
-bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend) {
-    if (extrapolating || !generated || built_type != Settings::FrameGenType::Fsr3 || !fsr3_chain ||
-        !destination->storage_view) {
-        return false;
-    }
-    const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
-    scheduler.RequestOutsideRenderPassOperationContext();
-    fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
-                         std::clamp(blend, 0.0f, 1.0f), flow_scale);
-    return true;
-}
-
 bool FrameGen::GenerateAt(const Device& device, Frame* destination, f32 advance) {
     if (!CanPredict() || !destination->storage_view) {
         return false;

@@ -128,9 +128,6 @@ private:
     void RecordFluidInterpolated(Frame* frame, const HdrPresent& output, size_t generations,
                                  std::vector<Frame*>& interpolated_frames);
     u64 fluid_batch{}; ///< real frames recorded for the FLUID presenter
-    /// EDEN_NX2_FLUID_INTERP: the last real frame's slot and recording time.
-    u64 fluid_last_real_slot{};
-    std::chrono::steady_clock::time_point fluid_last_real_recorded{};
 #endif
 
     /// The encoding and luminances this frame is presented with; picks the swapchain format

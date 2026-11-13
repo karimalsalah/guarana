@@ -1,4 +1,4 @@
-# Lichii benchmark
+# Guarana benchmark
 
 `bench.py` runs one game scene the same way on any machine and writes one JSON row per run, so
 results from different PCs, drivers and settings can be compared. It drives the emulator through
@@ -15,7 +15,7 @@ Close the emulator first, plug the machine in, and leave it alone while it runs.
 
 ```
 python -I tools/bench/bench.py run \
-    --exe <path to lichii> --game <path to the game> \
+    --exe <path to guarana> --game <path to the game> \
     --scene tools/bench/scenes/oot-hyrule-field.json \
     --save-backup <folder with the scene's save> --reference <your reference screenshot> \
     [--variant tools/bench/variants/baseline.json --variant <other.json> ...] \
@@ -61,7 +61,7 @@ repaired by the next start. While the emulator runs, a watchdog stops it if free
 a timeout.
 
 `--user-dir` defaults to a `user` folder next to the emulator, else the per-user data folder
-(`%APPDATA%\lichii`, `~/.local/share/lichii`). Paths may use `%VAR%`, `$VAR` and `~`.
+(`%APPDATA%\guarana`, `~/.local/share/guarana`; the old `lichii` folder where only that exists). Paths may use `%VAR%`, `$VAR` and `~`.
 
 ### Scenes and variants
 
@@ -240,7 +240,7 @@ Both print markdown: variant, fps, p50, p99, sustained min / avg fps, watts and 
 ## Play
 
 ```
-python -I tools/bench/play.py --exe <path to lichii> --game <path to the game> \
+python -I tools/bench/play.py --exe <path to guarana> --game <path to the game> \
     [--profile tools/bench/profiles/oot-intel-igpu.json] \
     [--power-policy PERFBOOSTMODE=0 ...] [--close <process name> ...] [--dry-run]
 ```

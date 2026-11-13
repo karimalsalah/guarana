@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Starts Lichii for normal play on an integrated GPU: checks the machine, applies a profile.
+"""Starts Guarana for normal play on an integrated GPU: checks the machine, applies a profile.
 
-  python -I tools/bench/play.py --exe <lichii> --game <game> [--profile profiles/<name>.json]
+  python -I tools/bench/play.py --exe <guarana> --game <game> [--profile profiles/<name>.json]
       [--power-policy NAME=VALUE ...] [--close <process name> ...] [--dry-run]
 
 Looks for other heavy processes and battery power (it only reports them; --close ends the named

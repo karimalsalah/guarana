@@ -32,19 +32,6 @@ Run with `EDEN_NX2_EXTRAPOLATE=1 EDEN_NX2_FLUID=1 EDEN_NX2_SHOWN_STATS=1` in Hyr
 5. Cut and pause checks: walk through a door, open the pause screen, return; with the debug switch off no frame of the old scene may flash after the new one.
 6. A/B in one session through the environment: `EDEN_NX2_FLUID=1` against `=2`, `EDEN_NX2_FLUID_SPARE=0` against `2`, `EDEN_NX2_EXTRAPOLATE_HUD_DILATE=0` against default.
 
-# Frame generation
-
-Notes on how frames reach the display when frame generation is on. Switch rows are in [switches.md](switches.md).
-
-## The FLUID presenter
-
-`EDEN_NX2_FLUID=1` makes the present thread show one frame on every slot of the display (a slot is `divisor` vblanks, 2 on a 120 Hz display for 60 Hz slots). Between real frames the frames shown are extrapolated from the last real one. `RecordFluidFrames` (`video_core/renderer_vulkan/renderer_vulkan.cpp`) records a prediction for each slot from the real frame's first slot through the one the next real frame is expected for, when the real frame is recorded: the motion inputs are rewritten with every frame, so predictions cannot be recorded later. `FluidPresentSlot` (`vk_present_manager.cpp`) then shows, for each slot, the newest real frame's frame whose GPU work is done. A slot with none is a miss: `N with no frame ready` in the `Fluid presenter (10 s, ...)` line.
-
-With `EDEN_NX2_SHOWN_STATS=1` two lines every 10 s say how it went:
-
-- `Fluid presenter (10 s, ...)`: slots, slots shown on their slot, slots missed (and why: no frame ready, last copy still queued, slept through).
-- `Shown frames: ...`: the intervals between frames that reached the swapchain, generated ones included, and `% within 2 ms of the median`.
-
 ## The frame predictor (`EDEN_NX2_PREDICT`, experimental)
 
 The schedule above covers the slots up to the one where the next real frame is expected, using the smoothed real-frame interval. Real-frame intervals in Ocarina of Time on an Arc 140T (about 22 game frames per second) run from 25 to 110 ms, so the next real frame often comes after the last prediction, and slots miss.
