@@ -30,6 +30,13 @@ class Device;
 class Scheduler;
 class Swapchain;
 
+/// EDEN_NX2_FLUID. 0: off. 1: the present thread shows frames on a vblank clock, one per slot of
+/// round(refresh / 60) vblanks (16.7 ms at 60 or 120 Hz), and frame extrapolation records a
+/// prediction for each slot until the next real frame is due, as of the slot's own time. 2: the
+/// same, but each prediction is as of its slot less the latency a real frame can be shown at, so
+/// the real frame itself is shown when it is on time and predictions reach less far.
+[[nodiscard]] u32 FluidMode();
+
 struct Frame {
     u32 width;
     u32 height;

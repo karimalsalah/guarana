@@ -145,6 +145,15 @@ bool CanBlitToSwapchain(const vk::PhysicalDevice& physical_device, VkFormat form
 
 } // Anonymous namespace
 
+u32 FluidMode() {
+    static const u32 mode = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID");
+        const u32 parsed = value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
+        return parsed == 0 ? 0U : (parsed == 2 ? 2U : 1U);
+    }();
+    return mode;
+}
+
 PresentManager::PresentManager(const vk::Instance& instance_,
                                Core::Frontend::EmuWindow& render_window_,
                                const Device& device_,
