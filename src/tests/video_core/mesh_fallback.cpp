@@ -168,7 +168,6 @@ std::vector<u32> EmitProgram(Stage stage, bool as_compute, bool with_task,
     RuntimeInfo runtime_info;
     runtime_info.mesh_as_compute = as_compute;
     runtime_info.mesh_output_binding = OUTPUT_BINDING;
-    runtime_info.mesh_cull = mesh_cull;
     if (with_task) {
         runtime_info.mesh_task_payload_binding = PAYLOAD_BINDING;
         runtime_info.mesh_task_offsets_binding = OFFSETS_BINDING;

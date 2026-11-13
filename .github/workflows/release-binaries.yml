@@ -773,7 +773,9 @@ jobs:
   publish:
     name: Publish release
     needs: [prepare, build]
-    if: needs.prepare.outputs.publish == 'true'
+    # Publishes what built: one platform failing (say a Linux toolchain break) does not hold back the
+    # rest. A release without a Windows binary is refused below.
+    if: ${{ !cancelled() && needs.prepare.outputs.publish == 'true' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -792,6 +794,15 @@ jobs:
         with:
           pattern: lichii-*-${{ github.sha }}
           path: artifacts
+
+      - name: Require a Windows binary
+        shell: bash
+        run: |
+          if ! compgen -G "artifacts/lichii-windows-*" > /dev/null; then
+            echo "::error::No Windows binary was built; not publishing"
+            exit 1
+          fi
+          echo "Built platforms:"; ls artifacts
 
       - name: Download the release notes
         uses: actions/download-artifact@v7
