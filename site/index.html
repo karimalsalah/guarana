@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guarana: Switch 2 Emulator for Intel Arc iGPUs and Handhelds</title>
-<meta name="description" content="Open-source Switch 2 emulator fork for integrated GPUs: Intel Arc laptops first, AMD Radeon handhelds next. Frame pacing, frame generation, measured results.">
+<meta name="description" content="Free, open-source Switch 2 emulator for laptops and handhelds with integrated GPUs: Intel Arc first, AMD Radeon next. Every number names its machine.">
 <link rel="canonical" href="https://karimalsalah.github.io/guarana/">
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
 <meta name="color-scheme" content="light dark">
@@ -16,7 +16,7 @@
 <meta property="og:site_name" content="Guarana">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Guarana: Switch 2 Emulator for Intel Arc iGPUs and Handhelds">
-<meta property="og:description" content="Open-source Switch 2 emulator fork for integrated GPUs: Intel Arc laptops first, AMD Radeon handhelds next. Frame pacing, frame generation, measured results.">
+<meta property="og:description" content="Free, open-source Switch 2 emulator for laptops and handhelds with integrated GPUs: Intel Arc first, AMD Radeon next. Every number names its machine.">
 <meta property="og:url" content="https://karimalsalah.github.io/guarana/">
 <meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
 <meta property="og:image:type" content="image/png">
@@ -25,7 +25,7 @@
 <meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Guarana: Switch 2 Emulator for Intel Arc iGPUs and Handhelds">
-<meta name="twitter:description" content="Open-source Switch 2 emulator fork for integrated GPUs: Intel Arc laptops first, AMD Radeon handhelds next. Frame pacing, frame generation, measured results.">
+<meta name="twitter:description" content="Free, open-source Switch 2 emulator for laptops and handhelds with integrated GPUs: Intel Arc first, AMD Radeon next. Every number names its machine.">
 <meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
 <meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
 <script type="application/ld+json">
@@ -63,9 +63,11 @@
       "description": "Open-source Nintendo Switch 2 emulator fork tuned for integrated GPUs: Intel Arc iGPU laptops and handhelds first, AMD Radeon iGPU handhelds next. Focus on frame pacing, frame generation and measured GPU fixes. Ships no keys, firmware or games.",
       "applicationCategory": "GameApplication",
       "applicationSubCategory": "Game console emulator",
-      "operatingSystem": "Windows 11",
-      "softwareVersion": "v20",
+      "operatingSystem": "Windows, Linux, macOS",
+      "softwareVersion": "20.2.0",
       "downloadUrl": "https://github.com/karimalsalah/guarana/releases/latest",
+      "installUrl": "https://github.com/karimalsalah/guarana/releases/latest",
+      "releaseNotes": "https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md",
       "url": "https://karimalsalah.github.io/guarana/",
       "license": "https://spdx.org/licenses/GPL-3.0-or-later.html",
       "isAccessibleForFree": true,
@@ -87,9 +89,11 @@
         "url": "https://github.com/zortos293/Lichii"
       },
       "featureList": [
+        "Guarana Setup: a one-click Windows installer and launcher with play modes, a doctor and an autopilot (since v20.1)",
         "Global-memory routing fix for native shaders (EDEN_NX2_GM=11): 14.75 to 22.83 game fps in one scene on Intel Arc 140T",
-        "Frame generation by extrapolation from the game's motion vectors, with no added latency and HUD-aware output",
-        "Frame pacing work: with frame generation on, generated frames get equal shares of the real frame interval; a vblank-locked presenter is in progress",
+        "Frame generation by extrapolation from the game's motion vectors, with the HUD kept in place",
+        "A vblank-locked presenter that shows each real frame, on by default for Ocarina of Time on Windows integrated GPUs (since v20.2)",
+        "Headless shader warm-up: 4,515 pipelines and programs in 155 s on Intel Arc 140T (since v20.1)",
         "Release builds with ThinLTO and profile-guided optimization (PGO)"
       ],
       "keywords": "Switch 2 emulator, Intel Arc, integrated GPU, iGPU, handheld PC, frame pacing, frame generation"
@@ -99,25 +103,25 @@
       "@id": "https://karimalsalah.github.io/guarana/#webpage",
       "url": "https://karimalsalah.github.io/guarana/",
       "name": "Guarana: Switch 2 Emulator for Intel Arc iGPUs and Handhelds",
-      "description": "Open-source Switch 2 emulator fork for integrated GPUs: Intel Arc laptops first, AMD Radeon handhelds next. Frame pacing, frame generation, measured results.",
+      "description": "Free, open-source Switch 2 emulator for laptops and handhelds with integrated GPUs: Intel Arc first, AMD Radeon next. Every number names its machine.",
       "inLanguage": "en",
       "isPartOf": {
         "@id": "https://karimalsalah.github.io/guarana/#website"
       },
-      "dateModified": "2026-11-13",
+      "dateModified": "2026-11-14",
       "about": {
         "@id": "https://karimalsalah.github.io/guarana/#software"
       },
       "primaryImageOfPage": {
         "@type": "ImageObject",
-        "url": "https://karimalsalah.github.io/guarana/assets/logo-mark.svg"
+        "url": "https://karimalsalah.github.io/guarana/assets/social-preview.png"
       }
     },
     {
       "@type": "HowTo",
       "@id": "https://karimalsalah.github.io/guarana/#setup",
-      "name": "Set up Guarana on Windows 11",
-      "description": "Download Guarana, add your own keys, firmware and games, turn on the measured settings and send a device report.",
+      "name": "Set up Guarana on Windows",
+      "description": "Download Guarana Setup, add your own keys, firmware and games, and play.",
       "supply": [
         {
           "@type": "HowToSupply",
@@ -127,44 +131,30 @@
       "tool": [
         {
           "@type": "HowToTool",
-          "name": "Windows 11 PC or handheld with an integrated GPU"
+          "name": "Windows PC or handheld with an x86-64 CPU with AVX2 and a Vulkan driver"
         }
       ],
       "step": [
         {
           "@type": "HowToStep",
           "position": 1,
-          "name": "Download the latest release",
-          "text": "Get it from the GitHub releases page, the only official download.",
+          "name": "Download Guarana Setup",
+          "text": "Get Guarana-Setup-<version>.exe from the GitHub releases page, the only official download. It installs for your user, without admin rights.",
           "url": "https://karimalsalah.github.io/guarana/#setup-step-1"
         },
         {
           "@type": "HowToStep",
           "position": 2,
-          "name": "Extract the whole archive",
-          "text": "Unpack everything into a folder you can write to.",
+          "name": "Bring your own keys, firmware and games",
+          "text": "Dump them from hardware you own. Guarana Setup finds them on your PC with your consent. None are included.",
           "url": "https://karimalsalah.github.io/guarana/#setup-step-2"
         },
         {
           "@type": "HowToStep",
           "position": 3,
-          "name": "Add your own keys, firmware and games",
-          "text": "Start the emulator and point it at keys, firmware and games dumped from a Switch 2 and games you own. None are included.",
+          "name": "Play",
+          "text": "On a Windows integrated GPU, Ocarina of Time sets up its own frame pacing; on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (since v20.2). The first visit to each area hitches once while shaders compile.",
           "url": "https://karimalsalah.github.io/guarana/#setup-step-3"
-        },
-        {
-          "@type": "HowToStep",
-          "position": 4,
-          "name": "Turn on the measured settings",
-          "text": "Switches are off unless set. Add EDEN_NX2_GM=11 to nx2_switches.txt next to the emulator. For frame generation, turn on Enable Frame Generation in the graphics settings, set Target Frame Rate to 60 and add EDEN_NX2_EXTRAPOLATE=1 (Ocarina of Time only).",
-          "url": "https://karimalsalah.github.io/guarana/#setup-step-4"
-        },
-        {
-          "@type": "HowToStep",
-          "position": 5,
-          "name": "Let shaders build, then report",
-          "text": "The first visit to each area hitches while shaders compile. Play a while, then send a device report with your game fps.",
-          "url": "https://karimalsalah.github.io/guarana/#setup-step-5"
         }
       ]
     }
@@ -208,110 +198,65 @@
     <div>
       <p class="eyebrow">Open-source Nintendo Switch 2 emulator &middot; <span class="nowrap">GPL-3.0-or-later</span></p>
       <h1 id="hero-title">Switch 2 emulation tuned for integrated GPUs</h1>
-      <p class="lede">Guarana is a fork of Lichii for laptops and handhelds without a gaming graphics card. Intel Arc iGPUs come first, AMD Radeon iGPU handhelds next. The work goes into frame pacing, frame generation and GPU fixes, and we publish what we measure with the caveats.</p>
+      <p class="lede">For laptops and handhelds without a gaming graphics card: Intel Arc first, AMD Radeon handhelds next. A fork of Lichii that works on frame pacing, frame generation and GPU fixes, and publishes every number with the machine it came from.</p>
       <div class="btn-row">
         <a class="btn" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download the latest release</a>
-        <a class="btn btn-secondary" href="devices/">Check your device</a>
+        <a class="btn btn-secondary" href="#devices">Will it run on my PC?</a>
       </div>
-      <p class="fine">Windows 11 x64 is the tested platform. Official downloads come only from GitHub Releases. No keys, firmware or games included.</p>
+      <p class="fine">Free. Windows 11 x64 is the tested platform; Linux and macOS builds are on the same page. Official downloads come only from GitHub Releases. No keys, firmware or games included.</p>
     </div>
     <img class="hero-mark" src="assets/logo-mark.svg" alt="" width="240" height="240">
   </div>
 </section>
 
-<section class="section" aria-labelledby="guides">
-  <h2 id="guides">Guides by question</h2>
-  <ul>
-    <li><a href="play-ocarina-of-time-switch-2-on-pc.html">Play the Switch 2 Ocarina of Time on a PC or laptop</a>: the 5-minute path</li>
-    <li><a href="fix-stutter-switch-2-emulator.html">Fix stutter in a Switch 2 emulator</a>: shaders, pacing, power</li>
-    <li><a href="switch-2-emulator-intel-arc.html">Switch 2 emulator on Intel Arc</a></li>
-    <li><a href="switch-2-emulator-handheld.html">ROG Ally, Legion Go, MSI Claw, Steam Deck</a>: what to expect</li>
-    <li><a href="controller-setup.html">Controller setup</a>: Xbox, DualSense, Switch Pro, 8BitDo</li>
-  </ul>
-</section>
-
 <section class="section" aria-labelledby="results">
   <div class="wrap">
-    <h2 id="results">Measured on real hardware</h2>
-    <p class="section-intro">One laptop, one scene, the fix off and then on. That is the whole claim.</p>
-    <div class="stat-row">
+    <h2 id="results">Measured, with the machine named</h2>
+    <p class="section-intro">One laptop so far, one scene, the old setup and the new one back to back. That is the whole claim.</p>
+    <div class="stat-row stat-row-3">
       <div class="stat stat-hero">
-        <p class="stat-label">Game fps with the global-memory routing fix</p>
-        <p class="stat-value">22.83</p>
-        <p class="stat-from">14.75 without it, same scene</p>
+        <p class="stat-label">Display slots on time, v20.3 defaults</p>
+        <p class="stat-value">599<span class="stat-unit">of 600</span></p>
+        <p class="stat-from">Best run; 531&ndash;599 over two paired rounds, against 475&ndash;491 with the old setup.</p>
       </div>
       <div class="stat">
-        <p class="stat-label">Foliage draw, GPU time</p>
-        <p class="stat-value">5.8<span class="stat-unit">ms</span></p>
-        <p class="stat-from">15.7 ms without the fix</p>
+        <p class="stat-label">Late flips per 10 s</p>
+        <p class="stat-value">0</p>
+        <p class="stat-from">About 200 before; 99.5% of frames within 2 ms of the median in the best run</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Game fps from one shader fix</p>
+        <p class="stat-value">22.83</p>
+        <p class="stat-from">14.75 without <code>EDEN_NX2_GM=11</code>, frame generation off</p>
       </div>
     </div>
     <dl class="context">
       <div><dt>Game</dt><dd>The Legend of Zelda: Ocarina of Time, Hyrule Field</dd></div>
-      <div><dt>Laptop</dt><dd>Intel Core Ultra 9 285H with Arc 140T</dd></div>
+      <div><dt>Laptop</dt><dd>Intel Core Ultra 9 285H with Arc 140T, 32 GB</dd></div>
       <div><dt>Driver</dt><dd>Intel 32.0.101.9175</dd></div>
-      <div><dt>Change</dt><dd><code>EDEN_NX2_GM=11</code>, frame generation off</dd></div>
+      <div><dt>Display</dt><dd>120 Hz OLED; a slot is one 16.7 ms display interval</dd></div>
     </dl>
-    <p>What the fix does: shader loads from global memory used to search every bound buffer at run time. With <code>EDEN_NX2_GM=11</code>, buffer base addresses are computed once and each load searches only the buffers its address can come from. Game fps counts only frames the game renders; generated frames never count.</p>
-    <p><a href="benchmarks.html">All results, the play configuration and third-party reports</a></p>
+    <p>The v20.3 defaults are merged on <code>main</code> and come with the next release. Game fps counts only frames the game renders; generated frames never count. No input latency figure is published yet.</p>
+    <p><a href="benchmarks.html">All results and third-party reports</a> &middot; <a href="https://github.com/karimalsalah/guarana/blob/main/docs/switches.md">Every switch with its measurement</a> &middot; <a href="https://github.com/karimalsalah/guarana/blob/main/docs/BENCHMARKING.md">How to measure on your machine</a></p>
   </div>
 </section>
 
-<section class="section" aria-labelledby="byo">
+<section class="section" aria-labelledby="get-it">
   <div class="wrap">
-    <div class="note">
-      <h2 id="byo"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5.2c0 4.4-2.9 8-7 9.8-4.1-1.8-7-5.4-7-9.8V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.8 12.2l2.2 2.2 4.2-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Bring your own keys, firmware and games</h2>
-      <p>Guarana contains no encryption keys, no firmware and no games. Dump them from a Nintendo Switch 2 and games you own. We don't help anyone get them elsewhere, and issues or pull requests that ask for them or share them are closed.</p>
-      <p><a href="legal.html">Legal details</a></p>
-    </div>
-  </div>
-</section>
-
-<section class="section" aria-labelledby="how">
-  <div class="wrap">
-    <h2 id="how">How frame pacing and frame generation work</h2>
-    <div class="grid-2">
-      <article class="card">
-        <h3>Frame pacing</h3>
-        <p>Pacing is how evenly frames reach the screen. Thirty frames spaced 33.3 ms apart feel smoother than forty that arrive in uneven bursts. With frame generation on, each generated frame keeps the screen for an equal share of the time between real frames. Not finished: a presenter locked to the display's vblank, so frames change every 16.67 ms at 60 Hz, is in progress to remove the micro-stutter that remains.</p>
-      </article>
-      <article class="card">
-        <h3>Frame generation, without added latency</h3>
-        <p>After the game renders a frame, Guarana predicts the next ones by moving its pixels along the game's own motion vectors. Because this extrapolates forward instead of waiting for a future frame, it adds no latency. The HUD is kept apart from the 3D image, so text and menus don't smear. Motion data is wired up for Ocarina of Time so far.</p>
-      </article>
-      <article class="card">
-        <h3>Measured GPU fixes</h3>
-        <p>A change ships when it shows a measured gain on a verified scene. The global-memory routing fix took the Hyrule Field foliage draw from 15.7 to 5.8 ms on Arc 140T.</p>
-      </article>
-      <article class="card">
-        <h3>Optimized builds</h3>
-        <p>Release builds are compiled with ThinLTO and profile-guided optimization (PGO).</p>
-      </article>
-    </div>
-    <figure class="pace">
-      <div class="pace-row">
-        <p>Uneven: frames arrive in bursts</p>
-        <svg viewBox="0 0 600 40" aria-hidden="true" focusable="false"><line class="axis" x1="0" y1="20" x2="600" y2="20"/><g class="real"><circle cx="18" cy="20" r="7"/><circle cx="62" cy="20" r="7"/><circle cx="84" cy="20" r="7"/><circle cx="196" cy="20" r="7"/><circle cx="216" cy="20" r="7"/><circle cx="318" cy="20" r="7"/><circle cx="396" cy="20" r="7"/><circle cx="414" cy="20" r="7"/><circle cx="520" cy="20" r="7"/><circle cx="582" cy="20" r="7"/></g></svg>
-      </div>
-      <div class="pace-row">
-        <p>Paced: every frame keeps the screen for the same time</p>
-        <svg viewBox="0 0 600 40" aria-hidden="true" focusable="false"><line class="axis" x1="0" y1="20" x2="600" y2="20"/><g class="real"><circle cx="18" cy="20" r="7"/><circle cx="147" cy="20" r="7"/><circle cx="276" cy="20" r="7"/><circle cx="405" cy="20" r="7"/><circle cx="534" cy="20" r="7"/></g><g class="gen"><circle cx="82.5" cy="20" r="6"/><circle cx="211.5" cy="20" r="6"/><circle cx="340.5" cy="20" r="6"/><circle cx="469.5" cy="20" r="6"/><circle cx="582" cy="20" r="6"/></g></svg>
-      </div>
-      <figcaption>Each mark is a frame reaching the screen. Solid dots: frames the game rendered. Rings: frames predicted by frame generation. Even spacing is the goal; the vblank-locked presenter that finishes it is in progress.</figcaption>
-    </figure>
-    <h3 class="group-title">Known issues, in the open</h3>
-    <ul class="issues">
-      <li>Pacing micro-stutter: the fix (a vblank-locked 16.67 ms presenter) is in progress.</li>
-      <li>First visit to an area hitches while shaders compile; later visits load them from the cache.</li>
-      <li>Intel driver cache race: a fix is in progress.</li>
-    </ul>
+    <h2 id="get-it">Get it in three steps</h2>
+    <ol class="steps">
+<li id="setup-step-1"><h3>Download Guarana Setup</h3><p>Get <code>Guarana-Setup-&lt;version&gt;.exe</code> from the <a href="https://github.com/karimalsalah/guarana/releases/latest">GitHub releases page</a>, the only official download. It installs for your user, without admin rights.</p></li>
+<li id="setup-step-2"><h3>Bring your own keys, firmware and games</h3><p>Dump them from hardware you own. Guarana Setup finds them on your PC with your consent. None are included.</p></li>
+<li id="setup-step-3"><h3>Play</h3><p>On a Windows integrated GPU, Ocarina of Time sets up its own frame pacing; on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (since v20.2). The first visit to each area hitches once while shaders compile.</p></li>
+    </ol>
+    <p>Stuck? <a href="fix-stutter-switch-2-emulator.html">Stutter, black screen, crash</a>, the <a href="faq.html">FAQ</a>, or ask in the <a href="https://discord.gg/urz7vMdRM">Discord</a>.</p>
   </div>
 </section>
 
 <section class="section" aria-labelledby="devices">
   <div class="wrap">
-    <h2 id="devices">Device status</h2>
-    <p class="section-intro">Tested means we measured it. Community reports means someone else did, on their build. Untested means nobody has reported yet, so your report counts.</p>
+    <h2 id="devices">Will it run on my PC?</h2>
+    <p class="section-intro">Windows x64 is the tested platform (Linux and macOS builds are on Releases, untested on these devices); you need an x86-64 CPU with AVX2 and a Vulkan driver. 16 GB of RAM is below the comfortable floor, because the integrated GPU shares it. Tested means we measured it. Community reports means someone else did, on their build. Untested means nobody has reported yet, so your report counts.</p>
     <ul class="legend">
   <li><span class="badge badge-tested"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.9 8.3l2.1 2.1 4.2-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Tested</span><span>Measured by the maintainers on this build.</span></li>
   <li><span class="badge badge-community"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.4 3.2h11.2v7.4H7.8l-3.3 2.6v-2.6H2.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Community reports</span><span>Reported by others, on other builds. Not verified by us.</span></li>
@@ -401,6 +346,7 @@
   <span class="badge badge-untested"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.5 2.2"/></svg>Untested</span>
 </article>
 </div>
+    <p class="fine">Discrete GPUs are not a target of this fork and are not tested here; reports are still welcome. Requirements and vendor notes: <a href="https://github.com/karimalsalah/guarana/blob/main/docs/DEVICES.md">docs/DEVICES.md</a>.</p>
     <div class="btn-row">
       <a class="btn" href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Send a device report</a>
       <a class="btn btn-secondary" href="devices/">All device pages</a>
@@ -408,33 +354,119 @@
   </div>
 </section>
 
-<section class="section" aria-labelledby="setup">
+<section class="section" aria-labelledby="next">
   <div class="wrap">
-    <h2 id="setup">Set up in five steps</h2>
+    <h2 id="next">Coming in v20.3</h2>
+    <p class="section-intro">Merged on <code>main</code>, listed under Unreleased in the <a href="https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md">changelog</a>, and in the next release.</p>
+    <ul>
+      <li><strong>Frames on time in Ocarina of Time</strong> on Windows integrated GPUs, by default: the screen copy runs on a queue of its own, and the frame budget no longer raises the resolution into the GPU time the cadence frees. The numbers are at the top of this page.</li>
+      <li><strong>FLUID at 120 Hz</strong>, opt-in: a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790&ndash;801 to 1134&ndash;1137 of 1200.</li>
+      <li><strong>Fewer freezes:</strong> pointer-slot compute rebuilds compile on a worker, which removes 2.5&ndash;3.4 s freezes in Hyrule Field (upstream Lichii #995).</li>
+      <li><strong>A device profile in the log:</strong> GPU, CPU cores, RAM, power, display refresh and a device class, in one line you can paste into a report. No default changes with it yet.</li>
+      <li><strong>Launcher:</strong> an opt-in three-level Game Booster that undoes everything when the game exits, and Windows integration: game files open from Explorer, <code>guarana://</code> links, taskbar progress and opt-in notifications.</li>
+      <li><strong>Checkable downloads:</strong> a signed build provenance attestation on every release file.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="test">
+  <div class="wrap">
+    <h2 id="test">Test it on your device in 10 minutes</h2>
+    <p class="section-intro">No code and no debugger. Every GPU except one laptop's Arc 140T is untested, so any report is a first data point. "It does not run" is a result too.</p>
     <ol class="steps">
-<li id="setup-step-1"><h3>Download the latest release</h3><p>Get it from the <a href="https://github.com/karimalsalah/guarana/releases/latest">GitHub releases page</a>, the only official download.</p></li>
-<li id="setup-step-2"><h3>Extract the whole archive</h3><p>Unpack everything into a folder you can write to.</p></li>
-<li id="setup-step-3"><h3>Add your own keys, firmware and games</h3><p>Start the emulator and point it at keys, firmware and games dumped from a Switch 2 and games you own. None are included.</p></li>
-<li id="setup-step-4"><h3>Turn on the measured settings</h3><p>Switches are off unless set. Add <code>EDEN_NX2_GM=11</code> to <code>nx2_switches.txt</code> next to the emulator. For frame generation, turn on <em>Enable Frame Generation</em> in the graphics settings, set <em>Target Frame Rate</em> to 60 and add <code>EDEN_NX2_EXTRAPOLATE=1</code> (Ocarina of Time only).</p></li>
-<li id="setup-step-5"><h3>Let shaders build, then report</h3><p>The first visit to each area hitches while shaders compile. Play a while, then <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">send a device report</a> with your game fps.</p></li>
+<li><h3>Install and leave the settings alone</h3><p>Run Guarana Setup, plug in the charger and keep the defaults (mode <em>Auto</em>).</p></li>
+<li><h3>Stand in Hyrule Field</h3><p>In your own copy of Ocarina of Time: 30 seconds to settle, then one more minute. Take one screenshot.</p></li>
+<li><h3>Send it</h3><p>Press <em>Share</em> on the card the launcher shows after the game, or fill in the form yourself. You read it and you press Submit; nothing is sent for you.</p></li>
     </ol>
+    <div class="btn-row">
+      <a class="btn" href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Send a device report</a>
+      <a class="btn btn-secondary" href="https://github.com/karimalsalah/guarana/issues/55">The call for testers</a>
+    </div>
+    <p class="fine">Leave out keys, firmware, games, saves, shader caches and logs with your name in them. The full protocol: <a href="https://github.com/karimalsalah/guarana/blob/main/docs/TESTING.md">docs/TESTING.md</a>. A scripted run can set a record on the <a href="benchmarks.html#records">records board</a>.</p>
   </div>
 </section>
 
 <section class="section" aria-labelledby="contribute">
   <div class="wrap">
-    <h2 id="contribute">Help make it fast on your hardware</h2>
+    <h2 id="contribute">Contribute, with or without an AI agent</h2>
+    <p class="section-intro">The rules are the same for people and agents, and a person owns every pull request. You don't need a fast PC: CI builds every pull request on Linux and Windows and comments a Windows test build.</p>
     <div class="grid-2">
       <article class="card">
-        <h3>For people</h3>
-        <p>Send a device report, run the benchmark harness on your machine, or pick an issue. Every pull request is built and tested for free in CI and gets a Windows test build linked on the pull request, so you don't need a fast PC to contribute code.</p>
+        <h3>Find work and claim it</h3>
+        <p>Start with a <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22">good first issue</a>, an <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aneeds-triage%20no%3Aassignee">agent-ready task</a> with its acceptance test, or a problem with a number on <a href="wins.html">Open wins</a>. Comment <code>/claim</code> on the issue: it is labelled and assigned to you for 72 hours, and for as long as an open pull request links it.</p>
         <p><a href="contribute.html">How to contribute</a></p>
       </article>
       <article class="card">
-        <h3>For AI agents</h3>
-        <p>AGENTS.md has the rules. Issues labeled <code>agent-ready</code> are scoped for agents, and an opt-in debug MCP server lets an agent read status, frame times, screenshots and logs from a running game, and send controller input.</p>
-        <p><a href="contribute.html#agents">Agent quick start</a></p>
+        <h3>Bring your agent</h3>
+        <p>One sentence in your clone starts Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider or Cline. AGENTS.md has the rules, and an opt-in debug MCP server lets an agent read frame times, screenshots and logs from a tester's running game. Disclose AI help with an <code>Assisted-by:</code> trailer.</p>
+        <p><a href="agents.html">Agent quick start</a></p>
       </article>
+    </div>
+    <p>Every merged pull request puts its author on the <a href="legacy.html">Hall of fame</a>. Questions: the <a href="https://discord.gg/urz7vMdRM">Discord</a>.</p>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="how">
+  <div class="wrap">
+    <h2 id="how">How frame pacing and frame generation work</h2>
+    <div class="grid-2">
+      <article class="card">
+        <h3>Frame pacing</h3>
+        <p>Pacing is how evenly frames reach the screen. Thirty frames spaced 33.3 ms apart feel smoother than forty that arrive in uneven bursts. The FLUID presenter shows one frame per display slot, timed to the display's vblank; since v20.2 it is on by default for Ocarina of Time on Windows integrated GPUs, and v20.3 gives its screen copy a queue of its own so it no longer waits behind the game's rendering.</p>
+      </article>
+      <article class="card">
+        <h3>Frame generation by extrapolation</h3>
+        <p>After the game renders a frame, Guarana predicts the next ones by moving its pixels along the game's own motion vectors. Extrapolation shows each real frame as soon as it is ready, where interpolation would hold it back until the next one exists. The HUD is kept apart from the 3D image, so text and menus don't smear. Generated frames make motion smoother, not input faster. Motion data is wired up for Ocarina of Time so far.</p>
+      </article>
+      <article class="card">
+        <h3>Measured GPU fixes</h3>
+        <p>A change ships when it shows a measured gain on a verified scene. The global-memory routing fix took the Hyrule Field foliage draw from 15.7 to 5.8 ms on Arc 140T. Experiments stay behind switches that are off by default.</p>
+      </article>
+      <article class="card">
+        <h3>Optimized builds</h3>
+        <p>Release builds are compiled with ThinLTO and profile-guided optimization (PGO).</p>
+      </article>
+    </div>
+    <figure class="pace">
+      <div class="pace-row">
+        <p>Uneven: frames arrive in bursts</p>
+        <svg viewBox="0 0 600 40" aria-hidden="true" focusable="false"><line class="axis" x1="0" y1="20" x2="600" y2="20"/><g class="real"><circle cx="18" cy="20" r="7"/><circle cx="62" cy="20" r="7"/><circle cx="84" cy="20" r="7"/><circle cx="196" cy="20" r="7"/><circle cx="216" cy="20" r="7"/><circle cx="318" cy="20" r="7"/><circle cx="396" cy="20" r="7"/><circle cx="414" cy="20" r="7"/><circle cx="520" cy="20" r="7"/><circle cx="582" cy="20" r="7"/></g></svg>
+      </div>
+      <div class="pace-row">
+        <p>Paced: every frame keeps the screen for the same time</p>
+        <svg viewBox="0 0 600 40" aria-hidden="true" focusable="false"><line class="axis" x1="0" y1="20" x2="600" y2="20"/><g class="real"><circle cx="18" cy="20" r="7"/><circle cx="147" cy="20" r="7"/><circle cx="276" cy="20" r="7"/><circle cx="405" cy="20" r="7"/><circle cx="534" cy="20" r="7"/></g><g class="gen"><circle cx="82.5" cy="20" r="6"/><circle cx="211.5" cy="20" r="6"/><circle cx="340.5" cy="20" r="6"/><circle cx="469.5" cy="20" r="6"/><circle cx="582" cy="20" r="6"/></g></svg>
+      </div>
+      <figcaption>An illustration, not a measurement. Each mark is a frame reaching the screen. Solid dots: frames the game rendered. Rings: frames predicted by frame generation. Even spacing is what the vblank-locked presenter is for.</figcaption>
+    </figure>
+    <h3 class="group-title">Known issues, in the open</h3>
+    <ul class="issues">
+      <li>First visit to an area hitches while shaders compile; later visits load them from the cache, and a headless warm-up can build the cached ones ahead of time.</li>
+      <li>Until v20.3 is released, v20.2.0 still flips about 200 frames per 10 s late in Hyrule Field on the Arc 140T; the v20.3 defaults bring that to 0.</li>
+      <li>Intel driver crash when the pipeline cache is saved during builds (IGCIT #1614): open on the roadmap. <code>EDEN_NX2_CACHE_SAFE=1</code> avoids it but can deadlock at boot, so it stays off.</li>
+      <li>No input latency figure is published yet.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="guides">
+  <div class="wrap">
+    <h2 id="guides">Guides by question</h2>
+    <ul>
+      <li><a href="play-ocarina-of-time-switch-2-on-pc.html">Play the Switch 2 Ocarina of Time on a PC or laptop</a>: the 5-minute path</li>
+      <li><a href="fix-stutter-switch-2-emulator.html">Fix stutter in a Switch 2 emulator</a>: shaders, pacing, power</li>
+      <li><a href="switch-2-emulator-intel-arc.html">Switch 2 emulator on Intel Arc</a></li>
+      <li><a href="switch-2-emulator-handheld.html">ROG Ally, Legion Go, MSI Claw, Steam Deck</a>: what to expect</li>
+      <li><a href="controller-setup.html">Controller setup</a>: Xbox, DualSense, Switch Pro, 8BitDo</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="byo">
+  <div class="wrap">
+    <div class="note">
+      <h2 id="byo"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5.2c0 4.4-2.9 8-7 9.8-4.1-1.8-7-5.4-7-9.8V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.8 12.2l2.2 2.2 4.2-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Bring your own keys, firmware and games</h2>
+      <p>Guarana contains no encryption keys, no firmware and no games. Dump them from a Nintendo Switch 2 and games you own. We don't help anyone get them elsewhere, and issues or pull requests that ask for them or share them are closed.</p>
+      <p><a href="legal.html">Legal details</a></p>
     </div>
   </div>
 </section>
