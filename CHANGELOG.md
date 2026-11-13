@@ -12,6 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Changed
 
+- **Ocarina of Time on a 120 Hz display is a locked 120 by default** on Windows Intel integrated GPUs: interpolated in-between frames on the vblank clock, 20 real frames a second, the time-critical present thread. Other refresh rates keep the 60 Hz configuration.
 - **A locked 120 Hz while Link runs.** `EDEN_NX2_FLUID_INTERP` now stretches a batch over a late real frame instead of leaving slots empty, and `EDEN_NX2_FLUID_RT=1` runs the present thread time-critical in the MMCSS Games task. In Hyrule Field on the Arc 140T, with 20 real frames a second: 1181-1200 of 1200 slots on time per 10 s, 118-120 shown frames a second, p99 9.6-13.6 ms (see the rows in [docs/switches.md](docs/switches.md)).
 
 ### Added
