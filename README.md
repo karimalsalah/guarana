@@ -89,7 +89,7 @@ No figure for input latency is published yet, because none has been taken the sa
 
 **[Releases](https://github.com/karimalsalah/guarana/releases/latest)** is the only official download, for every platform:
 Windows x86-64 zips (plain and PGO), Linux x86-64 and ARM64 (AppImage and tar.gz, plain and PGO), macOS Apple silicon (dmg and zip),
-and `SHA256SUMS` to check them. Every number on this page was measured on Windows with a CPU with AVX2 and a current GPU driver.
+and `SHA256SUMS.txt` to check them ([how to verify a download](docs/SIGNING.md), build provenance and signatures included). Every number on this page was measured on Windows with a CPU with AVX2 and a current GPU driver.
 
 1. **Download** the build for your system from [Releases](https://github.com/karimalsalah/guarana/releases/latest). To build it yourself: [docs/Build.md](docs/Build.md), or one command: `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` / `bash scripts/build-linux.sh`.
 2. **Extract** it to a writable folder and run **`guarana.exe`**.

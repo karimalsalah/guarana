@@ -6,6 +6,9 @@ name: release-binaries
 # - nightly.yml calls it for the rolling "nightly" pre-release of main;
 # - by hand: an existing tag again (its release gets the new files), or any branch as workflow
 #   artifacts only.
+# On the way to a release (docs/SIGNING.md): the Windows programs are Authenticode-signed when the
+# signing secrets are set, before they are zipped and checksummed, and every file gets a build
+# provenance attestation before it is uploaded.
 on:
   push:
     tags:
@@ -687,6 +690,70 @@ jobs:
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
 
+      # Authenticode signing of the two programs (docs/SIGNING.md) in builds that are published,
+      # before they are uploaded, zipped and checksummed. It needs all six signing secrets: with
+      # none set it is skipped with a notice, with only some set it is skipped with a warning.
+      - name: Check the signing secrets
+        id: signing
+        if: startsWith(matrix.platform, 'windows') && needs.prepare.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          # Whether each secret is set; the values themselves never reach this step.
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_ARTIFACT_SIGNING_PROFILE: ${{ secrets.ARTIFACT_SIGNING_PROFILE != '' }}
+        run: |
+          $names = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE'
+          $missing = @($names | Where-Object { [Environment]::GetEnvironmentVariable("HAS_$_") -ne 'true' })
+          if ($missing.Count -eq $names.Count) {
+            Write-Output '::notice::Authenticode signing is off: no signing secrets are set (docs/SIGNING.md)'
+            exit 0
+          }
+          if ($missing.Count -gt 0) {
+            Write-Output "::warning::Authenticode signing is off: $($missing -join ', ') not set (docs/SIGNING.md)"
+            exit 0
+          }
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/release/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/release/bin/$cli")) { $cli = 'eden-cli.exe' }
+          $files = foreach ($exe in $gui, $cli) { (Resolve-Path "build/release/bin/$exe").Path }
+          'enabled=true' | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "files=$($files -join ',')" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # Azure Artifact Signing, formerly Trusted Signing: this action was azure/trusted-signing-action.
+      # Pinned to a commit, and the only step that gets the secrets.
+      - name: Sign the Windows programs
+        if: steps.signing.outputs.enabled == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.signing.outputs.files }}
+          description: ${{ env.APP_NAME }}
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+
+      - name: Check the signatures
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          FILES: ${{ steps.signing.outputs.files }}
+        run: |
+          foreach ($file in $env:FILES -split ',') {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            Write-Output "$($signature.Status)  $sha  $file"
+            if ($signature.Status -ne 'Valid') { throw "$file is not validly signed: $($signature.StatusMessage)" }
+          }
+
       # A self-contained app bundle: macdeployqt copies Qt and every other Homebrew library both
       # programs load into the bundle, then the leftover Homebrew and build-tree search paths are
       # removed so a machine with Homebrew still uses the bundled copies. Ad-hoc signed, not
@@ -825,6 +892,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      # Build provenance (docs/SIGNING.md): the run's Sigstore certificate and the attestation.
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -895,6 +965,13 @@ jobs:
           ls -la dist
           cat dist/SHA256SUMS.txt
 
+      # Signed SLSA build provenance for every file the release gets, SHA256SUMS.txt included. It
+      # comes after the signing and the checksums, so it covers the files as published.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
       - name: Write release notes
         shell: bash
         run: |
@@ -926,6 +1003,7 @@ jobs:
           - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `guarana/guarana`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
           - **macOS** 15 or newer, Apple Silicon. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine guarana.app`.
           - **Checksums**: `SHA256SUMS.txt`. Check with `sha256sum -c SHA256SUMS.txt` (Linux), `shasum -a 256 -c SHA256SUMS.txt` (macOS) or `Get-FileHash <file>` (PowerShell).
+          - **Provenance**: every file has a signed build provenance attestation; check a download with `gh attestation verify <file> --repo @REPO@`. Signatures and the other checks: [docs/SIGNING.md](@SERVER@/@REPO@/blob/HEAD/docs/SIGNING.md).
 
           No keys, firmware or games are included or provided. Dump your own from hardware you own; see LEGAL.md.
           EOF
@@ -936,7 +1014,8 @@ jobs:
           if ! compgen -G "artifacts/guarana-windows-*/guarana.exe" > /dev/null; then
             win_gui=lichii.exe win_cli=eden-cli.exe
           fi
-          sed -i -e "s/@WIN_GUI@/$win_gui/g" -e "s/@WIN_CLI@/$win_cli/g" release-notes.md
+          sed -i -e "s/@WIN_GUI@/$win_gui/g" -e "s/@WIN_CLI@/$win_cli/g" \
+            -e "s|@REPO@|$GITHUB_REPOSITORY|g" -e "s|@SERVER@|$GITHUB_SERVER_URL|g" release-notes.md
           cat release-notes.md
 
       - name: Publish
@@ -961,13 +1040,18 @@ jobs:
           fi
 
   # The Windows installer (launcher/), with this release's Windows build bundled, attached to the
-  # same release with its SHA-256 added to SHA256SUMS.txt.
+  # same release with its SHA-256 added to SHA256SUMS.txt, signed and attested like the rest.
   installer:
     name: Windows installer
     needs: [prepare, publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    # A called workflow gets no more than this: id-token and attestations for its provenance.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/launcher.yml
+    # For the signing secrets (docs/SIGNING.md).
+    secrets: inherit
     with:
       release_tag: ${{ needs.prepare.outputs.tag }}

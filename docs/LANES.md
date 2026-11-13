@@ -30,7 +30,7 @@ Versions are `vX.Y.Z`; release candidates and other pre-releases are `vX.Y.Z-rcN
    ```
 
    Tags pushed by a workflow with the repository's token would not start the release workflow, so tags are pushed by people.
-4. `release-binaries.yml` checks the notes first: a tag without a non-empty section fails within a minute, before anything is built. Then it builds every platform (Windows clang-cl ThinLTO, with and without PGO; Linux x86_64 and aarch64 AppImage and tar.gz, with and without PGO; macOS arm64) and publishes the GitHub release with all the files and `SHA256SUMS.txt`. Files are named `guarana-<version>-<platform>.<ext>`, for example `guarana-0.2.0-windows-x86_64-pgo.zip`. A tag with a pre-release suffix is published as a pre-release.
+4. `release-binaries.yml` checks the notes first: a tag without a non-empty section fails within a minute, before anything is built. Then it builds every platform (Windows clang-cl ThinLTO, with and without PGO; Linux x86_64 and aarch64 AppImage and tar.gz, with and without PGO; macOS arm64) and publishes the GitHub release with all the files, `SHA256SUMS.txt` and a build provenance attestation for every file; with the signing secrets set, the Windows programs and the installer are Authenticode-signed first ([SIGNING.md](SIGNING.md)). Files are named `guarana-<version>-<platform>.<ext>`, for example `guarana-0.2.0-windows-x86_64-pgo.zip`. A tag with a pre-release suffix is published as a pre-release.
 5. Merge the release branch's `CHANGELOG.md` change back into `main`.
 
 To rebuild a published tag (a runner failure, a packaging fix that is not in the tag), run Actions > release-binaries > Run workflow with the tag: its release gets the new files and notes. To fix the notes, change `CHANGELOG.md`, move the tag (`git tag -f -a vX.Y.Z`, `git push -f origin vX.Y.Z`) before anyone downloads it, or publish the next patch version. Run from a branch without a tag, the workflow builds artifacts only and publishes nothing.
@@ -79,7 +79,7 @@ To merge it:
   git push origin FETCH_HEAD:refs/heads/upstream
   ```
 
-  or add the optional `UPSTREAM_SYNC_TOKEN` secret: a fine-grained token, or a GitHub App's, with Contents, Pull requests and Workflows write on this repository. With it the sync also pushes workflow changes, and its pull requests start CI on their own. Nothing else needs a secret.
+  or add the optional `UPSTREAM_SYNC_TOKEN` secret: a fine-grained token, or a GitHub App's, with Contents, Pull requests and Workflows write on this repository. With it the sync also pushes workflow changes, and its pull requests start CI on their own. Nothing else needs a secret but the optional release signing ([SIGNING.md](SIGNING.md)).
 - **"The upstream branch did not fast-forward"**: upstream rewrote `nx2`, or someone committed to `upstream`. Look at both before you overwrite anything; then reset the mirror with `git push --force origin FETCH_HEAD:refs/heads/upstream` after the fetch above.
 - **"Could not open the pull request"**: allow GitHub Actions to create pull requests (Settings > Actions > General > Workflow permissions), or set `UPSTREAM_SYNC_TOKEN`.
 
@@ -104,3 +104,4 @@ To merge it:
 - Settings > General > Features: Discussions on (the issue forms link to them).
 - Settings > Security: "Private vulnerability reporting" on (SECURITY.md and CODE_OF_CONDUCT.md rely on it).
 - Branch protection or rulesets: `main` and `release/*` require the `build-check` jobs and a review. Tags `v*` may be created only by maintainers. Nobody but the sync workflow pushes `upstream`.
+- Settings > Secrets and variables > Actions: the six signing secrets, once releases should be Authenticode-signed ([SIGNING.md](SIGNING.md), "Turn signing on"). Builds and provenance need no secret.

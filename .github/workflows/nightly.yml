@@ -51,9 +51,14 @@ jobs:
     name: Build and publish
     needs: check
     if: needs.check.outputs.build == 'true'
+    # A called workflow gets no more than this: contents to publish, id-token and attestations for
+    # the build provenance, and the signing secrets (docs/SIGNING.md).
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-binaries.yml
+    secrets: inherit
     with:
       channel: nightly
       ref: ${{ needs.check.outputs.sha }}

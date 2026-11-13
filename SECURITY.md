@@ -26,7 +26,7 @@ The maintainers are volunteers. We aim to acknowledge a report within 7 days, ag
 
 - Memory corruption or code execution through anything the emulator loads: game containers, updates and DLC, mods and cheats, shader and pipeline caches, saves, `nx2_switches.txt`, configuration files.
 - The debug server (`EDEN_NX2_DEBUG_SERVER`). It is off unless set, listens on loopback only, and writes only under its dump directory ([docs/nx2/debug-mcp.md](docs/nx2/debug-mcp.md)): a way to reach it from another machine, to read or write files outside that directory, or to read host memory through it is a vulnerability.
-- The build and release pipeline: the workflows in `.github/workflows`, the published release files and their `SHA256SUMS.txt`, and anything that lets a pull request from a fork run code with this repository's write permissions.
+- The build and release pipeline: the workflows in `.github/workflows`, the published release files, their `SHA256SUMS.txt`, build provenance attestations and Authenticode signatures ([docs/SIGNING.md](docs/SIGNING.md) says how to check them), and anything that lets a pull request from a fork run code with this repository's write permissions.
 - Network features, where a build enables them.
 
 ## Not vulnerabilities

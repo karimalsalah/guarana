@@ -14,6 +14,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [TESTING.md](TESTING.md) | The 10-minute test protocol: install, Hyrule Field, what to send, no debugging |
 | [BENCHMARKING.md](BENCHMARKING.md) | How to measure your device so your numbers can be compared |
 | [switches.md](switches.md) | The registry of every `EDEN_NX2_*` switch Guarana adds or relies on |
+| [SIGNING.md](SIGNING.md) | How release files are signed and attested, how to check a download, and how to turn signing on |
 | [Options.md](Options.md) | CMake build options |
 | [compatibility-report.md](compatibility-report.md) | Opt-in desktop compatibility reports |
 | [overwolf-vulkan.md](overwolf-vulkan.md) | Overwolf Vulkan start-up protection |
