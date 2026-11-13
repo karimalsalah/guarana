@@ -14,7 +14,7 @@ import type { Backend, Unlisten } from "./api";
 import type {
   AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
-  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink, LaunchRequest, Notifications,
+  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink, LaunchRequest, Notifications, BoosterStatus, BoosterLevelInfo,
 } from "./types";
 
 type PadMode = ControllerKind | "none" | "late";
@@ -259,6 +259,37 @@ export function createMockBackend(): Backend {
       ? { source: "link", game: opened, error: null }
       : { source: "link", game: null, error: `No game with title id ${sc.open.toUpperCase()} in your library` }
     : null;
+  // Game Booster (the backend's booster.rs, in short). Sample PC: High performance is installed
+  // (not Ultimate), and SysMain and Windows Search are running.
+  let boosterLevel = 0;
+  let boosterActive = false;
+  function boosterLevels(): BoosterLevelInfo[] {
+    const out: BoosterLevelInfo[] = [];
+    for (let level = 0; level <= 3; level++) {
+      const changes: string[] = [];
+      let elevated = false;
+      let summary = "No changes. Windows runs games as usual.";
+      if (level >= 1) {
+        changes.push(`Run Guarana at ${level >= 3 ? "High" : "Above Normal"} priority`);
+        changes.push("Turn off power throttling (EcoQoS) for Guarana");
+        changes.push("Ask Windows for the high-performance GPU for guarana.exe");
+        summary = "No admin needed: priority, power throttling and the GPU choice for Guarana.";
+      }
+      if (level >= 2) {
+        changes.push("Switch the power plan to High performance for this session, then put it back");
+        elevated = true;
+        summary = "Above Normal priority, power throttling off and the high-performance GPU for Guarana, and one Windows permission prompt to switch the power plan to High performance.";
+      }
+      if (level >= 3) {
+        changes.push("Pause SysMain and Windows Search while you play, and restart them after");
+        elevated = true;
+        summary = "High priority, power throttling off and the high-performance GPU for Guarana, and one Windows permission prompt to switch the power plan to High performance, and pause SysMain and Windows Search.";
+      }
+      out.push({ level, title: level === 0 ? "Off" : `Level ${level}`, summary, elevated, changes });
+    }
+    return out;
+  }
+  const boosterStatus = (note: string | null = null): BoosterStatus => ({ level: boosterLevel, active: boosterActive, levels: boosterLevels(), note });
   const shareStatus = (): ShareStatus => ({
     enabled: sharePrompt,
     offer:
@@ -698,6 +729,23 @@ export function createMockBackend(): Backend {
       shareOn = shareOn && sharePrompt;
       return shareStatus();
     },
+    async get_booster() {
+      await sleep(140);
+      return boosterStatus();
+    },
+    async set_booster_level(a) {
+      await sleep(200);
+      const level = Number(a.level);
+      if (!Number.isInteger(level) || level < 0 || level > 3) throw `Unknown booster level ${a.level}: use 0 (Off) to 3`;
+      boosterLevel = level;
+      return boosterStatus();
+    },
+    async booster_undo_all() {
+      await sleep(220);
+      const was = boosterActive;
+      boosterActive = false;
+      return boosterStatus(was ? "Undone. Priority, GPU choice and the power plan are back to normal." : "Nothing to undo.");
+    },
     async ask_ai(a) {
       await sleep(300);
       const base = a.service === "chatgpt" ? "https://chatgpt.com/?q=" : "https://claude.ai/new?q=";
@@ -718,9 +766,17 @@ export function createMockBackend(): Backend {
       }
       if (!a.title_id && !a.path) throw "Nothing to launch.";
       gameRunning = true;
+      if (boosterLevel >= 1) {
+        boosterActive = true;
+        emit("booster://changed", boosterStatus());
+      }
       const exited: GameExited = sc.crash ? { code: 3221225477, seconds: 1 } : { code: 0, seconds: 2715 };
       setTimeout(() => {
         gameRunning = false;
+        if (boosterActive) {
+          boosterActive = false;
+          emit("booster://changed", boosterStatus());
+        }
         emit("game://exited", exited);
       }, (sc.crash ? 1.4 : sc.session) * 1000);
       return { pid: 23816 };

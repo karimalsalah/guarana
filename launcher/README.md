@@ -20,6 +20,7 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   header or the file name). It reads names and small headers only, skips OneDrive placeholders,
   never follows junctions or links, and copies nothing until you choose Import.
 - **One switch, self-tuning.** Home has Auto, Smooth, Quality and Battery; Auto picks from this PC's detection and the community's verified settings (`best-settings.json`, cached 24 h, offline-safe). After each game an autopilot reads the log and makes at most one small, undoable change within the mode's limits; Home says what it changed and why.
+- **Game Booster (opt-in, off by default).** Three cumulative levels tune Windows for speed only while a game runs and put everything back when it exits, after a crash (from a journal file), or from "Undo all". Level 1 (no admin) runs the emulator at Above Normal priority, turns off power throttling (EcoQoS) for it, and asks Windows for the high-performance GPU for `guarana.exe`. Level 2 adds the High performance (or Ultimate Performance) power plan for the session. Level 3 adds High priority and pauses SysMain and Windows Search while you play. The elevated steps (the power plan and the services) run in a small helper behind one UAC prompt. Security settings are never touched and nothing under `HKLM` is changed except what `powercfg` does. See [CONTRACT.md](CONTRACT.md#game-booster).
 - **Ask AI**: Doctor and Report build a scrubbed summary and open a prefilled Claude or ChatGPT chat that points at Guarana's docs.
 - **Applies a profile** to the emulator's own files: a marked block in
   `%APPDATA%\guarana\nx2_switches.txt` (your own lines stay as they are) and a few `[Renderer]` keys
@@ -46,7 +47,7 @@ It never downloads, bundles or uploads keys, firmware or games.
 
 | Folder | Holds |
 | --- | --- |
-| `%LOCALAPPDATA%\Guarana` | `versions\`, `current.json`, `launcher-state.json`, `launcher.log`, `downloads\`, `reports\` |
+| `%LOCALAPPDATA%\Guarana` | `versions\`, `current.json`, `launcher-state.json`, `launcher.log`, `booster-journal.json` (the Game Booster's undo record), `downloads\`, `reports\` |
 | `%APPDATA%\guarana` | The emulator's own user folder (keys, config, caches, logs), copied from `%APPDATA%\lichii` by the emulator on its first start. The launcher does not move it, and keeps using `lichii` until then or with an emulator from before the rename. |
 
 ## Windows integration

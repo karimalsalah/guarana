@@ -16,8 +16,8 @@ use crate::types::{
 use crate::util::CmdResult;
 use crate::warm::WarmResult;
 use crate::{
-    autopilot, community, credits, doctor, install, keys, launch, locate, modes, notify, open, profiles, report, share, util,
-    warm,
+    autopilot, booster, community, credits, doctor, install, keys, launch, locate, modes, notify,
+    open, profiles, report, share, util, warm,
 };
 
 const LOCATE_EVENT: &str = "locate://progress";
@@ -345,4 +345,23 @@ pub async fn get_notifications(app: AppHandle) -> CmdResult<notify::Notification
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_notifications(app: AppHandle, enabled: bool) -> CmdResult<notify::Notifications> {
     blocking(&app, move |app| notify::set_enabled(app, enabled)).await?
+}
+
+/// The Game Booster: the chosen level, whether a session is active, and every level with what it
+/// changes on this PC (so the UI never drifts from what the backend does).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_booster(app: AppHandle) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, |app| booster::status(app, None)).await
+}
+
+/// Picks the booster level (0 = Off … 3). Saved and used at the next launch.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_booster_level(app: AppHandle, level: u8) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, move |app| booster::set_level(app, level)).await?
+}
+
+/// "Undo all": restores every change the booster made right now.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn booster_undo_all(app: AppHandle) -> CmdResult<booster::BoosterStatus> {
+    blocking(&app, |app| booster::undo_all(app)).await?
 }

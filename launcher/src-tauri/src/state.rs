@@ -34,6 +34,9 @@ pub struct Persisted {
     pub mode: Option<String>,
     #[serde(default)]
     pub autopilot: crate::autopilot::AutopilotState,
+    /// Game Booster level: 0 = Off (default), 1, 2 or 3.
+    #[serde(default)]
+    pub booster_level: u8,
     /// "Share my numbers": the session Home offers to share (until Share or Not now).
     #[serde(default)]
     pub share_offer: Option<crate::share::ShareOffer>,

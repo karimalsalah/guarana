@@ -5,7 +5,7 @@ import type {
   AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
   WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits, ShareStatus, ShareLink,
-  LaunchRequest, Notifications,
+  LaunchRequest, Notifications, BoosterStatus,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -131,6 +131,12 @@ export const api = {
   /** Windows notifications when shaders are ready or an update is installed (off by default). */
   getNotifications: () => call<Notifications>("get_notifications"),
   setNotifications: (enabled: boolean) => call<Notifications>("set_notifications", { enabled }),
+  /** The Game Booster: chosen level, whether a session is active, and each level's changes. */
+  getBooster: () => call<BoosterStatus>("get_booster"),
+  /** Picks the booster level (0 = Off … 3); used at the next launch. */
+  setBoosterLevel: (level: number) => call<BoosterStatus>("set_booster_level", { level }),
+  /** "Undo all": restores every change the booster made now. */
+  boosterUndoAll: () => call<BoosterStatus>("booster_undo_all"),
   appVersion: async () => (await backend()).appVersion(),
 };
 
@@ -146,6 +152,7 @@ export const events = {
   autopilotChanged: (h: (p: ModeStatus) => void, signal?: AbortSignal) => on<ModeStatus>("autopilot://changed", h, signal),
   /** A launch request is waiting: take it with api.takeLaunchRequest. */
   launchRequest: (h: () => void, signal?: AbortSignal) => on<unknown>("launch://request", () => h(), signal),
+  boosterChanged: (h: (p: BoosterStatus) => void, signal?: AbortSignal) => on<BoosterStatus>("booster://changed", h, signal),
 };
 
 /** Turns whatever a rejected invoke carries (string, Error, {message}) into one readable line. */
