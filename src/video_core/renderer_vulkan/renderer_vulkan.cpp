@@ -177,14 +177,15 @@ void ApplyGamePresets(const Device& device) {
     default:
         break;
     }
-    Core::GamePresets::Apply(Settings::GetCurrentProgramID(),
-                             Core::GamePresets::GpuInfo{
-                                 .vendor = vendor,
-                                 .integrated = device.IsIntegrated(),
-                                 .software_tensor_math =
-                                     !device.IsCooperativeHmmaSupported() &&
-                                     !device.IsCooperativeHmma16x16x16Supported(),
-                             });
+    const u64 program_id = Settings::GetCurrentProgramID();
+    const Core::GamePresets::GpuInfo gpu{
+        .vendor = vendor,
+        .integrated = device.IsIntegrated(),
+        .software_tensor_math =
+            !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
+    };
+    const std::string summary = Core::GamePresets::Apply(program_id, gpu);
+    Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
 }
 
 } // Anonymous namespace
