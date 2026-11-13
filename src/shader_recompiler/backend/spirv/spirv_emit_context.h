@@ -411,6 +411,9 @@ public:
     /// 192 words from this word (128 of A, then 64 of B).
     std::optional<u32> software_matrix_scratch_word;
     Id tensor_subgroup_id{};
+    /// The software matrix functions round to fp16 with a native conversion, which needs the
+    /// entry point's fp16 round-to-nearest-even and denorm preserve modes.
+    bool native_half_rounding{};
     std::vector<Id> interfaces;
     std::vector<std::pair<u32, spv::Op>> opcode_rewrites;
     /// Storage float32 atomic adds use OpAtomicFAddEXT (Profile::support_float32_atomic_add).
@@ -452,6 +455,8 @@ public:
     Id mesh_task_offsets_buffer{};
     Id mesh_task_args_buffer{};
     Id mesh_group_index{};
+    /// NumWorkgroups of a native mesh program (Profile::has_broken_mesh_user_sgprs only).
+    Id mesh_num_workgroups{};
 
     Id load_const_func_u8{};
     Id load_const_func_u16{};

@@ -44,16 +44,9 @@ struct State {
 
 State state;
 
-/// Caller holds state.mutex. Present times are recorded only while someone asks for them.
+/// Caller holds state.mutex.
 void SetTargetLocked(double fps) {
     fps = std::isfinite(fps) && fps >= 1.0 ? (std::min)(fps, 1000.0) : 0.0;
-    if ((fps > 0.0) != (state.target_fps > 0.0)) {
-        if (fps > 0.0) {
-            Core::g_nx2_present_time_services.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            Core::g_nx2_present_time_services.fetch_sub(1, std::memory_order_relaxed);
-        }
-    }
     state.target_fps = fps;
 }
 

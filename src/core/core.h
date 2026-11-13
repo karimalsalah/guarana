@@ -120,13 +120,11 @@ namespace Core {
 
 /// Frames the guest has presented (Switch 2 vi2 present calls); input replay is locked to it.
 extern std::atomic<u64> g_nx2_present_count;
-/// Steady-clock time of each guest present, by present count; written only while someone reads
-/// them (g_nx2_present_time_services: the debug server's frame_times tool, the shading-rate and
-/// power governors).
+/// Steady-clock time of each guest present, by present count, for the debug server's frame_times
+/// tool, bug reports and the shading-rate and power governors.
 extern std::array<std::atomic<u64>, 4096> g_nx2_present_times_ns;
-extern std::atomic<u32> g_nx2_present_time_services;
-/// Median interval in ms of the guest presents of the last second, 0 with fewer than four or
-/// while nothing records present times. Host-generated frames are not guest presents.
+/// Median interval in ms of the guest presents of the last second, 0 with fewer than four.
+/// Host-generated frames are not guest presents.
 [[nodiscard]] double Nx2RecentFrameMs();
 
 class CpuManager;
@@ -231,6 +229,12 @@ public:
     [[nodiscard]] SystemResultStatus Load(Frontend::EmuWindow& emu_window,
                                           const std::string& filepath,
                                           Service::AM::FrontendAppletParameters& params);
+
+    /// Brings up the kernel, Host1x and the GPU without an application process, audio or
+    /// services, for a GPU trace replay (video_core/gpu_trace/replay.h). ShutdownMainProcess
+    /// tears it down.
+    [[nodiscard]] SystemResultStatus InitializeForGpuReplay(Frontend::EmuWindow& emu_window,
+                                                            u64 program_id);
 
     /**
      * Creates the GPU and the renderer for `title_id` with no guest program, so that the renderer's

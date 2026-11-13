@@ -20,8 +20,8 @@ guarana-cli --warm-pipelines 0400486024DEC000 [-c <config file>] [-n]
 1. Lowers its own priority to below normal (the shader workers already run at low thread priority inside that), hides its window (`EDEN_NX2_HIDE_WINDOW`).
 2. Creates the kernel's device memory, the GPU and the Vulkan renderer for the title id (`System::SetupHeadlessVideo`), applies the game presets and overrides for that id, as a boot does. No guest process, no game file, no keys.
 3. Calls the renderer's own disk-cache load (`LoadDiskResources`) with the headless warm-up flag set (`ShaderWarm::SetWarmOnly`), which makes it the shader precache that the "Precache Shaders" loading screen runs, plus:
-   - the pipelines that sessions used are built first (the boot builds), all the others as the precache's background jobs, and the compute programs of `warm-compute.bin` when the title has that file;
-   - cached pipelines an earlier warm-up or precache already built for this driver (`precache-graphics.bin`, keyed by driver version, device id and cache version) are skipped, the used (boot-build) ones too, and the boot builds are recorded in that list as well, so a second run builds only what is new;
+   - the pipelines that sessions used are built first (the boot builds), all the others as the precache's background jobs (only the warm-up builds them there: a boot leaves them to the background prebuild), and the compute programs of `warm-compute.bin` when the title has that file;
+   - cached pipelines an earlier warm-up already built for this driver (`precache-graphics.bin`, keyed by driver version, device id and cache version) are skipped, the used (boot-build) ones too, and the boot builds are recorded in that list as well, so a second run builds only what is new;
    - the precache builds in chunks of 500: between chunks nothing builds, the driver cache is saved and then the list is written, so a run that is killed starts again from its last chunk (the list never names a pipeline the saved driver cache lacks);
    - it waits for the background prebuild too, and saves the driver pipeline cache with all of it in.
 4. Shuts the renderer down (that saves shader cache v2, the used list and the driver cache again) and exits.
@@ -70,7 +70,7 @@ Use a time limit that matches the machine; the first run is the long one (minute
 - The renderer is created without a guest process. Everything in `SetupHeadlessVideo` is what `Load` does for the GPU, but `Load` was the only path that ever ran it; a subsystem that assumes a process would fail at the renderer's creation (exit 1) or at shutdown.
 - It treats the title as a Switch 1 program (`CurrentProgramIsSwitch2` false). Nothing the shader pipelines are built from reads it; the ASTC and memory-layout choices that do are not made.
 - Graphics pipelines only come from the cache records. A pipeline whose record was never written (the title never drew it), or a pipeline built with other settings than the ones given, is built at play time as before.
-- At most 1 GiB of captured shader environments are held for the precache and 256 MiB for the prebuild per pass. A bigger cache is built in extra passes (up to 8, each takes what the last left); if a pass takes nothing new the run ends with code 4.
+- At most 1 GiB of captured shader environments are held for the precache per pass. A bigger cache is built in extra passes (up to 8, each takes what the last left); if a pass takes nothing new the run ends with code 4.
 - The driver cache is saved when the run ends; a crash of the driver in the middle loses the run's builds (not the cache before it).
 - On Intel's Windows driver the driver cache save waits for the running builds (`Device::SerializesPipelineCacheReads`); the prebuild is held until the precache's save, as at boot.
 - The Qt frontend does not have the option; it is a mode of the SDL frontend `guarana-cli` (`eden-cli` before v20.2).

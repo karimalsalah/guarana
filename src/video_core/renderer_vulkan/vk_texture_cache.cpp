@@ -2886,6 +2886,10 @@ u64 TextureCacheRuntime::GetDeviceMemoryBudget() const {
     return device.GetDeviceMemoryBudget();
 }
 
+u64 TextureCacheRuntime::GetDeviceHeapMemoryBudget() const {
+    return device.GetDeviceHeapMemoryBudget();
+}
+
 u64 TextureCacheRuntime::GetDeviceMemorySlack() const {
     return device.GetDeviceMemorySlack();
 }

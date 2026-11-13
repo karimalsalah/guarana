@@ -28,12 +28,17 @@ jobs:
 
             const gameLabels = {
               "Ocarina of Time": "Ocarina of Time",
+              "The Legend of Zelda: Ocarina of Time": "Ocarina of Time",
               "Mario Kart World": "Mario Kart",
               "Donkey Kong Bananza": "DKB",
+              "Kirby Air Riders": "Kirby Air Riders",
+              "Pokémon Pokopia": "Pokopia",
+              "Pokopia": "Pokopia",
               "Fire Emblem": "Fire Emblem",
               "Splatoon Raiders": "Splatoon Raiders",
-              "Pokopia": "Pokopia",
               "Hyrule Warriors": "Hyrule Warriors",
+              "Mario Tennis Fever": "Mario Tennis Fever",
+              "Yoshi and the Mysterious Book": "Yoshi",
               "Welcome Tour": "Welcome Tour",
             };
 
@@ -63,7 +68,7 @@ jobs:
             const os = get("Operating system");
             if (os) {
               if (/windows/i.test(os)) labels.add("windows");
-              else if (/linux/i.test(os)) labels.add("linux");
+              else if (/linux|steamos/i.test(os)) labels.add("linux");
               else if (/macos/i.test(os)) labels.add("MacOS");
             }
 

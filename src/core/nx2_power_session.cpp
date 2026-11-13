@@ -57,14 +57,12 @@ struct Nx2PowerSession::Impl {
         Common::SpinGovernor::Config config;
         config.ceiling = initial_percent;
         governor = Common::SpinGovernor{config};
-        g_nx2_present_time_services.fetch_add(1, std::memory_order_relaxed);
         thread = std::jthread{[this](std::stop_token stop) { Run(stop); }};
     }
 
     ~Impl() {
         thread.request_stop();
         thread.join();
-        g_nx2_present_time_services.fetch_sub(1, std::memory_order_relaxed);
         // Only what the governor set is undone: a power_set made meanwhile stays.
         if (Common::PowerTuning::spin_percent.load(std::memory_order_relaxed) == applied_percent) {
             Common::PowerTuning::spin_percent.store(initial_percent, std::memory_order_relaxed);
