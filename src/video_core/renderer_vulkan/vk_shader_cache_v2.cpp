@@ -429,39 +429,6 @@ std::unordered_map<u64, u8> UsedPipelinesFromLog(std::span<const ShaderCacheV2::
     return pipelines;
 }
 
-UseOrderInfo UseOrderFromLog(std::span<const ShaderCacheV2::LogRecord> live, u8 max_age,
-                             std::vector<u64>& expired) {
-    struct Session {
-        u64 key;
-        ShaderCacheV2::UseOrderRecord order;
-    };
-    std::vector<Session> sessions;
-    for (const ShaderCacheV2::LogRecord& record : live) {
-        if (record.kind != RecordKind::UseOrder) {
-            continue;
-        }
-        if (auto order = ShaderCacheV2::DecodeUseOrder(record.payload)) {
-            sessions.push_back({record.key, std::move(*order)});
-        }
-    }
-    std::ranges::stable_sort(sessions, std::ranges::greater{},
-                             [](const Session& session) { return session.order.session_time; });
-    UseOrderInfo info;
-    for (size_t age = 0; age < sessions.size(); ++age) {
-        if (age >= max_age) {
-            expired.push_back(sessions[age].key);
-            continue;
-        }
-        for (const ShaderCacheV2::UseOrderRecord::Entry& entry : sessions[age].order.pipelines) {
-            info.first_use_ms.try_emplace(entry.hash, entry.first_use_ms);
-            if ((entry.flags & ShaderCacheV2::UseOrderBuiltInPlay) != 0) {
-                info.built_in_play.insert(entry.hash);
-            }
-        }
-    }
-    return info;
-}
-
 std::vector<ShaderCacheV2::LogAppend> RelinkUsedPipelines(
     std::span<const ShaderCacheV2::LogRecord> live,
     std::span<const ShaderCacheV2::LogAppend> appends, u8 max_age,

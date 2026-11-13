@@ -270,26 +270,6 @@ std::optional<UsedRecord> DecodeUsed(std::span<const u8> payload) {
     return record;
 }
 
-std::vector<u8> EncodeUseOrder(const UseOrderRecord& record) {
-    static_assert(sizeof(UseOrderRecord::Entry) == 16);
-    PayloadWriter out;
-    out.Put(record.session_time);
-    out.Put(static_cast<u64>(record.pipelines.size()));
-    out.PutSpan(std::span<const UseOrderRecord::Entry>{record.pipelines});
-    return out.Take();
-}
-
-std::optional<UseOrderRecord> DecodeUseOrder(std::span<const u8> payload) {
-    PayloadReader in{payload};
-    UseOrderRecord record;
-    u64 count{};
-    if (!in.Get(record.session_time) || !in.Get(count) || !in.GetVector(record.pipelines, count) ||
-        !in.AtEnd()) {
-        return std::nullopt;
-    }
-    return record;
-}
-
 std::vector<u8> EncodeMigrated(const MigratedRecord& record) {
     PayloadWriter out;
     out.Put(record.source_size);

@@ -9,7 +9,6 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "common/common_types.h"
@@ -135,19 +134,6 @@ struct MaskedPipelineRecords {
 /// sessions ago each was last used (as the old used list holds them). `expired` gets the record
 /// keys of older sessions.
 [[nodiscard]] std::unordered_map<u64, u8> UsedPipelinesFromLog(
-    std::span<const VideoCommon::ShaderCacheV2::LogRecord> live, u8 max_age,
-    std::vector<u64>& expired);
-
-/// What the UseOrder records of the newest `max_age` sessions say.
-struct UseOrderInfo {
-    /// Pipeline key hash -> milliseconds into the session it was first used, as the newest session
-    /// that used it recorded
-    std::unordered_map<u64, u32> first_use_ms;
-    /// Pipelines a retained session had to build during play
-    std::unordered_set<u64> built_in_play;
-};
-/// `expired` gets the keys of the UseOrder records of older sessions.
-[[nodiscard]] UseOrderInfo UseOrderFromLog(
     std::span<const VideoCommon::ShaderCacheV2::LogRecord> live, u8 max_age,
     std::vector<u64>& expired);
 

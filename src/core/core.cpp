@@ -496,8 +496,6 @@ struct System::Impl {
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
         VideoCommon::StutterTrace::BootMarker("boot_start");
         Common::BootTiming::Mark("core: load started");
-        // The Vulkan instance does not depend on the game (EDEN_NX2_BOOT_ASYNC)
-        VideoCore::PrepareRenderer(emu_window);
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }

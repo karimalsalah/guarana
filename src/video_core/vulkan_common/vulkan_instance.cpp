@@ -4,11 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstddef>
-#include <cstdlib>
-#include <cstring>
 #include <future>
-#include <memory>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,7 +18,6 @@
 #include <vulkan/vulkan_core.h>
 #include "core/frontend/emu_window.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
-#include "video_core/vulkan_common/vulkan_library.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
 #include <algorithm>
@@ -160,10 +155,9 @@ void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const 
 }
 } // Anonymous namespace
 
-namespace {
-vk::Instance CreateInstanceNow(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
-                               u32 required_version, Core::Frontend::WindowSystemType window_type,
-                               bool enable_validation) {
+vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
+                            u32 required_version, Core::Frontend::WindowSystemType window_type,
+                            bool enable_validation) {
     if (!library.IsOpen()) {
         LOG_ERROR(Render_Vulkan, "Vulkan library not available");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
@@ -218,92 +212,6 @@ vk::Instance CreateInstanceNow(const Common::DynamicLibrary& library, vk::Instan
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     return instance;
-}
-
-#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-/// An instance made ahead of the renderer (EDEN_NX2_BOOT_ASYNC): its library and dispatch table
-/// are its own, and live as long as the process once handed over, as the instance points at them.
-struct Precreated {
-    std::shared_ptr<Common::DynamicLibrary> library;
-    std::unique_ptr<vk::InstanceDispatch> dld;
-    vk::Instance instance; ///< Destroyed first
-};
-
-struct PrecreateRequest {
-    Core::Frontend::WindowSystemType window_type;
-    bool validation;
-    std::future<std::unique_ptr<Precreated>> result;
-};
-
-std::mutex precreate_mutex;
-std::optional<PrecreateRequest> precreate_request;
-std::vector<std::unique_ptr<Precreated>> handed_over;
-#endif
-} // Anonymous namespace
-
-void PrecreateInstance([[maybe_unused]] Core::Frontend::WindowSystemType window_type,
-                       [[maybe_unused]] bool enable_validation) {
-#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-    static const bool enabled = [] {
-        const char* value = std::getenv("EDEN_NX2_BOOT_ASYNC");
-        return value != nullptr && value[0] == '1';
-    }();
-    if (!enabled) {
-        return;
-    }
-    std::scoped_lock lock{precreate_mutex};
-    if (precreate_request) {
-        return;
-    }
-    Common::BootTiming::Mark("vulkan: instance creation started ahead of the renderer");
-    precreate_request.emplace(PrecreateRequest{
-        .window_type = window_type,
-        .validation = enable_validation,
-        .result = std::async(std::launch::async, [window_type, enable_validation] {
-            auto made = std::make_unique<Precreated>();
-            made->library = OpenLibrary(nullptr);
-            made->dld = std::make_unique<vk::InstanceDispatch>();
-            made->instance = CreateInstanceNow(*made->library, *made->dld, VK_API_VERSION_1_1,
-                                               window_type, enable_validation);
-            return made;
-        })});
-#endif
-}
-
-vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
-                            u32 required_version, Core::Frontend::WindowSystemType window_type,
-                            bool enable_validation) {
-#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-    std::optional<PrecreateRequest> request;
-    {
-        std::scoped_lock lock{precreate_mutex};
-        request = std::move(precreate_request);
-        precreate_request.reset();
-    }
-    if (request) {
-        const double wait_start = Common::BootTiming::Now();
-        try {
-            std::unique_ptr<Precreated> made = request->result.get();
-            if (request->window_type == window_type && request->validation == enable_validation &&
-                required_version == VK_API_VERSION_1_1 && made->instance) {
-                // The instance points at its own dispatch table; the renderer's holds the same
-                // functions.
-                dld = *made->dld;
-                vk::Instance instance = std::move(made->instance);
-                Common::BootTiming::Mark("vulkan: instance taken from the early creation",
-                                         wait_start);
-                std::scoped_lock lock{precreate_mutex};
-                handed_over.push_back(std::move(made));
-                return instance;
-            }
-            LOG_INFO(Render_Vulkan, "The instance made ahead does not fit; creating another");
-        } catch (const std::exception& e) {
-            LOG_WARNING(Render_Vulkan, "Creating the instance ahead failed ({}); creating it now",
-                        e.what());
-        }
-    }
-#endif
-    return CreateInstanceNow(library, dld, required_version, window_type, enable_validation);
 }
 
 } // namespace Vulkan

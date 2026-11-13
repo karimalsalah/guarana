@@ -1176,34 +1176,6 @@ TEST_CASE("Shader cache v2: used pipelines age by the sessions that used them",
     REQUIRE(expired == std::vector<u64>{100, 101, 200});
 }
 
-TEST_CASE("Shader cache v2: the use order of the newest sessions says what to build first",
-          "[video_core][shader_cache_v2]") {
-    const V2::UseOrderRecord order{.session_time = 10,
-                                   .pipelines = {{.hash = 1, .first_use_ms = 5, .flags = 0},
-                                                 {.hash = 2,
-                                                  .first_use_ms = 9,
-                                                  .flags = V2::UseOrderBuiltInPlay}}};
-    REQUIRE(V2::DecodeUseOrder(V2::EncodeUseOrder(order)) == order);
-    REQUIRE_FALSE(V2::DecodeUseOrder(std::vector<u8>(15)).has_value());
-
-    const auto header = V2::EncodeFileHeader(1);
-    std::vector<u8> bytes(header.begin(), header.end());
-    V2::EncodeRecord(bytes, RecordKind::UseOrder, 100, V2::EncodeUseOrder(order));
-    V2::EncodeRecord(bytes, RecordKind::UseOrder, 101,
-                     V2::EncodeUseOrder({.session_time = 20,
-                                         .pipelines = {{.hash = 1, .first_use_ms = 7, .flags = 0},
-                                                       {.hash = 3, .first_use_ms = 2, .flags = 0}}}));
-    V2::EncodeRecord(bytes, RecordKind::UseOrder, 102,
-                     V2::EncodeUseOrder({.session_time = 1, .pipelines = {{.hash = 4}}}));
-    const V2::ParsedLog parsed = V2::ParseLog(bytes);
-    std::vector<u64> expired;
-    const auto info = Vulkan::UseOrderFromLog(parsed.live, 2, expired);
-    // The newest session that used a pipeline gives its time
-    REQUIRE(info.first_use_ms == std::unordered_map<u64, u32>{{1, 7}, {3, 2}, {2, 9}});
-    REQUIRE(info.built_in_play == std::unordered_set<u64>{2});
-    REQUIRE(expired == std::vector<u64>{102});
-}
-
 TEST_CASE("Shader cache v2: used pipelines follow the graphics records a relink moves",
           "[video_core][shader_cache_v2]") {
     const auto header = V2::EncodeFileHeader(1);

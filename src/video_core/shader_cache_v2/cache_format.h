@@ -45,9 +45,6 @@ enum class RecordKind : u16 {
     DeviceIdentity = 7,
     GraphicsBinary = 8,
     ComputeBinary = 9,
-    /// When a session first used each of its pipelines, and which it built during play (records.h,
-    /// UseOrderRecord). Keyed like the session's Used record. Builds that predate it skip it.
-    UseOrder = 10,
 };
 
 /// Bytes a record with a payload of this size takes in the file
