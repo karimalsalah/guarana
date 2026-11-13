@@ -23,6 +23,7 @@
 #include "common/nx2_sampler.h"
 #include "common/power_policy.h"
 #include "common/power_tuning.h"
+#include "common/thread.h"
 #include "common/adpf.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -660,6 +661,7 @@ struct System::Impl {
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
         Common::PowerTuning::LogState();
+        Common::LogHybridPlacement();
         power_session = Nx2PowerSession::MaybeStart(system);
         autopilot_session = Nx2AutopilotSession::MaybeStart(system);
         Common::BootTiming::Mark("core: load done");

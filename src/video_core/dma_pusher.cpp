@@ -206,6 +206,7 @@ private:
     void Loop(std::stop_token token) {
         Common::SetCurrentThreadName("GPUSnapshot");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+        Common::SetCurrentThreadToPerformanceCores();
         u64 done = 0;
         while (!token.stop_requested()) {
             u64 available = published.load(std::memory_order_acquire);
