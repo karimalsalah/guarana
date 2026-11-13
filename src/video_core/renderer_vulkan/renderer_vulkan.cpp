@@ -72,7 +72,10 @@ constexpr VkExtent2D CaptureImageSize{
 constexpr f64 FLUID_REAL_ADVANCE = 0.1;
 /// Predictions reach at most this many frame intervals ahead.
 constexpr f64 FLUID_MAX_ADVANCE = 3.0;
-constexpr size_t FLUID_MAX_PREDICTIONS = 6;
+/// Predictions per real frame: about 100 ms of slots, 6 at 60 shown frames a second and 12 at 120,
+/// so a real frame that comes late still finds its slots covered.
+constexpr size_t FLUID_MIN_PREDICTIONS = 6;
+constexpr size_t FLUID_MAX_PREDICTIONS = 12;
 /// EDEN_NX2_CADENCE: real frames are paced to be done this long before their slot's present.
 constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
 
@@ -594,6 +597,9 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     }
     const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
     const nanoseconds slot_period = slots.refresh * static_cast<s64>(slots.divisor);
+    const size_t max_predictions = std::clamp<size_t>(
+        static_cast<size_t>(std::llround(100.0e6 / static_cast<f64>((std::max)(slot_period.count(), s64{1})))),
+        FLUID_MIN_PREDICTIONS, FLUID_MAX_PREDICTIONS);
     // Real frames at least as fast as the slots fill them: the first slot shows the frame as
     // drawn, not a prediction of the latency ahead (EDEN_NX2_FLUID=1).
     const bool filled = FluidMode() == 1 && !FluidPredictAll() &&
@@ -606,7 +612,7 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
         const nanoseconds cover{predictor.Cover(real_interval.count())};
         last = predictor.PlanSlots(frame->fluid_batch, first, last,
                                    slots.FirstSlotPresentedAfter(recorded + slots.latency + cover),
-                                   slots.divisor, FLUID_MAX_PREDICTIONS);
+                                   slots.divisor, max_predictions);
     }
     // EDEN_NX2_FLUID=2: each prediction is as of its slot less the latency a real frame can be
     // shown at.
@@ -615,7 +621,7 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     bool cut_short = false;
     const bool split = FluidSplitSubmit();
     u64 slot = first;
-    for (; slot <= last && predicted < FLUID_MAX_PREDICTIONS; slot += slots.divisor) {
+    for (; slot <= last && predicted < max_predictions; slot += slots.divisor) {
         const nanoseconds ahead =
             duration_cast<nanoseconds>(slots.SlotTime(slot) - recorded - behind);
         const f64 advance =
@@ -659,7 +665,7 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     }
     frame_gen.NoteFluidGenerated(predicted);
     present_manager.NoteFluidBatch(true, cut_short,
-                                   !cut_short && slot <= last && predicted >= FLUID_MAX_PREDICTIONS);
+                                   !cut_short && slot <= last && predicted >= max_predictions);
 }
 #endif
 
