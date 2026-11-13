@@ -417,7 +417,7 @@ public:
     bool SerializesPipelineCacheReads() const {
         static const bool disabled = [] {
             const char* value = std::getenv("EDEN_NX2_CACHE_SAFE");
-            return value != nullptr && value[0] == '0';
+            return value == nullptr || value[0] != '1'; // opt-in (EDEN_NX2_CACHE_SAFE=1) until its boot deadlock is fixed
         }();
         return !disabled && !CanReadPipelineCacheDuringBuilds();
     }
