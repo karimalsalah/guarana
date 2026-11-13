@@ -4,7 +4,6 @@
   "log_file": "C:/Users/Zortos/.capy/work/lichii-pgo-20261103/runtime/user/log/eden_log.txt",
   "output_dir": "C:/Users/Zortos/.capy/work/cache-bench",
   "debug_server": "127.0.0.1:6545",
-  "exe": "lichii.exe",
   "repeats": 3,
   "cache_states": ["cold", "warm"],
   "mesh_modes": ["mesh", "no_mesh"],

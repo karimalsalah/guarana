@@ -8,7 +8,7 @@ Builds Guarana on Windows from a fresh clone.
 Checks every prerequisite and installs the ones it can under .deps\ (LLVM through
 tools\windows\install-llvm.ps1, Qt 6.8.3 through aqtinstall, CMake and Ninja through pip), loads the
 Visual Studio environment, configures build\release with the release flags (clang-cl, ThinLTO,
--fprofile-use=lichii-windows.profdata, -march=x86-64-v3) and builds lichii.exe and eden-cli.exe.
+-fprofile-use=lichii-windows.profdata, -march=x86-64-v3) and builds guarana.exe and guarana-cli.exe (lichii.exe and eden-cli.exe in a tree from before the rename).
 A second run reuses everything and rebuilds only what changed.
 
 Visual Studio 2022 Build Tools (C++ workload) and the Vulkan SDK are checked, not installed; the
@@ -611,7 +611,7 @@ try {
         $minutes = [math]::Round($clock.Elapsed.TotalMinutes, 1)
         Write-Host ''
         Write-Host "Built ($($describe -join ', ')) in $minutes min:" -ForegroundColor Green
-        foreach ($exe in @('lichii.exe', 'eden-cli.exe')) {
+        foreach ($exe in @('guarana.exe', 'guarana-cli.exe', 'lichii.exe', 'eden-cli.exe')) {
             $path = Join-Path $Build "bin\$exe"
             if (Test-Path -LiteralPath $path) { Write-Host "  $path" }
         }

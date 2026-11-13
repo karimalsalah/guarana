@@ -26,8 +26,8 @@ This section is the fork's. Everything under "Upstream Lichii guidance" is upstr
 | `src/video_core` | GPU emulation and the Vulkan renderer: buffer and texture caches, `renderer_vulkan/present/` (frame generation, extrapolation, cadence), frame budget, shading-rate governor, `nx2_uma.h` |
 | `src/shader_recompiler` | Maxwell and Ampere programs to SPIR-V. `EDEN_NX2_GM` lives in `ir_opt/global_memory_to_storage_buffer_pass.cpp` and `backend/spirv/` |
 | `src/common` | Settings, logging, host memory, power meter, policy, governor and tuning |
-| `src/lichii`, `src/qt_common` | The Qt frontend (`lichii.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
-| `src/lichii_cmd` | The SDL frontend (`eden-cli`) |
+| `src/lichii`, `src/qt_common` | The Qt frontend (`guarana.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
+| `src/lichii_cmd` | The SDL frontend (`guarana-cli`) |
 | `src/frontend_common` | Shared frontend code, config, the update checker (off in our release builds) |
 | `src/tests` | Catch2 unit tests, built with `-DLICHII_TESTS=ON` into `build/bin/tests` and a few smaller test programs |
 | `tools/nx2` | The debug server's MCP adapter (`debug_mcp.py`), the shader sweep, frame dump index, pipeline statistics, cache metrics, and their `test_*.py` |
@@ -61,7 +61,7 @@ Linux, bash, after installing your distribution's packages from [docs/Deps.md](d
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLICHII_TESTS=ON && cmake --build build --parallel "$(nproc)" && ctest --test-dir build --output-on-failure --parallel "$(nproc)"
 ```
 
-When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/lichii` (`lichii.exe`) and `bin/eden-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
+When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/guarana` (`guarana.exe`) and `bin/guarana-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
 
 ### Verify a change
 

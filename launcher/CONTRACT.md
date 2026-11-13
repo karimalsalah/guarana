@@ -37,9 +37,9 @@ Hard rules (legal and trust):
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
 | `list_controllers` | – | `Controller[]` (connected pads); `controller://changed` carries the new `Controller[]` whenever one connects, disconnects or its battery moves |
-| `warm_shaders` | `{ title_id }` | `WarmResult`; streams `warm://progress` (`WarmProgress`). Runs `<current>\eden-cli.exe --warm-pipelines <title_id> -c %APPDATA%\lichii\config\qt-config.ini` hidden at below-normal priority ("Prepare shaders" on a game card). Refused while `lichii.exe` runs. The launcher also runs it by itself for every title with a shader cache after a GPU driver change (`auto: true` in the events) |
+| `warm_shaders` | `{ title_id }` | `WarmResult`; streams `warm://progress` (`WarmProgress`). Runs `<current>\guarana-cli.exe --warm-pipelines <title_id> -c %APPDATA%\guarana\config\qt-config.ini` (`eden-cli.exe` in a build from before the rename) hidden at below-normal priority ("Prepare shaders" on a game card). Refused while `guarana.exe` (or `lichii.exe`) runs. The launcher also runs it by itself for every title with a shader cache after a GPU driver change (`auto: true` in the events) |
 
-| `stop_warm_shaders` | – | `StopResult`. Ends the running warm-up (the process is ended; eden-cli stops politely only on Ctrl+C), waits up to 15 s and reports. A stopped automatic run is not resumed and its driver counts as done. The pending `warm_shaders` call resolves with status `stopped` |
+| `stop_warm_shaders` | – | `StopResult`. Ends the running warm-up (the process is ended; guarana-cli stops politely only on Ctrl+C), waits up to 15 s and reports. A stopped automatic run is not resumed and its driver counts as done. The pending `warm_shaders` call resolves with status `stopped` |
 | `pick_folder` | `{ title?: string }` | `string \| null` (Windows folder picker; `null` when cancelled) |
 | `get_mode` | – | `ModeStatus`. Refreshes the community data first when it is older than 24 h (6 s at most, then the cache or built-in table) |
 | `set_mode` | `{ mode: "auto" \| "smooth" \| "quality" \| "battery" }` | `ModeStatus`. Saves the mode, clears the autopilot's adjustments for it and writes the settings; `note` says when they wait for the emulator or a warm-up to end |
@@ -57,7 +57,7 @@ the commands are declared with `rename_all = "snake_case"`. Errors reject the pr
 readable string.
 
 When the backend says no (the promise rejects with a sentence to show):
-- `launch_game` while `lichii.exe` already runs, or while shaders of the same title are being
+- `launch_game` while `guarana.exe` (or `lichii.exe`) already runs, or while shaders of the same title are being
   prepared (the message has the percentage; it can start when that finishes). A warm-up of another
   title is stopped first and resumes after the game exits.
 - `apply_profile` while the emulator or a warm-up runs: both save the settings when they end.
@@ -113,7 +113,7 @@ interface WarmProgress { title_id: string;                                    //
   auto: boolean; message?: string; }                                          // auto: the run after a driver change
 interface WarmResult { title_id: string;
   status: "done" | "incomplete" | "stopped" | "nothing built" | "nothing to do" | "failed";
-  seconds: number; built: number; already: number; left: number;             // from eden-cli's last line
+  seconds: number; built: number; already: number; left: number;             // from guarana-cli's last line
   exit_code: number | null;   // 0 ok; 1 configuration problem (see message); 3 nothing built even after the
                               // automatic second run (leave the title to the normal boot); 4 stopped or
                               // pipelines left over: run it again
@@ -176,7 +176,7 @@ class only with at least 3 validated reports, never on battery, and only `fluid_
 `ocarina_extrapolation` and `gm_routing`.
 
 **Autopilot** (`autopilot.rs`). When a game started by the launcher exits, it reads the emulator log
-(`%APPDATA%\lichii\log\eden_log.txt`, then `eden_log.txt.old.txt`, `eden_log.old.txt`, `eden_log.txt.old` and
+(`%APPDATA%\guarana\log\eden_log.txt`, then `eden_log.txt.old.txt`, `eden_log.old.txt`, `eden_log.txt.old` and
 the kept game log, the first with a `Booting game:` line written during the session): the last
 session's `Shown frames:` lines (interval p50/p95, share within 2 ms; the first of three or more windows
 is left out), the `Fluid presenter (10 s...)` stats lines (their presence means it ran; `(N real frames)`
@@ -198,7 +198,7 @@ causes to be written are the ones `apply_profile` writes.
 
 `intel-arc-igpu` (Arc 130T/140T/140V, Meteor/Panther Lake Arc), `amd-igpu-handheld` (Radeon 780M/880M/890M, Z1/Z2),
 `low-power-handheld` (any iGPU on battery: 30 fps cap, lower resolution), `desktop-dgpu`, `safe-defaults`.
-Toggles map to `%APPDATA%\lichii\nx2_switches.txt` lines and `qt-config.ini` keys, e.g.
+Toggles map to `%APPDATA%\guarana\nx2_switches.txt` lines and `qt-config.ini` keys, e.g.
 `frame_generation` → `[Renderer] frame_gen=true, frame_gen_multiplier=3, frame_gen_target_rate=60`,
 `ocarina_extrapolation` → `EDEN_NX2_EXTRAPOLATE=1`, `gm_routing` → `EDEN_NX2_GM=11`,
 `igpu_power_policy` (experimental) → `EDEN_NX2_POWER_POLICY=igpu`, `async_shaders`, `vram_mode`.

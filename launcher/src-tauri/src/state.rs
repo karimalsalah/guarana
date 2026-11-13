@@ -122,9 +122,10 @@ fn save_unlocked(state: &Persisted) -> util::CmdResult<()> {
         .map_err(|e| format!("Could not save the launcher state: {e}"))
 }
 
-/// The folder holding `lichii.exe` in a version folder: the folder itself or its only subfolder.
+/// The folder holding `guarana.exe` (`lichii.exe` in builds from before the rename) in a version
+/// folder: the folder itself or its only subfolder.
 pub fn emulator_dir_in(version_dir: &Path) -> Option<PathBuf> {
-    if version_dir.join(paths::EMULATOR_EXE).is_file() {
+    if paths::emulator_exe_in(version_dir).is_some() {
         return Some(version_dir.to_path_buf());
     }
     let subdirs: Vec<PathBuf> = fs::read_dir(version_dir)
@@ -134,7 +135,7 @@ pub fn emulator_dir_in(version_dir: &Path) -> Option<PathBuf> {
         .map(|e| e.path())
         .collect();
     match subdirs.as_slice() {
-        [only] if only.join(paths::EMULATOR_EXE).is_file() => Some(only.clone()),
+        [only] if paths::emulator_exe_in(only).is_some() => Some(only.clone()),
         _ => None,
     }
 }
@@ -142,7 +143,7 @@ pub fn emulator_dir_in(version_dir: &Path) -> Option<PathBuf> {
 /// Drops entries whose folder is gone and adopts version folders the state does not list (a
 /// deleted or older state file), so `installed` always matches `versions\`.
 fn reconcile_installed(state: &mut Persisted) {
-    state.installed.retain(|v| Path::new(&v.path).join(paths::EMULATOR_EXE).is_file());
+    state.installed.retain(|v| paths::emulator_exe_in(Path::new(&v.path)).is_some());
     let Ok(entries) = fs::read_dir(paths::versions_dir()) else {
         return;
     };
@@ -175,7 +176,7 @@ fn reconcile_installed(state: &mut Persisted) {
 
 pub fn read_current() -> Option<CurrentFile> {
     let current: CurrentFile = serde_json::from_slice(&fs::read(paths::current_file()).ok()?).ok()?;
-    Path::new(&current.path).join(paths::EMULATOR_EXE).is_file().then_some(current)
+    paths::emulator_exe_in(Path::new(&current.path)).is_some().then_some(current)
 }
 
 pub fn write_current(v: &InstalledVersion) -> util::CmdResult<()> {

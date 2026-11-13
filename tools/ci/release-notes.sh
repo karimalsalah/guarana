@@ -17,7 +17,7 @@ macos_ver="${macos_ver#macos-}"
 
 link() { if [[ -e "$dir/$2" ]]; then printf '[%s](%s/%s)' "$1" "$base" "$2"; fi; return 0; }
 join() { if [[ -n "$1" && -n "$2" ]]; then printf '%s · %s' "$1" "$2"; else printf '%s%s' "$1" "$2"; fi; }
-linux_cell() { join "$(link AppImage "eglantine-$1.AppImage")" "$(link tar.gz "eglantine-$1.tar.gz")"; }
+linux_cell() { join "$(link AppImage "guarana-$1.AppImage")" "$(link tar.gz "guarana-$1.tar.gz")"; }
 row() { if [[ -n "$2$3" ]]; then printf '| %s | %s | %s | %s |\n' "$1" "$2" "$3" "${4:-}"; fi; }
 commits() { git log --no-merges --pretty='- %s (`%h`)' "$@" 2>/dev/null | head -n 100 || true; }
 
@@ -70,13 +70,13 @@ EOF2
     printf '\n'
   fi
 
-  w_msvc=$(link 'MSVC zip' eglantine-windows-x86_64.zip)
-  w_pgo=$(link 'MinGW PGO zip' eglantine-windows-x86_64-pgo.zip)
+  w_msvc=$(link 'MSVC zip' guarana-windows-x86_64.zip)
+  w_pgo=$(link 'MinGW PGO zip' guarana-windows-x86_64-pgo.zip)
   if [[ -n "$w_msvc$w_pgo" ]]; then
     cat <<'EOF2'
 ## Windows
 
-Windows packages are in-place zip files: extract and run `eglantine.exe`, or `eden-cli.exe` from a terminal.
+Windows packages are in-place zip files: extract and run `guarana.exe`, or `guarana-cli.exe` from a terminal.
 
 | Build Type | Standard | PGO (Recommended) | Notes |
 | --- | --- | --- | --- |
@@ -86,11 +86,11 @@ EOF2
     printf '\n'
   fi
 
-  m_zip=$(link zip eglantine-macos-arm64.zip)
-  m_dmg=$(link dmg eglantine-macos-arm64.dmg)
+  m_zip=$(link zip guarana-macos-arm64.zip)
+  m_dmg=$(link dmg guarana-macos-arm64.dmg)
   if [[ -n "$m_zip$m_dmg" ]]; then
     printf '## macOS\n\n| Build Type | Standard | PGO (Recommended) | Notes |\n| --- | --- | --- | --- |\n'
-    row 'arm64 (Apple Silicon)' "$(join "$m_zip" "$m_dmg")" '' "macOS ${macos_ver} or newer. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine eglantine.app`. `eden-cli` is inside the app, in `Contents/MacOS`."
+    row 'arm64 (Apple Silicon)' "$(join "$m_zip" "$m_dmg")" '' "macOS ${macos_ver} or newer. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine guarana.app`. `guarana-cli` is inside the app, in `Contents/MacOS`."
     printf '\n'
   fi
 

@@ -42,7 +42,7 @@ to Vulkan.
 | `src/video_core/renderer_vulkan` | The Vulkan backend: rasterizer, pipeline cache, presentation | `vk_pipeline_cache.cpp`, `renderer_vulkan.cpp`, `vk_present_manager.cpp`, `vk_ocarina_camera_motion.cpp`, `present/` |
 | `src/shader_recompiler` | Native shader programs to IR to SPIR-V | `ir_opt/global_memory_to_storage_buffer_pass.cpp`, `backend/spirv/spirv_emit_context.cpp`, `profile.h` |
 | `src/common` | Settings, logging, file paths, host helpers | `settings.h`, `power_policy.cpp`, `power_governor.cpp`, `power_meter.cpp`, `windows/crash_handler.cpp` |
-| `src/lichii`, `src/qt_common` | The Qt frontend (the folder keeps the upstream name) | `nx2_switches.h`, `configuration/configure_graphics.cpp`, `config/shared_translation.cpp` |
+| `src/lichii`, `src/qt_common` | The Qt frontend (`guarana.exe`; the folder keeps the upstream name) | `nx2_switches.h`, `configuration/configure_graphics.cpp`, `config/shared_translation.cpp` |
 | `src/tests` | C++ unit tests (Catch2), built with `-DLICHII_TESTS=ON` | |
 | `tools/bench` | Cross-machine benchmark and play launcher ([README](../tools/bench/README.md)) | New in v20 |
 | `tools/nx2` | Debug MCP adapter, shader and cache tools, their Python tests | `debug_mcp.py`, `pipeline_stats.py` |
@@ -182,7 +182,7 @@ unless the debug server changes them live. A GUI launch cannot set environment v
 `src/lichii/nx2_switches.h` loads `NAME=VALUE` lines from `nx2_switches.txt`:
 
 1. the copy next to the program (shipped from `dist/nx2_switches.txt`; do not edit it);
-2. the user copy, `%APPDATA%\lichii\nx2_switches.txt` (or `$XDG_CONFIG_HOME/lichii/` elsewhere),
+2. the user copy, `%APPDATA%\guarana\nx2_switches.txt` (or `$XDG_CONFIG_HOME/guarana/` elsewhere),
    which wins over the shipped one;
 3. a variable already set in the real environment wins over both.
 

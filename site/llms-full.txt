@@ -32,8 +32,8 @@ This section is the fork's. Everything under "Upstream Lichii guidance" is upstr
 | `src/video_core` | GPU emulation and the Vulkan renderer: buffer and texture caches, `renderer_vulkan/present/` (frame generation, extrapolation, cadence), frame budget, shading-rate governor, `nx2_uma.h` |
 | `src/shader_recompiler` | Maxwell and Ampere programs to SPIR-V. `EDEN_NX2_GM` lives in `ir_opt/global_memory_to_storage_buffer_pass.cpp` and `backend/spirv/` |
 | `src/common` | Settings, logging, host memory, power meter, policy, governor and tuning |
-| `src/lichii`, `src/qt_common` | The Qt frontend (`lichii.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
-| `src/lichii_cmd` | The SDL frontend (`eden-cli`) |
+| `src/lichii`, `src/qt_common` | The Qt frontend (`guarana.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
+| `src/lichii_cmd` | The SDL frontend (`guarana-cli`) |
 | `src/frontend_common` | Shared frontend code, config, the update checker (off in our release builds) |
 | `src/tests` | Catch2 unit tests, built with `-DLICHII_TESTS=ON` into `build/bin/tests` and a few smaller test programs |
 | `tools/nx2` | The debug server's MCP adapter (`debug_mcp.py`), the shader sweep, frame dump index, pipeline statistics, cache metrics, and their `test_*.py` |
@@ -67,7 +67,7 @@ Linux, bash, after installing your distribution's packages from [docs/Deps.md](h
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLICHII_TESTS=ON && cmake --build build --parallel "$(nproc)" && ctest --test-dir build --output-on-failure --parallel "$(nproc)"
 ```
 
-When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/lichii` (`lichii.exe`) and `bin/eden-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
+When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/guarana` (`guarana.exe`) and `bin/guarana-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
 
 ### Verify a change
 
@@ -125,7 +125,7 @@ The synthetic containers in `src/tests/core/nx_fixtures/` are generated test dat
 
 Every `EDEN_NX2_*` switch that Guarana adds, or relies on, with what it does, its status and what it measured. Upstream Lichii has about 170 more; they are in [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md) ("Debugging tools"), [nx2/debug-mcp.md](https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md) and [dist/nx2_switches.txt](https://github.com/karimalsalah/guarana/blob/HEAD/dist/nx2_switches.txt), and are listed here only when we rely on them.
 
-Setting one: an environment variable (`EDEN_NX2_GM=11`) or a `NAME=VALUE` line in `%APPDATA%\lichii\nx2_switches.txt`. Unset or `0` leaves the emulator as it was. Every switch is off by default unless its row says otherwise. Statuses: proven (a measured gain on a verified scene), experimental, diagnostic, default on. Full rows with measurements and code locations: https://github.com/karimalsalah/guarana/blob/HEAD/docs/switches.md
+Setting one: an environment variable (`EDEN_NX2_GM=11`) or a `NAME=VALUE` line in `%APPDATA%\guarana\nx2_switches.txt`. Unset or `0` leaves the emulator as it was. Every switch is off by default unless its row says otherwise. Statuses: proven (a measured gain on a verified scene), experimental, diagnostic, default on. Full rows with measurements and code locations: https://github.com/karimalsalah/guarana/blob/HEAD/docs/switches.md
 
 ### Proven (1)
 
@@ -186,7 +186,7 @@ Setting one: an environment variable (`EDEN_NX2_GM=11`) or a `NAME=VALUE` line i
 
 ## CONTRIBUTING.md
 
-Guarana makes the Lichii Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
+Guarana, a fork of Lichii, makes the Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
 
 Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Chat, setup help and "is anyone on this?" go to the Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM); questions that deserve a lasting answer go to [Discussions](https://github.com/karimalsalah/guarana/discussions). Bugs and device reports stay on GitHub so they can be tracked.
 
@@ -585,7 +585,7 @@ Guarana is open-source software (GPL-3.0-or-later) that contains no Nintendo key
 
 #### What do I need to run it?
 
-A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file.
+A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file. The program is guarana.exe; its data lives in %APPDATA%\guarana, and settings move there automatically from an old %APPDATA%\lichii folder on first start.
 
 #### Which graphics driver should I use?
 

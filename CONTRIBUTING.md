@@ -1,6 +1,6 @@
 # Contributing to Guarana
 
-Guarana makes the Lichii Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
+Guarana, a fork of Lichii, makes the Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
 
 Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Chat, setup help and "is anyone on this?" go to the Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM); questions that deserve a lasting answer go to [Discussions](https://github.com/karimalsalah/guarana/discussions). Bugs and device reports stay on GitHub so they can be tracked.
 

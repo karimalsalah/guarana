@@ -257,15 +257,19 @@ jobs:
           cmake --build build --parallel
           ccache --show-stats -v
 
-      # nxformat is linked statically: lichii.exe must not need an nxformat.dll, which Windows
+      # nxformat is linked statically: guarana.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
-      - name: Check lichii.exe does not import nxformat.dll
+      # A build from before the rename still produces lichii.exe, so that name is checked too.
+      - name: Check guarana.exe does not import nxformat.dll
         run: |
-          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/lichii.exe |
+          exe=build/bin/guarana.exe
+          [ -f "$exe" ] || exe=build/bin/lichii.exe
+          [ -f "$exe" ] || { echo "::error::neither build/bin/guarana.exe nor build/bin/lichii.exe was produced"; exit 1; }
+          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports "$exe" |
             awk '/^(Import|DelayImport) {/ { kind = $1 } /^  Name:/ { print kind, $2 }')
           echo "$imports"
           if grep -qi ' nxformat.dll$' <<< "$imports"; then
-            echo "::error::lichii.exe imports nxformat.dll; nxformat must be linked statically"
+            echo "::error::$(basename "$exe") imports nxformat.dll; nxformat must be linked statically"
             exit 1
           fi
 
@@ -292,7 +296,12 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'test-build'
           New-Item -ItemType Directory -Force $out | Out-Null
-          foreach ($exe in 'lichii.exe', 'eden-cli.exe') {
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/bin/$cli")) { $cli = 'eden-cli.exe' }
+          foreach ($exe in $gui, $cli) {
               if (-not (Test-Path "build/bin/$exe")) {
                   throw "build/bin/$exe was not produced"
               }
@@ -302,7 +311,7 @@ jobs:
               Where-Object { $_.Name -notmatch '(^|_)tests?\.exe$|_probe\.exe$|fuzzer|\.(pdb|ilk|lib|exp)$' } |
               Copy-Item -Destination $out
           Get-ChildItem build/bin -Directory | Copy-Item -Destination $out -Recurse
-          windeployqt --release --no-translations (Join-Path $out 'lichii.exe')
+          windeployqt --release --no-translations (Join-Path $out $gui)
 
       # The folder itself: GitHub zips an artifact on download, and uploading a zip gave a zip
       # inside a zip. pr-build-comment.yml links it on the pull request.

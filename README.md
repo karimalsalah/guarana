@@ -92,15 +92,15 @@ Windows x86-64 zips (plain and PGO), Linux x86-64 and ARM64 (AppImage and tar.gz
 and `SHA256SUMS` to check them. Every number on this page was measured on Windows with a CPU with AVX2 and a current GPU driver.
 
 1. **Download** the build for your system from [Releases](https://github.com/karimalsalah/guarana/releases/latest). To build it yourself: [docs/Build.md](docs/Build.md), or one command: `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` / `bash scripts/build-linux.sh`.
-2. **Extract** it to a writable folder and run **`lichii.exe`**.
+2. **Extract** it to a writable folder and run **`guarana.exe`**.
 3. **Install your keys and firmware:** *Tools → Install Decryption Keys*, then *Tools → Install Firmware*.
 4. **Add your games folder** (double-click the empty game list) and start a game. Each new area compiles shaders and hitches once; later visits use the cache.
 5. **Optional, Ocarina of Time:** *Emulation → Configure… → Graphics → Enable Frame Generation*, **Frame Generation Multiplier** 3, **Target Frame Rate** 60. Extrapolation (`EDEN_NX2_EXTRAPOLATE=1`) is on in the shipped `nx2_switches.txt`; `EDEN_NX2_GM=11` turns itself on for this game only.
 
 More for Ocarina of Time: the [controller guide](docs/user/Controllers.md), the [Dynamic FPS add-on](docs/nx2/ocarina-dynamic-fps.md), the [anti-aliasing network bypass](docs/nx2/oot-network-bypass.md) and the opt-in `EDEN_NX2_POWER_POLICY=igpu` (experimental, not measured yet).
 
-Settings, saves and caches live in `%APPDATA%\lichii`, **the same folder upstream Lichii uses**: back it up before switching between the two.
-Put your own switch lines in `%APPDATA%\lichii\nx2_switches.txt`, not the copy next to `lichii.exe`. Every switch is in [docs/switches.md](docs/switches.md).
+Settings, saves and caches live in `%APPDATA%\guarana`, and on first start Guarana moves your settings over automatically from the old `%APPDATA%\lichii` folder (the old folder stays in place). On Linux the folder is `guarana` in your config directory (`$XDG_CONFIG_HOME/guarana`).
+Put your own switch lines in `%APPDATA%\guarana\nx2_switches.txt`, not the copy next to `guarana.exe`. Every switch is in [docs/switches.md](docs/switches.md).
 Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
 
 ## AI-native: plug in your agent

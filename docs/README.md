@@ -105,7 +105,7 @@ Working notes from specific games and sweeps. Useful as history and as templates
 
 ## User handbook (inherited from Eden)
 
-Player guides written for upstream Eden. They apply to Guarana where the program is called `lichii`
+Player guides written for upstream Eden. They apply to Guarana where the program is called `guarana`
 instead of `eden`; [Troubleshoot.md](user/Troubleshoot.md) and [Controllers.md](user/Controllers.md) are the most useful.
 
 | Doc | What it is |

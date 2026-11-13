@@ -5,7 +5,7 @@
   <name>Guarana</name>
   <summary>Experimental Nintendo Switch and Switch 2 emulator</summary>
   <description>
-    <p>Guarana is an experimental open-source emulator based on Lichii, Eden, Eglantine and yuzu. Compatibility and performance vary by game and hardware.</p>
+    <p>Guarana is an experimental open-source emulator fork of Lichii, based on Eglantine and Eden, with work inherited from yuzu and Sudachi. Compatibility and performance vary by game and hardware.</p>
   </description>
   <launchable type="desktop-id">io.github.zortos293.lichii.desktop</launchable>
   <provides><binary>guarana</binary></provides>

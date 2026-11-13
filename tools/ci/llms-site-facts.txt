@@ -304,7 +304,7 @@ Guarana is open-source software (GPL-3.0-or-later) that contains no Nintendo key
 
 ### What do I need to run it?
 
-A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file.
+A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file. The program is guarana.exe; its data lives in %APPDATA%\guarana, and settings move there automatically from an old %APPDATA%\lichii folder on first start.
 
 ### Which graphics driver should I use?
 

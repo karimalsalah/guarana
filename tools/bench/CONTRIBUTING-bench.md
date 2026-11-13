@@ -6,7 +6,7 @@ repository root; [README.md](README.md) explains every option.
 
 ## 1. Prepare
 
-- A Lichii build with the debug server, the game, and a save standing in the scene (the scene
+- A Guarana build with the debug server, the game, and a save standing in the scene (the scene
   file's `notes` say where: for `oot-hyrule-field`, Hyrule Field in the third file-select entry).
   Copy that save folder (`<user-dir>/nand/user/save`) somewhere: it is your `--save-backup`.
 - Plug the machine in, close browsers, launchers and overlays, pause updates, and do not touch
@@ -14,7 +14,7 @@ repository root; [README.md](README.md) explains every option.
 - Set the common options once (PowerShell shown; `--user-dir` only if yours is not the default):
 
 ```
-$common = '--exe', 'C:\path\lichii.exe', '--game', 'C:\path\game.nup', '--save-backup', 'C:\path\save-backup',
+$common = '--exe', 'C:\path\guarana.exe', '--game', 'C:\path\game.nup', '--save-backup', 'C:\path\save-backup',
           '--reference', 'tools\bench\reference\oot-hyrule-field.png'
 ```
 

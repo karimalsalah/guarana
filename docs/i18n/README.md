@@ -23,7 +23,7 @@ The English README is the reference. If a translation and the English text disag
 
 ## What stays in English
 
-Product names (Guarana, Lichii, Eden), commands, environment variables such as `EDEN_NX2_GM=11`, file names such as `lichii.exe`, menu paths, and URLs are kept in English in every translation, so they match the software and the links work.
+Product names (Guarana, Lichii, Eden), commands, environment variables such as `EDEN_NX2_GM=11`, file names such as `guarana.exe`, menu paths, and URLs are kept in English in every translation, so they match the software and the links work.
 
 ## Keeping them in sync
 

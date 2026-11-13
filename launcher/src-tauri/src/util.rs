@@ -148,14 +148,15 @@ fn process_running(names: &[&str]) -> bool {
     })
 }
 
-/// The emulator (`lichii.exe`, from any folder).
+/// The emulator (`guarana.exe`, or `lichii.exe` from before the rename; from any folder).
 pub fn emulator_running() -> bool {
-    process_running(&["lichii.exe"])
+    process_running(&[crate::paths::EMULATOR_EXE, crate::paths::EMULATOR_EXE_LEGACY])
 }
 
-/// A shader warm-up (`eden-cli.exe`): it saves the configuration and caches when it ends.
+/// A shader warm-up (`guarana-cli.exe`, or `eden-cli.exe` from before the rename): it saves the
+/// configuration and caches when it ends.
 pub fn warm_up_running() -> bool {
-    process_running(&["eden-cli.exe"])
+    process_running(&[crate::paths::CLI_EXE, crate::paths::CLI_EXE_LEGACY])
 }
 
 /// Opens an `https://` page in the default browser. Anything else is refused.

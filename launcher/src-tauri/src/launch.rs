@@ -1,6 +1,6 @@
 //! `launch_game` and `prefetch_caches`.
 //!
-//! The emulator boots a game with `lichii.exe -f -g <path>`: `-g/--game` is the file and
+//! The emulator boots a game with `guarana.exe -f -g <path>` (`lichii.exe` in builds from before the rename): `-g/--game` is the file and
 //! `-f/--fullscreen` starts it fullscreen (`src/core/launch_params.cpp`, read by
 //! `MainWindow::MainWindow` in `src/lichii/main_window.cpp`). Without a path it opens its own
 //! window.
@@ -94,10 +94,12 @@ pub fn launch(
     let st = app.state::<AppState>();
     let persisted = st.load();
     let current = state::current_version(&persisted).ok_or("Guarana is not installed yet")?;
-    let exe = Path::new(&current.path).join(paths::EMULATOR_EXE);
-    if !exe.is_file() {
-        return Err(format!("{} is missing: reinstall this version", exe.display()));
-    }
+    let exe = paths::emulator_exe_in(Path::new(&current.path)).ok_or_else(|| {
+        format!(
+            "{} is missing: reinstall this version",
+            Path::new(&current.path).join(paths::EMULATOR_EXE).display()
+        )
+    })?;
     if util::emulator_running() {
         return Err("Guarana is already running: close it first".into());
     }

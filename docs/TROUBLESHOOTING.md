@@ -20,10 +20,10 @@ matches, [report it](#reporting-a-problem). Upstream's handbook covers more gene
 
 ## First: find the log
 
-Open **File → Open Lichii Folders → Log Folder**. The current session writes `eden_log.txt`; the
+Open **File → Open Guarana Folders → Log Folder**. The current session writes `eden_log.txt`; the
 session before it is kept as `eden_log.txt.old.txt`. The first line names the build. On Windows the
-folder is `%APPDATA%\lichii\log` (v20 keeps the upstream folder name), or `user\log` next to
-`lichii.exe` in a portable install. The log contains paths from your machine: read it before you
+folder is `%APPDATA%\guarana\log`, or `user\log` next to
+`guarana.exe` in a portable install. The log contains paths from your machine: read it before you
 share it.
 
 ## It closes at once or does not start
@@ -35,7 +35,7 @@ share it.
 - **Missing Visual C++ runtime, or damaged system files.** Follow upstream's
   [fails to launch](user/Troubleshoot.md#eden-fails-to-launch-and-does-not-leave-any-logs) guide.
 - **Started from inside the zip.** Extract the whole zip into a folder you can write to, then run
-  `lichii.exe` from there.
+  `guarana.exe` from there.
 - **Vulkan initialization error.** Update your GPU driver; see upstream's
   [Vulkan initialization error](user/Troubleshoot.md#vulkan-initialization-error) steps.
 
@@ -98,7 +98,7 @@ experimental); see [roadmap N1](../ROADMAP.md#n1-vblank-locked-presenter-for-gen
 
 ## The play config does not apply
 
-1. The file must be `%APPDATA%\lichii\nx2_switches.txt`. Windows can hide extensions: make sure it
+1. The file must be `%APPDATA%\guarana\nx2_switches.txt`. Windows can hide extensions: make sure it
    is not `nx2_switches.txt.txt`.
 2. One `NAME=VALUE` per line; lines starting with `#` are ignored. Restart the emulator after every
    edit.
@@ -137,7 +137,7 @@ pipelines that fail with `VK_ERROR_OUT_OF_HOST_MEMORY`, or a crash during the fi
 
 - **Plug in.** On battery, laptops and handhelds usually run at a lower power limit.
 - **Close heavy background programs.** An integrated GPU shares memory and power with everything
-  else. `python -I tools/bench/play.py --exe <lichii.exe> --game <game> --dry-run` lists the
+  else. `python -I tools/bench/play.py --exe <guarana.exe> --game <game> --dry-run` lists the
   processes using the most CPU and GPU memory, and changes nothing.
 - **Name your driver.** The published numbers use Intel driver 32.0.101.9175; other versions may
   behave differently.
