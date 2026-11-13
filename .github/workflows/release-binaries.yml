@@ -117,14 +117,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building $channel $version from $sha (publish: $publish)"
 
-      # Root files (CHANGELOG.md) and tools/ci at the tagged commit.
+      # Root files (CHANGELOG.md) and tools/ci at the tagged commit; tools/ingest is what
+      # tools/ci/thanks.py imports (github_api.py).
       - name: Check out CHANGELOG.md
-        if: steps.plan.outputs.channel == 'release'
+        if: steps.plan.outputs.publish == 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.plan.outputs.sha }}
           persist-credentials: false
-          sparse-checkout: tools/ci
+          sparse-checkout: |
+            tools/ci
+            tools/ingest
 
       # Checked before anything is built: a tag without notes fails here, not after the builds.
       - name: Write the release notes
@@ -156,6 +159,10 @@ jobs:
               printf '> **Pre-release of %s.** Test it and report problems before the final release.\n\n' "${VERSION%%-*}"
             fi > notes/changes.md
             printf '%s\n' "$section" >> notes/changes.md
+            # Every section ends by thanking the people with a commit or a Co-authored-by trailer
+            # since the previous release tag (people only, like the hall of fame).
+            thanks=$(python3 -I tools/ci/thanks.py --repo "$GITHUB_REPOSITORY" --head "$SHA" --tag "$TAG") || thanks=
+            if [ -n "$thanks" ]; then printf '\n%s\n' "$thanks" >> notes/changes.md; fi
           else
             previous=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2> /dev/null) || previous=
             {
@@ -168,6 +175,8 @@ jobs:
                   changes="- The previous nightly ($previous) could not be compared with this one."
                 printf '%s\n' "$changes" | tail -n 100
                 printf '\n'
+                thanks=$(python3 -I tools/ci/thanks.py --repo "$GITHUB_REPOSITORY" --head "$SHA" --base "$previous") || thanks=
+                if [ -n "$thanks" ]; then printf '%s\n\n' "$thanks"; fi
               fi
             } > notes/changes.md
           fi
