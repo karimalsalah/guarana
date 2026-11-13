@@ -1670,7 +1670,11 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     if (UseFluidQueue(frame, extent)) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
-        if (fluid_copy_ahead_request && !frame->frame_gen) {
+        bool streamline_frame = false;
+#ifdef EGLANTINE_STREAMLINE
+        streamline_frame = frame->frame_gen;
+#endif
+        if (fluid_copy_ahead_request && !streamline_frame) {
             // Presented at the next slot's wake (FluidPresentAhead).
             fluid_ahead_pending = true;
             fluid_ahead_frame = frame;
