@@ -1212,6 +1212,16 @@ bool BootAsyncRequested() {
     }();
     return requested;
 }
+
+/// EDEN_NX2_CACHE_MMAP=1: the boot load maps the shader cache log instead of copying it, and
+/// decodes its Program records on the shader job workers
+bool CacheMapRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_CACHE_MMAP");
+        return value != nullptr && value[0] == '1';
+    }();
+    return requested;
+}
 } // Anonymous namespace
 
 /// A boot load whose graphics builds outlive LoadDiskResources: the ".booting" marker and the
@@ -1627,12 +1637,20 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     Common::BootTiming::Mark("shaders: reading the shader cache log");
     // Without the lock: another emulator's appends are complete records or a cut-off tail.
     // The payload hashes are checked on the shader job workers.
-    auto log_v2 = std::make_shared<CacheV2::LogFile>(CacheV2::ReadLogFile(
-        pipeline_cache_filename, [this](size_t count, const std::function<void(size_t)>& task) {
-            VideoCommon::ParallelFor(*shader_jobs, count, task);
-        }));
+    const CacheV2::ForEach on_shader_jobs = [this](size_t count,
+                                                   const std::function<void(size_t)>& task) {
+        VideoCommon::ParallelFor(*shader_jobs, count, task);
+    };
+    const bool map_log = CacheMapRequested();
+    if (map_log) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_CACHE_MMAP: the shader cache log is mapped, its "
+                                "programs decoded on the shader job workers");
+    }
+    auto log_v2 = std::make_shared<CacheV2::LogFile>(
+        map_log ? CacheV2::MapLogFile(pipeline_cache_filename, on_shader_jobs)
+                : CacheV2::ReadLogFile(pipeline_cache_filename, on_shader_jobs));
     Common::BootTiming::Mark("shaders: shader cache log read and checked");
-    cache_v2->LoadPrograms(log_v2->parsed.live);
+    cache_v2->LoadPrograms(log_v2->parsed.live, map_log ? on_shader_jobs : CacheV2::ForEach{});
     const CacheV2::LogStats& stats = log_v2->parsed.stats;
     LOG_INFO(Render_Vulkan,
              "Shader cache v2: {} bytes, {} live records, {} superseded, {} tombstones, {} "
@@ -2382,6 +2400,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                           state.incomplete);
     // The records the load never chooses go by tombstones, and the log is compacted once a
     // quarter of it is records no load reads.
+    bool compact_log{};
     if (!stop_loading.stop_requested()) {
         for (const auto* removed : {&state.incomplete, &state.copies}) {
             for (const VideoCommon::PipelineRecord& record : *removed) {
@@ -2391,12 +2410,15 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             }
         }
         const CacheV2::LogStats& stats = log->parsed.stats;
-        if (stats.dead_bytes != 0 && stats.dead_bytes >= stats.file_size / 4) {
-            cache_v2->Writer().Compact();
-        }
+        compact_log = stats.dead_bytes != 0 && stats.dead_bytes >= stats.file_size / 4;
     }
     records.clear();
     log.reset();
+    // Asked once the log read here is let go: on Windows a mapped log (EDEN_NX2_CACHE_MMAP) can't
+    // be replaced while it is mapped.
+    if (compact_log) {
+        cache_v2->Writer().Compact();
+    }
 
     if (use_vulkan_pipeline_cache && !async_boot) {
         // Its size from the save's own read: another read would need the build lock as well

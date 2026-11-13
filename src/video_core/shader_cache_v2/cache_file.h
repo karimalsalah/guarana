@@ -9,15 +9,19 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "common/fs/mapped_file.h"
 #include "common/scratch_buffer.h"
 #include "video_core/shader_cache_v2/cache_format.h"
 
 namespace VideoCommon::ShaderCacheV2 {
 
-/// A log read into memory; `parsed` points into `bytes`.
+/// A log read into memory; `parsed` points into `bytes`, or into `mapping` when it was mapped
+/// (MapLogFile).
 struct LogFile {
     /// Not zeroed before the read: a log is hundreds of MB
     Common::ScratchBuffer<u8> bytes;
+    /// Empty unless the log was mapped
+    Common::FS::MappedFile mapping;
     ParsedLog parsed;
 
     LogFile() = default;
@@ -31,6 +35,13 @@ struct LogFile {
 /// ignores one cut off by an append still in progress. A missing file reads as empty. See ParseLog
 /// for `for_each`.
 [[nodiscard]] LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each = {});
+
+/// Reads the log as ReadLogFile does, through a read-only memory map of the bytes the file held
+/// then instead of a copy (Common::FS::MappedFile); records appended later are not read. Read as
+/// ReadLogFile does when the file is missing, empty or can't be mapped. The records point into
+/// the mapping, which ends with the LogFile. While it lasts, on Windows, a compaction can fail to
+/// replace the file: the file stays as it was.
+[[nodiscard]] LogFile MapLogFile(const std::filesystem::path& file, const ForEach& for_each = {});
 
 enum class WriteResult {
     Written,

@@ -77,6 +77,16 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
     return log;
 }
 
+LogFile MapLogFile(const std::filesystem::path& file, const ForEach& for_each) {
+    LogFile log;
+    log.mapping = Common::FS::MappedFile{file};
+    if (!log.mapping.IsMapped()) {
+        return ReadLogFile(file, for_each);
+    }
+    log.parsed = ParseLog(log.mapping.Bytes(), for_each);
+    return log;
+}
+
 WriteResult AppendToLog(const std::filesystem::path& file, std::span<const u8> records) {
     // Without locks on this file system (the lock is neither held nor busy) it goes on as the
     // other caches do there.
