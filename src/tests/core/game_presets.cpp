@@ -175,6 +175,7 @@ TEST_CASE("A game preset sums up what it did in one line", "[core][game_presets]
 }
 
 TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches", "[core][game_presets]") {
+#ifdef _WIN32
     const auto names = [](std::span<const SwitchValue> items) {
         std::string joined;
         for (const SwitchValue& item : items) {
@@ -182,7 +183,6 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
         }
         return joined;
     };
-#ifdef _WIN32
     const std::string intel = names(SwitchDefaults(OcarinaTitleId, Arc140T));
     CHECK(intel.find("EDEN_NX2_FLUID=2 ") != std::string::npos);
     CHECK(intel.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
