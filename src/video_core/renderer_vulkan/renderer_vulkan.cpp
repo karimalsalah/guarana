@@ -779,7 +779,9 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
             first = (std::max)(first, fluid_last_real_slot + slots.divisor);
         }
     }
-    wanted = (std::min<size_t>)(wanted, 11);
+    // At most two more than the cadence's share: each extra frame costs GPU time, and a game that
+    // slows down must not get still more frames to make (and so slow down further).
+    wanted = (std::min<size_t>)(wanted, (std::min<size_t>)(generations + 2, 11));
     size_t made = 0;
     for (size_t generation = 0; generation < wanted; ++generation) {
         // Never waits: with no frame to spare the real frame comes sooner.
