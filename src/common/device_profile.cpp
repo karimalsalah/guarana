@@ -86,6 +86,83 @@ std::string_view NpuName(NpuPresence npu) {
     return "unknown";
 }
 
+constexpr u32 VendorAmd = 0x1002;
+constexpr u32 VendorIntel = 0x8086;
+
+// VkDriverId values (Vulkan specification): common does not include the Vulkan headers.
+constexpr u32 DriverAmdProprietary = 1;
+constexpr u32 DriverAmdOpenSource = 2;
+constexpr u32 DriverMesaRadv = 3;
+constexpr u32 DriverIntelProprietaryWindows = 5;
+constexpr u32 DriverIntelOpenSourceMesa = 6;
+
+struct FamilyRow {
+    u32 vendor_id;
+    u32 device_id;
+    /// Empty when the ID alone decides, else a part of the name the device must report.
+    std::string_view name_part;
+    GpuFamily family;
+};
+
+// Intel IDs are from the Linux kernel's include/drm/intel/pciids.h and Intel's own listings of
+// the GPUs its i915 and Xe drivers support (dgpu-docs.intel.com, "Supported hardware"); AMD IDs
+// are from libdrm's data/amdgpu.ids. A name part is needed where one ID covers more than one
+// family: AMD's IDs are shared by several Radeon parts told apart by PCI revision, which Vulkan
+// does not report, and two Intel IDs are in the kernel's list without Intel naming the part.
+constexpr std::array FamilyRows{
+    // Meteor Lake: Intel lists 7D55 as "Intel Arc Graphics" (128/112 EUs); 7DD5, 7D40 and 7D45
+    // are "Intel Graphics" and in no family.
+    FamilyRow{VendorIntel, 0x7D55, {}, GpuFamily::IntelArcMeteorLake},
+    // Arrow Lake-H: Intel lists 7D51 as "Intel Graphics" with 128/112 EUs. The kernel has 7DD1
+    // as Arrow Lake-H too, which Intel does not list: it goes by the name.
+    FamilyRow{VendorIntel, 0x7D51, {}, GpuFamily::IntelArrowLakeH},
+    FamilyRow{VendorIntel, 0x7DD1, "140T", GpuFamily::IntelArrowLakeH},
+    FamilyRow{VendorIntel, 0x7DD1, "130T", GpuFamily::IntelArrowLakeH},
+    // Lunar Lake: Intel lists 64A0 as "Intel Arc Graphics" (64/56 EUs) and 6420 as "Intel
+    // Graphics". The kernel has 64B0 too, which Intel does not list: it goes by the name.
+    FamilyRow{VendorIntel, 0x64A0, {}, GpuFamily::IntelArcLunarLake},
+    FamilyRow{VendorIntel, 0x64B0, "140V", GpuFamily::IntelArcLunarLake},
+    FamilyRow{VendorIntel, 0x64B0, "130V", GpuFamily::IntelArcLunarLake},
+    // Panther Lake: Intel lists B090 and B0A0 as "Intel Graphics" (4/3/2 Xe3 cores), B081, B083,
+    // B085 and B087 as the Arc B370 (11/10 Xe3 cores) and B080, B082, B084 and B086 as the Arc
+    // B390 (12 Xe3 cores). B08F, B0A1 and B0B0 are in the kernel's list only.
+    FamilyRow{VendorIntel, 0xB090, {}, GpuFamily::IntelGraphicsPantherLake},
+    FamilyRow{VendorIntel, 0xB0A0, {}, GpuFamily::IntelGraphicsPantherLake},
+    FamilyRow{VendorIntel, 0xB081, {}, GpuFamily::IntelArcB370},
+    FamilyRow{VendorIntel, 0xB083, {}, GpuFamily::IntelArcB370},
+    FamilyRow{VendorIntel, 0xB085, {}, GpuFamily::IntelArcB370},
+    FamilyRow{VendorIntel, 0xB087, {}, GpuFamily::IntelArcB370},
+    FamilyRow{VendorIntel, 0xB080, {}, GpuFamily::IntelArcB390},
+    FamilyRow{VendorIntel, 0xB082, {}, GpuFamily::IntelArcB390},
+    FamilyRow{VendorIntel, 0xB084, {}, GpuFamily::IntelArcB390},
+    FamilyRow{VendorIntel, 0xB086, {}, GpuFamily::IntelArcB390},
+    // Phoenix and Hawk Point: 15BF is also the 760M and 740M, 1900 also the 760M.
+    FamilyRow{VendorAmd, 0x15BF, "780M", GpuFamily::AmdRadeon780M},
+    FamilyRow{VendorAmd, 0x1900, "780M", GpuFamily::AmdRadeon780M},
+    // Strix Point: 150E is the 880M and the 890M.
+    FamilyRow{VendorAmd, 0x150E, "880M", GpuFamily::AmdRadeon880M},
+    FamilyRow{VendorAmd, 0x150E, "890M", GpuFamily::AmdRadeon890M},
+    // Strix Halo: 1586 is also the 8050S and 8040S.
+    FamilyRow{VendorAmd, 0x1586, "8060S", GpuFamily::AmdRadeon8060S},
+    // The Steam Deck's: 163F is only "AMD Custom GPU 0405" (LCD), 1435 "AMD Custom GPU 0932"
+    // (OLED).
+    FamilyRow{VendorAmd, 0x163F, {}, GpuFamily::AmdCustomGpu0405},
+    FamilyRow{VendorAmd, 0x1435, {}, GpuFamily::AmdCustomGpu0932},
+};
+
+/// Whether the driver is the vendor's own, on Windows or in Mesa.
+bool NativeDriver(u32 vendor_id, u32 driver_id) {
+    switch (vendor_id) {
+    case VendorIntel:
+        return driver_id == DriverIntelProprietaryWindows || driver_id == DriverIntelOpenSourceMesa;
+    case VendorAmd:
+        return driver_id == DriverAmdProprietary || driver_id == DriverAmdOpenSource ||
+               driver_id == DriverMesaRadv;
+    default:
+        return false;
+    }
+}
+
 DeviceClass ClassOf(const DeviceProfile& profile) {
     switch (profile.gpu.kind) {
     case GpuKind::Integrated: {
@@ -337,8 +414,58 @@ bool IsUnifiedMemory(GpuKind kind, u32 heaps, u32 device_local_heaps) {
            (heaps != 0 && device_local_heaps == heaps);
 }
 
+GpuFamily ClassifyGpuFamily(u32 vendor_id, u32 device_id, std::string_view device_name,
+                            u32 driver_id, GpuKind kind) {
+    if (kind != GpuKind::Integrated || !NativeDriver(vendor_id, driver_id)) {
+        return GpuFamily::None;
+    }
+    const auto it = std::ranges::find_if(FamilyRows, [&](const FamilyRow& row) {
+        return row.vendor_id == vendor_id && row.device_id == device_id &&
+               (row.name_part.empty() ||
+                device_name.find(row.name_part) != std::string_view::npos);
+    });
+    return it != FamilyRows.end() ? it->family : GpuFamily::None;
+}
+
+std::string_view GpuFamilyName(GpuFamily family) {
+    switch (family) {
+    case GpuFamily::IntelArcMeteorLake:
+        return "IntelArcMeteorLake";
+    case GpuFamily::IntelArrowLakeH:
+        return "IntelArrowLakeH";
+    case GpuFamily::IntelArcLunarLake:
+        return "IntelArcLunarLake";
+    case GpuFamily::IntelGraphicsPantherLake:
+        return "IntelGraphicsPantherLake";
+    case GpuFamily::IntelArcB370:
+        return "IntelArcB370";
+    case GpuFamily::IntelArcB390:
+        return "IntelArcB390";
+    case GpuFamily::AmdRadeon780M:
+        return "AmdRadeon780M";
+    case GpuFamily::AmdRadeon880M:
+        return "AmdRadeon880M";
+    case GpuFamily::AmdRadeon890M:
+        return "AmdRadeon890M";
+    case GpuFamily::AmdRadeon8060S:
+        return "AmdRadeon8060S";
+    case GpuFamily::AmdCustomGpu0405:
+        return "AmdCustomGpu0405";
+    case GpuFamily::AmdCustomGpu0932:
+        return "AmdCustomGpu0932";
+    case GpuFamily::None:
+    case GpuFamily::Count:
+        break;
+    }
+    return "None";
+}
+
 DeviceClassification Classify(const DeviceProfile& profile) {
-    return {.device_class = ClassOf(profile), .label = Label(profile)};
+    const GpuProfile& gpu = profile.gpu;
+    return {.device_class = ClassOf(profile),
+            .gpu_family = ClassifyGpuFamily(gpu.vendor_id, gpu.device_id, gpu.model,
+                                            gpu.driver_id, gpu.kind),
+            .label = Label(profile)};
 }
 
 std::string_view DeviceClassName(DeviceClass device_class) {
@@ -432,10 +559,11 @@ std::string DescribeDeviceProfile(const DeviceProfile& profile,
     const GpuProfile& gpu = profile.gpu;
     const CpuProfile& cpu = profile.cpu;
     return fmt::format(
-        "class={} label=\"{}\" gpu_vendor={} gpu_model=\"{}\" gpu_type={} gpu_driver={} "
-        "gpu_local_mib={} gpu_uma={} cpu_logical={} cpu_physical={} cpu_hybrid={} ram_mib={} "
-        "ram_source={} power={} display_hz={} npu={}",
-        DeviceClassName(classification.device_class), classification.label,
+        "class={} gpu_family={} label=\"{}\" gpu_vendor={} gpu_model=\"{}\" gpu_type={} "
+        "gpu_driver={} gpu_local_mib={} gpu_uma={} cpu_logical={} cpu_physical={} cpu_hybrid={} "
+        "ram_mib={} ram_source={} power={} display_hz={} npu={}",
+        DeviceClassName(classification.device_class), GpuFamilyName(classification.gpu_family),
+        classification.label,
         GpuVendorName(gpu.vendor_id), gpu.model, GpuKindName(gpu.kind),
         gpu.driver.empty() ? std::string_view{"unknown"} : std::string_view{gpu.driver},
         gpu.local_memory >> 20, gpu.uma ? "yes" : "no", cpu.logical, cpu.physical,

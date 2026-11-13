@@ -24,13 +24,19 @@ struct GpuInfo {
     bool software_tensor_math{};
     /// The machine's device class (Common::Classify). No preset or switch default uses it yet.
     Common::DeviceClass device_class{Common::DeviceClass::Unknown};
+    /// The GPU's model family (Common::ClassifyGpuFamily). No preset or switch default uses it
+    /// yet.
+    Common::GpuFamily gpu_family{Common::GpuFamily::None};
 };
 
-/// What a preset asks of the GPU. Unknown takes any vendor, a false flag takes either state.
+/// What a preset asks of the GPU. Unknown takes any vendor or device class, None any GPU family,
+/// a false flag takes either state.
 struct GpuMatch {
     GameSettings::GPUVendor vendor{GameSettings::GPUVendor::Unknown};
     bool integrated{};
     bool software_tensor_math{};
+    Common::DeviceClass device_class{Common::DeviceClass::Unknown};
+    Common::GpuFamily gpu_family{Common::GpuFamily::None};
 };
 
 /// A switchable setting by its label, and the value as BasicSetting::ToString gives it.
