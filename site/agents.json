@@ -25,10 +25,20 @@
   "agent_entry_files": {
     "claude_code": ["CLAUDE.md", ".mcp.json"],
     "codex": ["AGENTS.md"],
+    "gemini_cli": ["GEMINI.md"],
     "github_copilot": [".github/copilot-instructions.md"],
-    "cursor": [".cursor/rules/project.mdc"],
-    "aider": ["AGENTS.md"],
+    "cursor": [".cursor/rules/guarana.mdc"],
+    "windsurf": ["AGENTS.md", ".windsurfrules"],
+    "cline": ["AGENTS.md", ".clinerules/guarana.md"],
+    "aider": [".aider.conf.yml", "CONVENTIONS.md"],
     "other": ["AGENTS.md"]
+  },
+  "quickstart": {
+    "doc": "docs/AI-QUICKSTART.md",
+    "issue_url": "https://github.com/karimalsalah/guarana/issues/{n}",
+    "task": "Read AGENTS.md, then fix {issue_url}",
+    "claude_code": "claude \"Read AGENTS.md, then fix {issue_url}\"",
+    "web_chat_context": "https://karimalsalah.github.io/guarana/llms-full.txt"
   },
   "work_queue": {
     "label": "agent-ready",
@@ -113,6 +123,7 @@
   },
   "contact": {
     "questions": "https://github.com/karimalsalah/guarana/discussions",
+    "chat": "https://discord.gg/urz7vMdRM",
     "issues": "https://github.com/karimalsalah/guarana/issues",
     "security": "https://github.com/karimalsalah/guarana/security/advisories/new",
     "security_policy": "SECURITY.md"

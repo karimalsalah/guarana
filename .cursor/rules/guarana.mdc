@@ -1,0 +1,10 @@
+---
+description: "Guarana: read AGENTS.md first"
+globs:
+alwaysApply: true
+---
+
+@AGENTS.md
+
+AGENTS.md at the repository root is the source of truth for this repository: read it before changing
+anything. The one-command start for every tool is in docs/AI-QUICKSTART.md.

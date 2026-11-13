@@ -194,7 +194,11 @@ class AgentsPageTests(unittest.TestCase):
         self.assertIn("agents.json", page.hrefs)
         for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', text, re.S):
             json.loads(block)
-        self.assertEqual(page.scripts, [])
+        # The only script is the copy button of the one-paste prompt: text only, no libraries.
+        self.assertEqual(len(page.scripts), 1)
+        self.assertIn("copy-prompt", page.scripts[0])
+        for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
+            self.assertNotIn(forbidden, page.scripts[0])
 
 
 class LlmsTxtTests(unittest.TestCase):

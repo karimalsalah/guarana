@@ -35,12 +35,15 @@ Key facts:
 - [Latest release](https://github.com/karimalsalah/guarana/releases/latest): the only official download
 - [Device report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml): how to report results for any device
 - [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md): rules for AI coding agents
+- [AI quickstart](https://github.com/karimalsalah/guarana/blob/HEAD/docs/AI-QUICKSTART.md): from zero to a pull request, one command per tool (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline) and a paste-in prompt for web chats
+- [Discord](https://discord.gg/urz7vMdRM): chat, setup help and real-time help from contributors (bugs and device reports stay on GitHub)
+- [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html): everyone credited for good, rebuilt daily from the git history; data in [legacy.json](https://karimalsalah.github.io/guarana/data/legacy.json)
 - [Debug MCP server](https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md): lets an agent read status, frame times, screenshots and logs from a running game and send input
 - [Bench harness](https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md): runs a scene the same way on any machine and writes JSON rows
 
 ## Optional
 
-- [Full text for LLMs](https://karimalsalah.github.io/guarana/llms-full.txt): every fact on this site in one file
+- [Full text for LLMs](https://karimalsalah.github.io/guarana/llms-full.txt): the project in one file for a web chat: the rules (AGENTS.md), repository map, build and test commands, the switch overview, CONTRIBUTING, a legal summary and every fact on this site; rebuilt from the repository on every deploy
 - [Intel Arc 140T](https://karimalsalah.github.io/guarana/devices/arc-140t.html): Tested. 14.75 → 22.83 game fps in Hyrule Field (GM=11, frame generation off).
 - [Intel Arc 140V](https://karimalsalah.github.io/guarana/devices/arc-140v.html): Community reports. Third-party report: 22–24 fps in gameplay, on another build.
 - [Intel Arc (Meteor Lake)](https://karimalsalah.github.io/guarana/devices/meteor-lake-arc.html): Untested. Xe-LPG, up to 8 Xe-cores. No reports yet.

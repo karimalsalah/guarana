@@ -41,6 +41,10 @@ on:
       - "site/llms.txt"
       - "docs/AGENTS-INVITE.md"
       - "docs/FEEDBACK.md"
+      - "docs/AI-QUICKSTART.md"
+      - "site/agents.html"
+      - "README.md"
+      - "SUPPORT.md"
 
 permissions: {}
 
