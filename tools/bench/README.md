@@ -210,9 +210,12 @@ and are optional, so older rows stay valid.
 | `log` | string or null | `logs/<id>.log.txt`: the copy of the emulator log (not in git) |
 | `trace` | object or null | from the last `DKB gpu_work`, `gpu_pass` and `gpu_frame` log lines: `work` (its totals and `top`: the 8 costliest shader pairs with `ms`, `count`, `max_ms`), `pass` (totals and `top` render targets), `frame` (`gpu_frame_span_ms`, `gpu_submission_sum_ms`, `gpu_busy_ms`, submissions). Present when the variant set `EDEN_DKB_FRAME_TRACE=1` |
 
-`python -I tools/bench/bench.py validate <file.jsonl> ...` checks rows against this schema (types,
-consistency of `valid` and `probe`, the median, the machine id, no home directory paths) and
-exits 1 on any problem. CI runs it on contributed rows.
+`python -I tools/bench/bench.py validate <file.jsonl or folder> ...` checks rows against this schema
+(types, consistency of `valid` and `probe`, the median, the machine id, no home directory paths)
+and exits 1 on any problem; a folder stands for the `.jsonl` files in it. On every pull request
+that touches `tools/bench/`, CI (`.github/workflows/bench-rows.yml`) runs it on
+`tools/bench/results`, checks with `table tools/bench/results --check tools/bench/RESULTS.md` that
+`RESULTS.md` is the regenerated page, and runs `test_bench.py`.
 
 ## Privacy: what is collected
 
@@ -231,7 +234,7 @@ The logs are the emulator's own and do contain paths: do not attach one without 
 
 ```
 python -I tools/bench/bench.py compare results/<a>.jsonl results/<b>.jsonl
-python -I tools/bench/bench.py table results [--all] [--out RESULTS.md]
+python -I tools/bench/bench.py table results [--all] [--out RESULTS.md | --check RESULTS.md]
 ```
 
 Both print markdown: variant, fps, p50, p99, sustained min / avg fps, watts and `scene_ok`.

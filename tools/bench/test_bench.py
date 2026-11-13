@@ -258,6 +258,13 @@ class FakeEmulator:
                     stream.flush()
 
     def close(self):
+        # On Linux close() alone does not wake the accept() in serve(), and the port answers one
+        # more connection: shut the socket down first. Windows refuses that for a listener, and
+        # its close() does wake accept().
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.listener.close()
 
 
@@ -1002,7 +1009,135 @@ class TableTest(unittest.TestCase):
         self.assertIn("| oot-hyrule-field | extra | - | 66.0 | - |", text)
 
 
+def run_main(*argv):
+    """(exit code, stdout and stderr) of bench.main(argv)."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        code = bench.main(list(argv))
+    return code, out.getvalue()
+
+
+class ContributedRowsTest(unittest.TestCase):
+    """The checks .github/workflows/bench-rows.yml runs on a results pull request, on a copy of the folder."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.results = os.path.join(folder.name, "results")
+        os.mkdir(self.results)
+        self.page = os.path.join(folder.name, "RESULTS.md")
+        self.rows = os.path.join(self.results, f"2026-11-11-{bench.machine_id(HARDWARE)}.jsonl")
+        self.write([good_row(), dict(good_row(), variant="mesh")])
+
+    def write(self, rows, regenerate=True):
+        """Writes the contributor's rows file and, as CONTRIBUTING-bench.md asks, regenerates the page."""
+        with open(self.rows, "w", encoding="utf-8", newline="\n") as file:
+            file.writelines(json.dumps(row) + "\n" for row in rows)
+        if regenerate:
+            self.assertEqual(run_main("table", self.results, "--out", self.page), (0, ""))
+
+    def validate(self):
+        return run_main("validate", self.results)
+
+    def check_page(self):
+        return run_main("table", self.results, "--check", self.page)
+
+    def test_valid_rows_and_their_page_pass(self):
+        code, log = self.validate()
+        self.assertEqual(code, 0, log)
+        self.assertIn("2 row(s) ok", log)
+        code, log = self.check_page()
+        self.assertEqual(code, 0, log)
+        self.assertIn("matches the rows", log)
+
+    def test_edited_median_fails(self):
+        self.write([good_row(), dict(good_row(), fps=60.0)])  # windows 50, 60, 55: the median is 55
+        code, log = self.validate()
+        self.assertEqual(code, 1)
+        self.assertIn(":2: fps is not the median of windows_fps", log)
+        self.assertEqual(self.check_page()[0], 0)
+
+    def test_home_directory_path_fails(self):
+        for exe in ("C:\\Users\\somebody\\guarana\\guarana.exe", "/home/somebody/guarana/guarana"):
+            self.write([dict(good_row(), emulator={"exe": exe})])
+            code, log = self.validate()
+            self.assertEqual(code, 1, exe)
+            self.assertIn(":1: row.emulator.exe: looks like a home directory path", log)
+
+    def test_stale_page_fails(self):
+        self.write([good_row(), dict(good_row(), variant="mesh"), dict(good_row(), variant="extra")],
+                   regenerate=False)
+        self.assertEqual(self.validate()[0], 0)
+        code, log = self.check_page()
+        self.assertEqual(code, 1)
+        self.assertIn("RESULTS.md is stale", log)
+        self.assertIn(bench.TABLE_COMMAND, log)
+        self.assertIn("+| oot-hyrule-field | extra | 55.0 |", log)
+
+    def test_hand_edited_page_fails(self):
+        with open(self.page, "a", encoding="utf-8") as file:
+            file.write("| oot-hyrule-field | baseline | 99.0 |\n")
+        code, log = self.check_page()
+        self.assertEqual(code, 1)
+        self.assertIn("-| oot-hyrule-field | baseline | 99.0 |", log)
+
+    def test_missing_page_and_empty_folder(self):
+        os.remove(self.page)
+        self.assertEqual(self.check_page()[0], 1)
+        os.remove(self.rows)
+        self.assertEqual(self.validate(), (0, f"no result files in {self.results}\n"))
+        self.assertEqual(run_main("table", self.results, "--out", self.page)[0], 0)
+        self.assertEqual(self.check_page()[0], 0)
+
+    def test_check_and_out_exclude_each_other(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            bench.main(["table", self.results, "--out", self.page, "--check", self.page])
+
+
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
+
+class WorkflowTest(unittest.TestCase):
+    """What CI runs for the benchmark tool; the workflows themselves are proven by a run on GitHub."""
+
+    def read(self, name):
+        path = os.path.join(ROOT, ".github", "workflows", name)
+        if not os.path.isfile(path):
+            self.skipTest(f"no {name} next to this copy of the tool")
+        with open(path, encoding="utf-8") as file:
+            return file.read()
+
+    def test_rows_workflow_runs_the_checks_read_only(self):
+        text = self.read("bench-rows.yml")
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read$")
+        self.assertNotRegex(text, r":\s*write\b")
+        self.assertNotIn("pull_request_target", text)
+        self.assertNotIn("secrets.", text)
+        self.assertNotIn("github.token", text)
+        self.assertIn('      - "tools/bench/**"', text)
+        for command in ("python3 -I tools/bench/bench.py validate tools/bench/results",
+                        "python3 -I tools/bench/bench.py table tools/bench/results --check tools/bench/RESULTS.md",
+                        "python3 -I tools/bench/test_bench.py"):
+            self.assertIn(command, text)
+
+    def test_results_only_pull_requests_skip_the_builds(self):
+        text = self.read("build-check.yml")
+        skipped = re.compile(re.search(r"grep -qvE '([^']+)'", text).group(1))
+        for name in ("tools/bench/results/2026-11-11-0123456789.jsonl", "tools/bench/RESULTS.md"):
+            self.assertTrue(skipped.fullmatch(name), name)
+        for name in ("tools/bench/bench.py", "tools/bench/test_bench.py", "src/core/core.cpp"):
+            self.assertFalse(skipped.fullmatch(name), name)
+        self.assertIn("python3 -I tools/bench/test_bench.py", text)
+
+
 class ShippedFilesTest(unittest.TestCase):
+    def test_committed_rows_and_page_pass_the_ci_checks(self):
+        results = os.path.join(HERE, "results")
+        code, log = run_main("validate", results)
+        self.assertEqual(code, 0, log)
+        code, log = run_main("table", results, "--check", os.path.join(HERE, "RESULTS.md"))
+        self.assertEqual(code, 0, log)
+
     def test_scene_and_variants_load(self):
         for name in os.listdir(os.path.join(HERE, "variants")):
             variant = bench.load_json(os.path.join(HERE, "variants", name), "variant")
