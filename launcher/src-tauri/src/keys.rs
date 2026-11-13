@@ -1,5 +1,5 @@
 //! `import_keys`: copies the keys file the user picked (or the `prod.keys` / `title.keys` in the
-//! folder they picked) into `%APPDATA%\lichii\keys\`, after a format check. A file already there
+//! folder they picked) into `%APPDATA%\guarana\keys\`, after a format check. A file already there
 //! is kept in `keys\guarana-backups\` first.
 
 use std::fs;

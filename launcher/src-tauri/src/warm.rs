@@ -1,8 +1,8 @@
-//! `warm_shaders`: runs `<current>\eden-cli.exe --warm-pipelines <title id> -c <qt-config.ini>`
-//! (`docs/warm-up.md`) hidden at below-normal priority and turns its stdout into
+//! `warm_shaders`: runs `<current>\guarana-cli.exe --warm-pipelines <title id> -c <qt-config.ini>`
+//! (`eden-cli.exe` in builds from before the rename; `docs/warm-up.md`) hidden at below-normal priority and turns its stdout into
 //! `warm://progress` events and a `WarmResult`.
 //!
-//! eden-cli stops politely only on Ctrl+C, which a launcher reading its stdout through a pipe
+//! guarana-cli stops politely only on Ctrl+C, which a launcher reading its stdout through a pipe
 //! cannot send; a hard kill leaves the cache's "ended while building" guard, so that title's next
 //! run (or boot) builds nothing once. So the launcher never kills a warm-up of the game it is
 //! about to start; it only stops one of another title, and the next warm-up of that title, which
@@ -27,7 +27,7 @@ use crate::{paths, system};
 pub const EVENT: &str = "warm://progress";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
-/// The shader cache file eden-cli builds from (`VideoCommon::ShaderCacheV2::FileName`).
+/// The shader cache file guarana-cli builds from (`VideoCommon::ShaderCacheV2::FileName`).
 const CACHE_FILE: &str = "lichii-cache.v2.bin";
 const TIME_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -156,10 +156,10 @@ pub fn titles_with_cache() -> Vec<String> {
 }
 
 const NO_WARM_UP: &str =
-    "This Guarana build cannot prepare shaders ahead (its eden-cli has no --warm-pipelines); a newer build can";
+    "This Guarana build cannot prepare shaders ahead (its guarana-cli has no --warm-pipelines); a newer build can";
 
 /// Whether `exe` knows `--warm-pipelines`: the option's name is in its option table. An older
-/// eden-cli would take the title id for a game path, and still rewrite the configuration and
+/// guarana-cli would take the title id for a game path, and still rewrite the configuration and
 /// rotate the log, so it is never started for this. Cached per file size and time.
 fn supports_warm_up(exe: &Path) -> bool {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, (u64, Option<SystemTime>, bool)>>> = OnceLock::new();
@@ -197,12 +197,10 @@ fn file_contains(path: &Path, needle: &[u8]) -> bool {
     }
 }
 
-fn eden_cli(app: &AppHandle) -> CmdResult<PathBuf> {
+fn cli_exe(app: &AppHandle) -> CmdResult<PathBuf> {
     let current = state::current_version(&app.state::<AppState>().load()).ok_or("Guarana is not installed yet")?;
-    let exe = Path::new(&current.path).join("eden-cli.exe");
-    if !exe.is_file() {
-        return Err("This Guarana build has no eden-cli.exe".into());
-    }
+    let exe = paths::cli_exe_in(Path::new(&current.path))
+        .ok_or_else(|| format!("This Guarana build has no {}", paths::CLI_EXE))?;
     if !supports_warm_up(&exe) {
         return Err(NO_WARM_UP.into());
     }
@@ -212,7 +210,7 @@ fn eden_cli(app: &AppHandle) -> CmdResult<PathBuf> {
 /// Runs the warm-up for one title (twice when the first run says "run it again"). Blocking.
 pub fn run(app: &AppHandle, title_id: &str, auto: bool) -> CmdResult<WarmResult> {
     let tid = util::normalize_title_id(title_id).ok_or("Not a title id (16 hex digits)")?;
-    let exe = match eden_cli(app) {
+    let exe = match cli_exe(app) {
         Ok(exe) => exe,
         Err(e) if e == NO_WARM_UP => return Ok(WarmResult::simple(&tid.to_ascii_uppercase(), "nothing to do", NO_WARM_UP)),
         Err(e) => return Err(e),
@@ -235,7 +233,7 @@ pub fn run(app: &AppHandle, title_id: &str, auto: bool) -> CmdResult<WarmResult>
         w.running = Some(RunningWarm { title_id: tid.clone(), auto, percent: percent.clone(), stop: stop.clone() });
     }
     let _guard = RunningGuard(&st.warm);
-    // eden-cli rewrites the configuration it is given (it saves what it read).
+    // guarana-cli rewrites the configuration it is given (it saves what it read).
     let _ = util::backup_file(&config);
     keep_game_log();
 
@@ -287,7 +285,7 @@ fn run_once(
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
         .spawn()
-        .ctx("Could not start eden-cli")?;
+        .ctx("Could not start guarana-cli")?;
     let final_line: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let last_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -306,7 +304,7 @@ fn run_once(
                     if line.contains("renderer ready") {
                         emit(&app, &tid, "ready", 0, 0, 0, 0, 0.0, auto, Some(line.clone()));
                     }
-                    log::info!("eden-cli: {line}");
+                    log::info!("guarana-cli: {line}");
                     push_last(&last_lines, line);
                 }
             }
@@ -318,7 +316,7 @@ fn run_once(
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 let line = line.trim().to_string();
                 if line.starts_with("warm: ") {
-                    log::warn!("eden-cli: {line}");
+                    log::warn!("guarana-cli: {line}");
                     push_last(&last_lines, line);
                 }
             }
@@ -366,12 +364,12 @@ fn run_once(
             already: 0,
             left: 0,
             exit_code,
-            // No "warm:" line at all: an eden-cli from before --warm-pipelines.
+            // No "warm:" line at all: a guarana-cli (eden-cli) from before --warm-pipelines.
             message: last.or_else(|| {
                 Some(if killed {
                     "Stopped".to_string()
                 } else {
-                    "This Guarana build cannot prepare shaders yet (no eden-cli --warm-pipelines); update Guarana".to_string()
+                    "This Guarana build cannot prepare shaders yet (no guarana-cli --warm-pipelines); update Guarana".to_string()
                 })
             }),
         },
@@ -383,7 +381,7 @@ fn run_once(
     Ok(result)
 }
 
-/// eden-cli logs to the emulator's `eden_log.txt` and rotates it, so two warm-ups would push the
+/// guarana-cli logs to the emulator's `eden_log.txt` and rotates it, so two warm-ups would push the
 /// last game's log out. A log that booted a game is copied aside first.
 fn keep_game_log() {
     let log = paths::emulator_log_dir().join("eden_log.txt");
@@ -438,7 +436,7 @@ fn auto_blocking(app: &AppHandle) {
     if st.load().last_warm_driver.as_deref() == Some(key.as_str()) {
         return;
     }
-    if eden_cli(app).is_err() {
+    if cli_exe(app).is_err() {
         return;
     }
     let titles = titles_with_cache();
@@ -520,7 +518,7 @@ pub struct StopResult {
     pub message: String,
 }
 
-/// Ends the running warm-up. eden-cli stops politely only on Ctrl+C, which a launcher reading its
+/// Ends the running warm-up. guarana-cli stops politely only on Ctrl+C, which a launcher reading its
 /// output through a pipe cannot send, so the process is ended; the title's next warm-up then
 /// repairs the cache guard with one extra run (see the module comment). Blocking, 15 s at most.
 pub fn stop(app: &AppHandle) -> CmdResult<StopResult> {
@@ -602,7 +600,7 @@ mod tests {
     fn probe_finds_the_option_across_reads() {
         let dir = std::env::temp_dir().join(format!("guarana-warm-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("eden-cli.exe");
+        let path = dir.join("guarana-cli.exe");
         let needle = b"warm-pipelines";
         // The first read takes 1 MiB + the needle's length; start the needle 5 bytes before that.
         let mut data = vec![b'x'; (1 << 20) + needle.len() - 5];

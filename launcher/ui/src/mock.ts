@@ -287,7 +287,7 @@ export function createMockBackend(): Backend {
 
   const state: LauncherState = {
     install_dir: `${HOME}\\AppData\\Local\\Guarana`,
-    user_data_dir: `${HOME}\\AppData\\Roaming\\lichii`,
+    user_data_dir: `${HOME}\\AppData\\Roaming\\guarana`,
     installed,
     current: "20.0.2",
     profile_id: sc.firstRun ? null : "intel-arc-igpu",
@@ -664,7 +664,7 @@ export function createMockBackend(): Backend {
       if (gameRunning) throw "Guarana is already running.";
       if (sc.fail && firstLaunch) {
         firstLaunch = false;
-        throw "lichii.exe stopped during startup (0xC0000135): a DLL is missing. Doctor can check the Visual C++ runtime.";
+        throw "guarana.exe stopped during startup (0xC0000135): a DLL is missing. Doctor can check the Visual C++ runtime.";
       }
       if (!a.title_id && !a.path) throw "Nothing to launch.";
       gameRunning = true;

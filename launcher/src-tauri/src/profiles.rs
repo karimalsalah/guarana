@@ -1,11 +1,11 @@
 //! Profiles: sets of toggles, the recommendation from `detect_system`, and `apply_profile`,
 //! which writes them to the emulator's own files:
 //!
-//! - `%APPDATA%\lichii\nx2_switches.txt`: one block between `# >>> Guarana launcher` and
+//! - `%APPDATA%\guarana\nx2_switches.txt`: one block between `# >>> Guarana launcher` and
 //!   `# <<< Guarana launcher`. Lines outside it are the user's and are never touched. The block
 //!   goes at the end of the file, so its values win over earlier lines (the emulator reads the
 //!   file top to bottom, later lines overriding earlier ones; `src/lichii/nx2_switches.h`).
-//! - `%APPDATA%\lichii\config\qt-config.ini`, `[Renderer]`: only the keys below, each with its
+//! - `%APPDATA%\guarana\config\qt-config.ini`, `[Renderer]`: only the keys below, each with its
 //!   `\default` flag, which the emulator needs to read a value at all
 //!   (`Config::ReadSettingGeneric`, `src/frontend_common/config.cpp`).
 //!

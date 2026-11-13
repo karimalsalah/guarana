@@ -404,8 +404,8 @@ pub async fn install_version(app: &AppHandle, version: &str, channel: &str) -> C
     })
 }
 
-/// Skips a top-level `user` folder: beside `lichii.exe` it would switch the emulator to portable
-/// mode and away from `%APPDATA%\lichii` (`src/common/fs/path_util.cpp`).
+/// Skips a top-level `user` folder: beside `guarana.exe` it would switch the emulator to portable
+/// mode and away from `%APPDATA%\guarana` (`src/common/fs/path_util.cpp`).
 fn is_portable_user_dir(rel: &Path) -> bool {
     let comps: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
     comps.first().map(|c| c == "user").unwrap_or(false) || (comps.len() >= 2 && comps[1] == "user")
@@ -682,8 +682,8 @@ mod tests {
     #[test]
     fn portable_user_dir_is_skipped() {
         assert!(is_portable_user_dir(Path::new("user/config/qt-config.ini")));
-        assert!(is_portable_user_dir(Path::new("lichii/user/keys")));
-        assert!(!is_portable_user_dir(Path::new("lichii.exe")));
+        assert!(is_portable_user_dir(Path::new("guarana/user/keys")));
+        assert!(!is_portable_user_dir(Path::new("guarana.exe")));
         assert!(!is_portable_user_dir(Path::new("platforms/qwindows.dll")));
     }
 }
