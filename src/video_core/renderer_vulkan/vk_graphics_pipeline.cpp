@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <span>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
 #include "common/bit_field.h"
+#include "common/cityhash.h"
 #include "common/scope_exit.h"
 #include "common/zstd_compression.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -413,6 +415,73 @@ void ReportTextureMemo() {
     }
 }
 
+// EDEN_NX2_DRAW_TEMPLATE_VERIFY=1, read once: draws a draw template holds for are resolved in
+// full and compared with it.
+const bool draw_template_verify = [] {
+    const char* const value = std::getenv("EDEN_NX2_DRAW_TEMPLATE_VERIFY");
+    return value != nullptr && value[0] == '1';
+}();
+
+// Draw templates on the drawing thread, logged every 10 s with EDEN_NX2_GPU_PROFILE or the
+// verify env.
+struct DrawTemplateStats {
+    u64 memo_hits{}; ///< Memo-eligible draws the texture memo resolved, before any lookup
+    u64 hits{};      ///< Templates found and valid; with verify, these are resolved in full
+    u64 misses{};
+    u64 kept{};
+    u64 not_kept{}; ///< Changing sampler variants, too many textures or descriptors not keepable
+    std::array<u64, static_cast<size_t>(VideoCommon::DrawTemplateCheck::Count)> rejected{};
+    /// Misses against the pipeline's last template: none yet, other tables or sampler binding,
+    /// other handle words; and misses whose key was kept before (evicted or rejected since)
+    std::array<u64, 4> miss_kinds{};
+    u64 prepare_deleted{};
+    u64 verified{};
+    std::array<u64, 4> mismatches{}; ///< Views, samplers, descriptors, rescaling words
+    u64 mismatched_draws{};
+    u64 total_mismatched_draws{};
+    std::chrono::steady_clock::time_point next_report{};
+} draw_template_stats;
+
+/// Every key a template was kept for, for DrawTemplateStats::miss_kinds (verify or profile only).
+std::unordered_set<u64> kept_template_keys;
+
+void ReportDrawTemplates() {
+    DrawTemplateStats& stats = draw_template_stats;
+    if (((stats.hits + stats.misses) & 1023) != 0 ||
+        (!VideoCommon::Nx2Profile::Enabled() && !draw_template_verify)) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < stats.next_report) {
+        return;
+    }
+    if (stats.next_report != std::chrono::steady_clock::time_point{}) {
+        using Check = VideoCommon::DrawTemplateCheck;
+        const auto rejected = [&](Check check) {
+            return stats.rejected[static_cast<size_t>(check)];
+        };
+        LOG_INFO(Render_Vulkan,
+                 "Draw templates in 10 s: {} texture memo hits, {} hits, {} misses ({} first of "
+                 "their pipeline, {} other tables, {} other handle words, {} kept before), {} "
+                 "kept, {} not keepable; rejected: {} host memory, {} scale, {} view deleted, {} "
+                 "descriptor bytes, {} prepare deleted images",
+                 stats.memo_hits, stats.hits, stats.misses, stats.miss_kinds[0],
+                 stats.miss_kinds[1], stats.miss_kinds[2], stats.miss_kinds[3], stats.kept,
+                 stats.not_kept, rejected(Check::HostMemory), rejected(Check::Scale),
+                 rejected(Check::ViewDeleted), rejected(Check::Descriptors), stats.prepare_deleted);
+        if (draw_template_verify) {
+            LOG_INFO(Render_Vulkan,
+                     "Draw template verify in 10 s: {} checked, {} mismatched: {} views, {} "
+                     "samplers, {} descriptors, {} rescaling words ({} mismatched in total)",
+                     stats.verified, stats.mismatched_draws, stats.mismatches[0],
+                     stats.mismatches[1], stats.mismatches[2], stats.mismatches[3],
+                     stats.total_mismatched_draws);
+        }
+    }
+    stats = {.total_mismatched_draws = stats.total_mismatched_draws,
+             .next_report = now + std::chrono::seconds{10}};
+}
+
 /// EDEN_NX2_GPL_OPTIMIZE_THREADS=<n> (default 1): the optimized links of EDEN_NX2_GPL_OPTIMIZE run
 /// on their own pool of n low-priority threads, so they don't slow down the builds that draws
 /// wait for. 0 returns null: they run as Background jobs of the shader job scheduler instead.
@@ -455,15 +524,17 @@ GraphicsPipeline::GraphicsPipeline(
     GuestDescriptorQueue& guest_descriptor_queue_, DescriptorBufferRing& descriptor_buffer_ring_,
     DrawTemplates& draw_templates_, const PipelineBuildQueue& build_queue,
     PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
-    const GraphicsPipelineCacheKey& key_, std::array<vk::ShaderModule, NUM_STAGES> stages,
-    const std::array<const Shader::Info*, NUM_STAGES>& infos, EmitStagesFunc emit_stages,
-    std::optional<MeshEmulationSetup> mesh_emulation_, LibraryParams library_params)
+    const GraphicsPipelineCacheKey& key_, std::array<std::vector<u32>, NUM_STAGES> stages,
+    const std::array<const Shader::Info*, NUM_STAGES>& infos,
+    std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages,
+    std::optional<MeshEmulationSetup> mesh_emulation_,
+    std::shared_ptr<PrepassShaders> prepass_shaders_, LibraryParams library_params)
     : key{key_}, device{device_}, texture_cache{texture_cache_}, buffer_cache{buffer_cache_},
       pipeline_cache(pipeline_cache_), binaries{binaries_}, scheduler{scheduler_},
       guest_descriptor_queue{guest_descriptor_queue_},
-      descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(stages)},
-      library_cache{library_params.library_cache}, spirv_hashes{library_params.spirv_hashes},
-      build_jobs{build_queue.jobs},
+      descriptor_buffer_ring{descriptor_buffer_ring_}, draw_templates{draw_templates_},
+      template_owner{draw_templates_.NewOwner()}, spirv{std::move(stages)},
+      library_cache{library_params.library_cache}, build_jobs{build_queue.jobs},
       worker_only_build{build_queue.jobs && static_cast<bool>(emit_stages)},
       mesh_emulation{std::move(mesh_emulation_)}, prepass_shaders{std::move(prepass_shaders_)},
       prepass_split{prepass_shaders != nullptr},
@@ -716,7 +787,7 @@ GraphicsPipeline::GraphicsPipeline(
     if (build_queue.jobs && emit_stages) {
         emit = [this, shader_notify, emit_stages = std::exchange(emit_stages, {})] {
             try {
-                spv_modules = emit_stages(spirv_hashes);
+                spirv = emit_stages();
             } catch (const Shader::Exception& exception) {
                 LOG_ERROR(Render_Vulkan, "Graphics pipeline {:016x}: {}", key.Hash(),
                           exception.what());
@@ -742,49 +813,33 @@ GraphicsPipeline::GraphicsPipeline(
         };
         try {
             if (emit_stages) {
-                spv_modules = emit_stages(spirv_hashes);
+                spirv = emit_stages();
+            }
+            for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+                if (spirv[stage].empty()) {
+                    continue;
+                }
+                spv_modules[stage] = BuildShader(device, spirv[stage]);
+                if (library_cache) {
+                    // Libraries are keyed by the SPIR-V handed to the driver, so one is only
+                    // reused for the exact same module words.
+                    spirv_hashes[stage] =
+                        Common::CityHash128(reinterpret_cast<const char*>(spirv[stage].data()),
+                                            spirv[stage].size() * sizeof(u32));
+                }
+                if (device.HasDebuggingToolAttached()) {
+                    const std::string name{
+                        fmt::format("Shader {:016x}", key.unique_hashes[stage + 1])};
+                    spv_modules[stage].SetObjectNameEXT(name.c_str());
+                }
             }
             const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
             Validate();
             if (library_cache) {
-                bool made{};
-                try {
-                    made = MakeLibraryPipeline(render_pass);
-                } catch (const vk::Exception& exception) {
-                    LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: pipeline {:016x} linking failed: {}",
-                              key.Hash(), exception.what());
-                }
-                if (!made) {
-                    library_cache->RecordFallback();
-                    FallBackToMonolithic(render_pass);
-                }
-                if (made && GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries() &&
-                    build_jobs) {
-                    // Optimized link on its own low-priority pool, swapped in at a later draw
-                    // (ConfigureDraw). Dropped if the pipeline goes away before the link started
-                    // (drop_unstarted, or a cancelled Background job when
-                    // EDEN_NX2_GPL_OPTIMIZE_THREADS=0).
-                    auto link = [this, render_pass] {
-                        optimized_pipeline = LinkLibraries(render_pass, true);
-                        optimized_ready.store(true, std::memory_order_release);
-                    };
-                    if (Common::ThreadWorker* const pool = GplOptimizeWorkers()) {
-                        optimized_build.emplace(pool, std::move(link), true);
-                    } else {
-                        optimized_build.emplace(
-                            PipelineBuildQueue{
-                                .jobs = build_jobs,
-                                .priority = VideoCommon::ShaderJobPriority::Background,
-                            },
-                            std::move(link));
-                    }
-                }
-                // The libraries hold the shaders now (the fallback has used them too).
-                for (vk::ShaderModule& module : spv_modules) {
-                    module.reset();
-                }
+                MakeLibraryBuild(render_pass);
             } else {
-                pipeline = MakePipeline(render_pass);
+                MakePipeline(render_pass);
+                MakePrepassPipelines(render_pass);
             }
         } catch (const Shader::Exception& exception) {
             LOG_ERROR(Render_Vulkan, "Graphics pipeline {:016x}: {}", key.Hash(), exception.what());
@@ -868,6 +923,7 @@ KeptGraphicsStages GraphicsPipeline::TakeKeptStages() {
         .spirv = std::move(kept_spirv),
         .mesh_emulation = mesh_emulation,
         .mapped_pointers = mapped_pointers,
+        .libraries = library_cache != nullptr,
     };
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
         if (!kept.spirv[stage].empty()) {
@@ -1943,7 +1999,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         scheduler.Record([this](vk::CommandBuffer) {
             retired_pipeline = std::move(pipeline);
             pipeline = std::move(optimized_pipeline);
+            library_cache->RecordReplacement();
         });
+    }
+    if (library_cache && !optimized_bound && (!IsBuilt() || linked.load(std::memory_order_relaxed))) {
+        library_cache->RecordFastDraw();
     }
     if (!IsBuilt()) {
         // Wait for the pipeline to be built
@@ -2089,6 +2149,40 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     return true;
 }
 
+void GraphicsPipeline::MakePrepassPipelines(VkRenderPass render_pass) {
+    if (!prepass_shaders) {
+        return;
+    }
+    // Nothing reads the SPIR-V after this build.
+    const std::shared_ptr<PrepassShaders> shaders{std::move(prepass_shaders)};
+    if (!pipeline || mesh_emulation || !spv_modules[NUM_STAGES - 1] ||
+        shaders->depth_only.empty() || shaders->early_test.empty()) {
+        return;
+    }
+    try {
+        prepass_modules[0] = BuildShader(device, shaders->depth_only);
+        prepass_modules[1] = BuildShader(device, shaders->early_test);
+        MakePipeline(render_pass, PipelineVariant::PrepassDepth);
+        MakePipeline(render_pass, PipelineVariant::PrepassColor);
+        VideoCore::Nx2Debug::CountPrepassPipeline();
+        LOG_INFO(Render_Vulkan,
+                 "Prepass split: graphics pipeline {:016x} (fragment shader {:016x}) has its "
+                 "depth and colour pass pipelines",
+                 key.Hash(), key.unique_hashes[5]);
+    } catch (const std::exception& exception) {
+        LOG_ERROR(Render_Vulkan,
+                  "Prepass split: graphics pipeline {:016x} draws in one pass, the two passes' "
+                  "pipelines failed to build: {}",
+                  key.Hash(), exception.what());
+        for (vk::Pipeline& prepass_pipeline : prepass_pipelines) {
+            prepass_pipeline.reset();
+        }
+    }
+    for (vk::ShaderModule& prepass_module : prepass_modules) {
+        prepass_module.reset();
+    }
+}
+
 struct GraphicsPipeline::PipelineStates {
     FixedPipelineState::DynamicState dynamic{};
     static_vector<VkVertexInputBindingDescription, 32> vertex_bindings;
@@ -2110,7 +2204,7 @@ struct GraphicsPipeline::PipelineStates {
     VkPipelineDepthStencilStateCreateInfo depth_stencil_ci{};
     static_vector<VkPipelineColorBlendAttachmentState, Maxwell::NumRenderTargets> cb_attachments;
     VkPipelineColorBlendStateCreateInfo color_blend_ci{};
-    static_vector<VkDynamicState, 34> dynamic_states;
+    static_vector<VkDynamicState, 36> dynamic_states;
     VkPipelineDynamicStateCreateInfo dynamic_state_ci{};
     bool is_mesh{};
     bool has_tess_stages{};
@@ -2122,7 +2216,7 @@ struct GraphicsPipeline::PipelineStates {
     bool chains_provoking{};
 };
 
-void GraphicsPipeline::FillStates(PipelineStates& s) const {
+void GraphicsPipeline::FillStates(PipelineStates& s, PipelineVariant variant) const {
     FixedPipelineState::DynamicState& dynamic = s.dynamic;
     if (!key.state.extended_dynamic_state) {
         dynamic = key.state.dynamic_state;
@@ -2362,9 +2456,9 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
     };
     if (variant == PipelineVariant::PrepassColor) {
         // Where this is dynamic state instead, the draw sets the same (PrepassDraw).
-        depth_stencil_ci.depthTestEnable = VK_TRUE;
-        depth_stencil_ci.depthWriteEnable = VK_FALSE;
-        depth_stencil_ci.depthCompareOp = VK_COMPARE_OP_EQUAL;
+        s.depth_stencil_ci.depthTestEnable = VK_TRUE;
+        s.depth_stencil_ci.depthWriteEnable = VK_FALSE;
+        s.depth_stencil_ci.depthCompareOp = VK_COMPARE_OP_EQUAL;
     }
     if (dynamic.depth_bounds_enable && !device.IsDepthBoundsSupported()) {
         LOG_WARNING(Render_Vulkan, "Depth bounds is enabled but not supported");
@@ -2530,11 +2624,11 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
     };
 }
 
-/// Builds the monolithic pipeline from every stage module. Null for a mesh pipeline on a device
-/// without mesh shaders.
-vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+/// Builds the monolithic pipeline (or one of a prepass split's) from every stage module. Leaves
+/// it null for a mesh pipeline on a device without mesh shaders.
+void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant variant) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
-        return {};
+        return;
     }
     if (mesh_emulation) {
         // The mesh program (stage 0, or mesh_stage after a task program in stage 0) is built as
@@ -2574,6 +2668,8 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 .basePipelineHandle = nullptr,
                 .basePipelineIndex = 0,
             };
+            // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+            const auto cache_lock = device.LockPipelineCacheForBuild();
             return binaries ? binaries->CreateComputePipeline(
                                   compute_ci, *pipeline_cache,
                                   GraphicsRecordKey(key) ^ (program * 0x9e3779b97f4a7c15ULL))
@@ -2593,7 +2689,10 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         }
     }
     PipelineStates states;
-    FillStates(states);
+    FillStates(states, variant);
+    const bool dynamic_shading_rate{std::ranges::find(states.dynamic_states,
+                                                      VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR) !=
+                                    states.dynamic_states.end()};
     const bool is_mesh{states.is_mesh};
     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
@@ -2725,11 +2824,32 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     };
-    vk::Pipeline created =
-        binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache,
-                                                    GraphicsRecordKey(key))
-                 : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
-    TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
+    // Stored driver binaries are checked against the driver's key of this create info; the salt
+    // keeps the builds with the dynamic rate beside the others instead of replacing them.
+    // So do the salts of a prepass split: its two pipelines are other builds of this key, and so
+    // is the pipeline itself when its stages decorate Position for the split.
+    static constexpr std::array<u64, 3> variant_salts{0ULL, 0x5052455f44455054ULL,
+                                                      0x5052455f434f4c52ULL};
+    const u64 binary_key{GraphicsRecordKey(key) ^
+                         (dynamic_shading_rate ? 0x5652535f44594e31ULL : 0ULL) ^
+                         variant_salts[static_cast<size_t>(variant)] ^
+                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
+    // A build that captures for EDEN_NX2_PIPELINE_STATS takes no driver pipeline cache, so that
+    // its statistics come from a compile (the binary store is not opened then: PipelineCache).
+    const VkPipelineCache driver_cache{capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE}
+                                                          : *pipeline_cache};
+    vk::Pipeline& built =
+        variant == PipelineVariant::Main
+            ? pipeline
+            : prepass_pipelines[variant == PipelineVariant::PrepassDepth ? 0 : 1];
+    {
+        // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+        const auto cache_lock = device.LockPipelineCacheForBuild();
+        built = binaries
+                    ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, binary_key)
+                    : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
+    }
+    TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
@@ -2754,7 +2874,6 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         );
         GPU::Logging::GPULogger::GetInstance().LogPipelineStateChange(pipeline_info);
     }
-    return created;
 }
 
 namespace {
@@ -2937,6 +3056,8 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
             pre_rasterization ? VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT
                               : VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT),
     };
+    // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+    const auto cache_lock = device.LockPipelineCacheForBuild();
     library.pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &library_ci,
@@ -2986,6 +3107,7 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
         flags |= VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT;
     }
     const auto begin = std::chrono::steady_clock::now();
+    const auto cache_lock = device.LockPipelineCacheForBuild();
     vk::Pipeline linked_pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &link_ci,
@@ -3013,7 +3135,7 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
 
 bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
     PipelineStates states;
-    FillStates(states);
+    FillStates(states, PipelineVariant::Main);
     // Values of states the draw sets (those in the dynamic list) are zeroed in the libraries'
     // create info, and so in their keys: pipelines that differ only in them share one shader
     // library. Vulkan ignores the static value of a dynamic state, so the linked pipeline draws
@@ -3078,6 +3200,8 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         .pNext = nullptr,
         .flags = VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
     };
+    {
+    const auto cache_lock = device.LockPipelineCacheForBuild();
     vertex_input_library = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &vertex_input_ci,
@@ -3099,11 +3223,14 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
+    }
     const VkGraphicsPipelineLibraryCreateInfoEXT fragment_output_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
         .pNext = nullptr,
         .flags = VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
     };
+    {
+    const auto cache_lock = device.LockPipelineCacheForBuild();
     fragment_output_library = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &fragment_output_ci,
@@ -3125,6 +3252,7 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
+    }
     pipeline = LinkLibraries(render_pass, !device.CanFastLinkGraphicsLibraries());
     linked = true;
     return true;
@@ -3150,7 +3278,47 @@ void GraphicsPipeline::FallBackToMonolithic(VkRenderPass render_pass) {
     shader_libraries = {};
     vertex_input_library.reset();
     fragment_output_library.reset();
-    pipeline = MakePipeline(render_pass);
+    MakePipeline(render_pass);
+}
+
+void GraphicsPipeline::MakeLibraryBuild(VkRenderPass render_pass) {
+    bool made{};
+    try {
+        made = MakeLibraryPipeline(render_pass);
+    } catch (const vk::Exception& exception) {
+        LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: pipeline {:016x} linking failed: {}", key.Hash(),
+                  exception.what());
+    }
+    if (!made) {
+        library_cache->RecordFallback();
+        FallBackToMonolithic(render_pass);
+        return;
+    }
+    if (GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries() && build_jobs) {
+        // Optimized link on its own low-priority pool, swapped in at a later draw
+        // (ConfigureDraw). Dropped if the pipeline goes away before the link started
+        // (drop_unstarted, or a cancelled Background job when EDEN_NX2_GPL_OPTIMIZE_THREADS=0).
+        auto link = [this, render_pass] {
+            try {
+                optimized_pipeline = LinkLibraries(render_pass, true);
+            } catch (const vk::Exception& exception) {
+                LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: optimized link of {:016x} failed: {}",
+                          key.Hash(), exception.what());
+                return;
+            }
+            optimized_ready.store(true, std::memory_order_release);
+        };
+        if (Common::ThreadWorker* const pool = GplOptimizeWorkers()) {
+            optimized_build.emplace(pool, std::move(link), true);
+        } else {
+            optimized_build.emplace(
+                PipelineBuildQueue{
+                    .jobs = build_jobs,
+                    .priority = VideoCommon::ShaderJobPriority::Background,
+                },
+                std::move(link));
+        }
+    }
 }
 
 void GraphicsPipeline::Validate() {

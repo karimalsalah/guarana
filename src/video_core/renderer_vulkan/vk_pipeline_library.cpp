@@ -28,7 +28,7 @@ constexpr std::array<const char*, 2> PART_NAMES{"pre-rasterization", "fragment"}
 bool GplOptimizeEnabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_GPL_OPTIMIZE");
-        return value && *value && *value != '0';
+        return value == nullptr || *value == 0 || *value != '0';
     }();
     return enabled;
 }
@@ -56,15 +56,22 @@ std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
             entry->condition.wait(lock, [&] { return entry->done; });
         }
         hits[index].fetch_add(1, std::memory_order_relaxed);
+        if (entry->library) {
+            // What this pipeline would have waited for building the library itself.
+            avoided_ns.fetch_add(entry->library->build_ns, std::memory_order_relaxed);
+        }
         return entry->library;
     }
     // Built outside the map lock: other libraries are built at the same time on other workers.
     const auto begin = std::chrono::steady_clock::now();
     std::shared_ptr<const GplLibrary> library;
     try {
-        library = std::make_shared<const GplLibrary>(build());
-        if (!library->pipeline) {
-            library.reset();
+        GplLibrary built_library = build();
+        built_library.build_ns = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                      std::chrono::steady_clock::now() - begin)
+                                                      .count());
+        if (built_library.pipeline) {
+            library = std::make_shared<const GplLibrary>(std::move(built_library));
         }
     } catch (const std::exception& exception) {
         LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: {} library {:016x} failed: {}", PART_NAMES[index],
@@ -129,9 +136,12 @@ void GraphicsPipelineLibraryCache::Report() {
     const u32 pre_failed = take(failed[0]), frag_failed = take(failed[1]);
     const u32 fallback_count = take(fallbacks);
     const u64 held = take(held_ns);
+    const u64 avoided = take(avoided_ns);
+    const u64 draws = take(fast_draws);
+    const u32 replaced = take(replacements);
     if (pre_built == 0 && frag_built == 0 && pre_hits == 0 && frag_hits == 0 && fast_links == 0 &&
         optimized_links == 0 && held == 0 && pre_failed == 0 && frag_failed == 0 &&
-        fallback_count == 0) {
+        fallback_count == 0 && draws == 0 && replaced == 0) {
         return;
     }
     const u32 pre_waited = take(waited[0]), frag_waited = take(waited[1]);
@@ -143,16 +153,18 @@ void GraphicsPipelineLibraryCache::Report() {
         return count == 0 ? 0.0 : Ms(total) / static_cast<double>(count);
     };
     LOG_INFO(Render_Vulkan,
-             "Nx2Perf gpl in the last 10 s: libraries built pre-rasterization {} ({:.0f} ms, max "
-             "{:.1f} ms), fragment {} ({:.0f} ms, max {:.1f} ms); cache hits pre-rasterization {} "
-             "(waited on a build {}), fragment {} (waited {}); failed {}/{}; fast links {} (mean "
-             "{:.3f} ms, max {:.3f} ms), optimized links {} (mean {:.1f} ms, max {:.1f} ms); "
-             "monolithic fallbacks {}; draws held {:.1f} ms; {} libraries cached",
-             pre_built, Ms(pre_ns), Ms(pre_max), frag_built, Ms(frag_ns), Ms(frag_max), pre_hits,
-             pre_waited, frag_hits, frag_waited, pre_failed, frag_failed, fast_links,
-             mean(fast_ns, fast_links), Ms(fast_max), optimized_links,
-             mean(optimized_ns, optimized_links), Ms(optimized_max), fallback_count, Ms(held),
-             total_libraries.load(std::memory_order_relaxed));
+             "Nx2Perf gpl in the last 10 s: fast-linked draws {}; libraries built "
+             "pre-rasterization {} ({:.0f} ms, max {:.1f} ms), fragment {} ({:.0f} ms, max "
+             "{:.1f} ms); libraries reused pre-rasterization {} (waited on a build {}), fragment "
+             "{} (waited {}); failed {}/{}; fast links {} (mean {:.3f} ms, max {:.3f} ms); "
+             "background replacements {} (optimized links {}, mean {:.1f} ms, max {:.1f} ms); "
+             "monolithic fallbacks {}; draw wait avoided {:.0f} ms (library builds not repeated), "
+             "draws held {:.1f} ms; {} libraries cached",
+             draws, pre_built, Ms(pre_ns), Ms(pre_max), frag_built, Ms(frag_ns), Ms(frag_max),
+             pre_hits, pre_waited, frag_hits, frag_waited, pre_failed, frag_failed, fast_links,
+             mean(fast_ns, fast_links), Ms(fast_max), replaced, optimized_links,
+             mean(optimized_ns, optimized_links), Ms(optimized_max), fallback_count, Ms(avoided),
+             Ms(held), total_libraries.load(std::memory_order_relaxed));
 }
 
 size_t GraphicsPipelineLibraryCache::PruneUnused() {

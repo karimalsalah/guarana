@@ -66,8 +66,8 @@ EDEN_NX2_EXTRAPOLATE=1
 # optimization on every driver. Unset: fast, except on AMD's Windows driver.
 #EDEN_NX2_GPL_FAST_LINK=1
 # With libraries on and fast links: after the fast link, an optimized link is built in the
-# background and replaces it at a later draw.
-#EDEN_NX2_GPL_OPTIMIZE=1
+# background and replaces it at a later draw. On unless =0.
+#EDEN_NX2_GPL_OPTIMIZE=0
 # Threads of those optimized links, at low priority (default 1). =0 runs them as background jobs
 # of the shader build workers instead.
 #EDEN_NX2_GPL_OPTIMIZE_THREADS=1

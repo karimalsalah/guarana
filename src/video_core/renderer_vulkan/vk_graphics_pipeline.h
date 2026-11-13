@@ -115,22 +115,47 @@ struct MeshEmulationSetup {
     std::array<u32, 4> position_lines{~0U, ~0U, ~0U, ~0U}; ///< line of PositionX..W
 };
 
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): the fragment program's two other shaders,
+/// emitted with the pipeline's stages. A draw of such a pipeline is recorded as a depth pass with
+/// `depth_only`, then a colour pass at equal depth with `early_test` (PrepassDraw).
+struct PrepassShaders {
+    std::vector<u32> depth_only; ///< no colour outputs: only what decides a discard is left
+    std::vector<u32> early_test; ///< the fragment shader with early fragment tests
+    /// The stages before the fragment one decorate Position as Invariant
+    /// (EDEN_NX2_PREPASS_INVARIANT), which makes them other shaders than without the split.
+    bool invariant_position{};
+};
+/// The sampled textures and image descriptors of a draw, kept across frames (ConfigureImpl).
+using DrawTemplate =
+    VideoCommon::DrawTemplate<DescriptorUpdateEntry,
+                              Tegra::Engines::Maxwell3D::Regs::MaxShaderStage,
+                              Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS>;
+using DrawTemplates = VideoCommon::DrawTemplateTable<DrawTemplate>;
+
+/// What an evicted graphics pipeline needs to be built again without translating its shaders
+struct KeptGraphicsStages {
+    static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
+
+    std::array<std::vector<u8>, NUM_STAGES> spirv; ///< zstd, empty for absent stages
+    std::array<std::unique_ptr<Shader::Info>, NUM_STAGES> infos;
+    std::optional<MeshEmulationSetup> mesh_emulation;
+    VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    bool libraries{}; ///< built from graphics pipeline libraries (per-stage descriptor sets)
+
+    /// Memory it holds, roughly
+    [[nodiscard]] u64 Bytes() const noexcept;
+};
+
 /// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
 /// from shared per-stage libraries.
 struct GraphicsPipelineLibraryParams {
     GraphicsPipelineLibraryCache* library_cache{};
-    std::array<u128, Tegra::Engines::Maxwell3D::Regs::MaxShaderStage> spirv_hashes{};
 };
 
 class GraphicsPipeline {
     static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
 
 public:
-    /// Emits the stages' SPIR-V on a worker; with libraries it also returns each stage's SPIR-V
-    /// hash (zero for absent stages).
-    using EmitStagesFunc = std::function<std::array<vk::ShaderModule, NUM_STAGES>(
-        std::array<u128, NUM_STAGES>& spirv_hashes)>;
-
     /// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
     /// from per-stage libraries; the stages were emitted with one descriptor set per stage.
     // Declared outside the class: GCC rejects a default argument `= {}` of a nested struct
@@ -147,8 +172,9 @@ public:
         RenderPassCache& render_pass_cache, const GraphicsPipelineCacheKey& key,
         std::array<std::vector<u32>, NUM_STAGES> stages,
         const std::array<const Shader::Info*, NUM_STAGES>& infos,
-        EmitStagesFunc emit_stages = {},
+        std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages = {},
         std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt,
+        std::shared_ptr<PrepassShaders> prepass_shaders = nullptr,
         LibraryParams library_params = {});
 
     static std::chrono::nanoseconds TakeHoldTime() noexcept;
@@ -467,12 +493,25 @@ private:
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
 
+    /// The pipeline itself, or one of the two an alpha-test prepass split draws with: the depth
+    /// pass (the depth-only fragment shader, no colour written) and the colour pass (the fragment
+    /// shader with early fragment tests, depth compared for equality and not written).
+    enum class PipelineVariant : u8 {
+        Main,
+        PrepassDepth,
+        PrepassColor,
+    };
+
+    void MakePipeline(VkRenderPass render_pass, PipelineVariant variant = PipelineVariant::Main);
+
+    /// Builds the split's two pipelines after the pipeline itself, from the same modules for the
+    /// stages before the fragment one. A failure leaves the pipeline without them.
+    void MakePrepassPipelines(VkRenderPass render_pass);
+
     struct PipelineStates;
 
     /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
-    void FillStates(PipelineStates& states) const;
-
-    vk::Pipeline MakePipeline(VkRenderPass render_pass);
+    void FillStates(PipelineStates& states, PipelineVariant variant) const;
 
     /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then links them
     /// with this pipeline's vertex input and fragment output parts. False when a library
@@ -486,6 +525,10 @@ private:
                                  VkRenderPass render_pass) const;
 
     vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized);
+
+    /// Build body with libraries: the fast link (or monolithic fallback), then the optimized link
+    /// in the background.
+    void MakeLibraryBuild(VkRenderPass render_pass);
 
     /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
     void FallBackToMonolithic(VkRenderPass render_pass);
@@ -590,7 +633,7 @@ private:
     vk::Pipeline vertex_input_library;
     vk::Pipeline fragment_output_library;
     vk::DescriptorSetLayout fallback_empty_set_layout;
-    bool linked{};
+    std::atomic_bool linked{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;
@@ -639,6 +682,14 @@ private:
     DescriptorAllocator distribution_allocator;
     std::array<MeshEmulationBuffer, 4> mesh_task_buffers{};
     u32 mesh_capacity{};
+
+    // Alpha-test prepass split: the shaders until the build has made their modules, and the
+    // pipelines of the depth pass [0] and the colour pass [1].
+    std::shared_ptr<PrepassShaders> prepass_shaders;
+    const bool prepass_split;
+    const bool prepass_invariant;
+    std::array<vk::ShaderModule, 2> prepass_modules;
+    std::array<vk::Pipeline, 2> prepass_pipelines;
 
     /// Declared before `build`: destroyed after it, so the first build (which starts this one)
     /// has finished when this one is waited for.

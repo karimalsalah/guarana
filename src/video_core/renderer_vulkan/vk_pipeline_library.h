@@ -50,10 +50,11 @@ namespace Vulkan {
 constexpr u32 GPL_FRAGMENT_TEXTURE_SCALING_BASE = 64;
 constexpr u32 GPL_FRAGMENT_IMAGE_SCALING_BASE = 32;
 
-/// EDEN_NX2_GPL_OPTIMIZE=1 (with EDEN_NX2_GPL=1): after the fast link, an optimized link
-/// (VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT) is built on a worker and swapped in at a
-/// later draw, like the fast first build. The shader libraries are then created with
-/// VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT.
+/// With EDEN_NX2_GPL=1, after the fast link an optimized link
+/// (VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT) of the same libraries is built on a worker
+/// and swapped in at a later draw. The shader libraries are then created with
+/// VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT. EDEN_NX2_GPL_OPTIMIZE=0 leaves
+/// the fast-linked pipelines in place.
 bool GplOptimizeEnabled();
 
 enum class GplPart : u32 {
@@ -66,6 +67,8 @@ struct GplLibrary {
     std::vector<vk::DescriptorSetLayout> set_layouts;
     vk::PipelineLayout layout;
     vk::Pipeline pipeline;
+    /// How long the build took: what each later reuse of the library saves.
+    u64 build_ns{};
 };
 
 /// Bytes of a library key. Only whole scalar values are added, never structs with padding.
@@ -111,6 +114,15 @@ public:
     void RecordHeldDraw(std::chrono::nanoseconds time);
     void RecordFallback();
 
+    /// A draw recorded with a pipeline linked from libraries, before its optimized link.
+    void RecordFastDraw() {
+        fast_draws.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// The optimized link replaced a fast-linked pipeline.
+    void RecordReplacement() {
+        replacements.fetch_add(1, std::memory_order_relaxed);
+    }
+
     /// Logs the counters of the last 10 s (Nx2Perf gpl), when there were any.
     void Report();
 
@@ -140,6 +152,9 @@ private:
     std::array<std::atomic<u64>, 2> link_ns{};
     std::array<std::atomic<u64>, 2> link_max_ns{};
     std::atomic<u64> held_ns{};
+    std::atomic<u64> avoided_ns{};
+    std::atomic<u64> fast_draws{};
+    std::atomic<u32> replacements{};
     std::atomic<u32> fallbacks{};
     std::atomic<u32> logged_builds{};
     std::atomic<size_t> total_libraries{};

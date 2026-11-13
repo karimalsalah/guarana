@@ -2112,6 +2112,51 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
+    // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
+    // as dynamic state (GraphicsPipeline). Only the per-draw rate is used, and the per-primitive
+    // rate of native mesh programs with EDEN_NX2_MESH_OUT bit 2.
+    if (!mesh_primitive_rate || !extensions.mesh_shader) {
+        features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
+    }
+    features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
+    extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
+                                       features.fragment_shading_rate.pipelineFragmentShadingRate &&
+                                       instance_version >= VK_API_VERSION_1_2 &&
+                                       std::getenv("EDEN_NX2_VRS") != nullptr;
+    if (!extensions.fragment_shading_rate ||
+        !features.fragment_shading_rate.primitiveFragmentShadingRate) {
+        // The mesh feature needs the primitive rate one.
+        features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+    }
+    if (mesh_primitive_rate) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_MESH_OUT: per-primitive shading rate of mesh programs {} (multiple "
+                 "viewports {}, non-trivial combiners {})",
+                 IsMeshPrimitiveShadingRateSupported() ? "enabled" : "not available",
+                 properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports,
+                 properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps);
+    }
+    fragment_shading_rates.clear();
+    if (extensions.fragment_shading_rate) {
+        std::string rates;
+        for (const VkPhysicalDeviceFragmentShadingRateKHR& rate :
+             physical.GetFragmentShadingRatesKHR()) {
+            if ((rate.sampleCounts & VK_SAMPLE_COUNT_1_BIT) == 0) {
+                continue;
+            }
+            fragment_shading_rates.push_back(rate.fragmentSize);
+            rates += fmt::format(" {}x{}", rate.fragmentSize.width, rate.fragmentSize.height);
+        }
+        const VkExtent2D max_size = properties.fragment_shading_rate.maxFragmentSize;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_VRS: VK_KHR_fragment_shading_rate enabled, rates:{}, max {}x{}", rates,
+                 max_size.width, max_size.height);
+    } else if (loaded_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
+        // Not a warning: the extension is left out unless asked for.
+        RemoveExtensionFeature(extensions.fragment_shading_rate, features.fragment_shading_rate,
+                               VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    }
+
     // VK_EXT_graphics_pipeline_library (EDEN_NX2_GPL): used only with fast linking, which makes
     // a link cost a fraction of a millisecond.
     if (graphics_pipeline_library_requested) {
