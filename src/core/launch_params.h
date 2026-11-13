@@ -33,6 +33,9 @@ struct LaunchParams {
     std::optional<std::string> edit_nup_icon{};
     std::optional<std::string> edit_nup_version{};
     std::optional<std::string> edit_nup_publisher{};
+    // --warm-pipelines <title id, hex>: builds a title's cached pipelines into the driver's
+    // caches without booting it, then exits (eden-cli, docs/warm-up.md).
+    std::optional<std::string> warm_pipelines_title{};
     u16 port = Network::DefaultRoomPort;
     bool use_multiplayer = false;
     bool fullscreen = false;

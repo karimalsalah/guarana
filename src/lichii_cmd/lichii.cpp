@@ -21,6 +21,9 @@
 #include <optional>
 #include <regex>
 #include <string>
+#include <limits>
+#include <stop_token>
+#include <thread>
 #include "common/settings_enums.h"
 #include "core/launch_params.h"
 #ifdef __EMSCRIPTEN__
@@ -480,6 +483,148 @@ static bool BuildWarm(Core::System& system, int argc, char** argv) {
     return result.ok;
 }
 
+// eden-cli --warm-pipelines <title id>: exit codes and interrupt flag of the headless warm-up.
+constexpr int kWarmExitFailed = 1;     // bad arguments, or no Vulkan renderer could be created
+constexpr int kWarmExitRunAgain = 3;   // nothing built: the last run ended while building
+constexpr int kWarmExitIncomplete = 4; // stopped, or cached pipelines are left for another run
+static int warm_exit_code = 0;
+static std::atomic_bool warm_interrupted{false};
+
+/// Headless shader warm-up (docs/warm-up.md): creates the Vulkan renderer with a hidden window and
+/// no guest program, loads the title's shader cache (lichii-cache.v2.bin), builds every cached
+/// pipeline into the driver's pipeline cache with the renderer's own precache machinery, saves the
+/// caches and shuts down. Progress goes to stdout, one line per 5%.
+static bool WarmPipelines(SdlState& state, const Core::LaunchParams& lp) {
+    namespace ShaderWarm = VideoCommon::ShaderWarm;
+    warm_exit_code = kWarmExitFailed;
+
+    const std::string& text = *lp.warm_pipelines_title;
+    char* end = nullptr;
+    const u64 title_id = std::strtoull(text.c_str(), &end, 16);
+    if (text.empty() || *end != '\0' || title_id == 0) {
+        fmt::print(stderr, "warm: '{}' is not a title id (16 hex digits)\n", text);
+        return false;
+    }
+    if (Settings::values.renderer_backend.GetValue() != Settings::RendererBackend::Vulkan) {
+        fmt::print(stderr, "warm: the renderer is not Vulkan, there is nothing to warm\n");
+        return false;
+    }
+    if (!Settings::values.use_disk_shader_cache.GetValue()) {
+        fmt::print(stderr, "warm: the disk shader cache is off in the configuration\n");
+        return false;
+    }
+
+    // Below-normal priority; the shader workers already run at low thread priority inside it.
+#ifdef _WIN32
+    SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+    _putenv_s("EDEN_NX2_HIDE_WINDOW", "1");
+#else
+    setpriority(PRIO_PROCESS, 0, 10);
+    setenv("EDEN_NX2_HIDE_WINDOW", "1", 0);
+#endif
+
+    state.system.Initialize();
+    state.system.ApplySettings();
+    state.emu_window =
+        std::make_unique<EmuWindow_SDL3_VK>(&state.input_subsystem, state.system, false);
+    state.system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
+    state.system.SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
+
+    const auto begin = std::chrono::steady_clock::now();
+    const auto seconds = [&begin] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    };
+    if (const auto result = state.system.SetupHeadlessVideo(*state.emu_window, title_id);
+        result != Core::SystemResultStatus::Success) {
+        fmt::print(stderr, "warm: the renderer could not be created (error {})\n",
+                   static_cast<int>(result));
+        state.system.ShutdownMainProcess();
+        return false;
+    }
+    fmt::print("warm: title {:016x}, renderer ready after {:.1f} s\n", title_id, seconds());
+    std::fflush(stdout);
+
+    std::signal(SIGINT, [](int) { warm_interrupted = true; });
+    std::stop_source stop;
+    std::jthread watcher{[&stop](std::stop_token done) {
+        while (!done.stop_requested()) {
+            if (warm_interrupted) {
+                stop.request_stop();
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        }
+    }};
+
+    // A line per 5% of each stage; the callback comes from build workers and this thread.
+    static std::mutex print_mutex;
+    int printed[4]{-1, -1, -1, -1};
+    int pass = 0;
+    const auto on_progress = [&](VideoCore::LoadCallbackStage stage, size_t value, size_t total) {
+        if ((stage != VideoCore::LoadCallbackStage::Build &&
+             stage != VideoCore::LoadCallbackStage::Warm) ||
+            total == 0) {
+            return;
+        }
+        const int step = static_cast<int>((std::min)(value, total) * 100 / total / 5) * 5;
+        std::scoped_lock lock{print_mutex};
+        int& last = printed[static_cast<size_t>(stage)];
+        if (step <= last) {
+            return;
+        }
+        last = step;
+        fmt::print("warm: pass {} {} {}% ({}/{}) {:.1f} s\n", pass,
+                   stage == VideoCore::LoadCallbackStage::Build ? "boot-builds" : "precache", step,
+                   value, total, seconds());
+        std::fflush(stdout);
+    };
+
+    constexpr int kMaxPasses = 8;
+    ShaderWarm::SetWarmOnly(true);
+    ShaderWarm::WarmOnlyReport report;
+    size_t previous_left = (std::numeric_limits<size_t>::max)();
+    bool incomplete = false;
+    for (pass = 1; pass <= kMaxPasses; ++pass) {
+        std::fill(std::begin(printed), std::end(printed), -1);
+        state.system.Renderer().ReadRasterizer()->LoadDiskResources(title_id, stop.get_token(),
+                                                                    on_progress);
+        report = ShaderWarm::TakeWarmOnlyReport();
+        if (stop.stop_requested() || !report.built || report.left == 0) {
+            break;
+        }
+        // Cached pipelines were left for want of room; the next pass takes them, as long as each
+        // pass takes some.
+        if (report.left >= previous_left || pass == kMaxPasses) {
+            incomplete = true;
+            break;
+        }
+        previous_left = report.left;
+    }
+    ShaderWarm::SetWarmOnly(false);
+    watcher.request_stop();
+
+    // Closing the renderer saves the caches (driver pipeline cache, shader cache v2, used list).
+    state.system.ShutdownMainProcess();
+    const bool stopped = stop.stop_requested();
+    fmt::print("warm: {} after {:.1f} s: {} cached graphics pipelines, {} already built for this "
+               "driver, {} left\n",
+               stopped ? "stopped" : !report.built ? "nothing built" : incomplete ? "incomplete"
+                                                                                  : "done",
+               seconds(), report.graphics_records, report.already_built, report.left);
+    std::fflush(stdout);
+    if (stopped || incomplete) {
+        warm_exit_code = kWarmExitIncomplete;
+        return false;
+    }
+    if (!report.built) {
+        fmt::print("warm: the last run ended while building the cache; run it again\n");
+        warm_exit_code = kWarmExitRunAgain;
+        return false;
+    }
+    warm_exit_code = 0;
+    return true;
+}
+
 extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // SDL calls SDL_AppIterate back to back by default, which kept a host core at 100% polling
     // input; 240 Hz is plenty for input and the key script.
@@ -561,6 +706,10 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     if (lp.edit_nup_source) {
         return EditNup(lp) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+    }
+
+    if (lp.warm_pipelines_title) {
+        return WarmPipelines(*state, lp) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
     }
 
     if (lp.filepath.empty()) {
@@ -853,6 +1002,11 @@ extern "C" void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         // SDL3 maps SDL_APP_SUCCESS to exit code 0; quit SDL ourselves to return the restart code.
         SDL_Quit();
         std::exit(kRestartExitCode);
+    }
+    if (warm_exit_code > kWarmExitFailed) {
+        // The warm-up's own codes (3, 4); SDL3 knows only 0 and 1.
+        SDL_Quit();
+        std::exit(warm_exit_code);
     }
 }
 

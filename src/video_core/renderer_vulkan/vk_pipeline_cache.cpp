@@ -1480,6 +1480,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         shader_cache_v2 = nullptr;
         cache_v2.reset();
         pipeline_binaries.reset();
+        if (VideoCommon::ShaderWarm::WarmOnly()) {
+            // A pass of the headless warm-up reads the records again: those the last pass had no
+            // room for are built now.
+            disk_pipelines.clear();
+        }
     }
 
     namespace StutterTrace = VideoCommon::StutterTrace;
@@ -1563,9 +1568,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     // With the shader precache this boot, the cached graphics pipelines skipped below are built
     // on the loading screen too, unless an earlier precache built them for this driver.
     namespace ShaderWarm = VideoCommon::ShaderWarm;
+    // A headless warm-up (eden-cli --warm-pipelines) is a precache that also builds the rest.
     const bool precache =
-        ShaderWarm::PrecacheBeforeStart(Settings::values.precache_shaders.GetValue(),
-                                        ShaderWarm::TakeWarmBeforeStart()) &&
+        (ShaderWarm::PrecacheBeforeStart(Settings::values.precache_shaders.GetValue(),
+                                         ShaderWarm::TakeWarmBeforeStart()) ||
+         ShaderWarm::WarmOnly()) &&
         build_at_boot;
     std::unordered_set<u64> precached_pipelines;
     if (precache) {
@@ -1710,6 +1717,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                                     std::unordered_set<u64> precached_pipelines,
                                     bool build_at_boot) {
     namespace CacheV2 = VideoCommon::ShaderCacheV2;
+    namespace ShaderWarm = VideoCommon::ShaderWarm;
     namespace StutterTrace = VideoCommon::StutterTrace;
     using CacheV2::RecordKind;
     using VideoCommon::ShaderJobPriority;
@@ -1774,6 +1782,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     std::vector<PrecacheJob> precache_graphics;
     u64 precache_capture_bytes = 0;
     std::vector<CacheV2::ProgramRecord> stale_programs;
+    const bool warm_only = ShaderWarm::WarmOnly();
+    size_t warm_already_built = 0;
+    size_t warm_left = 0;
     for (const CacheV2::LogRecord& record : log->parsed.live) {
         if (record.kind != RecordKind::Program) {
             continue;
@@ -1965,6 +1976,11 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             boot_graphics.emplace_back(index, *key);
             continue;
         }
+        if (warm_only && precached_pipelines.contains(hash)) {
+            // Built into the driver's cache for this driver by an earlier warm-up or precache
+            ++warm_already_built;
+            continue;
+        }
         ++skipped_pipelines;
         const u64 bytes = record.payload.size();
         std::vector<u8> payload(record.payload.begin(), record.payload.end());
@@ -1990,6 +2006,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         } else if (bytes <= PrebuildCaptureLimit - prebuild_bytes) {
             prebuild_bytes += bytes;
             prebuild.push_back({*key, std::move(payload)});
+        } else {
+            ++warm_left;
         }
     }
 
@@ -2209,6 +2227,28 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         start_prebuild();
         LOG_INFO(Render_Vulkan, "{} cached graphics pipelines admitted for background prebuild",
                  deferred_pipelines);
+    }
+    if (warm_only) {
+        // The process ends when this returns: wait for the background builds too (a stop cancels
+        // them) and save the driver's cache with them in it.
+        if (scheduled_prebuild) {
+            scheduled_prebuild->Batch().Wait();
+        }
+        if (!stop_loading.stop_requested()) {
+            serialization_thread.WaitForRequests();
+            if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
+                last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                                   vulkan_pipeline_cache,
+                                                                   CACHE_VERSION, true),
+                                      std::memory_order_relaxed);
+            }
+        }
+        ShaderWarm::ReportWarmOnly({
+            .built = build_at_boot,
+            .graphics_records = graphics_records,
+            .already_built = warm_already_built,
+            .left = warm_left,
+        });
     }
 }
 
