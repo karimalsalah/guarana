@@ -316,10 +316,14 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             // from a compile (the binary store is not opened then: PipelineCache).
             const VkPipelineCache driver_cache{
                 capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE} : *pipeline_cache};
-            pipeline = binaries ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache,
-                                                                  binary_key)
-                                : device.GetLogical().CreateComputePipeline(compute_ci,
-                                                                            driver_cache);
+            {
+                // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+                const auto cache_lock = device.LockPipelineCacheForBuild();
+                pipeline = binaries ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache,
+                                                                      binary_key)
+                                    : device.GetLogical().CreateComputePipeline(compute_ci,
+                                                                                driver_cache);
+            }
             TracePipelineBuild("END", "compute", shader_hash, traced, unoptimized,
                                std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - trace_begin)

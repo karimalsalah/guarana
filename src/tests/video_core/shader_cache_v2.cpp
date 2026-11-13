@@ -499,7 +499,7 @@ TEST_CASE("Shader cache v2: compaction keeps the live records and only them",
         const Common::FS::FileLock other{VideoCommon::PipelineCacheLockPath(file)};
         REQUIRE(other.Held());
         REQUIRE(V2::CompactLog(file) == V2::WriteResult::Busy);
-        REQUIRE(ReadAll(file) == before.bytes);
+        REQUIRE(std::ranges::equal(ReadAll(file), before.bytes));
     }
     REQUIRE(V2::CompactLog(file) == V2::WriteResult::Written);
     const V2::LogFile after = V2::ReadLogFile(file);
