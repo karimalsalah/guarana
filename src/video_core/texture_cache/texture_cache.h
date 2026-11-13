@@ -28,6 +28,7 @@
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_hitch.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -166,8 +167,45 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             EvictionAge(mode_age, min_age, total_used_memory, retention_limit, out_of_memory);
         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
     };
+    // EDEN_NX2_HITCH_GC_BATCH: images that must be downloaded before they go are recorded, up to
+    // MaxBatchBytes of them, and one wait for the host GPU serves the batch (see
+    // flush_evictions), not one wait per image.
+    constexpr size_t MaxBatchBytes = 64_MiB;
+    const bool batch_downloads = VideoCommon::Hitch::GcBatch();
+    [[maybe_unused]] const bool clean_first = VideoCommon::Hitch::GcCleanFirst();
+    using EvictionMap = decltype(runtime.DownloadStagingBuffer(size_t{}));
+    using EvictionCopies = decltype(FullDownloadCopies(std::declval<const ImageInfo&>()));
+    struct PendingEviction {
+        ImageId image_id;
+        EvictionMap map;
+        EvictionCopies copies;
+    };
+    boost::container::small_vector<PendingEviction, 16> evictions;
+    size_t eviction_bytes = 0;
+    const auto flush_evictions = [&] {
+        if (evictions.empty()) {
+            return;
+        }
+        runtime.Finish();
+        for (PendingEviction& entry : evictions) {
+            Image& image = slot_images[entry.image_id];
+            SwizzleImage(*gpu_memory, image.gpu_addr, image.info, entry.copies,
+                         entry.map.mapped_span, swizzle_data_buffer);
+            ++gc_download_deletes;
+            ClearStaleImage(image);
+            if (True(image.flags & ImageFlagBits::Tracked)) {
+                UntrackImage(image, entry.image_id);
+            }
+            ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
+            UnregisterImage(entry.image_id);
+            DeleteImage(entry.image_id, image.scale_tick > frame_tick + 5);
+        }
+        evictions.clear();
+        eviction_bytes = 0;
+    };
     const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,
-                          &evict_old_costly, out_of_memory](ImageId image_id) {
+                          &evict_old_costly, out_of_memory, batch_downloads, &evictions,
+                          &eviction_bytes, &flush_evictions](ImageId image_id) {
         if (num_iterations == 0) {
             return true;
         }
@@ -179,6 +217,24 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         const bool must_download = IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
         if ((!aggressive_mode && !evict_old_costly && True(image.flags & ImageFlagBits::CostlyLoad)) ||
             (!high_priority_mode && must_download)) {
+            return false;
+        }
+        if (must_download && batch_downloads) {
+            // Queued by an earlier pass of this collection: deleted when the batch is flushed.
+            for (const PendingEviction& entry : evictions) {
+                if (entry.image_id == image_id) {
+                    return false;
+                }
+            }
+            auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
+            auto copies = FullDownloadCopies(image.info);
+            MarkStaleTransfer(image);
+            image.DownloadMemory(map, copies);
+            eviction_bytes += image.unswizzled_size_bytes;
+            evictions.push_back(PendingEviction{image_id, map, std::move(copies)});
+            if (eviction_bytes >= MaxBatchBytes) {
+                flush_evictions();
+            }
             return false;
         }
         if (must_download) {
@@ -253,7 +309,13 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
                                ? static_cast<double>(it->second) / static_cast<double>(block.block_size)
                                : 0.0;
                 }
-                ordered.emplace_back(fill, image_id);
+                // EDEN_NX2_HITCH_GC_CLEAN_FIRST: images the collector must download before it
+                // deletes them (a full GPU wait each) go after every image it can drop at once.
+                const Image& candidate = slot_images[image_id];
+                const bool costs_a_download =
+                    clean_first && IsDownloadable(candidate) &&
+                    False(candidate.flags & ImageFlagBits::BadOverlap);
+                ordered.emplace_back(costs_a_download ? fill + 2.0 : fill, image_id);
             }
             std::stable_sort(ordered.begin(), ordered.end(),
                              [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -281,6 +343,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         Configure(true);
         Collect();
     }
+    flush_evictions();
 }
 
 template <class P>

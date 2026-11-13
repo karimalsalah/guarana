@@ -27,6 +27,7 @@
 #include "common/thread.h"
 #include "video_core/auto_shading_rate.h"
 #include "video_core/gpu_logging/gpu_logging.h"
+#include "video_core/nx2_hitch.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_uma.h"
 #include "video_core/renderer_vulkan/upload_batch.h"
@@ -51,6 +52,16 @@ std::atomic<u64> g_profile_finish_ns{};
 std::atomic<u64> g_profile_window_start{};
 std::mutex g_profile_end_mutex;
 std::map<std::string, u64> g_profile_ends;
+
+/// EDEN_NX2_HITCH_FINISH_TRACE: Scheduler::Finish callers (thread, file:line) of the last window.
+struct FinishCaller {
+    u64 count{};
+    u64 total_ns{};
+    u64 max_ns{};
+};
+std::mutex g_finish_trace_mutex;
+std::map<std::string, FinishCaller> g_finish_trace;
+std::chrono::steady_clock::time_point g_finish_trace_start{};
 
 constexpr std::array<std::string_view, static_cast<size_t>(TraceCategory::Count)>
     TRACE_CATEGORY_NAMES{
@@ -186,6 +197,50 @@ void CountRenderPassEnd(const char* file, u32 line) {
     }
     std::scoped_lock lock{g_profile_end_mutex};
     ++g_profile_ends[fmt::format("{}:{}", name, line)];
+}
+
+/// Adds one Finish to the caller table and, every 10 s, logs the table (top 12 by wait).
+void NoteFinishCaller(const std::source_location& location, u64 ns) {
+    std::string name = fmt::format("{} {}:{}",
+                                   VideoCommon::GpuSplit::OnBackThread() ? "back" : "other",
+                                   TraceBaseName(location.file_name()), location.line());
+    std::vector<std::pair<std::string, FinishCaller>> rows;
+    double seconds = 0.0;
+    {
+        std::scoped_lock lock{g_finish_trace_mutex};
+        const auto now = std::chrono::steady_clock::now();
+        if (g_finish_trace_start == std::chrono::steady_clock::time_point{}) {
+            g_finish_trace_start = now;
+        }
+        FinishCaller& caller = g_finish_trace[std::move(name)];
+        ++caller.count;
+        caller.total_ns += ns;
+        caller.max_ns = (std::max)(caller.max_ns, ns);
+        if (now - g_finish_trace_start < std::chrono::seconds{10}) {
+            return;
+        }
+        seconds = std::chrono::duration<double>(now - g_finish_trace_start).count();
+        g_finish_trace_start = now;
+        rows.assign(g_finish_trace.begin(), g_finish_trace.end());
+        g_finish_trace.clear();
+    }
+    std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {
+        return lhs.second.total_ns > rhs.second.total_ns;
+    });
+    u64 count = 0;
+    u64 total_ns = 0;
+    for (const auto& row : rows) {
+        count += row.second.count;
+        total_ns += row.second.total_ns;
+    }
+    LOG_INFO(Render_Vulkan, "Hitch finish trace: {} Scheduler::Finish in {:.1f} s, {:.1f} ms waited",
+             count, seconds, static_cast<double>(total_ns) / 1e6);
+    for (size_t i = 0; i < rows.size() && i < 12; ++i) {
+        LOG_INFO(Render_Vulkan, "Hitch finish trace: {} x{} {:.1f} ms (longest {:.1f} ms)",
+                 rows[i].first, rows[i].second.count,
+                 static_cast<double>(rows[i].second.total_ns) / 1e6,
+                 static_cast<double>(rows[i].second.max_ns) / 1e6);
+    }
 }
 
 void ReportSubmitCounts() {
@@ -467,8 +522,16 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     const u64 presubmit_tick = CurrentTick();
     const bool profile = VideoCommon::Nx2Profile::Enabled();
     const u64 start = profile ? VideoCommon::Nx2Profile::Now() : 0;
+    const bool hitch_trace = VideoCommon::Hitch::FinishTrace();
+    const auto hitch_start = hitch_trace ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
     SubmitExecution(signal_semaphore, wait_semaphore, MakeTraceSite(location));
     Wait(presubmit_tick);
+    if (hitch_trace) {
+        NoteFinishCaller(location, static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                        std::chrono::steady_clock::now() - hitch_start)
+                                                        .count()));
+    }
     AllocateNewContext();
     submitted_serial = record_serial;
     last_flush = std::chrono::steady_clock::now();

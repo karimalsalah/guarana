@@ -9,6 +9,7 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <utility>
 
@@ -161,7 +162,9 @@ public:
     /// Waits for a submitted tick without flushing: safe on threads other than the GPU thread.
     void WaitSubmittedTick(u64 tick);
 
-    void Finish();
+    /// Submits and waits for the host GPU; the location names the caller in the Finish trace
+    /// (EDEN_NX2_HITCH_FINISH_TRACE).
+    void Finish(std::source_location location = std::source_location::current());
 
     void FinishForHostRead();
 
