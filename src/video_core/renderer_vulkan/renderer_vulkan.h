@@ -123,6 +123,10 @@ private:
     void RecordFluidFrames(Frame* frame, const HdrPresent& output,
                            std::vector<Frame*>& predicted_frames,
                            bool& real_flushed);
+    /// EDEN_NX2_FLUID_INTERP: records the in-between frames of the last two real frames, each on
+    /// the slot before the next, and gives the real frame the slot after them.
+    void RecordFluidInterpolated(Frame* frame, const HdrPresent& output, size_t generations,
+                                 std::vector<Frame*>& interpolated_frames);
     u64 fluid_batch{}; ///< real frames recorded for the FLUID presenter
 #endif
 

@@ -433,6 +433,9 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         if (fluid && (predict || generated_frames == 0)) {
             // EDEN_NX2_FLUID: the present thread shows each frame at its vblank slot.
             RecordFluidFrames(frame, output, predicted_frames, real_flushed);
+        } else if (fluid && FrameGen::FluidInterpolation()) {
+            // EDEN_NX2_FLUID_INTERP: interpolated frames on the vblank slots before the real one.
+            RecordFluidInterpolated(frame, output, generated_frames, predicted_frames);
         } else {
             // Each generated frame keeps the screen for an equal share of the real frame
             // interval (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh
@@ -666,6 +669,61 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     frame_gen.NoteFluidGenerated(predicted);
     present_manager.NoteFluidBatch(true, cut_short,
                                    !cut_short && slot <= last && predicted >= max_predictions);
+}
+#endif
+
+#ifdef HAS_LSFG
+void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& output,
+                                             size_t generations,
+                                             std::vector<Frame*>& interpolated_frames) {
+    using std::chrono::duration_cast;
+    using std::chrono::nanoseconds;
+    const auto recorded = std::chrono::steady_clock::now();
+    frame->fluid_batch = ++fluid_batch;
+    frame->fluid_recorded = recorded;
+    const PresentManager::FluidClock slots = present_manager.GetFluidClock();
+    u64 first = 0;
+    if (slots.Valid()) {
+        // The first slot the batch's GPU work can be done for.
+        first = slots.FirstSlotPresentedAfter(recorded + slots.latency);
+        const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                              std::memory_order_relaxed)) *
+                          1.0e-9f;
+        if (frame_gen.CadenceActive() && paced > 0.0f &&
+            std::abs(frame_gen.FrameInterval() - paced) <= paced * 0.05f) {
+            // As RecordFluidFrames: move the guest's paced presents towards batches whose GPU
+            // work is done just before their first slot.
+            const s64 slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+            const s64 slack = duration_cast<nanoseconds>(slots.SlotTime(first) - slots.lead -
+                                                         (recorded + slots.latency))
+                                  .count();
+            s64 error = slack - FLUID_PHASE_MARGIN_NS;
+            if (error > slot_ns / 2) {
+                error -= slot_ns;
+            }
+            Tegra::g_nx2_present_phase_shift_ns.fetch_add(
+                std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
+        }
+    }
+    size_t made = 0;
+    for (size_t generation = 0; generation < generations; ++generation) {
+        // Never waits: with no frame to spare the real frame comes sooner.
+        Frame* const generated = present_manager.TryGetRenderFrame();
+        if (generated == nullptr) {
+            break;
+        }
+        generated->color_space = output.color_space;
+        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        frame_gen.GenerateInto(device, generated, generation);
+        generated->fluid_batch = frame->fluid_batch;
+        generated->fluid_recorded = recorded;
+        generated->fluid_slot = first != 0 ? first + generation * slots.divisor : 0;
+        interpolated_frames.push_back(generated);
+        ++made;
+    }
+    frame->fluid_slot = first != 0 ? first + made * slots.divisor : 0;
+    frame_gen.NoteFluidGenerated(made);
+    present_manager.NoteFluidBatch(true, made < generations, false);
 }
 #endif
 
