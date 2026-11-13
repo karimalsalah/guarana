@@ -198,6 +198,17 @@ public:
         return dlss_status_text;
     }
 
+    /// Started with --launcher-session and a game: the window is never shown in its desktop form.
+    [[nodiscard]] bool IsLauncherSession() const {
+        return launcher_session;
+    }
+
+    /// The exit code a launcher session ended with, once its window has closed: 0 after a stop,
+    /// 1 when the game did not start.
+    [[nodiscard]] std::optional<int> LauncherSessionExitCode() const {
+        return launcher_session_exit;
+    }
+
 signals:
 
     /**
@@ -502,6 +513,9 @@ private:
     void UpdateInputDrivers();
     void HideMouseCursor();
     void ShowMenuHintToast();
+    /// Closes the window of a launcher session once its emulation has stopped and no restart or
+    /// sub-program boots again; closeEvent then ends the process.
+    void EndLauncherSession();
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
@@ -611,6 +625,18 @@ private:
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
     bool user_flag_cmd_line = false;
+
+    // --launcher-session with a game: the window opens as the fullscreen loading screen and game,
+    // and the process exits when the emulation stops instead of showing the game list.
+    bool launcher_session = false;
+    // The launcher session's game did not start: the process exits with 1.
+    bool launcher_session_failed = false;
+    // The player uses separate windows; the launcher session plays in the main window and puts
+    // the setting back before it is saved.
+    bool launcher_session_separate_window = false;
+    // A restart or a sub-program is between ShutdownGame and BootGame: the session goes on.
+    bool launcher_session_rebooting = false;
+    std::optional<int> launcher_session_exit;
 
     bool auto_paused = false;
     bool auto_muted = false;

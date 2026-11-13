@@ -32,7 +32,7 @@ Hard rules (legal and trust):
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
-| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number }`; emits `game://exited` `{ code, seconds }` |
+| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number }`; emits `game://exited` `{ code, seconds }`. Runs `<current>\guarana.exe --launcher-session -f -g <file>`, or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
@@ -166,6 +166,42 @@ Events: `install://progress` (stages `resolve`, `download`, `verify`, `extract`,
 (`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed),
 `launch://request` (no payload: a `LaunchRequest` waits for `take_launch_request`),
 `booster://changed` (`BoosterStatus`, after the booster applies for a session, restores it, or the level changes).
+
+## Launcher session
+
+`launch_game` starts the emulator with `--launcher-session` before `-f -g <file>` (`launch.rs`,
+`src/core/launch_params.cpp`). The emulator then:
+
+- never shows its desktop window (menu bar, status bar, game list): the window first appears as the
+  fullscreen loading screen, black, once the game file has been read, and the game follows on the
+  same surface. Until then the launcher's own screen stays up (it already reads "Playing" a second
+  after the start). The emulator asks for the foreground when its window appears; the launcher
+  allows that with `AllowSetForegroundWindow`. It uses the fullscreen mode set in the emulator
+  (borderless or exclusive), and plays in the main window even when the player chose separate
+  windows there (that setting is saved unchanged). The "leave fullscreen" hotkey (Esc by default)
+  stops the game instead, with the usual stop confirmation; the fullscreen toggle does nothing. The
+  hint toast, where enabled, names that key and the controller's stop combo instead of the menu;
+- exits when the emulation stops, for any reason (the stop or exit hotkey, closing the window, the
+  game ending itself), instead of going back to its game list: exit code **0**. A game that did not
+  start (a load error, a missing firmware or key, a cancelled user or low-RAM dialog) exits with
+  **1** once its error dialog is closed. A crash ends the process with the crash code, as before. A
+  restart or a game that starts its own sub-program boots again and does not end the session;
+- shows its dialogs (load errors, confirmations, applets such as the software keyboard) as before,
+  above the fullscreen window or, before the window appears, on their own.
+
+`game://exited` brings the launcher back as soon as the process is gone; `code` is that exit code.
+A code of 1 can arrive late (the player may leave the load error open for minutes), so `seconds`
+alone does not tell a failed start from a session; the autopilot ignores a code-1 session that
+showed no frame (`autopilot::decide`).
+
+Only versions that understand the flag get it: a stable version of 20.3.0 or later
+(`LAUNCHER_SESSION_SINCE` in `launch.rs`, compared with `current.json`). The flag was added when the
+repository's `VERSION` read 20.2.0; the assumption is that the next release is 20.3.0 or later. A
+nightly, a pre-release or any other label gets `-f -g <file>` only, as do older versions the
+launcher installs or rolls back to: they show the emulator's window around the game and go back to
+its game list when the game stops, until the player closes it. An older build that receives it
+ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the gate is
+about behaviour, not safety.
 
 ## Opening games from Windows
 

@@ -25,8 +25,13 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
 - **Applies a profile** to the emulator's own files: a marked block in
   `%APPDATA%\guarana\nx2_switches.txt` (your own lines stay as they are) and a few `[Renderer]` keys
   in `%APPDATA%\guarana\config\qt-config.ini`. Both are backed up to `guarana-backups\` first.
-- **Starts games** with `guarana.exe -f -g "<game file>"` (`-g/--game` boots the file,
-  `-f/--fullscreen` starts fullscreen; `src/core/launch_params.cpp`), can warm the title's shader
+- **Starts games** with `guarana.exe --launcher-session -f -g "<game file>"` (`-g/--game` boots the
+  file, `-f/--fullscreen` starts fullscreen; `src/core/launch_params.cpp`). `--launcher-session`
+  (20.3.0 and later) means the emulator's own window never appears: once the game starts loading,
+  its loading screen and then the game fill the screen (until then the launcher's screen stays),
+  and the emulator exits when the game stops, so you are back in the launcher. The leave-fullscreen key (Esc by default) stops the game
+  (see [CONTRACT.md](CONTRACT.md#launcher-session)). Older versions get `-f -g` only.
+  It can warm the title's shader
   cache files into memory first, and prepares a title's shaders for a new GPU driver with
   `guarana-cli.exe --warm-pipelines <title id> -c <qt-config.ini>` (`docs/warm-up.md`).
 - **Fits into Windows 11**: double-click a `.nsp`, `.xci`, `.nup` or `.nca` file and Guarana starts

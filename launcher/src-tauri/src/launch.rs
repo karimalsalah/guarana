@@ -3,9 +3,12 @@
 //! The emulator boots a game with `guarana.exe -f -g <path>` (`lichii.exe` in builds from before the rename): `-g/--game` is the file and
 //! `-f/--fullscreen` starts it fullscreen (`src/core/launch_params.cpp`, read by
 //! `MainWindow::MainWindow` in `src/lichii/main_window.cpp`). Without a path it opens its own
-//! window.
+//! window. Builds that understand it also get `--launcher-session` first: the emulator then shows
+//! only the fullscreen loading screen and game, never its desktop window, and exits when the game
+//! stops (0 after a stop, 1 when the game did not start) instead of showing its game list.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,9 +23,34 @@ use windows::Win32::System::Threading::{
 use crate::state::{self, AppState};
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{autopilot, modes, paths, profiles, system, warm};
+use crate::{autopilot, install, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
+
+/// The first emulator release that understands `--launcher-session`. The flag was added when the
+/// repository's `VERSION` read 20.2.0, the newest release then, so it ships in the next one; this
+/// assumes that is 20.3.0 or later. Raise it if the next release is numbered otherwise.
+const LAUNCHER_SESSION_SINCE: &str = "20.3.0";
+
+/// Whether the emulator version `current.json` names understands `--launcher-session`. Older
+/// builds, which the launcher can roll back to, get `-f -g` only. A nightly, a pre-release or any
+/// label that is not a release version counts as older: its label does not say what it was built
+/// from.
+fn understands_launcher_session(version: &str) -> bool {
+    !install::is_newer(LAUNCHER_SESSION_SINCE, version)
+}
+
+/// The arguments that boot `game` in the emulator `version`.
+fn game_args(version: &str, game: &Path) -> Vec<OsString> {
+    let mut args = Vec::new();
+    if understands_launcher_session(version) {
+        args.push(OsString::from("--launcher-session"));
+    }
+    args.push(OsString::from("-f"));
+    args.push(OsString::from("-g"));
+    args.push(game.as_os_str().to_owned());
+    args
+}
 
 /// Reads the title's shader and pipeline caches (`*.bin`) once, front to back, so the OS file
 /// cache holds them when the emulator boots. Background I/O priority; at most half the free RAM
@@ -160,7 +188,7 @@ pub fn launch(
     // autopilot reads them after the game.
     cmd.env("EDEN_NX2_SHOWN_STATS", "1");
     if let Some(gp) = &game_path {
-        cmd.arg("-f").arg("-g").arg(gp);
+        cmd.args(game_args(&current.version, gp));
     }
 
     // Game Booster (Off by default). The GPU preference must be set before the emulator starts, so
@@ -179,6 +207,11 @@ pub fn launch(
         }
     };
     let pid = child.id();
+    // The emulator's first window can appear seconds from now, after the player has used the
+    // launcher; let it take the foreground then so it does not open behind the launcher.
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid);
+    }
     log::info!(
         "Started Guarana {} (pid {pid}){}",
         current.version,
@@ -219,4 +252,36 @@ pub fn launch(
         crate::booster::launch_helper_async(app, pid, booster_level, prep);
     }
     Ok(LaunchResult { pid })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn launcher_session_only_for_builds_that_know_it() {
+        assert!(understands_launcher_session("20.3.0"));
+        assert!(understands_launcher_session("v20.3.0"));
+        assert!(understands_launcher_session("20.10.1"));
+        assert!(understands_launcher_session("21.0.0"));
+        assert!(!understands_launcher_session("20.2.0"), "the newest release before the flag");
+        assert!(!understands_launcher_session("20.0.2"));
+        assert!(!understands_launcher_session("20.3.0-rc1"), "a pre-release counts as older");
+        assert!(!understands_launcher_session("nightly-20261113-1a2b3c4"));
+        assert!(!understands_launcher_session("bundled"));
+    }
+
+    #[test]
+    fn game_arguments_by_version() {
+        let game = Path::new(r"D:\Games\Zelda [0400486024DEC000].nsp");
+        assert_eq!(strings(game_args("20.2.0", game)), ["-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]);
+        assert_eq!(
+            strings(game_args("20.3.0", game)),
+            ["--launcher-session", "-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]
+        );
+    }
 }

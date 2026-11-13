@@ -24,6 +24,7 @@ Only the Qt frontend supports the following arguments:
     - Requires a copy of Atmosphere to be extracted onto `sdmc`.
     - This is a shorthand for `<eden folder>/sdmc/atmosphere/hbl.nsp`.
 - `-setup`: Launch setup applet.
+- `--launcher-session` (with `-g <path>`; 20.3.0 and later): what the Guarana launcher starts games with. The window never appears in its desktop form (no menu bar, status bar or game list): it opens as the fullscreen loading screen and then the game. The leave-fullscreen hotkey (Esc by default) stops the game instead of leaving fullscreen. When the emulation stops, for any reason, the program exits instead of going back to the game list: exit code `0` after a stop, `1` when the game did not start. Without a game it is ignored. See [launcher/CONTRACT.md](../../launcher/CONTRACT.md#launcher-session).
 
 `eden` (provided with `--room`), and `eden-room` supports the following options as well:
 
