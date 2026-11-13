@@ -186,6 +186,11 @@ struct Counters {
     std::atomic<u64> early_bytes{};
     std::atomic<u64> early_flushes{};
     std::atomic<u64> early_refused{};
+    /// Pages queued for early downloads when the work that wrote them was recorded, by the site
+    /// that recorded them: after a dispatch, after a draw (EARLY_SUBMIT bit 2), at the frame's end
+    std::atomic<u64> early_pages_dispatch{};
+    std::atomic<u64> early_pages_draw{};
+    std::atomic<u64> early_pages_frame{};
     /// Pages the read-back table dropped to make room, and its size at the last learning
     std::atomic<u64> table_evictions{};
     std::atomic<u64> table_pages{};
@@ -334,6 +339,9 @@ inline void MaybeReport() {
     const u64 early_bytes = take(c.early_bytes);
     const u64 early_flushes = take(c.early_flushes);
     const u64 early_refused = take(c.early_refused);
+    const u64 pages_dispatch = take(c.early_pages_dispatch);
+    const u64 pages_draw = take(c.early_pages_draw);
+    const u64 pages_frame = take(c.early_pages_frame);
     const u64 table_evictions = take(c.table_evictions);
     const u64 table_pages = c.table_pages.load(std::memory_order_relaxed);
     constexpr auto async = static_cast<size_t>(Read::Async);
@@ -343,14 +351,15 @@ inline void MaybeReport() {
              "after the request (longest {:.2f} ms) | reader fence waits for an early download "
              "{:.0f} times, {:.1f} ms | reader waits for the back to submit the tick {:.0f} "
              "times, {:.1f} ms (the rest of the fence wait is the host GPU) | early downloads "
-             "recorded {:.0f} ({:.1f} KiB), {:.0f} submitted at once, {:.0f} refused by a limit | "
-             "read-back table {} pages, {:.0f} evicted (EARLY_SUBMIT={}, EARLY_PAGES={}, "
+             "recorded {:.0f} ({:.1f} KiB), {:.0f} submitted at once, {:.0f} refused by a limit; pages queued after a dispatch {:.0f}, after a draw {:.0f}, "
+             "at the frame's end {:.0f} | read-back table {} pages, {:.0f} evicted (EARLY_SUBMIT={}, EARLY_PAGES={}, "
              "EARLY_AFTER={})",
              per_second(sync_ops), ms_per_second(sync_ns), static_cast<double>(sync_max_ns) / 1e6,
              per_second(early_waits), ms_per_second(early_wait_ns), per_second(submit_waits),
              ms_per_second(submit_wait_ns), per_second(early_recorded),
              per_second(early_bytes) / 1024.0, per_second(early_flushes),
-             per_second(early_refused), table_pages, per_second(table_evictions), EarlySubmit(),
+             per_second(early_refused), per_second(pages_dispatch), per_second(pages_draw),
+             per_second(pages_frame), table_pages, per_second(table_evictions), EarlySubmit(),
              EarlyPages(), EarlyAfter());
     LOG_INFO(HW_GPU,
              "Async read-back per second: reads {:.0f} async ({:.1f} ms), {:.0f} only waited for a "

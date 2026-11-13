@@ -219,6 +219,8 @@ void BufferCache<P>::TickFrame() {
     delayed_destruction_ring.Tick();
 
     // Pages draws wrote: their early downloads, now that the frame's work is recorded.
+    VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_frame,
+                                  early_pages.size());
     RecordEarlyDownloads();
     early_bytes_this_frame = 0;
     // Read downloads no thread waited for (the other ranges the guest read before, early ones).
@@ -904,10 +906,14 @@ void BufferCache<P>::NoteWorkRecorded(bool dispatch) {
     if constexpr (!IS_OPENGL && USE_MEMORY_MAPS) {
         if (dispatch) {
             // Outside any render pass: the copies go right behind the dispatch.
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_dispatch,
+                                          early_pages.size());
             RecordEarlyDownloads();
         } else if ((VideoCore::AsyncReadback::EarlySubmit() & 2) != 0 && !early_pages.empty()) {
             // EDEN_NX2_EARLY_SUBMIT bit 2: right behind the draw that wrote the pages, ending its
             // render pass, rather than at the end of the frame.
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_draw,
+                                          early_pages.size());
             RecordEarlyDownloads();
         }
         // Early downloads the host GPU ran go to guest memory, where their reads then find them.
