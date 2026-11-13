@@ -64,6 +64,10 @@ add_library(video_core STATIC
     engines/maxwell_dma.h
     engines/puller.cpp
     engines/puller.h
+    autopilot_controller.cpp
+    autopilot_controller.h
+    autopilot_feed.cpp
+    autopilot_feed.h
     frame_budget.cpp
     frame_budget.h
     frame_budget_controller.cpp

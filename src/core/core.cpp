@@ -36,6 +36,7 @@
 #include "core/cpu_manager.h"
 #include "core/debugger/debugger.h"
 #include "core/debugger/nx2_debug_tools.h"
+#include "core/nx2_autopilot_session.h"
 #include "core/nx2_power_session.h"
 #include "core/device_memory.h"
 #include "core/file_sys/card_image.h"
@@ -660,6 +661,7 @@ struct System::Impl {
         Nx2Sampler::StartFromEnvironment();
         Common::PowerTuning::LogState();
         power_session = Nx2PowerSession::MaybeStart(system);
+        autopilot_session = Nx2AutopilotSession::MaybeStart(system);
         Common::BootTiming::Mark("core: load done");
         return SystemResultStatus::Success;
     }
@@ -667,6 +669,7 @@ struct System::Impl {
     /// Stops the running program and releases what it used, keeping the System reusable for
     /// the next Load.
     void ShutdownMainProcess() {
+        autopilot_session.reset();
         power_session.reset();
         debug_service.reset();
         SetShuttingDown(true);
@@ -828,6 +831,7 @@ struct System::Impl {
     /// EDEN_NX2_DEBUG_SERVER; the last member, so it stops before anything it reads goes away.
     std::unique_ptr<Nx2Debug::Service> debug_service;
     std::unique_ptr<Nx2PowerSession> power_session;
+    std::unique_ptr<Nx2AutopilotSession> autopilot_session;
 
     /// Creates the general channel's event on first use after a kernel (re)start.
     void EnsureGeneralChannelInitialized(System& system) {
