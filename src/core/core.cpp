@@ -469,6 +469,27 @@ struct System::Impl {
         return SystemResultStatus::Success;
     }
 
+    /// The video side of Load without a program: kernel and device memory, the GPU and its
+    /// renderer. The program id and the game overrides are set as Load sets them.
+    SystemResultStatus SetupHeadlessVideo(System& system, Frontend::EmuWindow& emu_window,
+                                          u64 title_id) {
+        Settings::SetCurrentProgramID(title_id);
+        Settings::SetCurrentProgramIsSwitch2(false);
+        Settings::SetAstcRecompressionOverride(std::nullopt);
+        Settings::ClearPresetValues();
+        if (const auto kernel_result = InitializeKernel(system);
+            kernel_result != SystemResultStatus::Success) {
+            return kernel_result;
+        }
+        host1x_core.emplace(system);
+        VideoCore::CreateGPU(gpu_core, emu_window, system);
+        if (!gpu_core) {
+            return SystemResultStatus::ErrorVideoCore;
+        }
+        GameSettings::LoadOverrides(title_id, gpu_core->Renderer());
+        return SystemResultStatus::Success;
+    }
+
     /// Creates the program's process and sets up the rest of the system to run it.
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
         VideoCommon::StutterTrace::BootMarker("boot_start");
@@ -898,6 +919,10 @@ void System::InitializeDebugger() {
 SystemResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,
                                 Service::AM::FrontendAppletParameters& params) {
     return impl->Load(*this, emu_window, filepath, params);
+}
+
+SystemResultStatus System::SetupHeadlessVideo(Frontend::EmuWindow& emu_window, u64 title_id) {
+    return impl->SetupHeadlessVideo(*this, emu_window, title_id);
 }
 
 bool System::IsPoweredOn() const {
