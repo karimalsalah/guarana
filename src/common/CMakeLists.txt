@@ -45,6 +45,8 @@ add_library(
     demangle.h
     device_power_state.cpp
     device_power_state.h
+    device_profile.cpp
+    device_profile.h
     display_hdr.cpp
     display_hdr.h
     div_ceil.h
