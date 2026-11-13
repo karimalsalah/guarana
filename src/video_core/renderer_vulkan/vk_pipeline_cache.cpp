@@ -1594,7 +1594,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
         if (device.SerializesPipelineCacheReads()) {
             LOG_INFO(Render_Vulkan, "Driver pipeline cache: reads wait for the builds into it, "
-                                    "saved during play too (EDEN_NX2_CACHE_SAFE=0 turns this off)");
+                                    "saved during play too (EDEN_NX2_CACHE_SAFE=1)");
         }
     }
     if (boot_lock.Held() && !Common::FS::NewFile(boot_marker)) {
