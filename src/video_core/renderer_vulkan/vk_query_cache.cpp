@@ -21,6 +21,7 @@
 #include "video_core/nx2_gpucost.h"
 #include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_cache/query_cache.h"
+#include "video_core/query_cache/running_query_bound.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
@@ -41,7 +42,7 @@ using VideoCommon::QueryType;
 namespace {
 class SamplesQueryBank : public VideoCommon::BankBase {
 public:
-    static constexpr size_t BANK_SIZE = 256;
+    static constexpr size_t BANK_SIZE = VideoCommon::RunningSamplesQuery::BankSlots;
     static constexpr size_t QUERY_SIZE = 8;
     explicit SamplesQueryBank(const Device& device_, Scheduler& scheduler_, size_t index_)
         : BankBase(BANK_SIZE), device{device_}, scheduler{scheduler_}, index{index_} {
@@ -225,13 +226,15 @@ public:
         // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
         // Time's title screen and file select reached 16,384 slots over 64 banks, while gameplay
         // windows in Hyrule Field, Kakariko Village, and the Shooting Gallery reach up to 346
-        // slots across two banks. Past 4 banks (1,024 slots), drop the count as a reset would.
-        static constexpr size_t MaxRunningQuerySlots = 4 * SamplesQueryBank::BANK_SIZE;
-        if (current_query && current_query->size_slots > MaxRunningQuerySlots) {
+        // slots across two banks, but on an AMD iGPU (Lichii issue 1428) they went past 4 banks
+        // and occlusion-tested objects blinked. Past RunningSamplesQuery::MaxBanks (32 banks,
+        // 8,192 slots), drop the count as a reset would.
+        if (current_query &&
+            VideoCommon::RunningSamplesQuery::IsOverBound(current_query->size_slots)) {
             // It drops a real count. Logged on the 1st, 2nd, 4th, 8th... drop, so a window this
             // long during gameplay doesn't go unnoticed and a title screen doesn't flood the log.
             ++bank_bound_resets;
-            if ((bank_bound_resets & (bank_bound_resets - 1)) == 0) {
+            if (VideoCommon::RunningSamplesQuery::IsLoggedDrop(bank_bound_resets)) {
                 LOG_WARNING(Render_Vulkan,
                             "Samples query ran {} slots with no reset or report, dropped its "
                             "count (drop {})",
