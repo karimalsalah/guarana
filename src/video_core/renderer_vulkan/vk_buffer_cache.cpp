@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "video_core/buffer_cache/buffer_cache_base.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_list_grid.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
@@ -643,7 +644,13 @@ u64 BufferCacheRuntime::QueueForHostRead() {
     scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.Record(HostReadBarrier);
     const u64 tick = scheduler.CurrentTick();
-    if (!scheduler.DeferFlush()) {
+    // EDEN_NX2_EARLY_SUBMIT: the early download goes to the GPU right behind the write that
+    // fills its pages. Deferred, it waits for the next submission (up to the DeferFlush window,
+    // longer while the back records a long list), and the guest's read waits for that too.
+    if (VideoCore::AsyncReadback::EarlySubmit() != 0) {
+        scheduler.Flush();
+        VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_flushes, 1);
+    } else if (!scheduler.DeferFlush()) {
         scheduler.Flush();
     }
     return tick;
@@ -656,9 +663,14 @@ void BufferCacheRuntime::WaitForHostRead(u64 tick) {
     // A queued tick may not be submitted yet. Only the split's back submits: other threads ask it
     // to, as for fences (InnerFence::Wait). On the back, and once it has stopped, Wait submits it.
     if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active() &&
-        !VideoCommon::GpuSplit::OnBackThread() && scheduler.WaitSubmitted(tick)) {
-        scheduler.GetMasterSemaphore().Wait(tick);
-        return;
+        !VideoCommon::GpuSplit::OnBackThread()) {
+        const u64 submit_start = VideoCore::AsyncReadback::Now();
+        const bool submitted = scheduler.WaitSubmitted(tick);
+        VideoCore::AsyncReadback::CountSubmitWait(VideoCore::AsyncReadback::Now() - submit_start);
+        if (submitted) {
+            scheduler.GetMasterSemaphore().Wait(tick);
+            return;
+        }
     }
     scheduler.Wait(tick);
 }

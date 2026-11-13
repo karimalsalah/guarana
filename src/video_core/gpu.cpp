@@ -304,8 +304,9 @@ struct GPU::Impl {
         const u64 area_size = raster_area.end_address - raster_area.start_address;
         // In flight: an earlier read's downloads cover the area, only FinishRead is left.
         if (!raster_area.in_flight) {
-            const u64 fence = RequestSyncOperation([this, raster_area, area_size]() {
+            const u64 fence = RequestSyncOperation([this, raster_area, area_size, request]() {
                 const u64 start = AsyncReadback::Now();
+                AsyncReadback::CountSyncOp(start - request);
                 // Apply collected guest writes before downloading GPU data over guest memory.
                 InvalidateGPUCache();
                 renderer->ReadRasterizer()->FlushRegionForRead(raster_area.start_address,

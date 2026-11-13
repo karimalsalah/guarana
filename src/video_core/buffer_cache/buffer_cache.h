@@ -219,6 +219,8 @@ void BufferCache<P>::TickFrame() {
     delayed_destruction_ring.Tick();
 
     // Pages draws wrote: their early downloads, now that the frame's work is recorded.
+    VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_frame,
+                                  early_pages.size());
     RecordEarlyDownloads();
     early_bytes_this_frame = 0;
     // Read downloads no thread waited for (the other ranges the guest read before, early ones).
@@ -817,6 +819,9 @@ void BufferCache<P>::RecordReadDownload(std::span<const std::pair<DAddr, u64>> r
         if (early) {
             ++pending_early_downloads;
             early_bytes_this_frame += total_size_bytes;
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_recorded, 1);
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_bytes,
+                                          total_size_bytes);
         }
         read_downloads.push_back(std::move(download));
         VideoCore::g_read_downloads.fetch_add(1, std::memory_order_release);
@@ -829,11 +834,13 @@ std::optional<u64> BufferCache<P>::FinishReadDownloads(DAddr device_addr, u64 si
         std::unique_lock lock{mutex};
         // The newest one over the range: those before it are written first.
         std::optional<u64> tick;
+        bool newest_early = false;
         for (const ReadDownload& download : read_downloads) {
             // EDEN_NX2_READ_CHECK: a check alone is waited for too, as its read's download.
             if (download.write_ranges.Intersects(device_addr, size) ||
                 (download.check && download.check->own.Intersects(device_addr, size))) {
                 tick = download.tick;
+                newest_early = download.early;
             }
         }
         if (!tick) {
@@ -845,7 +852,7 @@ std::optional<u64> BufferCache<P>::FinishReadDownloads(DAddr device_addr, u64 si
             const u64 wait_start = VideoCore::AsyncReadback::Now();
             runtime.WaitForHostRead(*tick);
             waited = (std::max)(VideoCore::AsyncReadback::Now() - wait_start, u64{1});
-            VideoCore::AsyncReadback::CountHostWait(waited);
+            VideoCore::AsyncReadback::CountHostWait(waited, newest_early);
             lock.lock();
         }
         WriteReadDownloads(*tick, VideoCore::AsyncReadback::t_reading
@@ -899,6 +906,14 @@ void BufferCache<P>::NoteWorkRecorded(bool dispatch) {
     if constexpr (!IS_OPENGL && USE_MEMORY_MAPS) {
         if (dispatch) {
             // Outside any render pass: the copies go right behind the dispatch.
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_dispatch,
+                                          early_pages.size());
+            RecordEarlyDownloads();
+        } else if ((VideoCore::AsyncReadback::EarlySubmit() & 2) != 0 && !early_pages.empty()) {
+            // EDEN_NX2_EARLY_SUBMIT bit 2: right behind the draw that wrote the pages, ending its
+            // render pass, rather than at the end of the frame.
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_pages_draw,
+                                          early_pages.size());
             RecordEarlyDownloads();
         }
         // Early downloads the host GPU ran go to guest memory, where their reads then find them.
@@ -916,6 +931,8 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
         if (!gpu_modified && read_back_pages.empty()) {
             return;
         }
+        const size_t max_pages = VideoCore::AsyncReadback::EarlyPages();
+        const u16 early_after = VideoCore::AsyncReadback::EarlyAfter();
         for (DAddr page = begin; page < end; page += DEVICE_PAGESIZE) {
             auto it = std::ranges::lower_bound(read_back_pages, page, {}, &ReadBackPage::page);
             if (it == read_back_pages.end() || it->page != page) {
@@ -923,13 +940,17 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
                 if (!gpu_modified) {
                     continue;
                 }
-                if (read_back_pages.size() >= MaxReadBackPages) {
+                if (read_back_pages.size() >= max_pages) {
                     // The page whose writes were read longest ago makes room.
                     read_back_pages.erase(
                         std::ranges::min_element(read_back_pages, {}, &ReadBackPage::last_read));
+                    VideoCore::AsyncReadback::Add(
+                        VideoCore::AsyncReadback::g_counters.table_evictions, 1);
                     it = std::ranges::lower_bound(read_back_pages, page, {}, &ReadBackPage::page);
                 }
                 it = read_back_pages.insert(it, ReadBackPage{.page = page, .written = true});
+                VideoCore::AsyncReadback::g_counters.table_pages.store(
+                    read_back_pages.size(), std::memory_order_relaxed);
                 read_back_first.store(read_back_pages.front().page, std::memory_order_release);
                 read_back_last.store(read_back_pages.back().page, std::memory_order_release);
             }
@@ -939,7 +960,7 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
             }
             it->written = false;
             it->unread_writes = 0;
-            it->reads = (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
+            it->reads = (std::min)(static_cast<u16>(it->reads + 1), early_after);
             it->last_read = ++read_back_reads;
         }
     }
@@ -990,7 +1011,7 @@ void BufferCache<P>::NoteReadBackWrite(DAddr device_addr, u64 size) {
                 // The guest no longer reads it after its writes.
                 it->reads = 0;
             }
-            if (it->reads >= EarlyAfterReads &&
+            if (it->reads >= VideoCore::AsyncReadback::EarlyAfter() &&
                 std::ranges::find(early_pages, it->page) == early_pages.end()) {
                 early_pages.push_back(it->page);
             }
@@ -1012,6 +1033,7 @@ void BufferCache<P>::RecordEarlyDownloads() {
         // Bounded: past it, the reads of these pages flush on demand.
         if (pending_early_downloads >= MaxPendingEarlyDownloads ||
             early_bytes_this_frame >= EarlyBytesPerFrame) {
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_refused, 1);
             return;
         }
         RecordReadDownload(pages, pages, true);
