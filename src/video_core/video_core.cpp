@@ -30,6 +30,7 @@
 #include "video_core/renderer_opengl/renderer_opengl.h"
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/video_core.h"
 
 namespace {
@@ -55,6 +56,13 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
 } // Anonymous namespace
 
 namespace VideoCore {
+
+void PrepareRenderer(Core::Frontend::EmuWindow& emu_window) {
+    if (Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan) {
+        Vulkan::PrecreateInstance(emu_window.GetWindowInfo().type,
+                                  Settings::values.renderer_debug.GetValue());
+    }
+}
 
 /// @brief Creates an emulated GPU instance using the given system context.
 void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
