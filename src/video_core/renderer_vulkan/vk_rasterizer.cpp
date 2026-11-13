@@ -61,6 +61,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -3552,10 +3553,17 @@ void RasterizerVulkan::WaitForIdle() {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
 
-    query_cache.NotifyWFI();
+    const bool synced = query_cache.NotifyWFI();
 
     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
+        fence_manager.SignalOrdering();
+        return;
+    }
+    if (synced && VideoCommon::Nx2GpuCost::Query(VideoCommon::Nx2GpuCost::QuerySkipWfiBarrier)) {
+        // EDEN_NX2_GPUCOST_QUERY bit 2: the sync's barrier before its copies waited for every
+        // stage and write of the earlier work, and the one after them made the copies' writes
+        // visible to every later stage, so this one has nothing left to wait for.
         fence_manager.SignalOrdering();
         return;
     }

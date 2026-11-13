@@ -151,7 +151,8 @@ public:
     void CounterReport(GPUVAddr addr, QueryType counter_type, QueryPropertiesFlags flags,
                        u32 payload, u32 subreport);
 
-    void NotifyWFI();
+    /// Whether it recorded the barriers of a sync (host queries were pending).
+    bool NotifyWFI();
 
     bool AccelerateHostConditionalRendering();
 
