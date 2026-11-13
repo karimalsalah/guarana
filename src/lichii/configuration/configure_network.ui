@@ -45,7 +45,7 @@
         <item row="3" column="0" colspan="2">
          <widget class="QCheckBox" name="lan_play">
           <property name="toolTip">
-           <string>Plays local wireless games with other Lichii instances or ldn_mitm consoles on the same network, without a room. If you are in a room when a game starts local play, the room is used instead.</string>
+           <string>Plays local wireless games with other Guarana instances or ldn_mitm consoles on the same network, without a room. If you are in a room when a game starts local play, the room is used instead.</string>
           </property>
           <property name="text">
            <string>LAN play</string>

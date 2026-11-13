@@ -261,7 +261,7 @@ ReleaseList GetReleases() {
     const auto response = Fetch(url, Common::g_build_auto_update_api_path);
 
     if (!response.body) {
-        LOG_WARNING(Common, "Failed to get Lichii releases");
+        LOG_WARNING(Common, "Failed to get Guarana releases");
         return {.status = response.status};
     }
 

@@ -150,7 +150,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "Auto: HDR while Windows HDR (\"Use HDR\") is on for the monitor that shows the "
               "game, SDR otherwise and on hosts that cannot tell.\n"
               "On: HDR whenever the display driver offers an HDR format.\n"
-              "The game is told the display is HDR only while Lichii really presents HDR. SDR "
+              "The game is told the display is HDR only while Guarana really presents HDR. SDR "
               "games and menus are shown at the reference white.\n"
               "While HDR is active, anti-aliasing, post-processing and FSR/SGSR upscaling are off "
               "and the window is scaled bilinearly. Frame generation keeps working.\n"
@@ -186,7 +186,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Runs a Switch 2 game's own DLSS (its upscaling network, translated for this GPU) "
               "instead of AMD FSR 3.1 in its place.\nAMD FSR 3.1 still draws while the network is "
               "checked, when it can't run on this GPU, with resolution scaling, and for the rest "
-              "of the session if its output fails Lichii's checks.\nTakes effect when a game "
+              "of the session if its output fails Guarana's checks.\nTakes effect when a game "
               "starts."));
     INSERT(Settings, frame_rate_limit, tr("Frame rate limit (Switch 2):"),
            tr("Rate of the Switch 2 VSync event that games start their frames on (default 60 Hz)."
@@ -203,7 +203,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
 #if defined(__linux__) && !defined(__ANDROID__)
     INSERT(Settings, amd_fsr4, tr("Use FSR 4 (fsr4-vk community Vulkan port) in place of FSR 3.1"),
-           tr("Uses fsr4-vk, a community Vulkan port of AMD's ML-based FSR 4.1.1 that Lichii's "
+           tr("Uses fsr4-vk, a community Vulkan port of AMD's ML-based FSR 4.1.1 that Guarana's "
               "x86-64 Linux packages include, where FSR replaces a game's upscaler (Ocarina of Time with "
               "the setting above). It is not AMD's official FSR 4 and is not affiliated with or "
               "endorsed by AMD. Radeon RX 6000 or newer, or an RDNA 3 Ryzen GPU, on Mesa's RADV "
@@ -213,14 +213,14 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, amd_fsr4, tr("Use AMD FSR 4 in place of FSR 3.1"),
            tr("Uses AMD's ML-based FSR 4 where FSR replaces a game's upscaler (Ocarina of Time "
               "with the setting above). Radeon RX 6000 or newer, or a Ryzen AI processor, with a "
-              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Lichii downloads from "
+              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Guarana downloads from "
               "AMD when you ask. The files are AMD's, under AMD's licence. Without them, or if FSR 4 "
               "can't run, FSR 3.1 is used. Takes effect when a game starts."));
 #endif
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
-              "the NVIDIA app has downloaded it; Lichii does not ship NVIDIA's files. Use the "
+              "the NVIDIA app has downloaded it; Guarana does not ship NVIDIA's files. Use the "
               "download button below.\nFire Emblem: Fortune's Weave also needs "
               "EDEN_NX2_DLSS_REPLACEMENT=dlss. Without that override, its spatial workaround "
               "remains active.\nIn The Legend of Zelda: Ocarina of Time it replaces the game's "
@@ -244,7 +244,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "while playing."));
     INSERT(
         Settings, nvidia_dlss_preset, tr("NVIDIA DLSS model preset:"),
-        tr("Applies only when a game uses its own DLSS.\nM (DLSS 4.5) is Lichii's default for "
+        tr("Applies only when a game uses its own DLSS.\nM (DLSS 4.5) is Guarana's default for "
            "every quality mode. NVIDIA recommends K for "
            "DLAA/Quality/Balanced, M for Performance, and L for Ultra Performance.\n"
            "L/M cost more on RTX 20/30 GPUs; consider K. J may reduce ghosting but flicker more. "

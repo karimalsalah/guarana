@@ -187,7 +187,7 @@ Dialog::Dialog(const Session& session, QNetworkAccessManager* network_, QWidget*
                       "not collected. Do not paste logs, paths, keys or private details."));
     setup_notice->setWordWrap(true);
     setup->addRow(setup_notice);
-    line(setup, QStringLiteral("build"), tr("Lichii build"), Known(session.build));
+    line(setup, QStringLiteral("build"), tr("Guarana build"), Known(session.build));
     line(setup, QStringLiteral("gameVersion"), tr("Game version"), Known(session.game_version));
     line(setup, QStringLiteral("cpu"), tr("CPU"), Known(session.cpu));
     line(setup, QStringLiteral("gpu"), tr("GPU"), Known(session.gpu));

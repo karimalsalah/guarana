@@ -28,7 +28,7 @@ AboutDialog::AboutDialog(QWidget* parent)
         ui->labelLogo->setPixmap(lichii_logo.pixmap(112));
     }
     ui->labelLichii->setPixmap(QIcon(QStringLiteral(":/img/lichii_wordmark.png")).pixmap(113, 48));
-    ui->labelLichii->setAccessibleName(QStringLiteral("Lichii"));
+    ui->labelLichii->setAccessibleName(QStringLiteral("Guarana"));
     ui->verticalLayout_3->setContentsMargins(32, 28, 32, 20);
     ui->horizontalLayout->setSpacing(32);
     ui->verticalLayout->setSpacing(10);

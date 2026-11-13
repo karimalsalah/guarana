@@ -5,13 +5,15 @@
 
 #pragma once
 
-// Lichii data directories
+// Guarana data directories
 
-#define EDEN_DIR "lichii"
+#define EDEN_DIR "guarana"
+// The folder name before the rename; copied to EDEN_DIR on first start (data_dir_migration.h)
+#define PRE_GUARANA_DIR "lichii"
 #define EDEN_LEGACY_DIR "eden"
 #define PORTABLE_DIR "user"
 
-// Sub-directories contained within a Lichii data directory
+// Sub-directories contained within a Guarana data directory
 #define AMIIBO_DIR "amiibo"
 #define CACHE_DIR "cache"
 #define CONFIG_DIR "config"
@@ -40,7 +42,7 @@
 #define SUYU_DIR "suyu"
 #define RYUJINX_DIR "Ryujinx"
 
-// Lichii-specific files
+// Guarana-specific files
 #define LOG_FILE "eden_log.txt"
 #define LOSSLESS_DLL_FILE "Lossless.dll"
 #define LOSSLESS_CACHE_FILE "lsfg_spirv.cache"
