@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- Launcher: Windows integration. `.nsp`, `.xci`, `.nup` and `.nca` files open with Guarana from Explorer (registered per user, and listed under Open with); `guarana://launch/<title id>` and `guarana://launch?path=<file>` links start a game from your library or game folders, checked strictly; a second start hands its file or link to the launcher already open; the taskbar button shows install and shader warm-up progress; and Windows notifications, off until you turn them on under Home → Advanced, say when shaders are ready or an update is installed. See [launcher/README.md](launcher/README.md#windows-integration).
+
 ## [20.2.0] - 2026-11-13
 
 ### Added

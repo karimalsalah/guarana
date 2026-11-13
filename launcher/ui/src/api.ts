@@ -5,6 +5,7 @@ import type {
   AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
   WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits, ShareStatus, ShareLink,
+  LaunchRequest, Notifications,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -125,6 +126,11 @@ export const api = {
   shareDismiss: () => call<ShareStatus>("share_dismiss"),
   /** The setting to stop (or resume) asking after a game. */
   shareSetPrompt: (enabled: boolean) => call<ShareStatus>("share_set_prompt", { enabled }),
+  /** The game Explorer or a guarana:// link asked for, once; null when there is none. */
+  takeLaunchRequest: () => call<LaunchRequest | null>("take_launch_request"),
+  /** Windows notifications when shaders are ready or an update is installed (off by default). */
+  getNotifications: () => call<Notifications>("get_notifications"),
+  setNotifications: (enabled: boolean) => call<Notifications>("set_notifications", { enabled }),
   appVersion: async () => (await backend()).appVersion(),
 };
 
@@ -138,6 +144,8 @@ export const events = {
   warmProgress: (h: (p: WarmProgress) => void, signal?: AbortSignal) => on<WarmProgress>("warm://progress", h, signal),
   shareChanged: (h: (p: ShareStatus) => void, signal?: AbortSignal) => on<ShareStatus>("share://changed", h, signal),
   autopilotChanged: (h: (p: ModeStatus) => void, signal?: AbortSignal) => on<ModeStatus>("autopilot://changed", h, signal),
+  /** A launch request is waiting: take it with api.takeLaunchRequest. */
+  launchRequest: (h: () => void, signal?: AbortSignal) => on<unknown>("launch://request", () => h(), signal),
 };
 
 /** Turns whatever a rejected invoke carries (string, Error, {message}) into one readable line. */

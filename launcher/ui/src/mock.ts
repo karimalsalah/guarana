@@ -7,13 +7,14 @@
 //   keys=0|1  update=0|1  first=0|1  pad=playstation|xbox|switch|generic|none|late
 //   crash=1 (the game exits with an error right after it starts)  session=<s> (seconds until game://exited)
 //   warm=1 (an automatic shader warm-up after a driver change runs when the app opens)
+//   open=<title id> (the app was opened with guarana://launch/<title id>; an id not in the library is refused)
 //   speed=<factor> (0.25 makes every delay four times shorter, 20 lets you watch each stage)
 
 import type { Backend, Unlisten } from "./api";
 import type {
   AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
-  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink,
+  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink, LaunchRequest, Notifications,
 } from "./types";
 
 type PadMode = ControllerKind | "none" | "late";
@@ -31,6 +32,7 @@ interface Scenario {
   fail: boolean;
   crash: boolean;
   autoWarm: boolean;
+  open: string | null;
   session: number;
   speed: number;
 }
@@ -57,6 +59,7 @@ function readScenario(): Scenario {
     fail: false,
     crash: false,
     autoWarm: false,
+    open: q.get("open"),
     session: 7,
     speed: 1,
   };
@@ -248,6 +251,14 @@ export function createMockBackend(): Backend {
   // "Share my numbers": the mock offers one session until Share or Not now.
   let shareOn = true;
   let sharePrompt = true;
+  let notifications = false;
+  // guarana://launch/<id> (open=<id>): the backend's open.rs checks it against the library.
+  const opened = sc.open ? allGames.find((g) => g.title_id.toLowerCase() === sc.open?.toLowerCase()) : undefined;
+  let launchRequest: LaunchRequest | null = sc.open
+    ? opened
+      ? { source: "link", game: opened, error: null }
+      : { source: "link", game: null, error: `No game with title id ${sc.open.toUpperCase()} in your library` }
+    : null;
   const shareStatus = (): ShareStatus => ({
     enabled: sharePrompt,
     offer:
@@ -668,6 +679,19 @@ export function createMockBackend(): Backend {
     async share_dismiss() {
       shareOn = false;
       return shareStatus();
+    },
+    async take_launch_request() {
+      const r = launchRequest;
+      launchRequest = null;
+      return r;
+    },
+    async get_notifications() {
+      return { enabled: notifications } satisfies Notifications;
+    },
+    async set_notifications(a) {
+      notifications = a.enabled === true;
+      if (notifications) console.info("[mock] notification: Notifications are on");
+      return { enabled: notifications } satisfies Notifications;
     },
     async share_set_prompt(a) {
       sharePrompt = a.enabled === true;

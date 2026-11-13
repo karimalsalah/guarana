@@ -7,6 +7,7 @@
 #[cfg(not(windows))]
 compile_error!("Guarana Launcher is a Windows application");
 
+mod args;
 mod autopilot;
 mod commands;
 mod community;
@@ -20,12 +21,15 @@ mod launch;
 mod locate;
 mod logging;
 mod modes;
+mod notify;
+mod open;
 mod paths;
 mod profiles;
 mod report;
 mod share;
 mod state;
 mod system;
+mod taskbar;
 mod types;
 mod util;
 mod warm;
@@ -43,17 +47,22 @@ fn main() {
     }
 
     let result = tauri::Builder::default()
-        // First, so a second start only brings the running launcher to the front.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // First, so a second start only hands its command line to the running launcher: a game
+        // file goes to `open`, a guarana:// link to the deep-link plugin (the `deep-link` feature).
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+            open::from_args(app, &args, std::path::Path::new(&cwd));
         }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(state::AppState::new())
         .setup(|app| {
             let handle = app.handle().clone();
+            open::init(&handle);
             controllers::start(handle.clone());
             // Community best settings: refreshed in the background at most once a day.
             tauri::async_runtime::spawn(async {
@@ -98,6 +107,9 @@ fn main() {
             commands::share_open,
             commands::share_dismiss,
             commands::share_set_prompt,
+            commands::take_launch_request,
+            commands::get_notifications,
+            commands::set_notifications,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

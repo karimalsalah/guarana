@@ -680,7 +680,10 @@ pub fn after_session(app: &AppHandle, info: SessionInfo) {
             let app2 = app.clone();
             let _ = std::thread::Builder::new().name("autopilot-warm".into()).spawn(move || {
                 match warm::run(&app2, &title_id, true) {
-                    Ok(r) => log::info!("Autopilot shader warm-up of {title_id}: {}", r.status),
+                    Ok(r) => {
+                        log::info!("Autopilot shader warm-up of {title_id}: {}", r.status);
+                        crate::notify::warm_finished(&app2, &r);
+                    }
                     Err(e) => log::warn!("Autopilot shader warm-up of {title_id} not run: {e}"),
                 }
             });
