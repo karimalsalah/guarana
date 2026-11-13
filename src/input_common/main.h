@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include "common/container/unordered_map.h"
@@ -154,6 +155,17 @@ public:
 
     /// Reloads the input devices.
     void ReloadInputDevices();
+
+    /// Registers a callback run from PumpEvents (on the caller's thread, normally the UI thread)
+    /// on the first pump and every time a gamepad is attached or re-attached.
+    void SetDeviceAddedCallback(std::function<void()> callback);
+
+    /// Params (engine, guid, port, display) of the most recently attached SDL gamepad that is
+    /// still connected; empty when there is none.
+    [[nodiscard]] Common::ParamPackage GetMostRecentDevice() const;
+
+    /// True when the connected SDL device described by `device` has a gyroscope.
+    [[nodiscard]] bool DeviceHasMotion(const Common::ParamPackage& device) const;
 
     /// Start polling from all backends for a desired input type.
     void BeginMapping(Polling::InputType type);

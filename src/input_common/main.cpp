@@ -323,12 +323,22 @@ struct InputSubsystem::Impl {
 #endif
     }
 
-    void PumpEvents() const {
+    void PumpEvents() {
         update_engine->PumpEvents();
 #ifdef HAVE_SDL3
         sdl->PumpEvents();
+        const u32 counter = sdl->GetDeviceAddedCounter();
+        if (device_added_callback && (!device_callback_primed || counter != last_device_counter)) {
+            device_callback_primed = true;
+            last_device_counter = counter;
+            device_added_callback();
+        }
 #endif
     }
+
+    std::function<void()> device_added_callback;
+    bool device_callback_primed = false;
+    u32 last_device_counter = 0;
 
     void RegisterInput(const MappingData& data) {
         mapping_factory->RegisterInput(data);
@@ -489,6 +499,27 @@ void InputSubsystem::StopMapping() const {
 
 void InputSubsystem::PumpEvents() const {
     impl->PumpEvents();
+}
+
+void InputSubsystem::SetDeviceAddedCallback(std::function<void()> callback) {
+    impl->device_added_callback = std::move(callback);
+    impl->device_callback_primed = false;
+}
+
+Common::ParamPackage InputSubsystem::GetMostRecentDevice() const {
+#ifdef HAVE_SDL3
+    return impl->sdl->GetMostRecentDevice();
+#else
+    return {};
+#endif
+}
+
+bool InputSubsystem::DeviceHasMotion(const Common::ParamPackage& device) const {
+#ifdef HAVE_SDL3
+    return impl->sdl->DeviceHasMotion(device);
+#else
+    return false;
+#endif
 }
 
 std::string GenerateKeyboardParam(int key_code) {
