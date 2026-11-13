@@ -8,6 +8,7 @@
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/frontend/ir/modifiers.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -95,7 +96,8 @@ void EmitLoadGlobalS16(EmitContext&) {
 
 Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        const Id narrow{ctx.NarrowGlobalLoad(2, inst->Flags<u32>())};
+        const Id narrow{ctx.NarrowGlobalLoad(2, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
         return ctx.OpFunctionCall(
             ctx.U32[1], Sirit::ValidId(narrow) ? narrow : ctx.load_global_func_u32, address);
     }
@@ -105,7 +107,8 @@ Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
 
 Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        const Id narrow{ctx.NarrowGlobalLoad(3, inst->Flags<u32>())};
+        const Id narrow{ctx.NarrowGlobalLoad(3, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
         return ctx.OpFunctionCall(
             ctx.U32[2], Sirit::ValidId(narrow) ? narrow : ctx.load_global_func_u32x2, address);
     }
@@ -115,7 +118,8 @@ Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
 
 Id EmitLoadGlobal128(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        const Id narrow{ctx.NarrowGlobalLoad(4, inst->Flags<u32>())};
+        const Id narrow{ctx.NarrowGlobalLoad(4, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
         return ctx.OpFunctionCall(
             ctx.U32[4], Sirit::ValidId(narrow) ? narrow : ctx.load_global_func_u32x4, address);
     }
