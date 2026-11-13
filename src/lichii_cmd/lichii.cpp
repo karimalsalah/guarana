@@ -631,9 +631,25 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "240");
 
 #ifdef _WIN32
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        freopen("CONOUT$", "wb", stdout);
-        freopen("CONOUT$", "wb", stderr);
+    // A stream already redirected to a file or pipe (a launcher reading --warm-pipelines
+    // progress, `> log`) stays there; only streams with nowhere to go use the parent's console.
+    const auto redirected = [](DWORD which) {
+        const HANDLE handle = GetStdHandle(which);
+        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        const DWORD type = GetFileType(handle);
+        return type == FILE_TYPE_DISK || type == FILE_TYPE_PIPE;
+    };
+    const bool out_redirected = redirected(STD_OUTPUT_HANDLE);
+    const bool err_redirected = redirected(STD_ERROR_HANDLE);
+    if (!(out_redirected && err_redirected) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        if (!out_redirected) {
+            freopen("CONOUT$", "wb", stdout);
+        }
+        if (!err_redirected) {
+            freopen("CONOUT$", "wb", stderr);
+        }
     }
     // Raise the CRT's open-file limit like the Qt frontend: loose RomFS folders keep thousands of
     // files open through the VFS cache.
