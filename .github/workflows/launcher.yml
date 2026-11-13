@@ -364,7 +364,7 @@ jobs:
       SETUP: ${{ needs.build.outputs.setup_name }}
     steps:
       - name: Download the installer
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: Guarana-Setup
           path: dist
