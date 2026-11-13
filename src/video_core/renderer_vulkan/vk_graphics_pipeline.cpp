@@ -2096,6 +2096,8 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
                 .basePipelineHandle = nullptr,
                 .basePipelineIndex = 0,
             };
+            // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+            const auto cache_lock = device.LockPipelineCacheForBuild();
             return binaries ? binaries->CreateComputePipeline(
                                   compute_ci, *pipeline_cache,
                                   GraphicsRecordKey(key) ^ (program * 0x9e3779b97f4a7c15ULL))
@@ -2659,8 +2661,13 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         variant == PipelineVariant::Main
             ? pipeline
             : prepass_pipelines[variant == PipelineVariant::PrepassDepth ? 0 : 1];
-    built = binaries ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, binary_key)
-                     : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
+    {
+        // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+        const auto cache_lock = device.LockPipelineCacheForBuild();
+        built = binaries
+                    ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, binary_key)
+                    : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, driver_cache);
+    }
     TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)

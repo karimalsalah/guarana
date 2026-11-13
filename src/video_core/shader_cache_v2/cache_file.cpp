@@ -66,7 +66,7 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
     if (stream.is_open()) {
         const std::streamoff size = stream.tellg();
         if (size > 0) {
-            log.bytes.resize(static_cast<size_t>(size));
+            log.bytes.resize_destructive(static_cast<size_t>(size));
             stream.seekg(0);
             stream.read(reinterpret_cast<char*>(log.bytes.data()), size);
             // Cut short when the file shrank since (a compaction replaced it)
