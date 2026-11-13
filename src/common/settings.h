@@ -936,6 +936,14 @@ struct Values {
 #endif
     };
     Setting<bool> controller_navigation{linkage, true, "controller_navigation", Category::Controls};
+    // Map player 1 (Pro Controller) to a connected gamepad automatically when it is unmapped,
+    // keyboard-mapped or mapped to a disconnected device.
+    Setting<bool> controller_auto_configure{linkage, true, "controller_auto_configure",
+                                            Category::Controls};
+    // true: Nintendo positional layout (A is the east button, like a Switch). false: Xbox/PlayStation
+    // label layout (A/B and X/Y swapped) for auto-configured pads.
+    Setting<bool> controller_positional_face_buttons{
+        linkage, true, "controller_positional_face_buttons", Category::Controls};
     Setting<bool> enable_joycon_driver{linkage, true, "enable_joycon_driver", Category::Controls};
     Setting<bool> enable_procon_driver{linkage, false, "enable_procon_driver", Category::Controls};
 
