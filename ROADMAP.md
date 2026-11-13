@@ -19,7 +19,7 @@ problem and how you would measure it.
 | | [N2. Intel pipeline-cache crash](#n2-intel-driver-crash-when-the-pipeline-cache-is-saved-during-builds) | Shaders, Intel |
 | | [N3. Test builds for every PR, nightlies](#n3-test-builds-for-every-pull-request) | CI |
 | | [N4. Switch registry](#n4-switch-registry) | Docs, tooling |
-| | [A1. NPU feasibility](#a1-npu-feasibility) | AI, NPU |
+| | [A1. NPU feasibility (measured)](#a1-npu-feasibility) | AI, NPU |
 | **Next** | [X1. Shader translation off the GPU thread](#x1-shader-translation-off-the-gpu-thread) | Shaders, stutter |
 | | [X2. Persisted SPIR-V](#x2-persisted-spir-v) | Boot, shaders |
 | | [X3. Non-blocking boot and memory-mapped caches](#x3-non-blocking-boot-and-memory-mapped-caches) | Boot |
@@ -37,6 +37,7 @@ problem and how you would measure it.
 | | [A4. Battery-mode super resolution](#a4-battery-mode-super-resolution) | Power, NPU |
 | | [A6. AI eyes for every build](#a6-ai-eyes-for-every-build) | CI, quality, AI |
 | | [A7. Learned autopilot](#a7-learned-autopilot) | Tuning, AI |
+| | [A8. Offline AI doctor on the NPU](#a8-offline-ai-doctor-on-the-npu) | Launcher, NPU |
 
 ## Now
 
@@ -208,14 +209,23 @@ Each item ships only if it fits the frame budget it claims, measured the same wa
 
 ### A1. NPU feasibility
 
-`area: ai` · status: in progress
+`area: ai` · status: measured on 2026-11-13
 
 **Problem.** Nobody has published what an integrated NPU can do inside a 16.7 ms frame.
 
-**Plan.** Benchmark super-resolution, image-to-image and tiny policy networks on the Intel NPU (OpenVINO) against
-the iGPU and CPU on the Arc 140T laptop, including the cost of moving a frame between Vulkan memory and the NPU.
+**Result** (Core Ultra 9 285H, Intel AI Boost NPU driver 32.0.100.5540, OpenVINO 2026.4, FP16, p50 latency):
 
-**Done when.** A published table of latency (p50/p99) per workload and device, and a go or no-go for A2 to A4.
+| Workload | NPU | Arc 140T iGPU | CPU |
+|---|---:|---:|---:|
+| Super resolution 720p → 1440p | 67.7 ms | 28.8 ms | 74.2 ms |
+| Super resolution 540p → 1080p | 43.6 ms | 17.2 ms | 43.0 ms |
+| Image-to-image network at 1440p, 16 channels | 72.3 ms | 33.0 ms | 70.2 ms |
+| Small policy network, one call | 0.45 ms (p99 2.2) | 0.09 ms | 0.02 ms |
+
+Moving one 2560x1440 half-float frame to the NPU and back costs about 30 ms on its own. **Verdict:** per-frame image
+work (A2, A3, A4) does not fit on this NPU generation: the iGPU is faster and the transfer alone exceeds a frame.
+The NPU's strengths here are background models (A5, A7) and an offline AI doctor (A8). The verdict is re-tested on
+each new NPU generation (Lunar Lake, Panther Lake, Ryzen AI 300). Scripts: `tools/npu/` (to be added).
 
 ### A2. Disocclusion fill for predicted frames
 
@@ -228,6 +238,7 @@ have no pixels yet and show as smears at edges.
 running in parallel with the next real frame so it adds no latency.
 
 **Done when.** Side-by-side captures show fewer edge artifacts at the same shown-frame pacing and no added latency.
+On the Arc 140T laptop this runs on the iGPU, not the NPU (see A1).
 
 ### A3. The game's anti-aliasing network on the NPU
 
@@ -250,6 +261,20 @@ so it is skipped (`oot_anti_aliasing`) and the image loses that anti-aliasing.
 **Plan.** Render at a lower internal resolution and upscale on the NPU, so the iGPU and CPU keep more of the budget.
 
 **Done when.** Longer battery life at the same game fps and a sharper image than plain bilinear scaling.
+Blocked on current NPUs by A1's numbers; re-tested on newer NPU generations.
+
+### A8. Offline AI doctor on the NPU
+
+`area: launcher, ai`
+
+**Problem.** "Ask AI" today opens a web chat; some players want help that never leaves their PC.
+
+**Plan.** The launcher offers, with consent and a size shown up front, a small local language model run through
+OpenVINO on the NPU (CPU fallback). It reads the scrubbed session log and the doctor's checks, explains what went
+wrong in plain words and proposes the setting change, which the player applies with one click.
+
+**Done when.** On an NPU laptop the doctor answers in under 10 s without a network and its suggestion fixes the
+seeded test cases (wrong present mode, power policy on a CPU-bound game, a cold shader cache).
 
 ### A5. Shader-need prediction
 
