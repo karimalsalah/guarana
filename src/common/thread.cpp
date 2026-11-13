@@ -582,9 +582,11 @@ const WindowsHybrid& Hybrid() {
                                                    "SetProcessDefaultCpuSets")));
         // Threads without a role of their own (audio, drivers, Qt, SDL) stay off the low-power
         // cores too.
+        const std::vector<ULONG> responsive_ids(result.plan.responsive.begin(),
+                                                result.plan.responsive.end());
         if (result.plan.active && !result.plan.low_power.empty() && set_default != nullptr &&
-            !set_default(GetCurrentProcess(), result.plan.responsive.data(),
-                         static_cast<ULONG>(result.plan.responsive.size()))) {
+            !set_default(GetCurrentProcess(), responsive_ids.data(),
+                         static_cast<ULONG>(responsive_ids.size()))) {
             LOG_WARNING(Common, "SetProcessDefaultCpuSets failed: {}", Common::GetLastErrorMsg());
         }
         return result;
