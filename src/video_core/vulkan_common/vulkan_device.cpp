@@ -1882,6 +1882,23 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_atomic_int64, features.shader_atomic_int64,
                                        VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
 
+    // VK_EXT_shader_atomic_float: storage buffer float32 atomic add in hardware instead of a
+    // compare-exchange loop. Intel only for now (the GPU it was measured on): on an Arc B580 a
+    // contended loop of Ocarina of Time (1e1964184a291f00, 96 groups) took 2 ms of each frame.
+    // EDEN_NX2_NO_FLOAT_ATOMICS=1 keeps the loop.
+    {
+        constexpr u32 intel_vendor_id = 0x8086;
+        const char* const no_float_atomics = std::getenv("EDEN_NX2_NO_FLOAT_ATOMICS");
+        extensions.shader_atomic_float =
+            extensions.shader_atomic_float &&
+            properties.properties.vendorID == intel_vendor_id &&
+            features.shader_atomic_float.shaderBufferFloat32AtomicAdd &&
+            !(no_float_atomics != nullptr && no_float_atomics[0] == '1');
+        RemoveExtensionFeatureIfUnsuitable(extensions.shader_atomic_float,
+                                           features.shader_atomic_float,
+                                           VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+    }
+
     // VK_EXT_shader_demote_to_helper_invocation
     extensions.shader_demote_to_helper_invocation =
         features.shader_demote_to_helper_invocation.shaderDemoteToHelperInvocation;

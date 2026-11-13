@@ -229,6 +229,11 @@ public:
         return stage_infos[0].is_task || stage_infos[0].is_mesh;
     }
 
+    /// Has tessellation control and evaluation stages: drawn as a patch list.
+    [[nodiscard]] bool HasTessellation() const noexcept {
+        return has_tessellation;
+    }
+
     /// Mesh pipeline drawn through the compute emulation (MeshEmulationSetup).
     [[nodiscard]] bool IsEmulatedMesh() const noexcept {
         return mesh_emulation.has_value();
@@ -524,6 +529,7 @@ private:
     size_t num_image_elements{};
     std::vector<SampledImage> sampled_images;
     u32 num_textures{};
+    bool has_tessellation{};
     bool fragment_has_color0_output{};
     u32 color_output_mask{};
     bool writes_storage{};

@@ -263,6 +263,7 @@ void StateTracker::ChangeChannel(Tegra::Control::ChannelState& channel_state) {
 void StateTracker::InvalidateState() {
     flags->set();
     current_topology = INVALID_TOPOLOGY;
+    current_host_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     stencil_reset = true;
 }
 

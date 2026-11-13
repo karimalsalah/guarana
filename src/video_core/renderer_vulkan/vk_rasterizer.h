@@ -403,6 +403,8 @@ private:
     } oot_actor, oot_previous_actor;
     u64 render_trace_frame = 0;
     u32 render_trace_draws = 0;
+    /// The topology UpdateDynamicStates gives the draw (see there).
+    VkPrimitiveTopology dynamic_host_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     u32 render_trace_clears = 0;
     bool pending_native_work{};
     u64 budget_defer_tick{}; ///< The submission DeferBudgetFlush last deferred

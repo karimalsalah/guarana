@@ -289,6 +289,9 @@ public:
     Id sample_id{};
     Id is_helper_invocation{};
     Id subgroup_local_invocation_id{};
+    /// SubgroupSize, when the host subgroup may be narrower than the guest warp and the program
+    /// shuffles (Profile::warp_size_potentially_smaller_than_guest).
+    Id subgroup_size{};
     Id subgroup_mask_eq{};
     Id subgroup_mask_lt{};
     Id subgroup_mask_le{};
@@ -408,6 +411,8 @@ public:
     Id tensor_subgroup_id{};
     std::vector<Id> interfaces;
     std::vector<std::pair<u32, spv::Op>> opcode_rewrites;
+    /// Storage float32 atomic adds use OpAtomicFAddEXT (Profile::support_float32_atomic_add).
+    bool native_f32_atomic_add{};
 
     // Task and mesh programs. Their stage buffer: the task's output region is the task payload
     // (the mesh stage's input region); the mesh output regions live in workgroup memory until

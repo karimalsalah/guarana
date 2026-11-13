@@ -1651,6 +1651,14 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
     IR::Type used_types{profile.support_descriptor_aliasing ? info.used_storage_buffer_types
                                                             : IR::Type::U32};
     used_types |= IR::Type::U32;
+    // Float32 atomic adds on an aliased float view of the buffers, in hardware.
+    native_f32_atomic_add = info.uses_atomic_f32_add && profile.support_float32_atomic_add &&
+                            profile.support_descriptor_aliasing;
+    if (native_f32_atomic_add) {
+        used_types |= IR::Type::F32;
+        AddExtension("SPV_EXT_shader_atomic_float_add");
+        AddCapability(spv::Capability::AtomicFloat32AddEXT);
+    }
     if (profile.support_int8 && profile.support_storage_buffer_8bit &&
         True(used_types & IR::Type::U8)) {
         DefineSsbos(*this, storage_types.U8, &StorageDefinitions::U8, info, binding, U8,
@@ -1703,7 +1711,7 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
         decrement_cas_ssbo = CasLoop(*this, Operation::Decrement, storage_types.U32.array,
                                      storage_types.U32.element, U32[1], spv::Scope::Device);
     }
-    if (info.uses_atomic_f32_add) {
+    if (info.uses_atomic_f32_add && !native_f32_atomic_add) {
         f32_add_cas = CasLoop(*this, Operation::FPAdd, storage_types.U32.array,
                               storage_types.U32.element, F32[1], spv::Scope::Device);
     }
@@ -1898,6 +1906,12 @@ void EmitContext::DefineInputs(const IR::Program& program) {
             DefineInput(*this, U32[1], false, spv::BuiltIn::SubgroupLocalInvocationId);
         if (stage == Stage::Fragment) {
             Decorate(subgroup_local_invocation_id, spv::Decoration::Flat);
+        }
+        if (info.uses_subgroup_shuffles && profile.warp_size_potentially_smaller_than_guest) {
+            subgroup_size = DefineInput(*this, U32[1], false, spv::BuiltIn::SubgroupSize);
+            if (stage == Stage::Fragment) {
+                Decorate(subgroup_size, spv::Decoration::Flat);
+            }
         }
     }
     if (info.uses_fswzadd) {

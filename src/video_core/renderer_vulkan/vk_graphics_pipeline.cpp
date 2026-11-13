@@ -808,6 +808,9 @@ GraphicsPipeline::GraphicsPipeline(
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
         present_stages[stage] = infos[stage] != nullptr;
     }
+    // Mesh pipelines can hold the mesh program in slot 1; the pipeline cache drops pipelines
+    // with only one of the two tessellation stages.
+    has_tessellation = !IsMeshPipeline() && (present_stages[1] || present_stages[2]);
     configure_func = ConfigureFunc(present_stages, stage_infos);
     build.emplace(build_queue, std::move(func), std::move(emit));
 }

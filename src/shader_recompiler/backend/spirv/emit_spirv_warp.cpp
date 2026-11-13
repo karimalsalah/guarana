@@ -89,6 +89,17 @@ Id GuestLane(EmitContext& ctx, Id index) {
     return ctx.OpBitwiseAnd(ctx.U32[1], index, ctx.Const(31U));
 }
 
+// A guest lane past a narrower host subgroup (Intel's SIMD16 fragment shaders) has no host
+// invocation, and shuffling from it is undefined: it is treated as out of the shuffle's range, so
+// the lane keeps its own value and the in-bounds predicate is false.
+Id InHostSubgroup(EmitContext& ctx, Id in_range, Id src_thread_id) {
+    if (!Sirit::ValidId(ctx.subgroup_size)) {
+        return in_range;
+    }
+    const Id size{ctx.OpLoad(ctx.U32[1], ctx.subgroup_size)};
+    return ctx.OpLogicalAnd(ctx.U1, in_range, ctx.OpULessThan(ctx.U1, src_thread_id, size));
+}
+
 bool UseShuffleFallback(EmitContext& ctx) {
     return ctx.profile.has_broken_spirv_subgroup_shuffle ||
            (ctx.profile.has_broken_spirv_fragment_shuffle && ctx.stage == Stage::Fragment);
@@ -246,7 +257,8 @@ Id EmitShuffleIndex(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id cla
 
     const Id lhs{ctx.OpBitwiseAnd(ctx.U32[1], GuestLane(ctx, index), not_seg_mask)};
     const Id src_thread_id{ctx.OpBitwiseOr(ctx.U32[1], lhs, min_thread_id)};
-    const Id in_range{ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id)};
+    const Id in_range{InHostSubgroup(
+        ctx, ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id), src_thread_id)};
 
     SetInBoundsFlag(inst, in_range);
     if (!StageSupportsSubgroups(ctx)) {
@@ -290,7 +302,8 @@ Id EmitShuffleDown(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clam
     const Id thread_id{EmitLaneId(ctx)};
     const Id max_thread_id{GetMaxThreadId(ctx, thread_id, clamp, segmentation_mask)};
     const Id src_thread_id{ctx.OpIAdd(ctx.U32[1], thread_id, delta)};
-    const Id in_range{ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id)};
+    const Id in_range{InHostSubgroup(
+        ctx, ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id), src_thread_id)};
 
     SetInBoundsFlag(inst, in_range);
     const Id shuffled{ShuffleRelative(ctx, value, delta, src_thread_id,
@@ -308,7 +321,8 @@ Id EmitShuffleButterfly(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id
     const Id thread_id{EmitLaneId(ctx)};
     const Id max_thread_id{GetMaxThreadId(ctx, thread_id, clamp, segmentation_mask)};
     const Id src_thread_id{ctx.OpBitwiseXor(ctx.U32[1], thread_id, mask)};
-    const Id in_range{ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id)};
+    const Id in_range{InHostSubgroup(
+        ctx, ctx.OpSLessThanEqual(ctx.U1, src_thread_id, max_thread_id), src_thread_id)};
 
     SetInBoundsFlag(inst, in_range);
     const Id shuffled{ctx.OpGroupNonUniformShuffleXor(ctx.U32[1], SubgroupScope(ctx), value, mask)};

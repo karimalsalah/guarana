@@ -4830,7 +4830,19 @@ void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
     }
     const auto topology = maxwell3d->draw_manager.draw_state.topology;
     const bool topology_changed = !emulated_mesh && state_tracker.ChangePrimitiveTopology(topology);
-    if (topology_changed) {
+    // The dynamic topology follows the bound pipeline the way its static one does (FillStates):
+    // a patch list with tessellation stages, points for patches without them. Intel honours the
+    // dynamic topology as given (dynamicPrimitiveTopologyUnrestricted), so a tessellation
+    // pipeline drawn as a triangle list put stray, stretched triangles on screen.
+    dynamic_host_topology = MaxwellToVK::PrimitiveTopology(device, topology);
+    if (pipeline != nullptr && pipeline->HasTessellation()) {
+        dynamic_host_topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+    } else if (dynamic_host_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
+        dynamic_host_topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    }
+    const bool host_topology_changed =
+        !emulated_mesh && state_tracker.ChangeHostPrimitiveTopology(dynamic_host_topology);
+    if (topology_changed || host_topology_changed) {
         flags[Dirty::DepthBiasEnable] = true;
         flags[Dirty::PrimitiveRestartEnable] = true;
     }
@@ -4854,9 +4866,8 @@ void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
             UpdateDepthWriteEnable(regs);
             UpdateStencilTestEnable(regs);
         }
-        if (topology_changed) {
-            scheduler.Record([topology_vk = MaxwellToVK::PrimitiveTopology(device, topology)](
-                                 vk::CommandBuffer cmdbuf) {
+        if (host_topology_changed) {
+            scheduler.Record([topology_vk = dynamic_host_topology](vk::CommandBuffer cmdbuf) {
                 cmdbuf.SetPrimitiveTopologyEXT(topology_vk);
             });
         }
@@ -5294,8 +5305,7 @@ void RasterizerVulkan::UpdatePrimitiveRestartEnable(Tegra::Engines::Maxwell3D::R
     if (device.IsMoltenVK()) {
         enable = true;
     } else if (enable) {
-        const auto topology = MaxwellToVK::PrimitiveTopology(device, maxwell3d->draw_manager.draw_state.topology);
-        enable = IsPrimitiveRestartSupported(device, topology);
+        enable = IsPrimitiveRestartSupported(device, dynamic_host_topology);
     }
 
     scheduler.Record([enable](vk::CommandBuffer cmdbuf) {
