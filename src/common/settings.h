@@ -703,6 +703,11 @@ struct Values {
                                                          true,
                                                          true};
 
+    // Graphics pipeline libraries (VK_EXT_graphics_pipeline_library): pipelines linked from
+    // per-stage shader libraries. EDEN_NX2_GPL=1 also turns it on.
+    SwitchableSetting<bool> use_graphics_pipeline_library{
+        linkage, false, "use_graphics_pipeline_library", Category::RendererAdvanced};
+
     // Precache shaders before the game starts: the compute programs in the game files and the
     // cached graphics pipelines the boot leaves for later are built on the loading screen, so the
     // driver's cache holds them before the game first uses them.

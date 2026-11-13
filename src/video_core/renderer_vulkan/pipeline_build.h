@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "common/logging.h"
+#include "common/thread_worker.h"
 #include "video_core/shader_jobs.h"
 
 namespace Vulkan {
@@ -75,6 +76,9 @@ struct PipelineBuildQueue {
     u64 driver_bytes{};
     /// Left for Build(), the driver stage of the job that translated it
     bool owner_builds{};
+    /// Priority of the job. Optional builds (an optimized pipeline that replaces the one already
+    /// drawn with) are Background: a job still queued when the pipeline goes is dropped.
+    VideoCommon::ShaderJobPriority priority{VideoCommon::ShaderJobPriority::Soon};
 };
 
 class PipelineBuild {
@@ -131,7 +135,7 @@ public:
           owner_builds{queue.owner_builds} {
         if (jobs) {
             VideoCommon::ShaderJob job{
-                .priority = VideoCommon::ShaderJobPriority::Soon,
+                .priority = queue.priority,
                 .cpu_bytes = queue.cpu_bytes,
                 .driver_bytes = queue.driver_bytes,
             };
@@ -161,7 +165,26 @@ public:
         }
     }
 
+    /// An optional build on a pool of its own (EDEN_NX2_GPL_OPTIMIZE_THREADS), outside the shader
+    /// job scheduler. Without `workers` it is built here.
+    /// @param drop_unstarted  Destroying the build before a worker started it drops the task
+    ///                        instead of running it on the destroying thread.
+    PipelineBuild(Common::ThreadWorker* workers, std::function<void()> task,
+                  bool drop_unstarted_)
+        : state{std::make_shared<State>(std::move(task))}, drop_unstarted{drop_unstarted_} {
+        if (workers) {
+            workers->QueueWork([state = state] { state->Run(); });
+        } else {
+            state->Run();
+        }
+    }
+
     ~PipelineBuild() {
+        if (drop_unstarted && !state->claimed.exchange(true)) {
+            state->task = {};
+            state->Complete();
+            return;
+        }
         if (jobs) {
             // Nothing needs a pipeline that goes: a build still queued is dropped.
             jobs->Cancel(handle);
@@ -231,6 +254,7 @@ private:
     VideoCommon::ShaderJobScheduler* jobs{};
     VideoCommon::ShaderJobHandle handle;
     bool owner_builds{};
+    bool drop_unstarted{};
 };
 
 } // namespace Vulkan
