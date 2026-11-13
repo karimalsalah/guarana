@@ -18,6 +18,7 @@
 #include "common/common_types.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_cache/query_cache.h"
 #include "video_core/rasterizer_interface.h"
@@ -290,6 +291,12 @@ public:
             driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
             (intel_wait_on_last && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS);
 
+        // EDEN_NX2_GPUCOST_QUERY bit 1: QueryCacheRuntime::Barriers(true) follows these copies in
+        // NotifyWFI, and its barrier (every stage and write of earlier work to transfer reads and
+        // writes) orders the copies' writes before the reads of SyncWrites. The prefix scan pass
+        // has a barrier of its own before it reads them.
+        const bool own_barrier =
+            !VideoCommon::Nx2GpuCost::Query(VideoCommon::Nx2GpuCost::QueryNoCopyBarrier);
         ApplyBanksWideOp<true>(pending_sync, [&](SamplesQueryBank* bank, size_t start,
                                                  size_t amount) {
             size_t bank_id = bank->GetIndex();
@@ -297,7 +304,7 @@ public:
             VkQueryPool query_pool = bank->GetInnerPool();
             scheduler.RequestOutsideRenderPassOperationContext();
             scheduler.RecordEmu(TraceCategory::QueryCopy, {static_cast<u32>(amount), 0, 0},
-                [start, amount, base_offset, query_pool, wait_on_last,
+                [start, amount, base_offset, query_pool, wait_on_last, own_barrier,
                               buffer = *resolve_buffer](vk::CommandBuffer cmdbuf) {
                 const VkBufferMemoryBarrier copy_query_pool_barrier{
                     .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -342,8 +349,11 @@ public:
                         static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
                         VK_QUERY_RESULT_64_BIT);
                 }
-                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, copy_query_pool_barrier);
+                if (own_barrier) {
+                    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                           copy_query_pool_barrier);
+                }
             });
             offsets[bank_id] = {start, base_offset};
             base_offset += amount * SamplesQueryBank::QUERY_SIZE;
