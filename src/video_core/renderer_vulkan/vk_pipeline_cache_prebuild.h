@@ -43,8 +43,12 @@ public:
 
     /// Submits the build of a pipeline whose translation holds `capture_bytes` until it runs,
     /// unless one of its key is queued or the captures queued would pass the limit
+    /// `done` is called once when the job ends without a Take of it waiting (built, failed,
+    /// translated to nothing or stopped by a request); a job cancelled before it ran calls nothing.
     bool Add(const Key& key, u64 capture_bytes, u64 cpu_bytes, u64 driver_bytes,
-             Translate translate) {
+             Translate translate,
+             VideoCommon::ShaderJobPriority priority = VideoCommon::ShaderJobPriority::Background,
+             Common::UniqueFunction<void> done = {}) {
         std::scoped_lock lock{mutex};
         if (stopped || entries.contains(key) || capture_bytes > capture_limit - captured_bytes) {
             return false;
@@ -53,13 +57,19 @@ public:
         auto entry = std::make_shared<Entry>();
         entry->job = jobs.Submit(
             {
-                .priority = VideoCommon::ShaderJobPriority::Background,
+                .priority = priority,
                 .cpu_bytes = cpu_bytes,
                 .driver_bytes = driver_bytes,
-                .cpu = [this, entry, capture_bytes, translate = std::move(translate)](
-                           VideoCommon::ShaderJobContext& context) mutable
+                .cpu = [this, entry, capture_bytes, translate = std::move(translate),
+                        done = std::move(done)](VideoCommon::ShaderJobContext& context) mutable
                 -> VideoCommon::ShaderDriverStage {
+                    const auto finish = [](Common::UniqueFunction<void>& callback) {
+                        if (callback) {
+                            callback();
+                        }
+                    };
                     if (context.StopRequested()) {
+                        finish(done);
                         return {};
                     }
                     std::unique_ptr<Pipeline> pipeline = translate();
@@ -69,15 +79,19 @@ public:
                         captured_bytes -= capture_bytes;
                     }
                     if (!pipeline) {
+                        finish(done);
                         return {};
                     }
-                    return [this, entry, pipeline = std::move(pipeline)]() mutable {
+                    return [this, entry, pipeline = std::move(pipeline),
+                            done = std::move(done)]() mutable {
                         pipeline->Build();
-                        if (pipeline->Failed()) {
-                            return;
+                        if (!pipeline->Failed()) {
+                            std::scoped_lock entry_lock{mutex};
+                            entry->pipeline = std::move(pipeline);
                         }
-                        std::scoped_lock entry_lock{mutex};
-                        entry->pipeline = std::move(pipeline);
+                        if (done) {
+                            done();
+                        }
                     };
                 },
             },

@@ -124,6 +124,12 @@ struct ComputePipelineCacheEntry {
                                        const ComputePipelineCacheKey& key) const;
 };
 
+/// When a session first used a graphics pipeline, and whether it had to build it during play
+struct PipelineUse {
+    u32 first_use_ms{}; ///< Since the session's cache load began
+    bool built_in_play{};
+};
+
 class PipelineCache : public VideoCommon::ShaderCache {
 public:
     explicit PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, const Device& device,
@@ -322,7 +328,7 @@ private:
     s64 native_wait_budget_us{8000};
     s64 native_wait_used_us{}; ///< Budget spent since the last 10 s log line.
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> evicted_pipelines; ///< (tick, pipeline)
-    std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
+    std::unordered_map<u64, PipelineUse> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
     VideoCommon::EvictedPointerSlots evicted_pointer_slots;
     /// The SPIR-V and stage infos of evicted pipelines, which build them again when used again
     VideoCommon::BoundedStore<GraphicsPipelineCacheKey, KeptGraphicsStages> kept_stages{0};
@@ -350,7 +356,14 @@ private:
     /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
     std::unordered_set<u64> disk_pipelines;
     std::unordered_map<u64, u8> used_pipelines; ///< Key hash -> sessions since it was last used
-    std::unordered_set<const GraphicsPipeline*> used_this_session;
+    /// Key hash -> milliseconds into the newest session that used it when it first did, to build
+    /// the ones the start of play needs first
+    std::unordered_map<u64, u32> boot_first_use_ms;
+    std::unordered_map<const GraphicsPipeline*, PipelineUse> used_this_session;
+    std::chrono::steady_clock::time_point used_session_begin{};
+    /// The boot load that has not ended yet (EDEN_NX2_BOOT_ASYNC): its marker and lock
+    struct AsyncBoot;
+    std::shared_ptr<AsyncBoot> async_boot;
     std::chrono::steady_clock::time_point used_pipelines_saved{};
     void SaveUsedPipelines();
 

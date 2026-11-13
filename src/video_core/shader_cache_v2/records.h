@@ -130,6 +130,28 @@ struct UsedRecord {
 [[nodiscard]] std::vector<u8> EncodeUsed(const UsedRecord& record);
 [[nodiscard]] std::optional<UsedRecord> DecodeUsed(std::span<const u8> payload);
 
+/// When a session first used each graphics pipeline, so that the next boots build the ones the
+/// start of play needs first, and which pipelines it had to build during play (a UseOrder record
+/// keyed like the session's Used record)
+struct UseOrderRecord {
+    struct Entry {
+        u64 hash{};          ///< Pipeline key hash
+        u32 first_use_ms{};  ///< Since the session's cache load began
+        u32 flags{};         ///< UseOrderBuiltInPlay
+
+        bool operator==(const Entry&) const = default;
+    };
+    u64 session_time{}; ///< As in the session's Used record
+    std::vector<Entry> pipelines;
+
+    bool operator==(const UseOrderRecord&) const = default;
+};
+/// The pipeline was not built before the game asked for it
+inline constexpr u32 UseOrderBuiltInPlay = 1;
+
+[[nodiscard]] std::vector<u8> EncodeUseOrder(const UseOrderRecord& record);
+[[nodiscard]] std::optional<UseOrderRecord> DecodeUseOrder(std::span<const u8> payload);
+
 /// An older cache this log was started from (a Migrated record keyed by its name's hash)
 struct MigratedRecord {
     std::string source;     ///< File name
