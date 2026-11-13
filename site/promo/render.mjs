@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // Renders the Guarana promo (site/promo/index.html) to video, one exact frame at a time.
 //
-// Each frame is set with window.renderAt(t) and captured as a PNG, so the result does not depend
-// on how fast the machine is. ffmpeg then writes, into --out:
-//   guarana-promo-vertical.mp4    1080x1920, 30 fps, 20 s, H.264 yuv420p (BT.709), CRF 18, faststart
-//   guarana-promo-landscape.mp4   1920x1080, same settings
-//   guarana-promo-teaser.gif      6 s of the landscape render, 960 px wide, 15 fps
-//   guarana-promo-poster-<format>.png  one still per format, for covers and thumbnails
-// Music: none. Each MP4 carries a silent stereo AAC track, because some platforms expect audio.
+// Each frame is set with window.renderAt(t) and captured as a PNG, so the result does not depend on
+// how fast the machine is. The page draws real motion blur itself (4 sub-frames averaged per frame).
+// score.mjs synthesizes the soundtrack from cues.json, the same cue list the picture uses. ffmpeg then
+// writes, into --out:
+//   guarana-promo-vertical.mp4      1080x1920, 60 fps, 20 s, H.264 High yuv420p (BT.709), CRF 18, AAC 192 kb/s
+//   guarana-promo-landscape.mp4     1920x1080, same settings
+//   guarana-promo-square.mp4        1080x1080, same settings
+//   guarana-promo-vertical-15s.mp4  15 s cut of the vertical render for TikTok and Shorts (cues.json "cut15")
+//   guarana-promo-teaser.mp4/.gif   6 s teaser of the landscape render that loops cut to cut ("teaser")
+//   guarana-promo-thumbnail.jpg/.png  1280x720 YouTube thumbnail
+//   guarana-promo-poster-<format>.png one still per format, for covers
+//   guarana-score.wav (+ -15s, -teaser)  the soundtrack, 48 kHz stereo 16-bit
 //
 // Browser drivers:
 //   playwright  used when the playwright (or playwright-core) package can be imported. CI installs
@@ -16,43 +21,53 @@
 //   cdp         built in: starts an installed Edge or Chrome headless and drives it over the DevTools
 //               protocol. Needs Node 22 or newer and nothing else. Used when Playwright is missing.
 //
-// Local render on Windows (PowerShell, from the repository root):
+// Full local render on Windows (from the repository root), everything above in one go:
 //   node site/promo/render.mjs --channel msedge --ffmpeg "C:\path\to\ffmpeg.exe" --out promo-out
 // Quick look at a few frames without encoding:
-//   node site/promo/render.mjs --format landscape --start 4 --end 5 --frames-only --keep-frames
+//   node site/promo/render.mjs --format landscape --start 4 --end 4.2 --frames-only --keep-frames
+// Layout check (clipped text, text outside the safe area, overlapping text), no video:
+//   node site/promo/render.mjs --check-layout --channel msedge
 //
 // Options:
-//   --format vertical|landscape|all   default all
+//   --format vertical,landscape,square|all   default all
 //   --out <dir>                       default ./promo-out (keep it outside site/, which is published)
-//   --fps <n>                         default 30
-//   --start <s> --end <s>             render part of the timeline (default 0 to 20)
+//   --fps <n>                         default 60
+//   --sub <n>                         motion-blur sub-frames per frame, default 4 (1 turns it off)
+//   --shutter <f>                     shutter in frames, default 0.75
+//   --start <s> --end <s>             render part of the timeline (default 0 to 20; no extras then)
 //   --driver auto|playwright|cdp      default auto
 //   --channel chromium|msedge|chrome  default chromium with Playwright, msedge with the cdp driver
 //   --browser-path <exe>              browser for the cdp driver (else PROMO_BROWSER, else a search)
 //   --playwright-dir <dir>            where to resolve playwright from (else PLAYWRIGHT_DIR)
 //   --ffmpeg <exe>                    default FFMPEG, else ffmpeg on PATH
-//   --workers <n>                     browsers rendering in parallel (default: half the cores, at most 4)
+//   --workers <n>                     browsers rendering in parallel (default: half the cores, at most 6)
 //   --grain <n>                       luma grain strength added by ffmpeg to the MP4s, 0 for none (default 4)
-//   --gif-start <s> --gif-length <s>  teaser window, default 4.4 and 6
-//   --poster <s>                      poster time, default 6.9
+//   --silent                          no score: every MP4 carries a silent stereo AAC track
+//   --poster <s>                      poster time (default: "poster" in cues.json)
+//   --no-thumb                        skip the thumbnail
+//   --thumb-only                      render just the thumbnail
 //   --keep-frames                     keep the PNG frames under <out>/frames
 //   --frames-only                     capture frames, skip ffmpeg
+//   --times <s,s,...>                 capture only the frames at these times (with --frames-only --keep-frames)
 //   --timing                          print where the time per frame goes
+//   --check-layout                    run the layout check instead of rendering
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { availableParallelism, cpus, tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const FORMATS = { vertical: { width: 1080, height: 1920 }, landscape: { width: 1920, height: 1080 } };
-const DURATION = 20;
+const SITE = resolve(HERE, '..');
+const FORMATS = { vertical: { width: 1080, height: 1920 }, landscape: { width: 1920, height: 1080 }, square: { width: 1080, height: 1080 } };
+const THUMB = { width: 1280, height: 720 };
 
 function parseArgs(argv) {
-  const flags = new Set(['keep-frames', 'frames-only', 'timing', 'help']);
+  const flags = new Set(['keep-frames', 'frames-only', 'timing', 'help', 'silent', 'no-thumb', 'check-layout', 'thumb-only']);
   const opts = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -70,19 +85,21 @@ if (opts.help) {
   console.log('See the comment at the top of site/promo/render.mjs for options.');
   process.exit(0);
 }
-const fps = Number(opts.fps || 30);
+const cues = JSON.parse(await readFile(join(HERE, 'cues.json'), 'utf8'));
+const DURATION = cues.duration;
+const fps = Number(opts.fps || cues.fps || 60);
 const start = Number(opts.start || 0);
 const end = Math.min(Number(opts.end || DURATION), DURATION);
+const fullRange = start === 0 && end === DURATION;
 const outDir = resolve(opts.out || 'promo-out');
 const formats = !opts.format || opts.format === 'all' ? Object.keys(FORMATS) : String(opts.format).split(',');
 for (const f of formats) if (!FORMATS[f]) throw new Error(`Unknown format: ${f}`);
-const gifStart = Number(opts['gif-start'] || 4.4);
-const gifLength = Number(opts['gif-length'] || 6);
-const posterAt = Number(opts.poster || 6.9);
+const posterAt = Number(opts.poster || cues.poster || 5.4);
+const sub = Number(opts.sub || 4);
+const shutter = Number(opts.shutter || 0.75);
 const ffmpeg = opts.ffmpeg || process.env.FFMPEG || 'ffmpeg';
 const grain = Number(opts.grain === undefined ? 4 : opts.grain);
-const workers = Math.max(1, Number(opts.workers || Math.min(4, Math.floor((availableParallelism ? availableParallelism() : cpus().length) / 2))));
-const pageFile = join(HERE, 'index.html');
+const workers = Math.max(1, Number(opts.workers || Math.min(6, Math.floor((availableParallelism ? availableParallelism() : cpus().length) / 2))));
 
 // ------------------------------------------------------------------ helpers
 function run(cmd, args) {
@@ -94,10 +111,29 @@ function run(cmd, args) {
 }
 const frameName = (i) => `f${String(i).padStart(5, '0')}.png`;
 const timing = { set: 0, capture: 0, write: 0, frames: 0 };
-const pageUrl = (format) => `${pathToFileURL(pageFile).href}?format=${format}&render=1`;
 // One expression (works with Playwright's evaluate and with Runtime.evaluate): set the frame, then
-// wait two animation frames so the capture sees it painted.
+// wait for the compositor so the capture sees it painted.
 const frameScript = (t) => `(async () => { window.renderAt(${JSON.stringify(t)}); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); return true; })()`;
+
+// The page is served over http from site/ so it can fetch cues.json and share ../assets with the site.
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2' };
+async function startServer() {
+  const server = createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, 'http://x');
+      const file = resolve(SITE, `.${decodeURIComponent(url.pathname)}`);
+      if (file !== SITE && !file.startsWith(SITE + sep)) throw new Error('outside');
+      const body = await readFile(file);
+      res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
+      res.end(body);
+    } catch {
+      res.writeHead(404);
+      res.end('not found');
+    }
+  });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
 
 async function loadPlaywright() {
   const bases = [opts['playwright-dir'], process.env.PLAYWRIGHT_DIR, HERE, process.cwd()].filter(Boolean);
@@ -145,7 +181,7 @@ async function playwrightDriver(pw, { width, height }) {
   const browser = await pw.chromium.launch({
     channel,
     headless: true,
-    args: ['--hide-scrollbars', '--force-color-profile=srgb', '--font-render-hinting=none'],
+    args: ['--hide-scrollbars', '--force-color-profile=srgb', '--font-render-hinting=none', '--allow-file-access-from-files'],
   });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: 'dark', reducedMotion: 'no-preference' });
   const page = await context.newPage();
@@ -158,6 +194,9 @@ async function playwrightDriver(pw, { width, height }) {
     async open(url) {
       await page.goto(url, { waitUntil: 'load' });
       await page.evaluate('window.promoReady');
+    },
+    async eval(expression) {
+      return page.evaluate(expression);
     },
     async frame(t, file) {
       const t0 = performance.now();
@@ -184,6 +223,7 @@ async function cdpDriver({ width, height }) {
     '--headless=new', '--hide-scrollbars', '--mute-audio', '--no-first-run', '--no-default-browser-check',
     '--disable-extensions', '--disable-background-networking', '--disable-sync', '--disable-component-update',
     '--disable-features=Translate,MediaRouter', '--force-color-profile=srgb', '--force-device-scale-factor=1',
+    '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
     `--window-size=${width},${height}`, '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
   ];
   const proc = spawn(exe, args, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -256,6 +296,7 @@ async function cdpDriver({ width, height }) {
       await loaded;
       await evaluate('window.promoReady');
     },
+    eval: evaluate,
     async frame(t, file) {
       const t0 = performance.now();
       await evaluate(frameScript(t));
@@ -289,29 +330,120 @@ async function cdpDriver({ width, height }) {
 }
 
 // ------------------------------------------------------------------ encoding
-async function encodeMp4(framesDir, first, count, file) {
+const bt709 = 'colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv';
+const grainFilter = grain > 0 ? `,noise=c0s=${grain}:c0f=t+u` : '';
+const videoTail = (extra = '') => `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p${grainFilter}${extra},setparams=${bt709}`;
+const videoCodec = [
+  '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+  '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv', '-r', String(fps),
+];
+const audioCodec = ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2'];
+const silentInput = ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000'];
+const audioInput = (wav) => (wav ? ['-i', wav] : silentInput);
+const seq = (framesDir, first, seconds) => ['-framerate', String(fps), '-start_number', String(first), '-t', seconds.toFixed(3), '-i', join(framesDir, 'f%05d.png')];
+
+async function encodeMp4(framesDir, first, count, wav, file) {
   await run(ffmpeg, [
     '-hide_banner', '-loglevel', 'error', '-y',
-    '-framerate', String(fps), '-start_number', String(first), '-i', join(framesDir, 'f%05d.png'),
-    '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
-    '-map', '0:v:0', '-map', '1:a:0', '-frames:v', String(count), '-t', (count / fps).toFixed(3),
-    // A light luma grain, added here rather than in the page: it dithers the dark gradients against
-    // banding, and keeps the PNG frames (and the GIF) clean and quick to capture.
-    // setparams tags the frames as BT.709 so players read the colours as intended.
-    '-vf', `scale=out_color_matrix=bt709:out_range=tv,format=yuv420p${grain > 0 ? `,noise=c0s=${grain}:c0f=t+u` : ''},setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv`,
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
-    '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',
-    '-r', String(fps), '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', file,
+    ...seq(framesDir, first, count / fps), ...(wav ? ['-ss', (first / fps).toFixed(3), '-i', wav] : silentInput),
+    '-map', '0:v:0', '-map', '1:a:0', '-t', (count / fps).toFixed(3),
+    '-vf', videoTail(), ...videoCodec, ...audioCodec, '-movflags', '+faststart', file,
   ]);
 }
-async function encodeGif(framesDir, first, count, file) {
+// Several stretches of the render joined cut to cut (the 15 s vertical cut).
+async function encodeCut(framesDir, segments, wav, file) {
+  const inputs = segments.flatMap(([a, b]) => seq(framesDir, Math.round(a * fps), b - a));
+  const n = segments.length;
+  const total = segments.reduce((s, [a, b]) => s + (b - a), 0);
   await run(ffmpeg, [
     '-hide_banner', '-loglevel', 'error', '-y',
-    '-framerate', String(fps), '-start_number', String(first), '-i', join(framesDir, 'f%05d.png'),
-    '-t', (count / fps).toFixed(3),
-    '-vf', 'fps=15,scale=960:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle',
+    ...inputs, ...audioInput(wav),
+    '-filter_complex', `${segments.map((_, i) => `[${i}:v]`).join('')}concat=n=${n}:v=1:a=0,${videoTail()}[v]`,
+    '-map', '[v]', '-map', `${n}:a:0`, '-t', total.toFixed(3),
+    ...videoCodec, ...audioCodec, '-movflags', '+faststart', file,
+  ]);
+}
+async function encodeGif(framesDir, first, seconds, file) {
+  await run(ffmpeg, [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    ...seq(framesDir, first, seconds),
+    '-vf', 'fps=15,scale=800:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle',
     '-loop', '0', file,
   ]);
+}
+
+// ------------------------------------------------------------------ drivers and capture
+async function makeDrivers(pw, size, count) {
+  return Promise.all(Array.from({ length: count }, () => (pw ? playwrightDriver(pw, size) : cdpDriver(size))));
+}
+const pageUrl = (base, q) => `${base}/promo/index.html?${new URLSearchParams(q).toString()}`;
+
+async function capture(drivers, url, framesDir, list, label) {
+  const began = Date.now();
+  timing.set = timing.capture = timing.write = timing.frames = 0;
+  try {
+    await Promise.all(drivers.map((d) => d.open(url)));
+    let next = 0;
+    let done = 0;
+    await Promise.all(drivers.map(async (d) => {
+      for (let k = next++; k < list.length; k = next++) {
+        const i = list[k];
+        await d.frame(i / fps, join(framesDir, frameName(i)));
+        done++;
+        if (done % fps === 0 || done === list.length) {
+          process.stdout.write(`\r  ${label} ${done}/${list.length} frames, ${((Date.now() - began) / 1000).toFixed(0)} s`);
+        }
+      }
+    }));
+    process.stdout.write('\n');
+    if (opts.timing && timing.frames) {
+      const per = (v) => (v / timing.frames).toFixed(0);
+      console.log(`  per frame and worker: set ${per(timing.set)} ms, capture ${per(timing.capture)} ms, write ${per(timing.write)} ms`);
+    }
+  } finally {
+    await Promise.all(drivers.map((d) => d.close()));
+  }
+}
+
+// ------------------------------------------------------------------ layout check
+async function checkLayout(pw, base) {
+  let bad = 0;
+  for (const format of formats) {
+    const size = FORMATS[format];
+    const [d] = await makeDrivers(pw, size, 1);
+    try {
+      await d.open(pageUrl(base, { format, render: 1, sub: 1 }));
+      const info = await d.eval('window.promoInfo()');
+      const s = info.safe;
+      const seen = new Map();
+      let now = 0;
+      // one line per distinct problem, with its first time and how many 0.05 s steps it lasts
+      const report = (key, m) => { const e = seen.get(key); if (e) e.n++; else { seen.set(key, { m, n: 1, t: now }); bad++; } };
+      for (let t = 0; t < DURATION; t += 0.05) {
+        now = t;
+        const log = await d.eval(`window.layoutAt(${t.toFixed(3)})`);
+        for (const b of log) {
+          if (b.x0 < s.x0 - 3 || b.x1 > s.x1 + 3 || b.y0 < s.y0 - 3 || b.y1 > s.y1 + 3) report(`safe|${b.grp}|${b.s}`, `"${b.s}" (${b.grp}) leaves the safe area: x ${b.x0.toFixed(0)}-${b.x1.toFixed(0)}, y ${b.y0.toFixed(0)}-${b.y1.toFixed(0)}`);
+          if (b.x0 < -1 || b.x1 > size.width + 1 || b.y0 < -1 || b.y1 > size.height + 1) report(`clip|${b.grp}|${b.s}`, `"${b.s}" (${b.grp}) is clipped by the frame`);
+        }
+        for (let i = 0; i < log.length; i++) {
+          for (let j = i + 1; j < log.length; j++) {
+            const a = log[i];
+            const b = log[j];
+            if (a.grp === b.grp || a.free || b.free) continue;
+            const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+            const h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+            if (w > 3 && h > 3) report(`ov|${a.grp}|${b.grp}`, `"${a.s}" (${a.grp}) overlaps "${b.s}" (${b.grp}) by ${w.toFixed(0)}x${h.toFixed(0)} px`);
+          }
+        }
+      }
+      for (const e of seen.values()) console.log(`  ${format}: ${e.m}, from ${e.t.toFixed(2)} s for ${e.n} step(s)`);
+    } finally {
+      await d.close();
+    }
+  }
+  console.log(bad ? `Layout check: ${bad} problem(s).` : 'Layout check: clean.');
+  return bad;
 }
 
 // ------------------------------------------------------------------ main
@@ -319,66 +451,91 @@ async function main() {
   const wanted = opts.driver || 'auto';
   const pw = wanted === 'cdp' ? null : await loadPlaywright();
   if (wanted === 'playwright' && !pw) throw new Error('Playwright is not installed where this script can find it (see --playwright-dir).');
-  await mkdir(outDir, { recursive: true });
-  const first = Math.round(start * fps);
-  const stop = Math.round(end * fps); // exclusive: 20 s at 30 fps is frames 0..599
-  const outputs = [];
+  const { server, base } = await startServer();
+  try {
+    if (opts['check-layout']) {
+      process.exitCode = (await checkLayout(pw, base)) ? 1 : 0;
+      return;
+    }
+    await mkdir(outDir, { recursive: true });
+    const first = Math.round(start * fps);
+    const stop = Math.round(end * fps); // exclusive: 20 s at 60 fps is frames 0..1199
+    const outputs = [];
+    // --times 1,2.5,4 captures just those frames (for looking at them); otherwise start..end
+    const frameList = opts.times ? String(opts.times).split(',').map((x) => Math.round(Number(x) * fps)) : Array.from({ length: stop - first }, (_, k) => first + k);
+    const encode = !opts['frames-only'];
+    const extras = encode && fullRange;
 
-  for (const format of formats) {
-    const { width, height } = FORMATS[format];
-    const framesDir = join(outDir, 'frames', format);
-    await rm(framesDir, { recursive: true, force: true });
-    await mkdir(framesDir, { recursive: true });
-    // Frames do not depend on each other, so several browsers render them side by side.
-    const drivers = await Promise.all(Array.from({ length: workers }, () => (pw ? playwrightDriver(pw, { width, height }) : cdpDriver({ width, height }))));
-    console.log(`${format}: ${width}x${height}, frames ${first}-${stop - 1} at ${fps} fps, ${workers} worker(s), driver: ${drivers[0].name}`);
-    const began = Date.now();
-    timing.set = timing.capture = timing.write = timing.frames = 0;
-    try {
-      await Promise.all(drivers.map((d) => d.open(pageUrl(format))));
-      let next = first;
-      let done = 0;
-      await Promise.all(drivers.map(async (d) => {
-        for (let i = next++; i < stop; i = next++) {
-          await d.frame(i / fps, join(framesDir, frameName(i)));
-          done++;
-          if (done % fps === 0 || done === stop - first) {
-            process.stdout.write(`\r  ${done}/${stop - first} frames, ${((Date.now() - began) / 1000).toFixed(0)} s`);
-          }
+    // The score, from the same cues.json as the picture.
+    let wavs = { master: null, cut15: null, teaser: null };
+    if (encode && !opts.silent) {
+      const audioDir = join(outDir, 'audio');
+      await mkdir(audioDir, { recursive: true });
+      console.log('score: synthesizing');
+      await run(process.execPath, [join(HERE, 'score.mjs'), '--out', audioDir]);
+      wavs = { master: join(audioDir, 'guarana-score.wav'), cut15: join(audioDir, 'guarana-score-15s.wav'), teaser: join(audioDir, 'guarana-score-teaser.wav') };
+      for (const w of Object.values(wavs)) outputs.push(w);
+    }
+
+    for (const format of opts['thumb-only'] ? [] : formats) {
+      const { width, height } = FORMATS[format];
+      const framesDir = join(outDir, 'frames', format);
+      await rm(framesDir, { recursive: true, force: true });
+      await mkdir(framesDir, { recursive: true });
+      // Frames do not depend on each other, so several browsers render them side by side.
+      const drivers = await makeDrivers(pw, { width, height }, workers);
+      console.log(`${format}: ${width}x${height}, frames ${first}-${stop - 1} at ${fps} fps, ${sub} sub-frames, ${workers} worker(s), driver: ${drivers[0].name}`);
+      await capture(drivers, pageUrl(base, { format, render: 1, sub, shutter }), framesDir, frameList, format);
+
+      const posterFrame = Math.round(posterAt * fps);
+      if (frameList.includes(posterFrame)) {
+        const poster = join(outDir, `guarana-promo-poster-${format}.png`);
+        await copyFile(join(framesDir, frameName(posterFrame)), poster);
+        outputs.push(poster);
+      }
+      if (encode) {
+        const mp4 = join(outDir, `guarana-promo-${format}.mp4`);
+        await encodeMp4(framesDir, first, stop - first, wavs.master, mp4);
+        outputs.push(mp4);
+        if (extras && format === 'vertical') {
+          const cut = join(outDir, 'guarana-promo-vertical-15s.mp4');
+          await encodeCut(framesDir, cues.cut15, wavs.cut15, cut);
+          outputs.push(cut);
         }
-      }));
-      process.stdout.write('\n');
-      if (opts.timing && timing.frames) {
-        const per = (v) => (v / timing.frames).toFixed(0);
-        console.log(`  per frame and worker: set ${per(timing.set)} ms, capture ${per(timing.capture)} ms, write ${per(timing.write)} ms`);
+        if (extras && format === 'landscape') {
+          const { start: a, end: b } = cues.teaser;
+          const tm = join(outDir, 'guarana-promo-teaser.mp4');
+          await run(ffmpeg, [
+            '-hide_banner', '-loglevel', 'error', '-y',
+            ...seq(framesDir, Math.round(a * fps), b - a), ...audioInput(wavs.teaser),
+            '-map', '0:v:0', '-map', '1:a:0', '-t', (b - a).toFixed(3),
+            '-vf', videoTail(), ...videoCodec, ...audioCodec, '-movflags', '+faststart', tm,
+          ]);
+          const gif = join(outDir, 'guarana-promo-teaser.gif');
+          await encodeGif(framesDir, Math.round(a * fps), b - a, gif);
+          outputs.push(tm, gif);
+        }
       }
-    } finally {
-      await Promise.all(drivers.map((d) => d.close()));
+      if (!opts['keep-frames'] && encode) await rm(framesDir, { recursive: true, force: true });
     }
 
-    const posterFrame = Math.round(posterAt * fps);
-    if (posterFrame >= first && posterFrame < stop) {
-      const poster = join(outDir, `guarana-promo-poster-${format}.png`);
-      await copyFile(join(framesDir, frameName(posterFrame)), poster);
-      outputs.push(poster);
+    // The 1280x720 YouTube thumbnail (a static composition of the same page).
+    if ((extras || opts['thumb-only']) && !opts['no-thumb']) {
+      const framesDir = join(outDir, 'frames', 'thumb');
+      await mkdir(framesDir, { recursive: true });
+      const drivers = await makeDrivers(pw, THUMB, 1);
+      await capture(drivers, pageUrl(base, { w: THUMB.width, h: THUMB.height, mode: 'thumb', render: 1, sub: 1 }), framesDir, [0], 'thumbnail');
+      const png = join(outDir, 'guarana-promo-thumbnail.png');
+      await copyFile(join(framesDir, frameName(0)), png);
+      await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', png, '-q:v', '2', '-pix_fmt', 'yuvj444p', join(outDir, 'guarana-promo-thumbnail.jpg')]);
+      outputs.push(png, join(outDir, 'guarana-promo-thumbnail.jpg'));
+      if (!opts['keep-frames']) await rm(framesDir, { recursive: true, force: true });
     }
-    if (!opts['frames-only']) {
-      const mp4 = join(outDir, `guarana-promo-${format}.mp4`);
-      await encodeMp4(framesDir, first, stop - first, mp4);
-      outputs.push(mp4);
-      const gifFirst = Math.round(gifStart * fps);
-      const gifCount = Math.round(gifLength * fps);
-      const teaserFormat = formats.includes('landscape') ? 'landscape' : formats[0];
-      if (format === teaserFormat && gifFirst >= first && gifFirst + gifCount <= stop) {
-        const gif = join(outDir, 'guarana-promo-teaser.gif');
-        await encodeGif(framesDir, gifFirst, gifCount, gif);
-        outputs.push(gif);
-      }
-    }
-    if (!opts['keep-frames'] && !opts['frames-only']) await rm(framesDir, { recursive: true, force: true });
+    if (!opts['keep-frames'] && encode) await rm(join(outDir, 'frames'), { recursive: true, force: true });
+    console.log(outputs.length ? `Wrote:\n  ${outputs.join('\n  ')}` : `Frames are in ${join(outDir, 'frames')}`);
+  } finally {
+    server.close();
   }
-  if (!opts['keep-frames'] && !opts['frames-only']) await rm(join(outDir, 'frames'), { recursive: true, force: true });
-  console.log(outputs.length ? `Wrote:\n  ${outputs.join('\n  ')}` : `Frames are in ${join(outDir, 'frames')}`);
 }
 
 main().catch((e) => {

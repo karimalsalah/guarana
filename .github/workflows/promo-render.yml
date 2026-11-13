@@ -1,15 +1,19 @@
 name: promo-render
 
-# Renders the 20-second promo in site/promo/ to video and uploads it as an artifact:
-# guarana-promo-vertical.mp4 (1080x1920), guarana-promo-landscape.mp4 (1920x1080), a 6 s GIF teaser
-# and one poster PNG per format. render.mjs sets every frame with renderAt(t) and captures it, so the
-# result does not depend on how fast the runner is. Music: none (the MP4s carry a silent track).
+# Renders the 20-second cinematic promo in site/promo/ and uploads it as an artifact:
+#   guarana-promo-vertical.mp4 (1080x1920), -landscape.mp4 (1920x1080), -square.mp4 (1080x1080), all 60 fps;
+#   guarana-promo-vertical-15s.mp4 (the 15 s TikTok and Shorts cut); guarana-promo-teaser.mp4 and .gif (6 s loop);
+#   guarana-promo-thumbnail.jpg and .png (1280x720); one poster PNG per format; the soundtrack as WAV files.
+# render.mjs sets every frame with renderAt(t) and captures it (the page averages 4 sub-frames per frame
+# for real motion blur), so the result does not depend on how fast the runner is. score.mjs synthesizes
+# the original soundtrack from site/promo/cues.json, the same cue list the picture uses.
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "site/promo/**"
+      - "site/assets/promo/**"
       - .github/workflows/promo-render.yml
 
 permissions:
@@ -23,7 +27,7 @@ jobs:
   render:
     name: Render the promo
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Check out the promo
         uses: actions/checkout@v5
@@ -67,15 +71,36 @@ jobs:
       - name: Smoke test, one frame per format
         env:
           PLAYWRIGHT_DIR: ${{ runner.temp }}/pw
-        run: node site/promo/render.mjs --driver playwright --start 6.9 --end 6.95 --frames-only --workers 1 --out "$RUNNER_TEMP/smoke"
+        run: node site/promo/render.mjs --driver playwright --times 5.4 --frames-only --workers 1 --out "$RUNNER_TEMP/smoke"
 
-      - name: Render both formats
+      # Text that is clipped, outside the safe area of its format, or overlapping other text fails the job.
+      - name: Layout check
         env:
           PLAYWRIGHT_DIR: ${{ runner.temp }}/pw
-        run: node site/promo/render.mjs --driver playwright --workers 3 --timing --out "$RUNNER_TEMP/promo"
+        run: node site/promo/render.mjs --driver playwright --check-layout
 
-      - name: List the files
-        run: ls -l "$RUNNER_TEMP/promo"
+      # The score has to stay under -1 dBFS; the AAC encode adds a little on top of the WAV.
+      - name: Score peak check
+        run: |
+          node site/promo/score.mjs --out "$RUNNER_TEMP/score"
+          peak=$(ffmpeg -hide_banner -i "$RUNNER_TEMP/score/guarana-score.wav" -af volumedetect -f null - 2>&1 | sed -n 's/.*max_volume: \(-\{0,1\}[0-9.]*\) dB.*/\1/p')
+          echo "peak: $peak dBFS"
+          awk -v p="$peak" 'BEGIN { exit !(p < -1.5) }'
+
+      - name: Render every format, the cuts, the thumbnail and the score
+        env:
+          PLAYWRIGHT_DIR: ${{ runner.temp }}/pw
+        run: node site/promo/render.mjs --driver playwright --workers 4 --timing --out "$RUNNER_TEMP/promo"
+
+      - name: Check the files
+        run: |
+          cd "$RUNNER_TEMP/promo"
+          for f in guarana-promo-*.mp4; do
+            ffprobe -v error -select_streams v:0 -show_entries stream=profile,pix_fmt,width,height,r_frame_rate,color_space:format=duration -of csv=p=0 "$f" | tr '\n' ' '
+            echo "$f"
+            ffmpeg -hide_banner -i "$f" -af volumedetect -vn -f null - 2>&1 | grep max_volume
+          done
+          ls -l
 
       - name: Upload the promo
         uses: actions/upload-artifact@v7
@@ -85,6 +110,8 @@ jobs:
             ${{ runner.temp }}/promo/*.mp4
             ${{ runner.temp }}/promo/*.gif
             ${{ runner.temp }}/promo/*.png
+            ${{ runner.temp }}/promo/*.jpg
+            ${{ runner.temp }}/promo/audio/*.wav
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
