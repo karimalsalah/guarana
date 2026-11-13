@@ -26,6 +26,8 @@ const uint FLAG_HUD = 1u;
 const uint FLAG_DEBUG = 2u;
 const uint FLAG_HUD_LINEAR = 4u; // hud_reference is linear, hud_composite sRGB-encoded
 const uint FLAG_HUD_EXACT = 8u;  // both are linear and equal wherever there is no HUD
+const uint FLAG_DEBUG_MOVED = 16u; // also tint every pixel moved by the prediction (debug 2)
+const uint FLAG_HUD_DILATE = 32u;  // a pixel next to the HUD counts as HUD (anti-aliased edges)
 
 const float CONVERGED_PIXELS = 2.0;
 const float MAX_TRAVEL = 0.25; // of the screen; anything longer is not a prediction
@@ -57,7 +59,7 @@ vec3 Encode(vec3 linear) {
                lessThan(linear, vec3(0.0031308)));
 }
 
-bool IsHud(vec2 uv) {
+bool IsHudAt(vec2 uv) {
     vec3 reference = textureLod(hud_reference, uv, 0.0).rgb;
     vec3 composite = textureLod(hud_composite, uv, 0.0).rgb;
     float limit = 0.07;
@@ -72,6 +74,20 @@ bool IsHud(vec2 uv) {
     return max(max(overlay.r, overlay.g), overlay.b) > limit;
 }
 
+bool IsHud(vec2 uv) {
+    if (IsHudAt(uv)) {
+        return true;
+    }
+    if ((params.flags & FLAG_HUD_DILATE) == 0u) {
+        return false;
+    }
+    // Text and icons are anti-aliased: their faint edge pixels differ from the scene by less
+    // than the limit and would be moved with it.
+    vec2 texel = 1.0 / vec2(textureSize(hud_reference, 0));
+    return IsHudAt(uv + vec2(texel.x, 0.0)) || IsHudAt(uv - vec2(texel.x, 0.0)) ||
+           IsHudAt(uv + vec2(0.0, texel.y)) || IsHudAt(uv - vec2(0.0, texel.y));
+}
+
 void Store(ivec2 pixel, vec3 color, vec3 tint) {
     if ((params.flags & FLAG_DEBUG) != 0u) {
         color = mix(color, tint, 0.6);
@@ -83,6 +99,14 @@ void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 extent = imageSize(out_frame);
     if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+
+    if ((params.flags & FLAG_DEBUG_MOVED) != 0u && pixel.y < 6) {
+        // A bar along the top: its length is the prediction's advance, in frame intervals (the
+        // frame's width is 3), so a screenshot says how far ahead the frame was predicted.
+        float bar = float(pixel.x) / float(extent.x) * 3.0;
+        imageStore(out_frame, pixel, vec4(bar < params.advance ? vec3(1.0) : vec3(0.1), 1.0));
         return;
     }
 
@@ -154,6 +178,10 @@ void main() {
     vec3 color = textureLod(frame_color, frame_uv, 0.0).rgb;
     if (fallback) {
         Store(pixel, color, tint);
+    } else if ((params.flags & FLAG_DEBUG_MOVED) != 0u &&
+               length((source - target) * params.screen_size) > 0.5) {
+        // Predicted: taken from somewhere else in the presented frame.
+        imageStore(out_frame, pixel, vec4(mix(color, vec3(0.0, 0.8, 0.8), 0.25), 1.0));
     } else {
         imageStore(out_frame, pixel, vec4(color, 1.0));
     }
