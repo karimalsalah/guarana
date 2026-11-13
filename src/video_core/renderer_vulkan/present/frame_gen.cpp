@@ -640,6 +640,17 @@ void FrameGen::UpdateCadence() {
         cadence_fast_checks = 0;
         VideoCore::FrameBudget::SetTargetFps(target / static_cast<f32>(divisor));
     };
+    // EDEN_NX2_CADENCE_DIVISOR=<n> (1 to 12): shown frames per real frame, as is: 5 at 120 holds
+    // real frames to 24 a second.
+    static const u32 raw_divisor = [] {
+        const char* value = std::getenv("EDEN_NX2_CADENCE_DIVISOR");
+        return value ? std::clamp<u32>(static_cast<u32>(std::strtoul(value, nullptr, 10)), 1U, 12U)
+                     : 0U;
+    }();
+    if (raw_divisor != 0) {
+        apply(raw_divisor, "fixed divisor");
+        return;
+    }
     if (setting >= 2) {
         apply(std::min(setting, CADENCE_MAX_DIVISOR) * scale, "fixed");
         return;
