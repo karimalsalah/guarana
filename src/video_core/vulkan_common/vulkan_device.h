@@ -325,12 +325,23 @@ public:
 
     /// Returns the main present queue.
     vk::Queue GetPresentQueue() const {
-        return present_queue;
+        return fluid_queue_presents && IsFluidQueueActive() ? fluid_queue : present_queue;
     }
 
     /// EDEN_NX2_FLUID_QUEUE: whether the FLUID presenter's copy has a queue of its own.
     bool HasFluidQueue() const {
         return has_fluid_queue;
+    }
+
+    /// Whether the dedicated queue is in use: it exists and the presenter has not given it up.
+    bool IsFluidQueueActive() const {
+        return has_fluid_queue && fluid_queue_enabled.load(std::memory_order_relaxed);
+    }
+
+    /// The presenter's watchdog: copies and presents go back to the graphics queue (the images stay
+    /// shared between the families).
+    void DisableFluidQueue() const {
+        fluid_queue_enabled.store(false, std::memory_order_relaxed);
     }
 
     vk::Queue GetFluidQueue() const {
@@ -1455,6 +1466,8 @@ private:
     vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
     u32 fluid_family{};
     bool has_fluid_queue{};
+    bool fluid_queue_presents{}; ///< presents come from the fluid queue too
+    mutable std::atomic<bool> fluid_queue_enabled{true};
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.

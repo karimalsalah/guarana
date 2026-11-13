@@ -404,15 +404,17 @@ std::vector<const char*> ExtensionListForVulkan(
     return output;
 }
 
-/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE (default on, 0 disables): the FLUID presenter's
-/// screen copy gets a queue of its own.
-[[nodiscard]] bool FluidQueueWanted() {
+/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE: the FLUID presenter's screen copy gets a queue of its
+/// own. Unset or 1: the queue at high global priority, also presenting. 0: off. For bisecting a
+/// fault: 2 default priority; 3 the copy only, presents stay on the original queue; 4 the queue is
+/// created but nothing uses it.
+[[nodiscard]] u32 FluidQueueMode() {
     const char* fluid = std::getenv("EDEN_NX2_FLUID");
     if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
-        return false;
+        return 0;
     }
     const char* queue = std::getenv("EDEN_NX2_FLUID_QUEUE");
-    return queue == nullptr || std::strtoul(queue, nullptr, 10) != 0;
+    return queue == nullptr ? 1U : static_cast<u32>(std::strtoul(queue, nullptr, 10));
 }
 
 constexpr u32 NvidiaDriverVersion(u32 major, u32 minor, u32 secondary) {
@@ -577,7 +579,8 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     bool fluid_high_priority = false;
     bool fluid_presents = false;
     size_t fluid_queue_ci = 0;
-    if (FluidQueueWanted()) {
+    const u32 fluid_queue_mode = FluidQueueMode();
+    if (fluid_queue_mode != 0) {
         const std::vector family_properties = physical.GetQueueFamilyProperties();
         std::optional<u32> chosen;
         int chosen_score = -1;
@@ -592,7 +595,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             if (score > chosen_score) {
                 chosen = index;
                 chosen_score = score;
-                fluid_presents = presents;
+                fluid_presents = presents && fluid_queue_mode != 3;
             }
         }
         if (chosen) {
@@ -600,6 +603,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             has_fluid_queue = true;
             const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
             fluid_high_priority =
+                fluid_queue_mode != 2 &&
                 (supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
                  supported_extensions.contains(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)) &&
                 std::ranges::find(priorities, VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) !=
@@ -1017,19 +1021,17 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     present_queue = logical.GetQueue(present_family);
     if (has_fluid_queue) {
         fluid_queue = logical.GetQueue(fluid_family);
-        if (fluid_presents) {
-            // The presenter presents from its own queue too, so a present is not queued behind
-            // the emulator's rendering either. The swapchain shares its images between the
-            // graphics family and this one.
-            present_queue = fluid_queue;
-            present_family = fluid_family;
-        }
+        fluid_queue_presents = fluid_presents;
         LOG_INFO(Render_Vulkan,
-                 "EDEN_NX2_FLUID_QUEUE: the present copy runs on queue family {} index 0 at {} "
+                 "EDEN_NX2_FLUID_QUEUE {}: the present copy runs on queue family {} index 0 at {} "
                  "priority, presents from {}",
-                 fluid_family, fluid_high_priority ? "high global" : "default",
+                 fluid_queue_mode, fluid_family, fluid_high_priority ? "high global" : "default",
                  fluid_presents ? "that queue" : "the original present queue after a semaphore "
                                                  "hand-over");
+        if (fluid_queue_mode == 4) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_QUEUE 4: the queue is left unused");
+            has_fluid_queue = false;
+        }
     }
 
 #ifdef EGLANTINE_STREAMLINE

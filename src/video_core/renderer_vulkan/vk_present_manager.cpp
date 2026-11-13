@@ -73,6 +73,9 @@ constexpr size_t FluidWatches = 8;
 constexpr std::chrono::seconds FluidStallLimit{2};
 /// A frame that comes this long after the last, with none held, starts the watchdog's count again.
 constexpr std::chrono::milliseconds FluidArrivalGap{500};
+/// With the dedicated queue: no frame at all this long after the presenter started (a game takes
+/// some 10 to 30 s to boot before the first) gives the queue up.
+constexpr std::chrono::seconds FluidFirstFrameLimit{60};
 
 [[nodiscard]] s64 CeilDiv(s64 value, s64 divisor) {
     return value >= 0 ? (value + divisor - 1) / divisor : -((-value) / divisor);
@@ -667,6 +670,8 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
              "EDEN_NX2_FLUID {}: frames are shown on a vblank clock ({}, display mode {:.2f} Hz)",
              FluidMode(), Common::VblankClock::SourceName(source),
              HertzOf(vblank.ReportedPeriod()));
+    const auto started = std::chrono::steady_clock::now();
+    bool start_watched = device.IsFluidQueueActive();
     while (!token.stop_requested()) {
         const auto wake = vblank.Wait();
         if (const auto current = vblank.CurrentSource(); current != source) {
@@ -703,6 +708,19 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         }
         const auto now = std::chrono::steady_clock::now();
         FluidLogStats(now, Common::VblankClock::SourceName(source), period);
+        if (start_watched && fluid.received != 0) {
+            start_watched = false;
+        } else if (start_watched && now - started >= FluidFirstFrameLimit) {
+            // The producer has handed over nothing: if the dedicated queue is why, copies and
+            // presents go back to the graphics queue (this FLUID presenter stays).
+            start_watched = false;
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_QUEUE: no frame received {:.0f} s after the presenter started, "
+                        "GPU at tick {}; copies and presents use the graphics queue from now on",
+                        std::chrono::duration<f64>(now - started).count(),
+                        scheduler.GetMasterSemaphore().KnownGpuTick());
+            device.DisableFluidQueue();
+        }
         if (FluidStalled(now)) {
             FluidFallBack(now);
             return false;
@@ -728,6 +746,8 @@ bool PresentManager::FluidStalled(std::chrono::steady_clock::time_point now) con
 }
 
 void PresentManager::FluidFallBack(std::chrono::steady_clock::time_point now) {
+    // Classic from here on includes the graphics queue for copies and presents.
+    device.DisableFluidQueue();
     const Frame* const oldest = fluid.pending.empty() ? nullptr : fluid.pending.front();
     const char* showing = "none";
     if (fluid.showing != nullptr) {
@@ -1216,7 +1236,7 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
 }
 
 bool PresentManager::UseFluidQueue(const Frame* frame, VkExtent2D extent) {
-    if (!device.HasFluidQueue() || !Fluid()) {
+    if (!device.IsFluidQueueActive() || !Fluid()) {
         return false;
     }
     // The dedicated queue's family cannot blit: it copies, which needs the same format and size.
