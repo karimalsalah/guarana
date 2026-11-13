@@ -432,9 +432,8 @@ target_link_libraries(lichii PRIVATE common core input_common frontend_common ne
 target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(lichii PRIVATE ZLIB::ZLIB)
-if (WIN32)
-    target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
-endif()
+# Help > Report a Problem zips the logs (qt_common/util/compress.h) on every platform.
+target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
 target_link_libraries(lichii PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 if (ENABLE_OPENGL)
     target_link_libraries(lichii PRIVATE glad)
