@@ -120,6 +120,17 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     return on;
 }
 
+/// EDEN_NX2_FLUID_COPY_AHEAD=1: with the screen copy on its own queue, each slot's frame is copied
+/// at the wake one slot before and presented at its own slot's wake, so the copy has about a slot
+/// and a half before its flip instead of half a slot (4.8 ms at 120 Hz), at one slot of latency.
+[[nodiscard]] bool FluidCopyAhead() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_COPY_AHEAD");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 /// EDEN_NX2_FLUID_HOST_WAIT_US=<us> (500 to 16000): how long that wait lasts at most, by default
 /// 12000 at 60 shown frames a second and 4000 above 75 (at 120 a slot is 8.3 ms: a longer wait makes
 /// the present thread sleep through the next slot).
@@ -781,7 +792,9 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                 .vblank_index = fluid.vblank,
                 .refresh = period,
                 .divisor = fluid.divisor,
-                .lead = period - offset,
+                .lead = FluidCopyAhead() && device.IsFluidQueueActive()
+                            ? period * static_cast<s64>(1 + fluid.divisor) - offset
+                            : period - offset,
                 .latency = std::chrono::nanoseconds{static_cast<s64>(fluid.latency_ns)},
             };
         }
@@ -797,7 +810,13 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                 FluidTakeFrames(now);
                 FluidRelease(now);
             }
-            FluidPresentSlot(fluid.vblank + 1, wake + period, !shown);
+            if (FluidCopyAhead() && device.IsFluidQueueActive()) {
+                FluidPresentAhead();
+                FluidPresentSlot(fluid.vblank + 1 + fluid.divisor,
+                                 wake + period * static_cast<s64>(1 + fluid.divisor), !shown);
+            } else {
+                FluidPresentSlot(fluid.vblank + 1, wake + period, !shown);
+            }
         }
         const auto now = std::chrono::steady_clock::now();
         FluidLogStats(now, Common::VblankClock::SourceName(source), period);
@@ -818,6 +837,12 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
             FluidFallBack(now);
             return false;
         }
+    }
+    if (fluid_ahead_pending) {
+        std::scoped_lock swapchain_lock{swapchain_mutex};
+        fluid_ahead_pending = false;
+        fluid_ahead_frame = nullptr;
+        swapchain.Present(fluid_ahead_semaphore);
     }
     // Nothing is presented from here on: answer WaitPresent.
     {
@@ -1174,7 +1199,9 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
     fluid_stats.spare += best->fluid_batch < fluid.newest_batch ? 1 : 0;
     fluid_stats.age_ms +=
         std::chrono::duration<f64, std::milli>(slot_time - best->fluid_recorded).count();
+    fluid_copy_ahead_request = FluidCopyAhead() && device.IsFluidQueueActive();
     FluidShow(best, slot);
+    fluid_copy_ahead_request = false;
     const f64 margin =
         std::chrono::duration<f64, std::milli>(slot_time - std::chrono::steady_clock::now())
             .count();
@@ -1204,6 +1231,47 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     }
     fluid.last_shown_vblank = shown_vblank;
     NoteShownFrame();
+}
+
+void PresentManager::FluidPresentAhead() {
+    if (!fluid_ahead_pending) {
+        return;
+    }
+    std::scoped_lock swapchain_lock{swapchain_mutex};
+    static const bool shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    if (fluid.showing != nullptr && fluid.showing == fluid_ahead_frame) {
+        // Its copy had a slot; a copy still running is late anyway.
+        const auto wait_start = std::chrono::steady_clock::now();
+        const bool copied = fluid_ahead_frame->present_done.Wait(
+                                FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+        if (shown_stats) {
+            const f64 waited = std::chrono::duration<f64, std::milli>(
+                                   std::chrono::steady_clock::now() - wait_start)
+                                   .count();
+            ++fluid_stats.copy_waits;
+            fluid_stats.copy_wait_timeouts += copied ? 0 : 1;
+            fluid_stats.copy_wait_ms += waited;
+            fluid_stats.copy_wait_max_ms = (std::max)(fluid_stats.copy_wait_max_ms, waited);
+        }
+    }
+    fluid_ahead_pending = false;
+    fluid_ahead_frame = nullptr;
+    swapchain.Present(fluid_ahead_semaphore);
+    if (shown_stats) {
+        const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
+        const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
+        ++fluid_stats.presents;
+        fluid_stats.lock_ms += lock;
+        fluid_stats.lock_max_ms = (std::max)(fluid_stats.lock_max_ms, lock);
+        fluid_stats.call_ms += call;
+        fluid_stats.call_max_ms = (std::max)(fluid_stats.call_max_ms, call);
+    }
+    // The copy is done (or late): give the frame back now rather than at the next wake.
+    if (fluid.showing != nullptr && FrameDone(fluid.showing)) {
+        FluidNoteCopyTime(fluid.showing);
+        ReturnFrame(fluid.showing);
+        fluid.showing = nullptr;
+    }
 }
 
 void PresentManager::FluidNoteCopyTime(Frame* frame) {
@@ -1541,6 +1609,12 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
 }
 
 void PresentManager::CopyToSwapchainImpl(Frame* frame) {
+    if (fluid_ahead_pending) {
+        // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
+        fluid_ahead_pending = false;
+        fluid_ahead_frame = nullptr;
+        swapchain.Present(fluid_ahead_semaphore);
+    }
 
     // Recreate for size changes, SDR/HDR10/scRGB transitions, or a suboptimal swapchain.
     const bool is_suboptimal = swapchain.NeedsRecreation() || swapchain.IsOutDated();
@@ -1596,10 +1670,18 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     if (UseFluidQueue(frame, extent)) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
+        if (fluid_copy_ahead_request && !frame->frame_gen) {
+            // Presented at the next slot's wake (FluidPresentAhead).
+            fluid_ahead_pending = true;
+            fluid_ahead_frame = frame;
+            fluid_ahead_semaphore = render_semaphore;
+            return;
+        }
         if (FluidQueueHostWait()) {
             // A copy still running after this long is late anyway: present and move on.
             const auto wait_start = std::chrono::steady_clock::now();
-            const bool copied = frame->present_done.Wait(FluidHostWaitNs(FluidShownRate()));
+            const bool copied =
+                frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
             if (timed) {
                 const f64 waited = ms_since(wait_start);
                 ++fluid_stats.copy_waits;

@@ -448,6 +448,12 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     } else {
         requested_image_count = (std::max)(requested_image_count, 3U);
     }
+    // EDEN_NX2_FLUID_COPY_AHEAD keeps an image acquired across a slot: at least four.
+    if (const char* ahead = std::getenv("EDEN_NX2_FLUID_COPY_AHEAD");
+        ahead != nullptr && std::strtoul(ahead, nullptr, 10) != 0) {
+        const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
+        requested_image_count = (std::min)((std::max)(requested_image_count, 4U), most);
+    }
     // EDEN_NX2_SWAPCHAIN_IMAGES=<n> (2 to 16): ask for n images, within what the surface allows.
     if (const char* images = std::getenv("EDEN_NX2_SWAPCHAIN_IMAGES")) {
         const u32 asked = std::clamp<u32>(static_cast<u32>(std::strtoul(images, nullptr, 10)), 2U, 16U);
