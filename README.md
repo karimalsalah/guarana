@@ -55,7 +55,7 @@ renders; generated frames are not included.
 | Foliage mesh draw, same runs | 15.7 ms GPU | **5.8 ms GPU** | In v20 |
 | Frame generation pacing, title screen: frames whose interval is within 2 ms of the median | n/a | **100%** (16.7 ms pacing) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
 | Same measure, Hyrule Field | 33-54% | **75%** (p5 16.4 ms) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
-| Headless shader warm-up | n/a | **4,515 pipelines in 155 s** | In v20.1 (`eden-cli --warm-pipelines`) |
+| Headless shader warm-up | n/a | **4,515 pipelines in 155 s** | In v20.1 (`guarana-cli --warm-pipelines`; `eden-cli` before v20.2) |
 
 <details>
 <summary><b>The full table, how each number was taken, and what is not measured yet</b></summary>
