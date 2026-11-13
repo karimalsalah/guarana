@@ -217,6 +217,8 @@ private:
     /// Copies the frame to the swapchain; it stays the frame showing until its copy is done.
     /// Holds swapchain_mutex.
     void FluidShow(Frame* frame, u64 shown_vblank);
+    /// EDEN_NX2_FLUID_COPY_AHEAD: presents the frame copied at the last slot's wake, if any.
+    void FluidPresentAhead();
 
     /// Frees a frame that is not shown. Holds swapchain_mutex.
     void FluidDiscard(Frame* frame);
@@ -385,6 +387,12 @@ private:
         f64 copy_gpu_ms{}, copy_gpu_max_ms{};
     } fluid_stats;
     void FluidNoteCopyTime(Frame* frame);
+    /// EDEN_NX2_FLUID_COPY_AHEAD: the next copy is for the slot after next and is presented at the
+    /// next slot's wake; a copy is pending presentation.
+    bool fluid_copy_ahead_request{};
+    bool fluid_ahead_pending{};
+    Frame* fluid_ahead_frame{};
+    VkSemaphore fluid_ahead_semaphore{};
 };
 
 } // namespace Vulkan
