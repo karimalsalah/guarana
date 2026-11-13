@@ -94,6 +94,8 @@ add_executable(lichii
     configuration/configure_hotkeys.cpp
     configuration/configure_hotkeys.h
     configuration/configure_hotkeys.ui
+    configuration/controller_auto_configure.cpp
+    configuration/controller_auto_configure.h
     configuration/configure_input.cpp
     configuration/configure_input.h
     configuration/configure_input.ui
