@@ -533,6 +533,24 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
 
+    // Parsed before the Vulkan devices are listed: a game started from the command line (a
+    // launcher or a shortcut) boots without the list.
+    std::optional<Core::LaunchParams> launch_params;
+    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
+        QList<QByteArray> qba{};
+        for (auto const& e : args)
+            qba.push_back(e.toUtf8());
+        std::vector<char*> args_cstr{};
+        for (auto& e : qba)
+            args_cstr.push_back(e.data());
+
+        launch_params = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(),
+                                                args_cstr.data(), nullptr);
+    }
+    const bool direct_launch =
+        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
+                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
+
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
 
@@ -547,10 +565,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         UpdateAPIText();
         renderer_status_button->setDisabled(true);
         renderer_status_button->setChecked(false);
+    } else if (direct_launch) {
+        Common::BootTiming::Mark(
+            "frontend: Vulkan device list left to the settings dialogs (direct launch)");
     } else {
-        const double start = Common::BootTiming::Now();
-        VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
-        Common::BootTiming::Mark("frontend: Vulkan devices listed for the settings", start);
+        ListVulkanDevices(false);
     }
 
     // On macOS, SDL video would pump AppKit events alongside Qt and disrupt native menus.
@@ -577,15 +596,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
-    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
-        QList<QByteArray> qba{};
-        for (auto const& e : args)
-            qba.push_back(e.toUtf8());
-        std::vector<char*> args_cstr{};
-        for (auto& e : qba)
-            args_cstr.push_back(e.data());
-
-        auto const lp = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(), args_cstr.data(), nullptr);
+    if (launch_params) {
+        auto const& lp = *launch_params;
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
@@ -3948,7 +3960,27 @@ void MainWindow::ToggleShowGameName() {
     game_list->RefreshGameDirectory();
 }
 
+void MainWindow::ListVulkanDevices(bool for_dialog) {
+    if (vk_device_records_listed || UISettings::values.has_broken_vulkan) {
+        return;
+    }
+    vk_device_records_listed = true;
+    const double start = Common::BootTiming::Now();
+    if (for_dialog) {
+        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+    }
+    VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+    if (for_dialog) {
+        QApplication::restoreOverrideCursor();
+    }
+    Common::BootTiming::Mark(for_dialog
+                                 ? "frontend: Vulkan devices listed when a settings dialog opened"
+                                 : "frontend: Vulkan devices listed for the settings",
+                             start);
+}
+
 void MainWindow::OnConfigure() {
+    ListVulkanDevices(true);
     const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
@@ -4247,6 +4279,7 @@ void MainWindow::OnConfigurePerGame() {
 }
 
 void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_name) {
+    ListVulkanDevices(true);
     Settings::SetConfiguringGlobal(false);
     ConfigurePerGame dialog(this, title_id, file_name, vk_device_records, *QtCommon::system);
     dialog.LoadFromFile(Core::GetGameFileFromPath(QtCommon::vfs, file_name));
