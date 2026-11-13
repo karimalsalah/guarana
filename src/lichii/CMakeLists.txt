@@ -95,6 +95,8 @@ add_executable(lichii
     configuration/configure_graphics_advanced.h
     configuration/configure_graphics_advanced.ui
     configuration/configure_graphics_extensions.cpp
+    configuration/configure_guarana.cpp
+    configuration/configure_guarana.h
     configuration/configure_graphics_extensions.h
     configuration/configure_graphics_extensions.ui
     configuration/configure_hotkeys.cpp
@@ -184,6 +186,8 @@ add_executable(lichii
     hotkeys.h
     install_dialog.cpp
     install_dialog.h
+    guarana_ui.cpp
+    guarana_ui.h
     loading_screen.cpp
     loading_screen.h
     loading_screen.ui

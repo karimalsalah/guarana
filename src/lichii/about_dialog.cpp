@@ -26,7 +26,7 @@ AboutDialog::AboutDialog(QWidget* parent)
     ui->setupUi(this);
     // Try and request the icon from Qt theme (Linux?)
     const QIcon lichii_logo = QIcon::fromTheme(QStringLiteral("io.github.zortos293.lichii"),
-                                           QIcon(QStringLiteral(":/img/lichii.ico")));
+                                           QIcon(QStringLiteral(":/img/guarana.ico")));
     if (!lichii_logo.isNull()) {
         ui->labelLogo->setPixmap(lichii_logo.pixmap(112));
     }

@@ -16,6 +16,7 @@
 #include <QWindow>
 
 #include "common/settings.h"
+#include "qt_common/config/uisettings.h"
 #include "core/core.h"
 #include "main_window.h"
 #include "qt_common/qt_common.h"
@@ -47,13 +48,19 @@ constexpr std::size_t FpsSamples = 10;
 /// A frame this much slower than the median is a spike.
 constexpr float SpikeRatio = 1.2f;
 
-constexpr QRgb TextColor = qRgb(0xF2, 0xF3, 0xF5);
-constexpr QRgb MutedColor = qRgb(0xA0, 0xA5, 0xAD);
-constexpr QRgb DimColor = qRgb(0x6E, 0x73, 0x7B);
-constexpr QRgb AccentColor = qRgb(0x5E, 0xB4, 0xFF);
+// Guarana: the launcher's ember accent on deep navy.
+constexpr QRgb TextColor = qRgb(0xEE, 0xF1, 0xF6);
+constexpr QRgb MutedColor = qRgb(0x8F, 0x99, 0xAD);
+constexpr QRgb DimColor = qRgb(0x6B, 0x75, 0x89);
+constexpr QRgb AccentColor = qRgb(0xFB, 0xBF, 0x24);
 constexpr QRgb SpikeColor = qRgb(0xFF, 0x5D, 0x52);
-constexpr QRgb BackgroundColor = qRgba(0, 0, 0, 140);
-constexpr QRgb LineColor = qRgba(0xF2, 0xF3, 0xF5, 217);
+constexpr QRgb BackgroundColor = qRgba(0x07, 0x0B, 0x14, 205);
+constexpr QRgb BorderColor = qRgba(0xF2, 0x85, 0x1A, 90);
+constexpr QRgb LineColor = qRgba(0xEE, 0xF1, 0xF6, 217);
+
+constexpr int CompactWidth = 232;
+constexpr int CompactHeight = 118;
+constexpr auto CompactWindow = std::chrono::seconds{2};
 constexpr QRgb AxisColor = qRgba(255, 255, 255, 46);
 constexpr QRgb MedianLineColor = qRgba(255, 255, 255, 56);
 
@@ -115,13 +122,19 @@ QString Percent(const std::optional<double>& percent) {
 PerformanceOverlay::PerformanceOverlay(MainWindow* parent) : QWidget(parent), m_mainWindow{parent} {
     setAttribute(Qt::WA_TranslucentBackground);
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
-    setFixedSize(OverlayWidth, OverlayHeight);
+    applyLayout();
     raise();
 
     // pos/stats
     resetPosition(m_mainWindow->pos());
     connect(parent, &MainWindow::positionChanged, this, &PerformanceOverlay::resetPosition);
     connect(m_mainWindow, &MainWindow::statsUpdated, this, &PerformanceOverlay::updateStats);
+}
+
+void PerformanceOverlay::applyLayout() {
+    m_compact = UISettings::values.guarana_overlay_compact.GetValue();
+    setFixedSize(m_compact ? QSize{CompactWidth, CompactHeight}
+                           : QSize{OverlayWidth, OverlayHeight});
 }
 
 void PerformanceOverlay::resetPosition(const QPoint& _) {
@@ -215,6 +228,11 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
         tags << tr("FG +%1").arg(std::round(generated), 0, 'f', 0);
     }
     m_tags = tags.join(QStringLiteral("  "));
+    m_generatedFps = m_mainWindow->FrameGenFps();
+    m_frameGenOn = Settings::values.frame_gen.GetValue();
+    if (m_compact != UISettings::values.guarana_overlay_compact.GetValue()) {
+        applyLayout();
+    }
 
     update();
 }
@@ -224,9 +242,13 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
 
-    painter.setPen(Qt::NoPen);
+    painter.setPen(QPen{QColor::fromRgba(BorderColor), 1.0});
     painter.setBrush(QColor::fromRgba(BackgroundColor));
-    painter.drawRoundedRect(rect(), 5.0, 5.0);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
+    if (m_compact) {
+        paintCompact(painter);
+        return;
+    }
 
     const QColor text = QColor::fromRgb(TextColor);
     const QColor muted = QColor::fromRgb(MutedColor);
@@ -291,6 +313,104 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
         QFontMetricsF{footer_font}.elidedText(m_tags, Qt::ElideRight, tags_width);
     DrawRuns(painter, right - QFontMetricsF{footer_font}.horizontalAdvance(tags), footer_baseline,
              {{tags, footer_font, muted}});
+}
+
+void PerformanceOverlay::paintCompact(QPainter& painter) {
+    constexpr qreal Pad = 12;
+    const qreal inner = CompactWidth - 2 * Pad;
+    const QColor text = QColor::fromRgb(TextColor);
+    const QColor muted = QColor::fromRgb(MutedColor);
+    const QColor accent = QColor::fromRgb(AccentColor);
+    const QFont fps_font = MonoFont(34, QFont::DemiBold);
+    const QFont small_font = MonoFont(12);
+    const QFont small_bold_font = MonoFont(12, QFont::DemiBold);
+
+    // Game fps, big, and the rate that reaches the screen once generated frames are added.
+    const qreal head_top = 6;
+    const qreal head_height = 40;
+    const std::vector<Run> fps_runs{
+        {m_fps ? QString::number(std::round(*m_fps), 'f', 0) : QStringLiteral("-"), fps_font, text},
+    };
+    const qreal baseline = Baseline(fps_font, head_top, head_height);
+    DrawRuns(painter, Pad, baseline, fps_runs);
+    DrawRuns(painter, Pad + Width(fps_runs) + 5, baseline, {{tr("game"), small_font, muted}});
+
+    const double shown = (m_fps ? *m_fps : 0.0) + (m_generatedFps >= 0.5 ? m_generatedFps : 0.0);
+    const std::vector<Run> shown_runs{
+        {m_fps ? QString::number(std::round(shown), 'f', 0) : QStringLiteral("-"), small_bold_font,
+         m_generatedFps >= 0.5 ? accent : text},
+        {tr(" shown"), small_font, muted},
+    };
+    DrawRuns(painter, Pad + inner - Width(shown_runs), Baseline(small_font, head_top + 4, 34),
+             shown_runs);
+
+    // Frame times of the last 2 s: a flat line is even pacing, a spike is a hitch.
+    const QRectF area{Pad, 52, inner, 38};
+    std::vector<const Core::FrameTimeHistory::Entry*> recent;
+    if (!m_frames.empty()) {
+        const auto newest = m_frames.back().end;
+        for (const auto& frame : m_frames) {
+            if (newest - frame.end <= CompactWindow) {
+                recent.push_back(&frame);
+            }
+        }
+    }
+    if (recent.size() >= 2) {
+        std::vector<float> ms;
+        ms.reserve(recent.size());
+        for (const auto* frame : recent) {
+            ms.push_back(frame->ms);
+        }
+        const auto summary = *Core::Summarize(ms);
+        float low = summary.min_ms;
+        float high = summary.max_ms;
+        const float min_span = std::max(2.0f, summary.median_ms * 0.1f);
+        if (high - low < min_span) {
+            const float middle = (low + high) / 2;
+            low = middle - min_span / 2;
+            high = middle + min_span / 2;
+        }
+        const auto newest = recent.back()->end;
+        const double window_s = std::chrono::duration<double>(CompactWindow).count();
+        QPolygonF line;
+        for (const auto* frame : recent) {
+            const double age_s = std::chrono::duration<double>(newest - frame->end).count();
+            line << QPointF{area.left() + area.width() * (1.0 - age_s / window_s),
+                            area.top() + (high - frame->ms) / (high - low) * area.height()};
+        }
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(
+            QPen{QColor::fromRgba(LineColor), 1.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin});
+        painter.drawPolyline(line);
+        painter.setPen(
+            QPen{QColor::fromRgb(SpikeColor), 1.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin});
+        const float spike_ms = summary.median_ms * SpikeRatio;
+        for (qsizetype i = 1; i < line.size(); ++i) {
+            if (ms[i - 1] > spike_ms || ms[i] > spike_ms) {
+                painter.drawLine(line[i - 1], line[i]);
+            }
+        }
+    }
+
+    // Frame generation state and the frame time.
+    QString generation;
+    QColor generation_color = muted;
+    if (!m_frameGenOn) {
+        generation = tr("Frame generation off");
+    } else if (m_generatedFps >= 0.5) {
+        generation = tr("Frame generation on, +%1 fps").arg(std::round(m_generatedFps), 0, 'f', 0);
+        generation_color = accent;
+    } else {
+        generation = tr("Frame generation on, waiting");
+    }
+    const qreal footer = Baseline(small_font, 94, 18);
+    const QString ms_text =
+        m_frameMs ? QStringLiteral("%1 ms").arg(*m_frameMs, 0, 'f', 1) : QStringLiteral("-");
+    const qreal ms_width = QFontMetricsF{small_font}.horizontalAdvance(ms_text);
+    const QString elided =
+        QFontMetricsF{small_font}.elidedText(generation, Qt::ElideRight, inner - ms_width - 10);
+    DrawRuns(painter, Pad, footer, {{elided, small_font, generation_color}});
+    DrawRuns(painter, Pad + inner - ms_width, footer, {{ms_text, small_font, muted}});
 }
 
 void PerformanceOverlay::paintGraph(QPainter& painter, const QRectF& area) {

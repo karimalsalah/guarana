@@ -194,15 +194,9 @@ public:
 
 signals:
     void AddDirectory();
+    void InstallKeys();
+    void InstallFirmware();
 
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
-
-private:
-    void changeEvent(QEvent* event) override;
-    void RetranslateUI();
-
-    QVBoxLayout* layout = nullptr;
-    QLabel* image = nullptr;
-    QLabel* text = nullptr;
 };

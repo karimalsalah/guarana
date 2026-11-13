@@ -64,6 +64,7 @@
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 #include "lichii/bootmanager.h"
+#include "lichii/guarana_ui.h"
 #include "lichii/main_window.h"
 
 #include "qt_common/render/context.h"
@@ -127,10 +128,12 @@ struct NullRenderWidget : public RenderWidget {
 GRenderWindow::GRenderWindow(MainWindow* parent,
                              std::shared_ptr<InputCommon::InputSubsystem> input_subsystem_)
     : QWidget(parent), input_subsystem{std::move(input_subsystem_)} {
-    setWindowTitle(QStringLiteral("Lichii %1 | %2-%3")
-                       .arg(QString::fromUtf8(Common::g_build_name),
-                            QString::fromUtf8(Common::g_scm_branch),
-                            QString::fromUtf8(Common::g_scm_desc)));
+    setWindowTitle(Guarana::UseCleanTitle()
+                       ? Guarana::CleanWindowTitle({})
+                       : QStringLiteral("Lichii %1 | %2-%3")
+                             .arg(QString::fromUtf8(Common::g_build_name),
+                                  QString::fromUtf8(Common::g_scm_branch),
+                                  QString::fromUtf8(Common::g_scm_desc)));
     setAttribute(Qt::WA_AcceptTouchEvents);
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

@@ -40,6 +40,9 @@ extern template class Setting<unsigned long long>;
 namespace UISettings {
 
 bool IsDarkTheme();
+/// Lichii Dark and Guarana Dark share their icon set and palette code.
+bool IsLichiiFamilyTheme();
+bool IsGuaranaTheme();
 
 struct ContextualShortcut {
     std::string keyseq;
@@ -62,11 +65,12 @@ enum class Theme {
     MidnightBlue,
     MidnightBlueColorful,
     LichiiDark,
+    GuaranaDark,
 };
 
-static constexpr Theme default_theme{Theme::LichiiDark};
+static constexpr Theme default_theme{Theme::GuaranaDark};
 
-using Themes = std::array<std::pair<const char*, const char*>, 7>;
+using Themes = std::array<std::pair<const char*, const char*>, 8>;
 extern const Themes themes;
 
 struct GameDir {
@@ -227,6 +231,23 @@ struct Values {
 
     // perf overlay
     Setting<bool> show_perf_overlay{linkage, false, "show_perf_overlay", Category::UiGameList};
+    // Compact brand overlay (fps, shown fps, 2 s frame times, frame generation); off = the
+    // detailed overlay as before
+    Setting<bool> guarana_overlay_compact{linkage, true, "guarana_overlay_compact",
+                                          Category::UiGameList};
+
+    // Guarana window and play mode
+    Setting<bool> guarana_remember_window{linkage, true, "guarana_remember_window",
+                                          Category::UiGeneral};
+    // "screen name|base64 geometry;..." with the screen used last first
+    Setting<std::string> guarana_window_geometry{linkage, {}, "guarana_window_geometry",
+                                                 Category::Ui};
+    Setting<bool> guarana_fullscreen_on_launch{linkage, true, "guarana_fullscreen_on_launch",
+                                               Category::UiGeneral};
+    Setting<bool> guarana_play_toast{linkage, true, "guarana_play_toast", Category::UiGeneral};
+    // The mode picked on the Guarana settings page: custom, smooth, quality or battery
+    Setting<std::string> guarana_mode{linkage, std::string{"custom"}, "guarana_mode",
+                                      Category::Ui};
 
     // Size & File Types Column
     Setting<bool> show_size{linkage, true, "show_size", Category::UiGameList};

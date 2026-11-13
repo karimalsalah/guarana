@@ -12,6 +12,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
+- Guarana window and play mode: Guarana Dark theme (new default), a Guarana settings page (play mode, frame generation, resolution, controller, report a problem), a compact brand performance overlay, per-monitor window memory, fullscreen on game launch with a menu hint, a clean release window title and icon, and a first-run panel on the empty game list. Settings: `guarana_remember_window`, `guarana_fullscreen_on_launch`, `guarana_play_toast`, `guarana_overlay_compact`, `guarana_mode`. See `docs/user/ui.md`.
+
 - Launcher: after a session with at least a minute of gameplay, a card offers to share your numbers (game fps, frame pacing, device, driver) as a prefilled device report you review and submit yourself; a setting stops it asking.
 
 - **Graphics pipeline library fast-link** (`EDEN_NX2_GPL=1`, opt-in, experimental): a pipeline is linked from cached per-stage shader libraries (`VK_EXT_graphics_pipeline_library`), so a pipeline whose stages were seen before costs a fast link instead of a 400 to 1000 ms driver build, and an optimized link replaces it in the background (`EDEN_NX2_GPL_OPTIMIZE=0` skips that). Off on AMD's Windows driver unless `EDEN_NX2_GPL_FAST_LINK=1`. Port of upstream pull requests [#1173](https://github.com/zortos293/Lichii/pull/1173), [#1177](https://github.com/zortos293/Lichii/pull/1177) and [#1185](https://github.com/zortos293/Lichii/pull/1185) by PantACRO4life and justin-wq1337, adapted to this tree. Not measured on a verified scene yet; the plan is in [docs/switches.md](docs/switches.md).
