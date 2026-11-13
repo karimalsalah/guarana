@@ -20,6 +20,7 @@
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/frontend/ir/modifiers.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -1026,11 +1027,11 @@ void EmitContext::EmitGlobalMemoryPrologue() {
     }
 }
 
-Id EmitContext::NarrowGlobalLoad(u32 shift, u32 flags) const {
-    if (flags == 0) {
+Id EmitContext::NarrowGlobalLoad(u32 shift, u32 list) const {
+    if (list == 0) {
         return Id{};
     }
-    const auto it{narrow_load_funcs.find({shift, flags})};
+    const auto it{narrow_load_funcs.find({shift, list})};
     return it == narrow_load_funcs.end() ? Id{} : it->second;
 }
 
@@ -1278,26 +1279,30 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         define(&StorageDefinitions::U32x4, storage_types.U32x4, U32[4], sizeof(u32[4]));
 
     if ((profile.global_memory_opt & GM_NARROW) != 0 && info.native_global_bounds) {
-        // The storage buffer pass left, in a load's flags, the descriptors its address can only
-        // be in: a byte each, index + 1, zero after the last. One function per distinct list.
+        // The storage buffer pass left, in a load's flags (IR::GlobalLoadFlags::NarrowList), the
+        // descriptors its address can only be in: 7 bits each, index + 1, zero after the last.
+        // One function per distinct list. The coherent bit is not part of the list.
         const bool no_fallback{(profile.global_memory_opt & GM_NARROW_NO_FALLBACK) != 0};
-        const auto narrow{[&](u32 shift, u32 flags) {
-            if (flags == 0 || narrow_load_funcs.contains({shift, flags})) {
+        const auto narrow{[&](u32 shift, u32 list) {
+            if (list == 0 || narrow_load_funcs.contains({shift, list})) {
                 return;
             }
-            boost::container::static_vector<u32, 4> indices;
-            for (u32 bits = flags; bits != 0; bits >>= 8) {
-                const u32 index{(bits & 0xff) - 1};
+            boost::container::static_vector<u32, IR::GlobalLoadFlags::NARROW_MAX_BUFFERS> indices;
+            const bool valid{IR::GlobalLoadFlags::ForEachNarrowBuffer(list, [&](u32 index) {
                 if (index >= num_buffers) {
-                    return;
+                    return false;
                 }
                 indices.push_back(index);
+                return true;
+            })};
+            if (!valid) {
+                return;
             }
             subset = std::span<const u32>{indices.data(), indices.size()};
             const auto fallback{[&](Id function) { return no_fallback ? Id{} : function; }};
             Id word_func{};
             if (shift > 2 && !profile.support_descriptor_aliasing) {
-                auto& word{narrow_load_funcs[{2U, flags}]};
+                auto& word{narrow_load_funcs[{2U, list}]};
                 if (!Sirit::ValidId(word)) {
                     word = define_load(&StorageDefinitions::U32, storage_types.U32.element, U32[1],
                                        2, fallback(load_global_func_u32));
@@ -1321,15 +1326,18 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
                                 shift, fallback(load_global_func_u32x4), word_func);
                 break;
             }
-            narrow_load_funcs[{shift, flags}] = function;
+            narrow_load_funcs[{shift, list}] = function;
             subset = {};
+        }};
+        const auto list_of{[](const IR::Inst& inst) {
+            return IR::GlobalLoadFlags::NarrowList(inst.Flags<u32>());
         }};
         for (const IR::Block* const block : program.blocks) {
             for (const IR::Inst& inst : block->Instructions()) {
                 switch (inst.GetOpcode()) {
-                case IR::Opcode::LoadGlobal32: narrow(2, inst.Flags<u32>()); break;
-                case IR::Opcode::LoadGlobal64: narrow(3, inst.Flags<u32>()); break;
-                case IR::Opcode::LoadGlobal128: narrow(4, inst.Flags<u32>()); break;
+                case IR::Opcode::LoadGlobal32: narrow(2, list_of(inst)); break;
+                case IR::Opcode::LoadGlobal64: narrow(3, list_of(inst)); break;
+                case IR::Opcode::LoadGlobal128: narrow(4, list_of(inst)); break;
                 default: break;
                 }
             }

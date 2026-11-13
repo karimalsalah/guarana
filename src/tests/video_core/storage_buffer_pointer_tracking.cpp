@@ -701,7 +701,8 @@ TEST_CASE("Loads built on one loaded pointer read its buffer at an offset comput
     if (!rebase) {
         const IR::Inst* const record{program.Find(IR::Opcode::LoadGlobal128)};
         REQUIRE(record != nullptr);
-        CHECK(record->Flags<u32>() == 1);
+        // Searches binding 0: list [0] above the coherent bit, which an LDG.CA load doesn't set
+        CHECK(record->Flags<u32>() == (1u << 1));
         CHECK(program.Count(IR::Opcode::LoadGlobal32) == 1);
         CHECK(program.Count(IR::Opcode::LoadStorage128) == 0);
         return;
@@ -743,8 +744,9 @@ TEST_CASE("Loads through a loaded pointer keep their search where a rebase is no
           "[shader][storage_buffer]") {
     LoadedPointerRecords program{true};
     IR::IREmitter& ir{program.ir};
-    // Bit 2's flags for the record: 1 searches binding 0, 0 every buffer
-    u32 record_flags{1};
+    // Bit 2's flags for the record: 2 searches binding 0 (list [0] above the coherent bit), 0
+    // every buffer
+    u32 record_flags{1u << 1};
     bool field_rebased{};
     SECTION("A store to the pointer's buffer") {
         program.LoadRecord();

@@ -377,9 +377,10 @@ public:
     std::vector<Id> global_bases;
     const Info* global_bases_info{};
     void EmitGlobalMemoryPrologue();
-    /// GM_NARROW: the load function for a word shift (2, 3, 4) and a LoadGlobal's flags, or an
-    /// invalid id when the load searches every buffer.
-    [[nodiscard]] Id NarrowGlobalLoad(u32 shift, u32 flags) const;
+    /// GM_NARROW: the load function for a word shift (2, 3, 4) and a LoadGlobal's narrowed buffer
+    /// list (IR::GlobalLoadFlags::NarrowList, without the coherent bit), or an invalid id when
+    /// the load searches every buffer.
+    [[nodiscard]] Id NarrowGlobalLoad(u32 shift, u32 list) const;
     std::map<std::pair<u32, u32>, Id> narrow_load_funcs;
 
     bool need_input_position_indirect{};

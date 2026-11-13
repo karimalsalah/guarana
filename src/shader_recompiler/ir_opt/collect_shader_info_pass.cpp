@@ -138,7 +138,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
     case IR::Opcode::LoadStorage32:
     case IR::Opcode::LoadStorage64:
     case IR::Opcode::LoadStorage128:
-        info.requires_coherent_global_memory |= inst.Flags<bool>();
+        info.requires_coherent_global_memory |= IR::GlobalLoadFlags::IsCoherent(inst.Flags<u32>());
         break;
     default:
         break;
