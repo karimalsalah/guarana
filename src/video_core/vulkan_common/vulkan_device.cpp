@@ -26,6 +26,7 @@
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/nx2_hitch.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
@@ -2519,7 +2520,14 @@ void Device::CollectPhysicalMemoryInfo() {
     main_heap_size = limit(mem_properties.memoryHeaps[main_heap].size);
     if (is_integrated) {
         const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
-        const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
+        u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
+        // EDEN_NX2_HITCH_UMA_BUDGET_MIB: a machine with room to spare may use more of its system
+        // memory as device memory (the texture cache's thresholds follow this budget).
+        if (const u64 hitch_mib = VideoCommon::Hitch::UmaBudgetMiB(); hitch_mib != 0) {
+            memory_size = hitch_mib << 20;
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_HITCH_UMA_BUDGET_MIB: integrated device budget cap {} MiB",
+                     hitch_mib);
+        }
         device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
     } else {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
