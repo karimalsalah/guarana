@@ -723,11 +723,17 @@ void EmitPrepassShaders(const Shader::Profile& profile, const Shader::RuntimeInf
 }
 
 /// Whether the pipeline's state lets it be linked from graphics pipeline libraries (EDEN_NX2_GPL).
-/// Left on the monolithic route: transform feedback, a static rasterizer discard, and the VRS
-/// experiment, whose rate is part of the pipeline create info.
+/// Left on the monolithic route: transform feedback, a static rasterizer discard, pipelines
+/// without a fragment shader, and the VRS experiment, whose rate is part of the pipeline create info.
 bool StateTakesLibraries(const Device& device, const GraphicsPipelineCacheKey& key) {
     if (!device.IsExtGraphicsPipelineLibrarySupported() || key.state.xfb_enabled != 0 ||
         device.IsKhrFragmentShadingRateSupported()) {
+        return false;
+    }
+    // A fragment shader library needs at least one stage (VUID-VkGraphicsPipelineCreateInfo-
+    // flags-06644), so a pipeline without a fragment program is built whole
+    // (zortos293/Lichii#1177, 49042f95d5).
+    if (key.unique_hashes[Maxwell::MaxShaderProgram - 1] == 0) {
         return false;
     }
     return key.state.extended_dynamic_state_2 != 0 || key.state.dynamic_state.rasterize_enable != 0;
@@ -1607,7 +1613,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     std::unordered_set<u64> precached_pipelines;
     if (precache) {
         precached_pipelines = ShaderWarm::ReadPrecachedPipelines(
-            ShaderWarm::PrecachedPipelinesPath(title_id),
+            ShaderWarm::PrecachedPipelinesPath(title_id,
+                                               device.IsExtGraphicsPipelineLibrarySupported()),
             {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION});
     }
     if (use_vulkan_pipeline_cache) {
@@ -2455,7 +2462,8 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::vector<PrecacheJob> jobs,
     }
     if (precached.size() != precached_before && marks_precached) {
         ShaderWarm::WritePrecachedPipelines(
-            ShaderWarm::PrecachedPipelinesPath(title_id),
+            ShaderWarm::PrecachedPipelinesPath(title_id,
+                                               device.IsExtGraphicsPipelineLibrarySupported()),
             {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION}, precached);
     }
     if (!stop_loading.stop_requested() && total_built != 0) {
