@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why 16.67 ms is hard: frame pacing and frame generation</title>
+<meta name="description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="author" content="Guarana contributors">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site.css">
+<link rel="stylesheet" href="blog.css">
+<link rel="alternate" type="application/rss+xml" title="Guarana blog" href="https://karimalsalah.github.io/guarana/blog/feed.xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED">
+<meta property="og:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta property="article:published_time" content="2026-11-13">
+<meta property="article:modified_time" content="2026-11-13">
+<meta property="article:section" content="Frame pacing">
+<meta property="article:tag" content="Frame pacing">
+<meta property="article:tag" content="Frame generation">
+<meta property="article:tag" content="Vulkan">
+<meta property="article:tag" content="OLED">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED">
+<meta name="twitter:description" content="Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html#article",
+      "headline": "Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED",
+      "description": "Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the fix in progress.",
+      "datePublished": "2026-11-13",
+      "dateModified": "2026-11-13",
+      "author": {
+        "@type": "Organization",
+        "name": "Guarana contributors",
+        "url": "https://github.com/karimalsalah/guarana/graphs/contributors"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://karimalsalah.github.io/guarana/assets/logo-mark.svg"
+        }
+      },
+      "image": {
+        "@type": "ImageObject",
+        "url": "https://karimalsalah.github.io/guarana/assets/social-preview.png",
+        "width": 1280,
+        "height": 640
+      },
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html"
+      },
+      "isPartOf": {
+        "@type": "Blog",
+        "@id": "https://karimalsalah.github.io/guarana/blog/#blog",
+        "name": "Guarana blog",
+        "url": "https://karimalsalah.github.io/guarana/blog/"
+      },
+      "inLanguage": "en",
+      "articleSection": "Frame pacing",
+      "keywords": "frame pacing, frame generation, micro-stutter, vblank, FIFO, present mode, 120 Hz OLED, extrapolation, motion vectors, Switch 2 emulator, integrated GPU",
+      "about": {
+        "@type": "SoftwareApplication",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "applicationCategory": "GameApplication"
+      },
+      "wordCount": 1242
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Blog",
+          "item": "https://karimalsalah.github.io/guarana/blog/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Frame pacing on a 120 Hz OLED",
+          "item": "https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="../">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="./" class="is-section">Blog</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<article aria-labelledby="post-title">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="../">Home</a></li><li><a href="./">Blog</a></li><li><span aria-current="page">Frame pacing on a 120 Hz OLED</span></li></ol></nav>
+  <p class="post-kicker">Frame pacing &middot; Frame generation &middot; In progress</p>
+  <h1 id="post-title">Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</h1>
+  <p class="post-meta"><span>By Guarana contributors</span><span><time datetime="2026-11-13">November 13, 2026</time></span><span>6 min read</span></p>
+  <p class="lede">Frame generation can put a new image on screen at every refresh. Making each of those images stay up for the same length of time is a separate problem, and it is the one we are working on now.</p>
+</div>
+<div class="wrap">
+<div class="prose post-body">
+
+<div class="status" role="note">
+  <span class="pill">In progress</span>
+  <p>The presenter described here is experimental, will arrive behind <code>EDEN_NX2_FLUID=1</code>, and has no published result yet. Nothing below claims it works.</p>
+</div>
+
+<aside class="in-short" aria-labelledby="in-short-title">
+  <h2 id="in-short-title">In short</h2>
+  <ul>
+    <li><strong>Pacing</strong> is how evenly frames reach the screen. The goal is that every shown frame, real or predicted, stays up for exactly one 16.67 ms slot, the length of one 60 Hz frame.</li>
+    <li><strong>Why v20 still stutters:</strong> with frame generation on, the swapchain is forced to FIFO, the present thread spaces frames on the CPU clock instead of the display's vblank, and predictions are made for fixed fractions of the frame interval rather than for the moment they reach the screen.</li>
+    <li><strong>The fix in progress:</strong> a presenter locked to vblank. It is not finished, and this post reports a diagnosis and a design, not a result.</li>
+  </ul>
+</aside>
+
+<h2 id="smooth">What smooth means</h2>
+<p>A display refreshes on a fixed beat. At 60 Hz that beat is 16.67 ms. The panel on our test laptop is a 120 Hz OLED, so it refreshes twice in every 16.67 ms slot. Pacing is about evenness: if one frame stays up for one slot and the next for two, motion visibly hitches, even when the average frame rate looks fine. A panel that switches pixels as fast as an OLED does nothing to blur that away.</p>
+<p>Frame generation fills the slots the game did not render. In Guarana it predicts instead of interpolating: each generated frame moves the newest real frame's pixels forward along the game's own motion vectors, using depth to decide which surface is in front. Because it never waits for a future frame, it adds no latency. The HUD is kept apart, so text and menus are not dragged along with the scenery.</p>
+
+<h2 id="today">Where v20 stands</h2>
+<p>In the frame-generation play config, the previous build was locked to 50 ms frames, 19.6 game fps. v20 reads about 26.7 game fps live. That is a live reading, not a same-spot A/B, so treat it as a sign rather than a measurement. Game fps counts only the frames the game renders.</p>
+<p>About 26.7 real frames a second does not divide 60 Hz evenly. Some real frames have to cover more 16.67 ms slots than others, and when the presenter cannot keep every shown frame up for the same time, you see micro-stutter. v20 lists it as a known issue.</p>
+
+<h2 id="diagnosis">The diagnosis: three things working against even holds</h2>
+<p>We followed a finished frame from the renderer to the screen and found three causes.</p>
+
+<h3 id="fifo">1. FIFO, forced</h3>
+<p>With frame generation on, the swapchain's present mode is forced to FIFO, or FIFO relaxed. Every present waits in a queue and becomes visible at a vblank. That is tear-free and correct, but it means the screen only changes on refresh boundaries, whatever time the emulator intended. On our test laptop the driver offers only the immediate and FIFO modes for the window, and no present-wait extension that would report when a frame actually reached the screen.</p>
+
+<h3 id="present-thread">2. A present thread that is not locked to vblank</h3>
+<p>Each generated frame carries a spacing: an equal share of the measured real frame interval. The present thread holds a frame for its spacing, then presents the next one. Those waits run on the CPU clock, not the display's. So the moment a frame enters the FIFO queue drifts against the refresh grid: one frame catches the next vblank, the next one just misses it and waits for the one after. Frames meant to stay up for equal times end up held for different numbers of refreshes.</p>
+
+<h3 id="fixed-fraction">3. Fixed-fraction prediction</h3>
+<p>Each predicted frame is extrapolated to a fixed fraction of the real frame interval, chosen before anyone knows when that frame will be shown. If it then reaches the screen a refresh early or late, it shows motion from the wrong moment, and things jump ahead or lag behind. The prediction and the display disagree about what time it is.</p>
+<p>Each cause is small on its own. Together they turn generated frames into uneven motion.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 640 262" role="img" aria-labelledby="pace-title pace-desc">
+    <title id="pace-title">Shown frames against 16.67 ms slots, today and with a vblank-locked presenter</title>
+    <desc id="pace-desc">In the top row, frames handed over on the CPU clock are held for one or two slots unevenly. In the bottom row, every shown frame lasts exactly one slot.</desc>
+    <text class="d-small" x="40" y="18">16.67 ms slots</text>
+    <path class="d-axis" d="M40 34H620"/>
+    <path class="d-grid" d="M40 28V40M98 28V40M156 28V40M214 28V40M272 28V40M330 28V40M388 28V40M446 28V40M504 28V40M562 28V40M620 28V40"/>
+    <text class="d-strong" x="40" y="72">Today: spacing on the CPU clock, then FIFO</text>
+    <rect class="d-accent" x="41.5" y="84" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="99.5" y="85.25" width="113" height="23.5" rx="5"/>
+    <rect class="d-gen" x="215.5" y="85.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-accent" x="273.5" y="84" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="331.5" y="85.25" width="113" height="23.5" rx="5"/>
+    <rect class="d-gen" x="447.5" y="85.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-accent" x="505.5" y="84" width="113" height="26" rx="5"/>
+    <text class="d-small" x="40" y="132">Some frames stay up for one slot, some for two: micro-stutter.</text>
+    <text class="d-strong" x="40" y="174">Vblank-locked presenter (in progress)</text>
+    <rect class="d-accent" x="41.5" y="186" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="99.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-gen" x="157.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-accent" x="215.5" y="186" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="273.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-accent" x="331.5" y="186" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="389.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-gen" x="447.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <rect class="d-accent" x="505.5" y="186" width="55" height="26" rx="5"/>
+    <rect class="d-gen" x="563.5" y="187.25" width="55" height="23.5" rx="5"/>
+    <text class="d-small" x="40" y="234">Every shown frame, real or predicted, stays up for one slot.</text>
+    <rect class="d-accent" x="40" y="246" width="14" height="12" rx="3"/>
+    <text class="d-small" x="60" y="256">real frame</text>
+    <rect class="d-gen" x="140" y="247" width="14" height="10" rx="3"/>
+    <text class="d-small" x="160" y="256">predicted frame</text>
+  </svg>
+  <figcaption>Illustration, not a capture. On a 120 Hz panel each 16.67 ms slot covers two refreshes.</figcaption>
+</figure>
+
+<h2 id="presenter">The presenter we are building</h2>
+<p>The fix is a presenter locked to the display's vblank. It is experimental, will arrive behind <code>EDEN_NX2_FLUID=1</code>, and is still in progress:</p>
+<ul>
+  <li><strong>A vblank clock.</strong> The present thread waits for the display's own vblank instead of sleeping for a computed spacing. On Windows it waits on the window's display output, with fallbacks when that is not available, and it follows the display when its refresh rate changes.</li>
+  <li><strong>Slots, not sleeps.</strong> Frames are scheduled into 16.67 ms slots, and each frame carries the slot it is meant for. On a 120 Hz panel a slot covers two refreshes.</li>
+  <li><strong>The newest finished frame wins.</strong> At each slot the presenter shows the newest frame whose GPU work is done. If none is ready, the slot counts as a miss. A frame whose slot has passed is dropped unshown rather than shown late.</li>
+  <li><strong>Predictions timed to their slot.</strong> A predicted frame is extrapolated to the moment its slot reaches the screen, not to a fixed fraction of the interval.</li>
+  <li><strong>One present ahead, at most.</strong> Only one present waits ahead of the display, so a late frame cannot push everything behind it.</li>
+  <li><strong>Phase lock.</strong> While the game keeps a steady pace, real frames are nudged to arrive just before their slot instead of drifting against the display.</li>
+</ul>
+
+<h2 id="done">What done looks like</h2>
+<p>The roadmap item for this work, <a href="https://github.com/karimalsalah/guarana/blob/HEAD/ROADMAP.md#n1-vblank-locked-presenter-for-generated-frames">N1</a>, is done when:</p>
+<ul>
+  <li>a present-level capture in Hyrule Field with frame generation on shows every shown frame lasting one 16.67 ms slot;</li>
+  <li>game fps in the same scene is not lower than v20, in valid benchmark rows;</li>
+  <li>it is on by default and the switch is gone, once rows from the Arc 140T and at least one other device agree.</li>
+</ul>
+<p>None of that is done yet. When the captures exist, they will be published with their method, the same way the <a href="hyrule-field-shader-fix-intel-arc.html">shader fix numbers</a> were.</p>
+
+<h2 id="help">Help wanted</h2>
+<ul>
+  <li><strong>Shown-frame captures</strong> on 60 Hz and high-refresh panels: PresentMon's display-change intervals next to the emulator's own numbers, from the same run, with the refresh rate and whether variable refresh was on.</li>
+  <li><strong>Issue <a href="https://github.com/karimalsalah/guarana/issues/8">#8</a></strong>: present-mode logging, shown-frame telemetry, and an A/B suite for hardware-accelerated GPU scheduling on and off and for immediate against FIFO. It is labelled <code>agent-ready</code>, and its tests run without the game.</li>
+  <li><strong>Device reports</strong> from any iGPU laptop or handheld, through the <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report form</a>.</li>
+</ul>
+
+<section class="qa" aria-labelledby="qa">
+  <h2 id="qa">Questions people ask</h2>
+  <h3>Does frame generation make the game respond faster?</h3>
+  <p>No. It makes motion look smoother. The game still runs and reads input at its own frame rate. The <a href="../faq.html#frame-generation">FAQ</a> has more.</p>
+  <h3>Why predict instead of interpolate?</h3>
+  <p>Interpolation needs the next real frame before it can show the frame in between, so it has to hold real frames back. Prediction shows each real frame as soon as it is ready and fills the time after it. Camera cuts and frames without motion data are shown alone.</p>
+  <h3>Can I try the new presenter in v20?</h3>
+  <p>Not yet. It will arrive as an experiment behind <code>EDEN_NX2_FLUID=1</code>. Follow issue <a href="https://github.com/karimalsalah/guarana/issues/8">#8</a> and the <a href="https://github.com/karimalsalah/guarana/blob/HEAD/CHANGELOG.md">changelog</a>; when it lands, test reports with your display's refresh rate are exactly what we need.</p>
+</section>
+
+<div class="cta-box">
+  <h2>Help make pacing even on your screen</h2>
+  <p>Every device except the Arc 140T is untested by the maintainers. Send a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a>, capture shown frames, or pick an <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready+-label%3Aneeds-triage"><code>agent-ready</code> issue</a>. <a href="../contribute.html">How to contribute</a>.</p>
+</div>
+
+<nav class="more-posts" aria-labelledby="more-title">
+  <h2 id="more-title">More from the blog</h2>
+  <ul>
+    <li><a href="hyrule-field-shader-fix-intel-arc.html">How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU</a></li>
+    <li><a href="switch-2-emulator-boot-time.html">Booting a Switch 2 emulator in half the time: what the boot marks found</a></li>
+    <li><a href="emulator-built-for-ai-agents.html">An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR</a></li>
+  </ul>
+</nav>
+
+</div>
+</div>
+</article>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="./">Blog</a></li>
+        <li><a href="../legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="../llms.txt">llms.txt</a></li>
+        <li><a href="../llms-full.txt">llms-full.txt</a></li>
+        <li><a href="../sitemap.xml">sitemap.xml</a></li>
+        <li><a href="feed.xml">Blog RSS feed</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+</body>
+</html>

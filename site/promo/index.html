@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guarana Promo</title>
+<meta name="description" content="A 20-second motion promo for Guarana, an open-source Switch 2 emulator fork tuned for integrated GPUs. Rendered from HTML, one frame at a time.">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0c11">
+<!-- music: none. The promo has no soundtrack. render.mjs gives each MP4 a silent stereo track so
+     platforms that expect audio accept it; add a track from the platform's own licensed library at
+     upload if you want one. Never add copyrighted music. -->
+<meta name="music" content="none">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="promo.css">
+<script src="promo.js" defer></script>
+</head>
+<body>
+<p class="sr-only">Guarana promo, 20 seconds, no sound. Your laptop's iGPU, Switch 2 games. Before: the previous build was locked at 50 ms frames, 19.6 fps. One shader fix took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T, and the foliage draw from 15.7 to 5.8 ms. A vblank-locked 16.67 ms presenter is in progress. Frame generation predicts frames from the game's motion vectors, with no added latency, and keeps the HUD in place. One-click Windows installer and launcher with a doctor. Plug in your pad. AI agents welcome: AGENTS.md, an MCP server that drives the game, free CI builds per pull request. github.com/karimalsalah/guarana. Not affiliated with Nintendo.</p>
+<div id="viewport">
+<div id="stage" class="stage" aria-hidden="true">
+  <svg class="defs" width="0" height="0" focusable="false">
+    <defs id="fx-defs">
+      <linearGradient id="ember-v" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFD36B"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+      <linearGradient id="ember-h" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+      <filter id="logo-mb" x="-60%" y="-20%" width="220%" height="140%" color-interpolation-filters="sRGB"><feGaussianBlur id="logo-mb-blur" stdDeviation="0 0"/></filter>
+      <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="9"/></filter>
+    </defs>
+  </svg>
+
+  <div class="layer world-bg" id="world-bg">
+    <div class="bg-base"></div>
+    <div class="orb orb-a" id="orb-a"></div>
+    <div class="orb orb-b" id="orb-b"></div>
+    <div class="orb orb-c" id="orb-c"></div>
+    <div class="floor-wrap"><div class="floor" id="floor"></div></div>
+  </div>
+  <div class="layer particles" id="particles"></div>
+  <div class="layer beams"><div class="beam" id="beam-a"></div><div class="beam beam-b" id="beam-b"></div></div>
+
+  <div class="layer world" id="world">
+
+    <!-- 1. Hook -->
+    <section class="scene s-hook" data-start="0" data-end="2.02">
+      <div class="col">
+        <p class="kicker" data-k="fade-up" data-at="0.05" data-out="1.68">Intel Arc iGPUs first &#183; AMD handhelds next</p>
+        <h1 class="hl hook">
+          <span class="mask"><span class="kl fit" data-k="rise" data-at="0.10" data-out="1.70" data-exit="left">your laptop's</span></span>
+          <span class="kl fit xl ember" data-k="slam" data-at="0.42" data-out="1.72" data-exit="zoom">iGPU.</span>
+          <span class="mask"><span class="kl fit" data-k="rise" data-at="0.80" data-out="1.74" data-exit="left">Switch 2 games.</span></span>
+        </h1>
+      </div>
+    </section>
+
+    <!-- 2. The problem -->
+    <section class="scene s-problem" data-start="1.98" data-end="4.42" data-tag="01 &#183; the problem">
+      <div class="col text">
+        <p class="kicker" data-k="fade-up" data-at="2.06">frame-gen play config &#183; previous build</p>
+        <h2 class="hl"><span class="kl fit hot" data-k="stutter" data-at="2.12" data-exit="left">it stutters.</span></h2>
+        <div class="stats">
+          <p class="stat" data-k="fade-up" data-at="2.55"><span class="num">50</span><span class="unit">ms</span><span class="lbl">frames, locked</span></p>
+          <p class="stat" data-k="fade-up" data-at="2.72"><span class="num">19.6</span><span class="unit">fps</span><span class="lbl">game fps</span></p>
+        </div>
+      </div>
+      <figure class="graph g-problem" data-k="blur-in" data-at="2.18" data-dur="0.5">
+        <svg viewBox="0 0 1000 440" focusable="false">
+          <line class="g-axis" x1="0" y1="400" x2="1000" y2="400"/>
+          <line class="g-ref" x1="0" y1="100" x2="1000" y2="100"/>
+          <line class="g-target" x1="0" y1="300" x2="1000" y2="300"/>
+          <path class="g-glow hot-stroke" id="gp-glow" d="M0 100"/>
+          <path class="g-line hot-stroke" id="gp-line" d="M0 100" pathLength="1"/>
+          <circle class="g-head hot-fill" id="gp-head" cx="1000" cy="100" r="11"/>
+          <text class="g-lbl" x="6" y="80">50 ms</text>
+          <text class="g-lbl g-lbl-target" x="6" y="336">16.67 ms</text>
+        </svg>
+        <figcaption class="g-cap">frame time &#183; illustration</figcaption>
+      </figure>
+    </section>
+
+    <!-- 3. The fix -->
+    <section class="scene s-fix" data-start="4.38" data-end="7.42" data-tag="02 &#183; the fix">
+      <p class="kicker" data-k="fade-up" data-at="4.46">global-memory routing &#183; Hyrule Field</p>
+      <h2 class="hl"><span class="kl fit" data-k="slide-r" data-at="4.50" data-exit="left">one shader fix.</span></h2>
+      <div class="fix-grid">
+        <div class="counter" data-k="blur-in" data-at="4.78" data-dur="0.45">
+          <p class="was" data-k="fade-up" data-at="6.18" data-dur="0.35">was <s>14.8</s></p>
+          <p class="big"><span class="num ember" id="fps-num">14.8</span><span class="unit">fps</span></p>
+          <p class="lbl">game fps &#183; same spot &#183; frame gen off</p>
+        </div>
+        <div class="draw" data-k="fade-up" data-at="5.55">
+          <p class="lbl">foliage draw &#183; GPU time</p>
+          <div class="bar"><div class="bar-fill" id="draw-fill"></div><div class="bar-ghost" id="draw-ghost"></div></div>
+          <p class="draw-val"><span class="num" id="draw-ms">15.7</span><span class="unit">ms</span><span class="was" id="draw-was">was 15.7 ms</span></p>
+        </div>
+      </div>
+      <p class="chips"><span class="chip" data-k="pop" data-at="6.55">ThinLTO + PGO builds</span></p>
+      <p class="fine" data-k="fade" data-at="5.00">measured on one laptop &#183; Core Ultra 9 285H &#183; Arc 140T iGPU &#183; driver 32.0.101.9175</p>
+    </section>
+
+    <!-- 4. Pacing -->
+    <section class="scene s-pace" data-start="7.38" data-end="10.02" data-tag="03 &#183; pacing">
+      <p class="kicker" data-k="fade-up" data-at="7.46">frame pacing</p>
+      <h2 class="hl"><span class="mask"><span class="kl fit" data-k="rise" data-at="7.50" data-exit="up">smooth is a number.</span></span></h2>
+      <figure class="graph g-pace" data-k="blur-in" data-at="7.62" data-dur="0.45">
+        <svg viewBox="0 0 1000 440" focusable="false">
+          <line class="g-axis" x1="0" y1="400" x2="1000" y2="400"/>
+          <line class="g-ref" x1="0" y1="100" x2="1000" y2="100"/>
+          <line class="g-target" id="gq-target" x1="0" y1="300" x2="1000" y2="300"/>
+          <path class="g-glow" id="gq-glow" d="M0 300"/>
+          <path class="g-line" id="gq-line" d="M0 300"/>
+          <circle class="g-head" id="gq-head" cx="1000" cy="300" r="11"/>
+          <text class="g-lbl" x="6" y="80">50 ms</text>
+          <text class="g-lbl g-lbl-target" id="gq-lbl" x="6" y="336">16.67 ms</text>
+        </svg>
+        <figcaption class="g-cap">shown frame time &#183; illustration</figcaption>
+      </figure>
+      <div class="lock-row">
+        <p class="lock" data-k="pop" data-at="9.02"><span class="num ember">16.67 ms</span><span class="lock-txt">every frame.</span></p>
+        <p class="chips"><span class="chip chip-wip" data-k="pop" data-at="9.16"><svg class="ic-dot" viewBox="0 0 16 16" focusable="false"><circle cx="8" cy="8" r="5"/></svg>vblank-locked presenter &#183; in progress</span></p>
+      </div>
+      <p class="fine" data-k="fade" data-at="7.95">frame-gen play config: 19.6 fps before &#183; ~26.7 fps live in v20 &#183; not a same-spot A/B</p>
+    </section>
+
+    <!-- 5. Frame generation -->
+    <section class="scene s-fg" data-start="9.98" data-end="12.62" data-tag="04 &#183; frame generation">
+      <p class="kicker" data-k="fade-up" data-at="10.06">frame generation</p>
+      <h2 class="hl fg-hl">
+        <span class="kl fit" data-k="slide-l" data-at="10.06" data-exit="left">frame gen</span>
+        <span class="kl fit ember" data-k="slide-r" data-at="10.20" data-exit="right">that predicts.</span>
+      </h2>
+      <div class="fg-wrap" data-k="fade" data-at="10.10" data-dur="0.3">
+        <div class="fg-track" id="fg-track"></div>
+        <div class="fg-now" id="fg-now"><span>on screen</span></div>
+      </div>
+      <p class="fg-legend" data-k="fade-up" data-at="10.55"><span class="lg lg-real"><i></i>real frame</span><span class="lg lg-pred"><i></i>predicted</span></p>
+      <p class="chips">
+        <span class="chip" data-k="pop" data-at="10.95">from the game's motion vectors</span>
+        <span class="chip" data-k="pop" data-at="11.18">no added latency</span>
+        <span class="chip" data-k="pop" data-at="11.41">HUD stays put</span>
+      </p>
+    </section>
+
+    <!-- 6. Installer, launcher, doctor -->
+    <section class="scene s-doctor" data-start="12.58" data-end="14.82" data-tag="05 &#183; setup">
+      <div class="col text">
+        <p class="kicker" data-k="fade-up" data-at="12.66">Windows installer + launcher</p>
+        <h2 class="hl stack">
+          <span class="kl fit" data-k="slam" data-at="12.68" data-exit="left">one click.</span>
+          <span class="mask"><span class="kl fit" data-k="rise" data-at="13.30" data-exit="left">it finds your stuff.</span></span>
+          <span class="mask"><span class="kl fit ember" data-k="rise" data-at="13.92" data-exit="left">it fixes itself.</span></span>
+        </h2>
+      </div>
+      <div class="app" id="app" data-k="blur-in" data-at="12.74" data-dur="0.4">
+        <div class="app-top">
+          <svg class="app-mark" viewBox="0 0 64 64" focusable="false"><defs><linearGradient id="am-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient><mask id="am-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask></defs><path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#am-fill)" mask="url(#am-streaks)"/><path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#3CCF7E"/></svg>
+          <b>Guarana</b><span class="app-sub">launcher</span>
+          <span class="app-win"><i></i><i></i><i></i></span>
+        </div>
+        <div class="app-main">
+          <div class="app-btn" id="app-btn"><span id="app-btn-txt">Install</span><i class="app-ripple" id="app-ripple"></i></div>
+          <div class="app-prog"><i id="app-prog"></i></div>
+          <ul class="app-list" id="app-list">
+            <li class="app-row"><span class="ic"></span><span class="nm">graphics driver</span><span class="vl" data-ok="ok"></span></li>
+            <li class="app-row"><span class="ic"></span><span class="nm">Vulkan</span><span class="vl" data-ok="ok"></span></li>
+            <li class="app-row"><span class="ic"></span><span class="nm">runtimes</span><span class="vl" data-ok="ok"></span></li>
+            <li class="app-row"><span class="ic"></span><span class="nm">your game folder</span><span class="vl" data-ok="found"></span></li>
+            <li class="app-row" data-fix="1"><span class="ic"></span><span class="nm">settings</span><span class="vl" data-ok="fixed" data-warn="fixing"></span></li>
+          </ul>
+        </div>
+        <svg class="app-cursor" id="app-cursor" viewBox="0 0 24 24" focusable="false"><path d="M4 2.5l15.2 9.6-6.9 1.4 3.6 7.1-2.9 1.4-3.6-7.2-5.4 4.6z"/></svg>
+      </div>
+    </section>
+
+    <!-- 7. Controller -->
+    <section class="scene s-pad" data-start="14.78" data-end="16.42" data-tag="06 &#183; controller">
+      <div class="pad-wrap" data-k="fade" data-at="14.80" data-dur="0.2">
+        <svg class="pad" viewBox="-30 -150 700 600" focusable="false">
+          <defs>
+            <linearGradient id="pad-ember" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD36B"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          </defs>
+          <g id="pad-cable">
+            <path class="pad-cord" d="M320 -400V22"/>
+            <rect class="pad-plug" x="300" y="22" width="40" height="44" rx="9"/>
+            <rect class="pad-plug-tip" x="309" y="64" width="22" height="16" rx="3"/>
+          </g>
+          <circle class="pad-pulse" id="pad-pulse" cx="320" cy="90" r="40"/>
+          <path class="pad-body" id="pad-glow" d="M200 92C260 80 380 80 440 92C520 96 568 120 590 178C612 236 624 318 600 362C580 398 530 404 506 372C482 340 470 304 440 296C380 282 260 282 200 296C170 304 158 340 134 372C110 404 60 398 40 362C16 318 28 236 50 178C72 120 120 96 200 92Z"/>
+          <path class="pad-outline" id="pad-outline" pathLength="1" d="M200 92C260 80 380 80 440 92C520 96 568 120 590 178C612 236 624 318 600 362C580 398 530 404 506 372C482 340 470 304 440 296C380 282 260 282 200 296C170 304 158 340 134 372C110 404 60 398 40 362C16 318 28 236 50 178C72 120 120 96 200 92Z"/>
+          <g class="pad-parts" id="pad-parts">
+            <path class="pad-dpad" d="M162 150h26v22h22v26h-22v22h-26v-22h-22v-26h22z"/>
+            <circle class="pad-btn" cx="465" cy="150" r="15"/>
+            <circle class="pad-btn" cx="500" cy="185" r="15"/>
+            <circle class="pad-btn" cx="465" cy="220" r="15"/>
+            <circle class="pad-btn" cx="430" cy="185" r="15"/>
+            <circle class="pad-stick" cx="252" cy="250" r="34"/><circle class="pad-stick-in" cx="252" cy="250" r="19"/>
+            <circle class="pad-stick" cx="388" cy="250" r="34"/><circle class="pad-stick-in" cx="388" cy="250" r="19"/>
+            <rect class="pad-pill" x="280" y="140" width="28" height="13" rx="6.5"/>
+            <rect class="pad-pill" x="332" y="140" width="28" height="13" rx="6.5"/>
+          </g>
+        </svg>
+      </div>
+      <div class="col text">
+        <p class="kicker" data-k="fade-up" data-at="14.86">controller</p>
+        <h2 class="hl stack">
+          <span class="mask"><span class="kl fit" data-k="rise" data-at="14.90" data-exit="left">plug in your pad.</span></span>
+          <span class="kl fit ember" data-k="slam" data-at="15.50" data-exit="zoom">it just works.</span>
+        </h2>
+      </div>
+    </section>
+
+    <!-- 8. AI agents -->
+    <section class="scene s-agents" data-start="16.38" data-end="18.02" data-tag="07 &#183; contributors">
+      <div class="col text">
+        <p class="kicker" data-k="fade-up" data-at="16.44">open source &#183; contributors</p>
+        <h2 class="hl stack">
+          <span class="kl fit" data-k="slide-l" data-at="16.44" data-exit="left">AI agents</span>
+          <span class="kl fit ember" data-k="slide-r" data-at="16.58" data-exit="right">welcome.</span>
+        </h2>
+        <p class="chips">
+          <span class="chip" data-k="pop" data-at="17.12">AGENTS.md</span>
+          <span class="chip" data-k="pop" data-at="17.26">an MCP server that drives the game</span>
+          <span class="chip" data-k="pop" data-at="17.40">free CI build on every PR</span>
+        </p>
+      </div>
+      <div class="term" data-k="blur-in" data-at="16.52" data-dur="0.35">
+        <div class="term-top"><span class="term-dots"><i></i><i></i><i></i></span><span class="term-title">agent session</span></div>
+        <div class="term-body" id="term-body">
+          <p class="tl"><span class="pr">&gt;</span><span class="tx" data-text="read AGENTS.md"></span><span class="ok"></span></p>
+          <p class="tl"><span class="pr">&gt;</span><span class="tx" data-text="mcp: screenshot"></span><span class="ok"></span></p>
+          <p class="tl"><span class="pr">&gt;</span><span class="tx" data-text="mcp: frame_times"></span><span class="ok"></span></p>
+          <p class="tl"><span class="pr">&gt;</span><span class="tx" data-text="open pull request"></span><span class="ok"></span></p>
+          <p class="tl tl-ci"><span class="pr">&#183;</span><span class="tx" data-text="CI: windows test build ready"></span><span class="ok"></span></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9. Logo reveal and call to action -->
+    <section class="scene s-cta" data-start="17.98" data-end="20.01">
+      <div class="logo-wrap">
+        <div class="logo-glow" id="logo-glow"></div>
+        <svg class="logo" id="logo" viewBox="-14 2 96 60" focusable="false">
+          <defs>
+            <linearGradient id="lg-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+            <mask id="lg-streaks" maskUnits="userSpaceOnUse" x="-120" y="-20" width="260" height="110">
+              <rect x="-120" y="-20" width="260" height="110" fill="#fff"/>
+              <path d="M-40 29.2H29M-40 42.8H29" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
+            </mask>
+          </defs>
+          <g id="logo-speed" class="logo-speed"><path d="M-60 29.2H10"/><path d="M-60 42.8H10"/><path d="M-48 36H2"/></g>
+          <g id="logo-drop" filter="url(#logo-mb)"><path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#lg-fill)" mask="url(#lg-streaks)"/></g>
+          <g id="logo-leaf"><path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#3CCF7E"/></g>
+          <g class="logo-echo" fill="none" stroke="#F59E0B" stroke-width="3" stroke-linecap="round">
+            <path id="echo-1" d="M53.93 22.98A17 17 0 0 1 53.93 49.02"/>
+            <path id="echo-2" d="M60.93 22.98A17 17 0 0 1 60.93 49.02"/>
+            <path id="echo-3" d="M67.93 22.98A17 17 0 0 1 67.93 49.02"/>
+          </g>
+        </svg>
+      </div>
+      <div class="col cta-text">
+        <p class="wordmark fit" id="wordmark">Guarana</p>
+        <p class="tagline" data-k="fade-up" data-at="18.66" data-exit="none">Switch 2 emulation tuned for integrated GPUs</p>
+        <p class="url-row" data-k="pop" data-at="18.92" data-exit="none"><span class="url-pill"><svg class="ic-star" viewBox="0 0 24 24" focusable="false"><path d="M12 2.6l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.4l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z"/></svg><span>github.com/karimalsalah/guarana</span></span></p>
+        <p class="cta-line" data-k="fade-up" data-at="19.12" data-exit="none">star it &#183; try it &#183; fork it</p>
+        <p class="fine" data-k="fade" data-at="19.24" data-exit="none">open source &#183; GPL-3.0-or-later &#183; not affiliated with Nintendo &#183; ships no games or system files</p>
+      </div>
+    </section>
+  </div>
+
+  <div class="layer chrome" id="chrome">
+    <p class="chrome-brand" id="chrome-brand"><svg viewBox="0 0 64 64" focusable="false"><defs><linearGradient id="cb-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient><mask id="cb-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask></defs><path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#cb-fill)" mask="url(#cb-streaks)"/><path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#3CCF7E"/><path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/></svg><span>Guarana</span></p>
+    <p class="chrome-tag" id="chrome-tag"></p>
+  </div>
+  <div class="layer letterbox"><i class="lb lb-top" id="lb-top"></i><i class="lb lb-bot" id="lb-bot"></i></div>
+  <div class="layer grain" id="grain"></div>
+  <div class="layer vignette"></div>
+  <div class="layer flash" id="flash"></div>
+  <p class="debug" id="debug"></p>
+</div>
+</div>
+<button class="play" id="play" type="button" hidden>Play the promo</button>
+<noscript><p class="noscript">This promo is drawn with JavaScript. The rendered videos are built by the promo-render workflow.</p></noscript>
+</body>
+</html>

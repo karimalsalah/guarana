@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halving a Switch 2 emulator's boot: what the boot marks found</title>
+<meta name="description" content="Boot timing marks show about 11 s of a 24.7 s boot is Vulkan instance creation. What the marks log, what is being cut next, and how to measure your own.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="author" content="Guarana contributors">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site.css">
+<link rel="stylesheet" href="blog.css">
+<link rel="alternate" type="application/rss+xml" title="Guarana blog" href="https://karimalsalah.github.io/guarana/blog/feed.xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Booting a Switch 2 emulator in half the time: what the boot marks found">
+<meta property="og:description" content="Boot timing marks show about 11 s of a 24.7 s boot is Vulkan instance creation. What the marks log, what is being cut next, and how to measure your own.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta property="article:published_time" content="2026-11-13">
+<meta property="article:modified_time" content="2026-11-13">
+<meta property="article:section" content="Boot time">
+<meta property="article:tag" content="Boot time">
+<meta property="article:tag" content="Vulkan">
+<meta property="article:tag" content="Shader cache">
+<meta property="article:tag" content="Switch 2 emulator">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Booting a Switch 2 emulator in half the time: what the boot marks found">
+<meta name="twitter:description" content="Boot timing marks show about 11 s of a 24.7 s boot is Vulkan instance creation. What the marks log, what is being cut next, and how to measure your own.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html#article",
+      "headline": "Booting a Switch 2 emulator in half the time: what the boot marks found",
+      "description": "Boot timing marks show about 11 s of a 24.7 s boot is Vulkan instance creation. What the marks log, what is being cut next, and how to measure your own.",
+      "datePublished": "2026-11-13",
+      "dateModified": "2026-11-13",
+      "author": {
+        "@type": "Organization",
+        "name": "Guarana contributors",
+        "url": "https://github.com/karimalsalah/guarana/graphs/contributors"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://karimalsalah.github.io/guarana/assets/logo-mark.svg"
+        }
+      },
+      "image": {
+        "@type": "ImageObject",
+        "url": "https://karimalsalah.github.io/guarana/assets/social-preview.png",
+        "width": 1280,
+        "height": 640
+      },
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html"
+      },
+      "isPartOf": {
+        "@type": "Blog",
+        "@id": "https://karimalsalah.github.io/guarana/blog/#blog",
+        "name": "Guarana blog",
+        "url": "https://karimalsalah.github.io/guarana/blog/"
+      },
+      "inLanguage": "en",
+      "articleSection": "Boot time",
+      "keywords": "boot time, Vulkan instance creation, Vulkan loader, shader cache, SPIR-V, Switch 2 emulator, integrated GPU, Intel Arc",
+      "about": {
+        "@type": "SoftwareApplication",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "applicationCategory": "GameApplication"
+      },
+      "wordCount": 975
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Blog",
+          "item": "https://karimalsalah.github.io/guarana/blog/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Boot time",
+          "item": "https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="../">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="./" class="is-section">Blog</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<article aria-labelledby="post-title">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="../">Home</a></li><li><a href="./">Blog</a></li><li><span aria-current="page">Boot time</span></li></ol></nav>
+  <p class="post-kicker">Boot time &middot; Vulkan &middot; In progress</p>
+  <h1 id="post-title">Booting a Switch 2 emulator in half the time: what the boot marks found</h1>
+  <p class="post-meta"><span>By Guarana contributors</span><span><time datetime="2026-11-13">November 13, 2026</time></span><span>5 min read</span></p>
+  <p class="lede">Before you can play, the emulator has to boot. We added timing marks to every phase of that boot to see where the time goes, and one phase stood out.</p>
+</div>
+<div class="wrap">
+<div class="prose post-body">
+
+<div class="status" role="note">
+  <span class="pill">In progress</span>
+  <p>One number is measured so far: about 11 s of a 24.7 s boot is Vulkan instance creation. Half the boot time is the target, not a result, and there is no after-number yet.</p>
+</div>
+
+<aside class="in-short" aria-labelledby="in-short-title">
+  <h2 id="in-short-title">In short</h2>
+  <ul>
+    <li><strong>What we measured:</strong> on our test laptop (Core Ultra 9 285H, Arc 140T, driver 32.0.101.9175), boot timing marks show about 11 s of a 24.7 s boot spent creating the Vulkan instance.</li>
+    <li><strong>What happens next:</strong> that one phase is the first thing being cut, starting with finer marks inside it. We have not split it yet, so we do not claim a cause.</li>
+    <li><strong>Status:</strong> in progress. No faster boot is claimed until a before-and-after from the same machine exists.</li>
+  </ul>
+</aside>
+
+<h2 id="why">Why boot time is worth a post</h2>
+<p>On a laptop or a handheld, boot is something you sit through every time: every launch, and every restart after you change a setting or a switch. The project's rule is that a change ships only with a measured gain. Boot time gets the same treatment, which meant measuring it properly first.</p>
+
+<h2 id="marks">What the boot marks are</h2>
+<p>v20 already logs coarse boot events. Set <code>EDEN_NX2_STUTTER_TRACE=1</code> and the log gets <code>Nx2Boot</code> lines for the start of the boot, the shader cache load, precaching and the first frame, with memory commit next to each. That tells you how long the boot took, but not where the time went.</p>
+<p>The finer boot marks, in a work branch and not in v20 yet, log each phase as <code>Boot timing: &lt;phase&gt; at &lt;milliseconds since the process started&gt;</code>, and many phases also carry their own duration. They cover:</p>
+<ul>
+  <li><strong>the frontend:</strong> logging, the main window, content providers and the game list scan, and the list of Vulkan devices for the settings;</li>
+  <li><strong>the game boot:</strong> the boot request, settings, and the core load, from system setup through the GPU and renderer, the kernel and the application process;</li>
+  <li><strong>Vulkan:</strong> listing instance extensions and layers, creating the instance, enumerating physical devices and creating the device;</li>
+  <li><strong>the game's file system:</strong> building the RomFS tree, the RomFS patch and LayeredFS for mods;</li>
+  <li><strong>the disk shader cache load</strong> that gates the start of the guest;</li>
+  <li><strong>the first guest frame</strong> on screen.</li>
+</ul>
+<p>The same change also logs the present mode of every swapchain the emulator creates, which feeds the <a href="frame-pacing-frame-generation-120hz-oled.html">frame pacing work</a>.</p>
+
+<h2 id="found">What they found</h2>
+<p>In one traced boot of 24.7 s, about 11 s was Vulkan instance creation. That is a single phase, and it runs before the game has drawn anything.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 640 150" role="img" aria-labelledby="boot-title boot-desc">
+    <title id="boot-title">One traced boot, to scale</title>
+    <desc id="boot-desc">The whole boot took 24.7 seconds. Vulkan instance creation took about 11 seconds of it.</desc>
+    <text class="d-strong" x="0" y="20">Whole boot</text>
+    <text class="d-mono" x="560" y="20" text-anchor="end">24.7 s</text>
+    <rect class="d-box" x="0" y="30" width="560" height="30" rx="6"/>
+    <text class="d-strong" x="0" y="96">Vulkan instance creation</text>
+    <text class="d-mono" x="249.4" y="96" text-anchor="end">~11 s</text>
+    <rect class="d-accent" x="0" y="106" width="249.4" height="30" rx="6"/>
+  </svg>
+  <figcaption>Durations to scale, from one boot on one laptop. The bars show how long each took, not where in the boot it happened.</figcaption>
+</figure>
+
+<p>We have not split those 11 s yet, so we do not know their cause, and we will not guess in public. What we do know is where to look. Instance creation is the step where the Vulkan loader finds the installed drivers and loads them, together with any layers registered on the system, so that is where the next, finer marks go.</p>
+<p>The boot also reaches Vulkan more than once: the frontend lists Vulkan devices for its settings page, and the renderer creates its own instance. Whether one of those or both are slow is the next thing to measure.</p>
+
+<h2 id="cut">What is being cut</h2>
+<p>These are the options being measured, not results:</p>
+<ul>
+  <li><strong>Split the 11 s.</strong> Marks inside instance creation: loading drivers, layers, extension queries.</li>
+  <li><strong>Do not pay for it twice.</strong> If the frontend's device listing and the renderer each create an instance, share the work or move the listing off the boot path.</li>
+  <li><strong>Overlap it.</strong> Start Vulkan setup alongside boot work that does not need the GPU, such as reading the game's file system and the shader cache files.</li>
+</ul>
+<p>Each lands only with boot marks from the same machine, before and after, and with the game reaching gameplay unchanged.</p>
+
+<h2 id="rest">The rest of the boot</h2>
+<p>Other boot work is already written up as <code>agent-ready</code> issues, each with a test that runs without the game:</p>
+<ul>
+  <li><a href="https://github.com/karimalsalah/guarana/issues/12">#12</a>: parse the game's container once per boot instead of more than once, and account for the time before the RomFS patch.</li>
+  <li><a href="https://github.com/karimalsalah/guarana/issues/11">#11</a>: memory-map the shader cache, decode its programs in parallel, then let the game reach its first frame while the rest of the cache loads.</li>
+  <li><a href="https://github.com/karimalsalah/guarana/issues/10">#10</a>: persist translated SPIR-V, so a restart does not translate every shader again.</li>
+</ul>
+<p>The <a href="https://github.com/karimalsalah/guarana/blob/HEAD/ROADMAP.md#next">roadmap</a> groups these with non-blocking boot and memory-mapped caches.</p>
+
+<h2 id="measure">Measure your own boot</h2>
+<ol>
+  <li>Add <code>EDEN_NX2_STUTTER_TRACE=1</code> to your <code>nx2_switches.txt</code> (the <a href="https://github.com/karimalsalah/guarana#quick-start">README</a> says which copy to edit).</li>
+  <li>Boot the same game three times with a warm cache, and keep the <code>Nx2Boot</code> lines. <code>python -I tools/nx2/cache_metrics.py parse &lt;log&gt;</code> turns a log into JSON, and <code>compare</code> diffs two runs.</li>
+  <li>Post the numbers with your device, driver and storage in issue <a href="https://github.com/karimalsalah/guarana/issues/11">#11</a> or in a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a>. Do not attach the log itself if it shows your user name or folder paths.</li>
+</ol>
+
+<section class="qa" aria-labelledby="qa">
+  <h2 id="qa">Questions people ask</h2>
+  <h3>Is boot time halved in v20?</h3>
+  <p>No. v20 has the coarse <code>Nx2Boot</code> events. The finer marks and the cuts are still in progress, and "half" is the target we are working toward, not something we have measured.</p>
+  <h3>Why does the first visit to an area hitch, even after the game has booted?</h3>
+  <p>That is a different cost: the driver compiles each new shader pipeline the first time it is needed, and later visits load it from the cache. The <a href="../faq.html#stutter">FAQ</a> explains it.</p>
+  <h3>Will a faster SSD help?</h3>
+  <p>We do not know yet. The marks separate file system and cache reads from GPU setup, so a report from a machine with different storage would answer it.</p>
+</section>
+
+<div class="cta-box">
+  <h2>Help cut the boot on your device</h2>
+  <p>Boot numbers from other laptops and handhelds tell us whether the 11 s is universal or specific to one machine. Send a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a>, or pick an <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready+-label%3Aneeds-triage"><code>agent-ready</code> issue</a>. <a href="../contribute.html">How to contribute</a>.</p>
+</div>
+
+<nav class="more-posts" aria-labelledby="more-title">
+  <h2 id="more-title">More from the blog</h2>
+  <ul>
+    <li><a href="hyrule-field-shader-fix-intel-arc.html">How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU</a></li>
+    <li><a href="frame-pacing-frame-generation-120hz-oled.html">Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</a></li>
+    <li><a href="emulator-built-for-ai-agents.html">An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR</a></li>
+  </ul>
+</nav>
+
+</div>
+</div>
+</article>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="./">Blog</a></li>
+        <li><a href="../legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="../llms.txt">llms.txt</a></li>
+        <li><a href="../llms-full.txt">llms-full.txt</a></li>
+        <li><a href="../sitemap.xml">sitemap.xml</a></li>
+        <li><a href="feed.xml">Blog RSS feed</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+</body>
+</html>

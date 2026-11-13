@@ -1,0 +1,90 @@
+name: promo-render
+
+# Renders the 20-second promo in site/promo/ to video and uploads it as an artifact:
+# guarana-promo-vertical.mp4 (1080x1920), guarana-promo-landscape.mp4 (1920x1080), a 6 s GIF teaser
+# and one poster PNG per format. render.mjs sets every frame with renderAt(t) and captures it, so the
+# result does not depend on how fast the runner is. Music: none (the MP4s carry a silent track).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "site/promo/**"
+      - .github/workflows/promo-render.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promo-render-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    name: Render the promo
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the promo
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            site/promo
+            site/assets
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The page names Inter and JetBrains Mono first in its font stacks. Without them it falls
+      # back to the system fonts, and headlines still fit (promo.js sizes them to their column).
+      - name: Install fonts
+        run: |
+          sudo apt-get update
+          for font in fonts-inter fonts-jetbrains-mono; do
+            sudo apt-get install -y --no-install-recommends "$font" || echo "::warning::$font is not available; the render uses a fallback font"
+          done
+
+      # Playwright goes into a folder outside the checkout, so nothing lands in site/ (Pages
+      # publishes it). npx runs from the same folder, so the browser matches the package.
+      - name: Install Playwright and Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw"
+          cd "$RUNNER_TEMP/pw"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund playwright@1
+          npx playwright@1 install --with-deps chromium
+
+      - name: Check ffmpeg
+        run: |
+          if ! command -v ffmpeg > /dev/null; then
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -version | head -n 1
+
+      - name: Smoke test, one frame per format
+        env:
+          PLAYWRIGHT_DIR: ${{ runner.temp }}/pw
+        run: node site/promo/render.mjs --driver playwright --start 6.9 --end 6.95 --frames-only --workers 1 --out "$RUNNER_TEMP/smoke"
+
+      - name: Render both formats
+        env:
+          PLAYWRIGHT_DIR: ${{ runner.temp }}/pw
+        run: node site/promo/render.mjs --driver playwright --workers 3 --timing --out "$RUNNER_TEMP/promo"
+
+      - name: List the files
+        run: ls -l "$RUNNER_TEMP/promo"
+
+      - name: Upload the promo
+        uses: actions/upload-artifact@v7
+        with:
+          name: guarana-promo-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/promo/*.mp4
+            ${{ runner.temp }}/promo/*.gif
+            ${{ runner.temp }}/promo/*.png
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
