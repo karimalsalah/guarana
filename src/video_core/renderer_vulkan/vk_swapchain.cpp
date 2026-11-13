@@ -507,6 +507,26 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         image_view_format = surface_format.format;
     }
+
+    // Frame generation asks for FIFO (or FIFO relaxed) whatever the vsync setting, unless DLSS-G
+    // presents the frames itself.
+    std::string supported_modes;
+    for (const VkPresentModeKHR mode : present_modes) {
+        if (!supported_modes.empty()) {
+            supported_modes += ", ";
+        }
+        supported_modes += string_VkPresentModeKHR(mode);
+    }
+    LOG_INFO(Render_Vulkan,
+             "Swapchain: {}, {} images ({} asked, surface min {} max {}), {}x{} {} {}; surface "
+             "present modes: {}; vsync setting {}, frame generation {}{}",
+             string_VkPresentModeKHR(present_mode), image_count, requested_image_count,
+             capabilities.minImageCount, capabilities.maxImageCount, extent.width, extent.height,
+             string_VkFormat(surface_format.format),
+             string_VkColorSpaceKHR(surface_format.colorSpace), supported_modes,
+             Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
+             Settings::values.frame_gen.GetValue() ? "on" : "off",
+             FrameGenPresents(surface_format.format) ? ", DLSS-G presents" : "");
 }
 
 void Swapchain::CreateSemaphores() {

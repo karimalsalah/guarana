@@ -47,6 +47,7 @@
 #include <QOpenGLContext>
 #endif
 
+#include "common/boot_timing.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/settings_input.h"
@@ -165,6 +166,7 @@ void GRenderWindow::OnFrameDisplayed() {
     if (!first_frame) {
         last_tas_state = new_tas_state;
         first_frame = true;
+        Common::BootTiming::Mark("frontend: first guest frame presented");
         emit FirstFrameDisplayed();
     }
 
