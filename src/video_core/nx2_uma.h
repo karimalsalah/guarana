@@ -26,6 +26,17 @@ inline constexpr u32 AdaptiveSubmit = 8;
 /// A buffer's used ranges are forgotten a generation at a time instead of only when the GPU is
 /// past its last use (Buffer::AgeUsageTracking): more uploads are reordered or written directly.
 inline constexpr u32 UsageGenerations = 16;
+/// The copies of GPU-written command list pages (BufferCache::Nx2CopyListPages) take a run of
+/// contiguous pages of one buffer at once, up to 16: one vkCmdCopyBuffer and one barrier pair
+/// per run instead of per 4 KiB page, into one staging buffer the pages of the run share.
+inline constexpr u32 ListPageRuns = 32;
+/// In-order buffer copies that take their own barriers (downloads, DMA copies, command list page
+/// copies, joins, uploads from dedicated staging buffers) join the upload batch
+/// (Scheduler::RecordUpload): back-to-back copies share one barrier pair while none of them
+/// reads or writes what another copy of the batch writes. Bit 1 does this as well, with its
+/// other changes; this bit alone leaves reordered uploads, and how a batch is recorded, as they
+/// are.
+inline constexpr u32 BatchCopies = 64;
 
 [[nodiscard]] inline u32 SwitchValue() {
     const char* const value = std::getenv("EDEN_NX2_UMA");

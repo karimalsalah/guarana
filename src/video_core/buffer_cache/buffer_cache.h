@@ -558,7 +558,8 @@ void BufferCache<P>::DownloadRangesMemory(std::span<const std::pair<DAddr, u64>>
                 download.copy.dst_offset += staging.offset;
                 Buffer& buffer = slot_buffers[download.buffer_id];
                 buffer.MarkUsage(download.copy.src_offset, download.copy.size);
-                runtime.CopyBuffer(staging.buffer, buffer, std::span{&download.copy, 1}, true);
+                CopyBufferAt(BufferCopySite::Download, staging.buffer, buffer,
+                             std::span{&download.copy, 1}, true);
             }
             if constexpr (has_mapped) {
                 runtime.FinishForHostRead();
@@ -772,7 +773,8 @@ void BufferCache<P>::RecordReadDownload(std::span<const std::pair<DAddr, u64>> r
                 buffer.MarkUsage(entry.copy.src_offset, entry.copy.size);
                 // Mapped buffers too: the GPU thread's later work may write them before the copy
                 // is read.
-                runtime.CopyBuffer(staging.buffer, buffer, std::span{&entry.copy, 1}, true);
+                CopyBufferAt(BufferCopySite::ReadDownload, staging.buffer, buffer,
+                             std::span{&entry.copy, 1}, true);
                 download.copies.push_back(BufferCopy{
                     .src_offset = buffer.CpuAddr() + entry.copy.src_offset,
                     .dst_offset = entry.copy.dst_offset,
@@ -789,7 +791,8 @@ void BufferCache<P>::RecordReadDownload(std::span<const std::pair<DAddr, u64>> r
                 Buffer& buffer = slot_buffers[entry.buffer_id];
                 entry.copy.dst_offset += check->staging.offset;
                 buffer.MarkUsage(entry.copy.src_offset, entry.copy.size);
-                runtime.CopyBuffer(check->staging.buffer, buffer, std::span{&entry.copy, 1}, true);
+                CopyBufferAt(BufferCopySite::ReadDownload, check->staging.buffer, buffer,
+                             std::span{&entry.copy, 1}, true);
                 check->copies.push_back(BufferCopy{
                     .src_offset = buffer.CpuAddr() + entry.copy.src_offset,
                     .dst_offset = entry.copy.dst_offset,
@@ -1504,7 +1507,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     const auto& copy = copies[0];
     src_buffer.MarkUsage(copy.src_offset, copy.size);
     dest_buffer.MarkUsage(copy.dst_offset, copy.size);
-    runtime.CopyBuffer(dest_buffer, src_buffer, copies, true);
+    CopyBufferAt(BufferCopySite::Dma, dest_buffer, src_buffer, copies, true);
     if (has_new_downloads) {
         memory_tracker.MarkRegionAsGpuModified(*cpu_dest_address, amount);
         const bool should_sync = Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
@@ -2152,7 +2155,7 @@ void BufferCache<P>::CommitAsyncFlushesHigh() {
         }
         download_ranges.Add(orig_device_addr, copy.size);
         buffer.MarkUsage(copy.src_offset, copy.size);
-        runtime.CopyBuffer(download_staging.buffer, buffer, copies, false);
+        CopyBufferAt(BufferCopySite::FenceDownload, download_staging.buffer, buffer, copies, false);
         normalized_copies.push_back(second_copy);
     }
     runtime.PostCopyBarrier();
@@ -2331,7 +2334,7 @@ void BufferCache<P>::BindHostIndexBuffer() {
             auto upload_staging = runtime.UploadStagingBuffer(size);
             std::array<BufferCopy, 1> copies{{BufferCopy{.src_offset = upload_staging.offset, .dst_offset = 0, .size = size}}};
             std::memcpy(upload_staging.mapped_span.data(), draw_state.inline_index_draw_indexes.data(), size);
-            runtime.CopyBuffer(buffer, upload_staging.buffer, copies, true);
+            CopyBufferAt(BufferCopySite::Index, buffer, upload_staging.buffer, copies, true);
         } else {
             buffer.ImmediateUpload(0, draw_state.inline_index_draw_indexes);
         }
@@ -3374,7 +3377,14 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
         }
         std::ranges::sort(nx2_list_copy_requests, {}, &std::pair<BufferId, DAddr>::second);
         constexpr DAddr page_size = DAddr{1} << Tegra::Nx2WrittenPageBits;
-        bool recorded = false;
+        // Each page once, with the bytes of it its buffer holds.
+        struct PageCopy {
+            BufferId buffer_id;
+            DAddr page;
+            DAddr begin;
+            DAddr end;
+        };
+        boost::container::small_vector<PageCopy, 8> page_copies;
         for (size_t i = 0; i < nx2_list_copy_requests.size(); ++i) {
             const auto [buffer_id, page] = nx2_list_copy_requests[i];
             if (i + 1 < nx2_list_copy_requests.size() &&
@@ -3388,25 +3398,61 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             if (begin >= end) {
                 continue;
             }
-            Nx2Staging staging = runtime.DownloadStagingBuffer(page_size, true);
+            page_copies.push_back({buffer_id, page, begin, end});
+        }
+        // EDEN_NX2_UMA bit 32: one copy takes a run of pages of one buffer whose bytes continue
+        // one another. The barriers between the copies of single pages ordered nothing: they
+        // read memory no copy writes, into staging buffers nothing else uses.
+        const size_t max_run_pages = runtime.MergesListPageRuns() ? NX2_MAX_LIST_RUN_PAGES : 1;
+        bool recorded = false;
+        for (size_t first = 0; first < page_copies.size();) {
+            size_t last = first + 1;
+            while (last < page_copies.size() && last - first < max_run_pages &&
+                   page_copies[last].buffer_id == page_copies[first].buffer_id &&
+                   page_copies[last].page == page_copies[last - 1].page + page_size &&
+                   page_copies[last].begin == page_copies[last].page &&
+                   page_copies[last - 1].end == page_copies[last].page) {
+                ++last;
+            }
+            const PageCopy& head = page_copies[first];
+            const size_t run_pages = last - first;
+            Buffer& buffer = slot_buffers[head.buffer_id];
+            Nx2Staging staging = runtime.DownloadStagingBuffer(run_pages * page_size, true);
             const BufferCopy copy{
-                .src_offset = buffer.Offset(begin),
-                .dst_offset = staging.offset + (begin - page),
-                .size = end - begin,
+                .src_offset = buffer.Offset(head.begin),
+                .dst_offset = staging.offset + (head.begin - head.page),
+                .size = page_copies[last - 1].end - head.begin,
             };
             buffer.MarkUsage(copy.src_offset, copy.size);
-            runtime.CopyBuffer(staging.buffer, buffer, std::span{&copy, 1}, true);
+            CopyBufferAt(BufferCopySite::ListPage, staging.buffer, buffer, std::span{&copy, 1},
+                         true);
             recorded = true;
+            const std::shared_ptr<Nx2Staging> run =
+                run_pages > 1 ? std::make_shared<Nx2Staging>(staging) : nullptr;
             std::scoped_lock lock{nx2_list_mutex};
-            Nx2ListPage& entry = nx2_list_pages[page];
-            if (entry.copy) {
-                nx2_retired_list_copies.emplace_back(entry.copy_tick, std::move(*entry.copy));
+            for (size_t index = first; index < last; ++index) {
+                const PageCopy& page_copy = page_copies[index];
+                Nx2ListPage& entry = nx2_list_pages[page_copy.page];
+                if (entry.copy_run) {
+                    nx2_retired_list_runs.emplace_back(entry.copy_tick, std::move(entry.copy_run));
+                } else if (entry.copy) {
+                    nx2_retired_list_copies.emplace_back(entry.copy_tick, std::move(*entry.copy));
+                }
+                // A page of a run sees its own bytes of the run's staging buffer.
+                Nx2Staging page_staging = staging;
+                if (run) {
+                    const size_t run_offset = (index - first) * page_size;
+                    page_staging.offset += run_offset;
+                    page_staging.mapped_span = staging.mapped_span.subspan(run_offset, page_size);
+                }
+                entry.copy = page_staging;
+                entry.copy_run = run;
+                entry.copy_writes = entry.writes;
+                entry.copy_tick = tick;
+                entry.copy_begin = static_cast<u32>(page_copy.begin - page_copy.page);
+                entry.copy_end = static_cast<u32>(page_copy.end - page_copy.page);
             }
-            entry.copy = staging;
-            entry.copy_writes = entry.writes;
-            entry.copy_tick = tick;
-            entry.copy_begin = static_cast<u32>(begin - page);
-            entry.copy_end = static_cast<u32>(end - page);
+            first = last;
         }
         nx2_list_copy_requests.clear();
         std::erase_if(nx2_retired_list_copies, [this](auto& retired) {
@@ -3416,6 +3462,20 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             runtime.FreeDeferredStagingBuffer(retired.second);
             return true;
         });
+        if (!nx2_retired_list_runs.empty()) {
+            // One copy wrote every page of a run: the GPU is past all of their ticks at once.
+            for (auto& [retired_tick, run] : nx2_retired_list_runs) {
+                if (!runtime.IsFree(retired_tick)) {
+                    continue;
+                }
+                if (run.use_count() == 1) {
+                    runtime.FreeDeferredStagingBuffer(*run);
+                }
+                run.reset();
+            }
+            std::erase_if(nx2_retired_list_runs,
+                          [](const auto& retired) { return retired.second == nullptr; });
+        }
         return recorded;
     }
 }
@@ -3691,7 +3751,7 @@ void BufferCache<P>::JoinOverlap(BufferId new_buffer_id, BufferId overlap_id,
         .size = overlap.SizeBytes(),
     });
     new_buffer.MarkUsage(copies[0].dst_offset, copies[0].size);
-    runtime.CopyBuffer(new_buffer, overlap, copies, true);
+    CopyBufferAt(BufferCopySite::Join, new_buffer, overlap, copies, true);
 #ifdef LICHII_LEGACY
     if (immediately_free)
         runtime.Finish();
@@ -3978,7 +4038,8 @@ void BufferCache<P>::MappedUploadMemory([[maybe_unused]] Buffer& buffer,
             copy.src_offset += upload_staging.offset;
         }
         const bool can_reorder = runtime.CanReorderUpload(buffer, copies);
-        runtime.CopyBuffer(buffer, upload_staging.buffer, copies, true, can_reorder);
+        CopyBufferAt(BufferCopySite::Upload, buffer, upload_staging.buffer, copies, true,
+                     can_reorder);
     }
 }
 
@@ -4022,7 +4083,8 @@ void BufferCache<P>::InlineMemoryImplementation(DAddr dest_address, size_t copy_
         u8* const src_pointer = upload_staging.mapped_span.data();
         std::memcpy(src_pointer, inlined_buffer.data(), copy_size);
         const bool can_reorder = runtime.CanReorderUpload(buffer, copies);
-        runtime.CopyBuffer(buffer, upload_staging.buffer, copies, true, can_reorder);
+        CopyBufferAt(BufferCopySite::Inline, buffer, upload_staging.buffer, copies, true,
+                     can_reorder);
     } else {
         buffer.ImmediateUpload(buffer.Offset(dest_address), inlined_buffer.first(copy_size));
     }
@@ -4068,7 +4130,8 @@ void BufferCache<P>::DownloadBuffersMemory(std::span<const BufferId> buffer_ids)
         download.copy.dst_offset += download_staging.offset;
         Buffer& buffer = slot_buffers[download.buffer_id];
         buffer.MarkUsage(download.copy.src_offset, download.copy.size);
-        runtime.CopyBuffer(download_staging.buffer, buffer, std::span{&download.copy, 1}, true);
+        CopyBufferAt(BufferCopySite::Download, download_staging.buffer, buffer,
+                     std::span{&download.copy, 1}, true);
     }
     runtime.Finish();
     const u8* const mapped_memory = download_staging.mapped_span.data();
@@ -4151,7 +4214,7 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
             copy.dst_offset += download_staging.offset;
             buffer.MarkUsage(copy.src_offset, copy.size);
         }
-        runtime.CopyBuffer(download_staging.buffer, buffer, copies_span, true);
+        CopyBufferAt(BufferCopySite::Download, download_staging.buffer, buffer, copies_span, true);
         runtime.Finish();
         const VideoCore::DownloadLanding landing{landing_begin, landing_end};
         const Common::RangeSet<DAddr> cpu_written = PendingCpuWriteRanges();
