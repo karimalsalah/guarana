@@ -1098,6 +1098,10 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     dynamic_features.has_provoking_vertex_tf_preserve =
         device.SupportsTransformFeedbackProvokingVertexPreservation();
 
+    // EDEN_NX2_UNOPT_FIRST (experiment): decided and logged here, before any pipeline is built.
+    graphics_libraries.SetUnoptimizedFirst(UnoptimizedFirstEnabled(
+        device.GetDriverID(), device.IsExtGraphicsPipelineLibrarySupported()));
+
     size_t cpu_threads = GetTotalPipelineWorkers();
     size_t driver_thread_limit = std::max<size_t>(std::thread::hardware_concurrency() / 2, 2);
     // EDEN_NX2_HYBRID: the pools fit the efficiency cores they are confined to.
@@ -2984,7 +2988,10 @@ void PipelineCache::TickFrame() {
     if (device.IsExtGraphicsPipelineLibrarySupported()) {
         graphics_libraries.Report();
     }
-    while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
+    // Not while its background build runs (EDEN_NX2_UNOPT_FIRST's can take a second): the
+    // destructor would wait for it on this thread. One that has not started is dropped.
+    while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first) &&
+           !evicted_pipelines.front().second->BackgroundBuildRunning()) {
         evicted_pipelines.pop_front();
     }
     while (!retired_compute_pipelines.empty() &&
