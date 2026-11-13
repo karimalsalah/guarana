@@ -55,6 +55,21 @@ public:
     /// an even share of the target rate, zero while they are not.
     [[nodiscard]] std::chrono::nanoseconds CadenceSpacing() const;
 
+    /// EDEN_NX2_FLUID: the time between real frames to predict against, in seconds: the interval
+    /// the guest is paced to while the measured one is within 10% of it, else the measured one;
+    /// 0 while unknown.
+    [[nodiscard]] f32 FluidInterval() const;
+
+    /// Whether the frame Process was given can be extrapolated (EDEN_NX2_FLUID).
+    [[nodiscard]] bool CanPredict() const;
+
+    /// EDEN_NX2_FLUID: records the frame `advance` frame intervals after the one Process was
+    /// given into destination. False when nothing was recorded.
+    bool GenerateAt(const Device& device, Frame* destination, f32 advance);
+
+    /// EDEN_NX2_FLUID: counts predicted frames for the status bar.
+    void NoteFluidGenerated(size_t count);
+
     /// Generates nothing until Process runs again, and gives back a cadence's frame rate cap
     /// (HDR output: extrapolation writes SDR only).
     void Pause();
@@ -93,6 +108,8 @@ private:
     u64 extrapolation_missing{};
     u64 extrapolation_frames{};
     bool extrapolating{};
+    /// This frame has motion to extrapolate (no camera cut).
+    bool extrapolation_usable{};
     /// EDEN_NX2_CADENCE: real frames are held to the target rate / cadence_divisor (0: off).
     u32 cadence_divisor{};
     u32 cadence_slow_checks{};
