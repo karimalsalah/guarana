@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import unittest
+from xml.etree import ElementTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # -I leaves the script's directory off sys.path.
@@ -28,6 +29,8 @@ DISCORD = "discord.gg/urz7vMdRM"
 SHIMS = (".github/copilot-instructions.md", ".cursor/rules/guarana.mdc", "GEMINI.md", ".windsurfrules",
          "CONVENTIONS.md", ".clinerules/guarana.md")
 TOOLS = ("Claude Code", "Codex", "Gemini CLI", "Cursor", "Copilot", "Windsurf", "Aider", "Cline")
+DOCS_MAP = ("docs/README.md", "docs/switches.md", "docs/frame-generation.md", "docs/FAQ.md", "docs/TROUBLESHOOTING.md",
+            "AGENTS.md", "CONTRIBUTING.md", "ROADMAP.md")
 
 
 def read(*parts):
@@ -166,12 +169,15 @@ class ReadmeTests(unittest.TestCase):
     def test_first_screen_sells_the_mission_with_the_measured_numbers(self):
         head = self.text[:self.text.index("## Get it")]
         for needed in ("14.8", "22.8", "15.7", "5.8", "16.7", "100%", "75%", "33-54%", "16.4", "4,515", "155 s",
-                       "Core Ultra 9 285H", "Arc 140T", "32.0.101.9175", "120 Hz OLED", "GPL-3.0-or-later"):
+                       "Core Ultra 9 285H", "Arc 140T", "32.0.101.9175", "120 Hz OLED", "GPL-3.0-or-later",
+                       "599 of 600", "best run", "531-599", "two paired rounds", "0 late flips", "99.5%", "45-47%",
+                       "about 200", "24 ms", "20 Hz"):
             self.assertIn(needed, head)
 
     def test_sections_and_honesty_markers(self):
-        for heading in ("## Measured wins", "## Get it", "## AI-native: plug in your agent", "## Why contribute now",
-                        "## Hall of fame", "## Devices", "## Roadmap", "## FAQ", "## Legal"):
+        for heading in ("## Measured wins", "## Get it", "## Built for AI agents", "## Why contribute now",
+                        "## Hall of fame", "## How the frame pacing works", "## Devices", "## Roadmap", "## Docs",
+                        "## FAQ", "## Legal"):
             self.assertIn(heading, self.text)
         self.assertIn("guarana setup** (since v20.1)", self.text.lower())
         self.assertIn("In v20.1, opt-in", self.text)
@@ -179,10 +185,16 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("Not affiliated with Nintendo", self.text)
         self.assertIn("emulator-debug", self.text)
         self.assertIn("Measured first on the Arc 140T", self.text)
+        self.assertIn("Measured on the Arc 140T only", self.text)
+        self.assertIn("```mermaid", self.text)
+        # Links into the README from elsewhere keep working after the agents section was renamed.
+        self.assertIn('<a name="ai-native-plug-in-your-agent"></a>', self.text)
 
     def test_badges_images_and_languages(self):
         for needed in ("img.shields.io/github/v/release", "build-check.yml", "license-GPL", "discord-urz7vMdRM",
-                       "assets/readme/hero.svg", "assets/readme/hero-light.svg", "assets/readme/frametime.svg"):
+                       "assets/readme/hero.svg", "assets/readme/hero-light.svg", "assets/readme/frametime.svg",
+                       "assets/readme/frametime-light.svg", "assets/readme/metrics.svg",
+                       "assets/readme/metrics-light.svg", "assets/readme/pacing.svg", "assets/readme/pacing-light.svg"):
             self.assertIn(needed, self.text)
         for language in ("zh-CN", "es", "pt-BR", "ja", "ko", "fr", "de", "ru", "ar"):
             self.assertIn(f"docs/i18n/README.{language}.md", self.text)
@@ -199,6 +211,27 @@ class ReadmeTests(unittest.TestCase):
                 continue
             path = target.split("#")[0]
             self.assertTrue(os.path.exists(os.path.join(ROOT, path)), target)
+
+    def test_the_docs_map_and_the_docs_index_agree(self):
+        section = self.text.split("\n## Docs\n")[1].split("\n## ")[0]
+        index = read("docs", "README.md")
+        for path in DOCS_MAP:
+            self.assertIn(f"]({path})", section, path)
+            if path != "docs/README.md":
+                target = path[len("docs/"):] if path.startswith("docs/") else "../" + path
+                self.assertIn(f"]({target})", index, path)
+
+    def test_the_artwork_is_small_self_contained_svg(self):
+        paths = glob.glob(os.path.join(ROOT, "assets", "readme", "*.svg"))
+        self.assertGreaterEqual(len(paths), 8)
+        for path in paths:
+            self.assertLess(os.path.getsize(path), 60 * 1024, path)
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+            root = ElementTree.fromstring(text)
+            self.assertEqual(root.tag, "{http://www.w3.org/2000/svg}svg", path)
+            self.assertIsNotNone(root.find("{http://www.w3.org/2000/svg}title"), path)
+            self.assertNotRegex(text, r'(?i)<script|<foreignObject|href="https?:', path)
 
     def test_translations_carry_the_discord_link(self):
         paths = glob.glob(os.path.join(ROOT, "docs", "i18n", "README*.md"))
