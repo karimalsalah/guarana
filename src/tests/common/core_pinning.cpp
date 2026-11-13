@@ -202,3 +202,78 @@ TEST_CASE("Core pinning: a 4P+4E CPU whose E-cores rank lower is skipped",
     CHECK(plan.performance_cores == 4);
     CheckSkipped(plan);
 }
+
+namespace {
+
+// A Core Ultra 9 285H as Windows reports it: 6 P cores (class 2), 8 E cores (class 1) behind the
+// same cache, 2 low-power E cores (class 0) behind a cache of their own.
+std::vector<LogicalProcessor> ArrowLakeH() {
+    std::vector<LogicalProcessor> processors;
+    AddCores(processors, 6, 1, 2);
+    AddCores(processors, 8, 1, 1);
+    AddCores(processors, 2, 1, 0);
+    for (size_t i = 14; i < processors.size(); ++i) {
+        processors[i].last_level_cache = 1;
+    }
+    return processors;
+}
+
+} // namespace
+
+TEST_CASE("Hybrid plan: Arrow Lake-H puts the guest on the P cores and the pools on the E cores",
+          "[common][core_pinning]") {
+    const auto processors = ArrowLakeH();
+    const auto plan = Common::PlanHybridCores(processors, true);
+    REQUIRE(plan.active);
+    CHECK(plan.performance_cores == 6);
+    CHECK(plan.performance == Ids(0, 6));
+    CHECK(plan.efficiency == Ids(6, 8));
+    CHECK(plan.low_power == Ids(14, 2));
+    CHECK(plan.responsive == Ids(0, 14));
+    CHECK(plan.front == Ids(1, 1));
+    CHECK(plan.back == Ids(2, 1));
+    CHECK(Sorted(plan.latency) == Concat(Ids(0, 1), Ids(3, 3)));
+}
+
+TEST_CASE("Hybrid plan: without pinning every latency thread may use every P core",
+          "[common][core_pinning]") {
+    const auto plan = Common::PlanHybridCores(ArrowLakeH(), false);
+    REQUIRE(plan.active);
+    CHECK(plan.latency == Ids(0, 6));
+    CHECK(plan.front == Ids(0, 6));
+    CHECK(plan.back == Ids(0, 6));
+}
+
+TEST_CASE("Hybrid plan: low-power cores are the lowest of three classes even behind one cache",
+          "[common][core_pinning]") {
+    auto processors = ArrowLakeH();
+    for (auto& processor : processors) {
+        processor.last_level_cache = 0;
+    }
+    const auto plan = Common::PlanHybridCores(processors, true);
+    REQUIRE(plan.active);
+    CHECK(plan.efficiency == Ids(6, 8));
+    CHECK(plan.low_power == Ids(14, 2));
+}
+
+TEST_CASE("Hybrid plan: two classes behind one cache have no low-power cores",
+          "[common][core_pinning]") {
+    std::vector<LogicalProcessor> processors;
+    AddCores(processors, 8, 2, 2);
+    AddCores(processors, 16, 1, 1);
+    const auto plan = Common::PlanHybridCores(processors, true);
+    REQUIRE(plan.active);
+    CHECK(plan.performance.size() == 16);
+    CHECK(plan.efficiency.size() == 16);
+    CHECK(plan.low_power.empty());
+}
+
+TEST_CASE("Hybrid plan: CPUs that are not hybrid or have too few P cores are left alone",
+          "[common][core_pinning]") {
+    CHECK(!Common::PlanHybridCores(Uniform(8, 2), true).active);
+    CHECK(!Common::PlanHybridCores({}, true).active);
+    std::vector<LogicalProcessor> small;
+    AddCores(small, 2, 2, 2);
+    AddCores(small, 8, 1, 1);
+    CHECK(!Common::PlanHybridCores(small, true).active);
+}

@@ -44,6 +44,64 @@ GpuThreadPinning PlanGpuThreadPinning(std::span<const LogicalProcessor> processo
     return plan;
 }
 
+HybridPlan PlanHybridCores(std::span<const LogicalProcessor> processors, bool pin_gpu_threads) {
+    HybridPlan plan;
+    if (processors.empty()) {
+        return plan;
+    }
+    u8 fastest = 0;
+    u8 lowest = 255;
+    for (const LogicalProcessor& processor : processors) {
+        fastest = (std::max)(fastest, processor.efficiency_class);
+        lowest = (std::min)(lowest, processor.efficiency_class);
+    }
+    if (lowest == fastest) {
+        return plan;
+    }
+    std::vector<u32> cores;
+    std::vector<u32> caches;
+    bool middle_class = false;
+    for (const LogicalProcessor& processor : processors) {
+        if (processor.efficiency_class == fastest) {
+            cores.push_back(processor.core);
+            caches.push_back(processor.last_level_cache);
+        } else if (processor.efficiency_class != lowest) {
+            middle_class = true;
+        }
+    }
+    std::ranges::sort(cores);
+    cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
+    plan.performance_cores = cores.size();
+    if (cores.size() < MinHybridPerformanceCores) {
+        return plan;
+    }
+    std::ranges::sort(caches);
+    for (const LogicalProcessor& processor : processors) {
+        if (processor.efficiency_class == fastest) {
+            plan.performance.push_back(processor.id);
+        } else if (!std::ranges::binary_search(caches, processor.last_level_cache) ||
+                   (middle_class && processor.efficiency_class == lowest)) {
+            plan.low_power.push_back(processor.id);
+        } else {
+            plan.efficiency.push_back(processor.id);
+        }
+    }
+    plan.responsive = plan.performance;
+    plan.responsive.insert(plan.responsive.end(), plan.efficiency.begin(), plan.efficiency.end());
+    GpuThreadPinning pinning = PlanGpuThreadPinning(processors);
+    if (pin_gpu_threads && !pinning.front.empty()) {
+        plan.front = std::move(pinning.front);
+        plan.back = std::move(pinning.back);
+        plan.latency = std::move(pinning.guest);
+    } else {
+        plan.front = plan.performance;
+        plan.back = plan.performance;
+        plan.latency = plan.performance;
+    }
+    plan.active = true;
+    return plan;
+}
+
 std::vector<u32> ParseCpuList(std::string_view list) {
     std::vector<u32> cpus;
     while (!list.empty() && (list.back() == '\n' || list.back() == ' ')) {

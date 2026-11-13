@@ -214,6 +214,7 @@ private:
     void Work() {
         Common::SetCurrentThreadName("ShaderWarmBuild");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        Common::SetCurrentThreadToBackgroundWork();
         Common::PowerTuning::TagBackgroundThread();
         for (;;) {
             Job job;

@@ -1096,11 +1096,16 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     dynamic_features.has_provoking_vertex_tf_preserve =
         device.SupportsTransformFeedbackProvokingVertexPreservation();
 
-    const size_t cpu_threads = GetTotalPipelineWorkers();
+    size_t cpu_threads = GetTotalPipelineWorkers();
+    size_t driver_thread_limit = std::max<size_t>(std::thread::hardware_concurrency() / 2, 2);
+    // EDEN_NX2_HYBRID: the pools fit the efficiency cores they are confined to.
+    if (const size_t efficiency = Common::HybridBackgroundProcessors(); efficiency != 0) {
+        cpu_threads = std::clamp<size_t>(cpu_threads, 1, efficiency);
+        driver_thread_limit = std::clamp<size_t>(driver_thread_limit, 2, std::max<size_t>(efficiency / 2, 2));
+    }
     const size_t driver_threads =
-        device.HasBrokenParallelShaderCompiling()
-            ? 1
-            : std::min(cpu_threads, std::max<size_t>(std::thread::hardware_concurrency() / 2, 2));
+        device.HasBrokenParallelShaderCompiling() ? 1
+                                                  : std::min(cpu_threads, driver_thread_limit);
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
         .cpu_threads = cpu_threads,
         .driver_threads = driver_threads,

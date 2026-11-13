@@ -317,6 +317,8 @@ ShaderJobStats ShaderJobScheduler::Stats() const {
 }
 
 void ShaderJobScheduler::Worker(bool driver) {
+    // EDEN_NX2_HYBRID: the thread starts on EcoQoS; a job a draw waits for runs without it.
+    bool eco = true;
     std::unique_lock lock{mutex};
     while (true) {
         JobPtr job;
@@ -328,6 +330,13 @@ void ShaderJobScheduler::Worker(bool driver) {
         }
         StartStage(*job, driver, Clock::now());
         lock.unlock();
+        if (Common::HybridPlacementActive()) {
+            const bool want_eco = job->priority.load() != ShaderJobPriority::NeedNow;
+            if (want_eco != eco) {
+                Common::SetCurrentThreadEcoQoS(want_eco);
+                eco = want_eco;
+            }
+        }
         if (driver) {
             RunDriver(job);
         } else {

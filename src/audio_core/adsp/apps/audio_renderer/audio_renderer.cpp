@@ -131,6 +131,7 @@ void AudioRenderer::CreateSinkStreams() {
 void AudioRenderer::Main(std::stop_token stop_token) {
     Common::SetCurrentThreadName("DSP_AudioRenderer_Main");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+    Common::SetCurrentThreadToResponsiveCores();
 
     // TODO: Create buffer map/unmap thread + mailbox
     // TODO: Create gMix devices, initialize them here

@@ -133,6 +133,16 @@ void SetCurrentThreadToPerformanceCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
+/// EDEN_NX2_HYBRID (Windows): the performance and efficiency cores, high QoS; for threads that
+/// answer the guest or a deadline (service threads, audio) but are not worth a performance core of
+/// their own. No-op otherwise.
+void SetCurrentThreadToResponsiveCores();
+/// EDEN_NX2_HYBRID=1 on a hybrid Windows CPU the plan applies to (see HybridPlan).
+bool HybridPlacementActive();
+/// With the plan active, how many efficiency processors background pools share; else 0.
+size_t HybridBackgroundProcessors();
+/// With EDEN_NX2_HYBRID set, one Info line: the topology found and where each kind of thread goes.
+void LogHybridPlacement();
 /// Windows: EcoQoS (efficient frequencies, efficiency cores preferred) for this thread, or back
 /// to HighQoS. No-op on other hosts.
 void SetCurrentThreadEcoQoS(bool enable);

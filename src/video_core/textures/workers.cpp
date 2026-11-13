@@ -19,7 +19,10 @@ Common::ThreadWorker& GetThreadWorkers() {
             return (std::max)(static_cast<u32>(std::strtoul(text, nullptr, 10)), 1U);
         }
         return (std::max)(std::thread::hardware_concurrency() / 4, 2U);
-    }(), "ImageTranscode"};
+    }(), "ImageTranscode", {},
+    // EDEN_NX2_HYBRID: off the performance cores the guest runs on.
+    Common::HybridPlacementActive() ? Common::ThreadPlacement::Efficiency
+                                    : Common::ThreadPlacement::Default};
     return workers;
 }
 
