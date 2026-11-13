@@ -235,11 +235,13 @@ private:
     /// Writes the driver pipeline cache to its file and returns the size of its data. Where its
     /// reads are serialized against builds (Device::SerializesPipelineCacheReads), a cache that
     /// holds what the file does is not written again: nothing was built since the file was read
-    /// or written, or only pipelines it held (the same size). There, with `max_lock_wait`, the
-    /// save is dropped when the running builds don't end within it.
+    /// or written or, with `skip_same_size`, its size is the one the file holds (the exit's save
+    /// doesn't take that guess). There, with `max_lock_wait`, each of a few tries a second apart
+    /// waits that long for the running builds, and the save is dropped when none gets the lock.
     size_t SerializeVulkanPipelineCache(
         const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
-        u32 cache_version, std::optional<std::chrono::milliseconds> max_lock_wait = std::nullopt);
+        u32 cache_version, bool skip_same_size = false,
+        std::optional<std::chrono::milliseconds> max_lock_wait = std::nullopt);
 
     vk::PipelineCache LoadVulkanPipelineCache(const std::filesystem::path& filename,
                                               u32 expected_cache_version);
@@ -349,8 +351,8 @@ private:
     std::filesystem::path vulkan_pipeline_cache_filename;
     vk::PipelineCache vulkan_pipeline_cache;
     /// One save of the driver pipeline cache at a time (they share a temporary file), and what
-    /// its file holds: the size of the driver's data and Device::PipelineCacheBuilds when the
-    /// file was read or written
+    /// its file holds: the cache's size as the driver gave it and Device::PipelineCacheBuilds
+    /// when the file was read or written
     std::mutex vulkan_cache_save_mutex;
     size_t saved_cache_size{};
     u64 saved_cache_builds{};
