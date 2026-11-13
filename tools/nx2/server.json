@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.karimalsalah/guarana-debug",
+  "title": "Guarana emulator debug",
+  "description": "Frame times, screenshots, GPU costs, logs and input from a running Guarana emulator",
+  "version": "20.2.0",
+  "repository": {
+    "url": "https://github.com/karimalsalah/guarana",
+    "source": "github",
+    "subfolder": "tools/nx2"
+  },
+  "websiteUrl": "https://karimalsalah.github.io/guarana/agents.html",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/karimalsalah/guarana/releases/download/v20.2.0/guarana-debug-mcp-20.2.0.mcpb",
+      "version": "20.2.0",
+      "fileSha256": "d9e22c98a8f6c71de9dc47577134d2d1764dcca963ab53e20eac52ef4e624ad8",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

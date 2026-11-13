@@ -1,0 +1,265 @@
+name: agent-claims
+
+# The claim protocol of docs/agents/README.md, so that several agents and people never work on the
+# same issue without knowing it.
+#
+# command: a comment on an open issue that starts with /claim gives the issue to the commenter: the
+#   `claimed` label, the commenter as assignee, and a bot comment that records who and when. It is
+#   refused on issues that still have `needs-triage`, that are assigned to someone else, or that
+#   someone else holds. /unclaim gives the issue back (the claimant or a maintainer).
+# release: daily and on demand. A claim older than 72 hours that no open pull request of this
+#   repository links to (`Closes #N`, the Development box, or a mention) loses its label and its
+#   claimant as assignee, and the claimant is told.
+#
+# It ignores comments on pull requests and from bots, and never closes, locks or edits anything
+# else. Comment text reaches the scripts only through the event payload, never through ${{ }}.
+# GitHub runs the default branch's copy of this file for issue_comment and schedule events.
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List the claims that would be released, without changing anything
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  command:
+    name: Handle /claim and /unclaim
+    if: >-
+      github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
+      github.event.comment.user.type != 'Bot' &&
+      (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    concurrency:
+      group: agent-claims-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Claim or release the issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const LABEL = "claimed";
+            const HOURS = 72;
+            const MARKER = "<!-- agent-claim ";
+            const RELEASED = "<!-- agent-claim-released -->";
+            const BOT = "github-actions[bot]";
+            const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+            const { owner, repo } = context.repo;
+            const comment = context.payload.comment;
+            const number = context.payload.issue.number;
+            const user = comment.user.login;
+            const command = (comment.body || "").trim().split(/\s+/, 1)[0].toLowerCase();
+            if (command !== "/claim" && command !== "/unclaim") {
+              core.info("The comment starts with another word; nothing to do.");
+              return;
+            }
+            if (comment.user.type === "Bot" || user.endsWith("[bot]")) return;
+
+            const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+            const stamp = (ms) => new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+            const guide = `https://github.com/${owner}/${repo}/blob/HEAD/docs/agents/README.md`;
+            const reply = (...lines) =>
+              github.rest.issues.createComment({ owner, repo, issue_number: number, body: lines.join("\n") });
+
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: number });
+            if (issue.pull_request) return;
+            const labels = issue.labels.map((label) => (typeof label === "string" ? label : label.name));
+            const assignees = (issue.assignees || []).map((assignee) => assignee.login);
+
+            // The claim on record: the label says there is one, and the newest marker that this
+            // workflow wrote says whose and since when. A release marker after it ends it.
+            let claim = null;
+            if (labels.includes(LABEL)) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: number, per_page: 100,
+              });
+              for (const c of comments.reverse()) {
+                const body = c.body || "";
+                if (c.user?.type !== "Bot" || c.user.login !== BOT) continue;
+                if (body.includes(RELEASED)) break;
+                const start = body.indexOf(MARKER);
+                if (start < 0) continue;
+                try {
+                  const record = JSON.parse(body.slice(start + MARKER.length, body.indexOf(" -->", start)));
+                  if (typeof record.user === "string" && !Number.isNaN(Date.parse(record.at))) claim = record;
+                } catch (error) {
+                  core.warning(`Comment ${c.id} has an unreadable claim marker`);
+                }
+                break;
+              }
+            }
+            const maintainer = MAINTAINERS.includes(comment.author_association);
+
+            if (command === "/claim") {
+              if (issue.state !== "open") return reply(`@${user}, this issue is closed: there is nothing to claim.`);
+              if (labels.includes("needs-triage")) {
+                return reply(`@${user}, a maintainer has not confirmed this issue yet (\`needs-triage\`), so it cannot be claimed. Wait until that label is gone, as CONTRIBUTING.md says.`);
+              }
+              if (claim && same(claim.user, user)) {
+                return reply(`@${user}, you hold this claim since ${stamp(Date.parse(claim.at))}. An open pull request that says \`Closes #${number}\` keeps it after ${stamp(Date.parse(claim.at) + HOURS * 3600e3)}.`);
+              }
+              if (claim) {
+                return reply(`@${user}, ${claim.user} claimed this issue at ${stamp(Date.parse(claim.at))}. Unless an open pull request links to it, the claim is released at the first daily check after ${stamp(Date.parse(claim.at) + HOURS * 3600e3)}. Pick another \`agent-ready\` issue, or offer help here.`);
+              }
+              if (labels.includes(LABEL)) {
+                return reply(`@${user}, this issue has the \`${LABEL}\` label without a claim recorded by this workflow. Ask here before you start.`);
+              }
+              const others = assignees.filter((login) => !same(login, user));
+              if (others.length) {
+                return reply(`@${user}, this issue is assigned to ${others.join(", ")}. Ask here before you start.`);
+              }
+
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [LABEL] });
+              let assigned = false;
+              try {
+                const { data } = await github.rest.issues.addAssignees({ owner, repo, issue_number: number, assignees: [user] });
+                assigned = (data.assignees || []).some((assignee) => same(assignee.login, user));
+              } catch (error) {
+                core.warning(`Could not assign ${user}: ${error.message}`);
+              }
+              const at = Date.now();
+              await reply(
+                `${MARKER}${JSON.stringify({ user, at: new Date(at).toISOString() })} -->`,
+                `**Claimed by @${user}** at ${stamp(at)}.`,
+                "",
+                `- Open a pull request that says \`Closes #${number}\` (a draft is fine) by ${stamp(at + HOURS * 3600e3)}. A claim older than ${HOURS} hours that no open pull request links to is released by the daily check.`,
+                `- One issue per pull request, from a branch that carries the number, for example \`fix/${number}-short-name\`.`,
+                `- \`/unclaim\` gives the issue back. How agents work here: [docs/agents/README.md](${guide}).`,
+                ...(assigned ? [] : ["", `The bot could not assign @${user}; the label and this comment hold the claim.`]),
+              );
+              return;
+            }
+
+            // /unclaim
+            if (!claim && !labels.includes(LABEL)) return reply(`@${user}, nobody holds a claim on this issue.`);
+            if (!maintainer && !(claim && same(claim.user, user))) {
+              return reply(`@${user}, only ${claim ? `${claim.user} or ` : ""}a maintainer can release this claim.`);
+            }
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: LABEL });
+            } catch (error) {
+              core.warning(`Could not remove the label: ${error.message}`);
+            }
+            if (claim && assignees.some((login) => same(login, claim.user))) {
+              await github.rest.issues.removeAssignees({ owner, repo, issue_number: number, assignees: [claim.user] });
+            }
+            await reply(RELEASED, `Claim released by @${user}. Anyone can \`/claim\` this issue now.`);
+
+  release:
+    name: Release stale claims
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      github.repository_owner == 'karimalsalah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+    concurrency:
+      group: agent-claims-release
+      cancel-in-progress: false
+    steps:
+      - name: Release claims older than 72 hours that no open pull request links to
+        uses: actions/github-script@v9
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          script: |
+            const LABEL = "claimed";
+            const HOURS = 72;
+            const MARKER = "<!-- agent-claim ";
+            const RELEASED = "<!-- agent-claim-released -->";
+            const BOT = "github-actions[bot]";
+            const LINKS = `query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  closedByPullRequestsReferences(first: 20, includeClosedPrs: false) { nodes { number state } }
+                  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 100) {
+                    nodes { ... on CrossReferencedEvent { isCrossRepository source { ... on PullRequest { number state } } } }
+                  }
+                }
+              }
+            }`;
+
+            const dryRun = process.env.DRY_RUN === "true";
+            const { owner, repo } = context.repo;
+            const now = Date.now();
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: "open", labels: LABEL, per_page: 100,
+            });
+            for (const issue of issues.filter((item) => !item.pull_request)) {
+              const number = issue.number;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: number, per_page: 100,
+              });
+              let claim = null;
+              for (const c of comments.reverse()) {
+                const body = c.body || "";
+                if (c.user?.type !== "Bot" || c.user.login !== BOT) continue;
+                if (body.includes(RELEASED)) break;
+                const start = body.indexOf(MARKER);
+                if (start < 0) continue;
+                try {
+                  const record = JSON.parse(body.slice(start + MARKER.length, body.indexOf(" -->", start)));
+                  if (typeof record.user === "string" && !Number.isNaN(Date.parse(record.at))) claim = record;
+                } catch (error) {
+                  core.warning(`#${number}: comment ${c.id} has an unreadable claim marker`);
+                }
+                break;
+              }
+              if (!claim) {
+                core.info(`#${number}: labelled ${LABEL} without a recorded claim; left alone`);
+                continue;
+              }
+              const hours = (now - Date.parse(claim.at)) / 3600e3;
+              if (hours < HOURS) {
+                core.info(`#${number}: ${claim.user}, ${Math.floor(hours)} h old; kept`);
+                continue;
+              }
+
+              const { repository } = await github.graphql(LINKS, { owner, repo, number });
+              const linked = new Set();
+              for (const pull of repository.issue.closedByPullRequestsReferences.nodes) {
+                if (pull && pull.state === "OPEN") linked.add(pull.number);
+              }
+              for (const event of repository.issue.timelineItems.nodes) {
+                const pull = event && event.source;
+                if (pull && pull.number && pull.state === "OPEN" && !event.isCrossRepository) linked.add(pull.number);
+              }
+              if (linked.size) {
+                core.info(`#${number}: ${claim.user}, kept: linked to open pull request ${[...linked].map((n) => "#" + n).join(", ")}`);
+                continue;
+              }
+              if (dryRun) {
+                core.info(`#${number}: would release the claim of ${claim.user} (${Math.floor(hours)} h, no linked pull request)`);
+                continue;
+              }
+
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: LABEL });
+              } catch (error) {
+                core.warning(`#${number}: could not remove the label: ${error.message}`);
+              }
+              if ((issue.assignees || []).some((assignee) => assignee.login.toLowerCase() === claim.user.toLowerCase())) {
+                await github.rest.issues.removeAssignees({ owner, repo, issue_number: number, assignees: [claim.user] });
+              }
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: number,
+                body: [
+                  RELEASED,
+                  `@${claim.user}, your claim on this issue is released: it is more than ${HOURS} hours old and no open pull request links to it. Still on it? Open a pull request that says \`Closes #${number}\` (a draft is fine) and \`/claim\` again.`,
+                ].join("\n"),
+              });
+              core.info(`#${number}: released the claim of ${claim.user}`);
+            }

@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- Agent kit: a front door for AI coding agents ([docs/agents/README.md](docs/agents/README.md)) and a living [HANDOVER.md](HANDOVER.md). `/claim` and `/unclaim` on an issue set a `claimed` label and an assignee; a claim older than 72 hours that no open pull request links to is released daily (`agent-claims.yml`). Optional `@claude` and `@gemini-cli` agents for maintainers run only when their secret is set (`agents.yml`). Copilot cloud agent gets setup steps. The debug MCP server has an entry for the official MCP registry (`tools/nx2/server.json`, bundled by `tools/nx2/mcpb_pack.py`). The research behind it: [docs/agents/RESEARCH-2026-11.md](docs/agents/RESEARCH-2026-11.md).
+
 ## [20.2.0] - 2026-11-13
 
 ### Added
