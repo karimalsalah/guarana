@@ -290,6 +290,12 @@ PresentManager::~PresentManager() {
         present_thread.request_stop();
         present_thread.join();
     }
+    if (fluid_presenter) {
+        // The FLUID thread shows frames it held for later slots after the renderer last waited
+        // for the GPU: their copies must be done before the frames go.
+        std::scoped_lock lock{scheduler.submit_mutex};
+        void(device.GetLogical().WaitIdle());
+    }
 #ifdef EGLANTINE_STREAMLINE
     Streamline::FrameGenSuspend();
 #endif
@@ -764,8 +770,9 @@ void PresentManager::FluidRelease(std::chrono::steady_clock::time_point now) {
             continue;
         }
         const auto done = it->unready + (now - it->unready) / 2;
-        const f64 sample =
-            (std::max)(0.0, std::chrono::duration<f64, std::nano>(done - it->recorded).count());
+        // A hitch (a shader built on the GPU thread) says nothing about the next frames.
+        const f64 sample = std::clamp(
+            std::chrono::duration<f64, std::nano>(done - it->recorded).count(), 0.0, 100.0e6);
         fluid.latency_ns = fluid.latency_ns > 0.0
                                ? fluid.latency_ns + (sample - fluid.latency_ns) * 0.2
                                : sample;
