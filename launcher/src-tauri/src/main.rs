@@ -8,6 +8,7 @@
 compile_error!("Guarana Launcher is a Windows application");
 
 mod autopilot;
+mod booster;
 mod commands;
 mod community;
 mod controllers;
@@ -34,6 +35,14 @@ use tauri::Manager;
 use windows::Win32::System::Diagnostics::Debug::{SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX};
 
 fn main() {
+    // The Game Booster's elevated helper: the launcher started again with --booster-helper through
+    // ShellExecuteEx "runas". It does only its small elevated task and exits, before Tauri or the
+    // single-instance plugin (which would otherwise treat it as a second launcher) start.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(booster::HELPER_FLAG) {
+        std::process::exit(booster::run_helper(&args[2..]));
+    }
+
     logging::init();
     log::info!("Guarana Launcher {} starting", env!("CARGO_PKG_VERSION"));
     // Scanning drives must never pop up "insert a disk" dialogs.
@@ -59,6 +68,9 @@ fn main() {
             tauri::async_runtime::spawn(async {
                 let _ = community::load(false).await;
             });
+            // A boosted session left behind by a crash: put its system changes back.
+            let recover = handle.clone();
+            tauri::async_runtime::spawn_blocking(move || booster::recover_after_crash(&recover));
             tauri::async_runtime::spawn(async move {
                 install::ensure_bundled(&handle).await;
                 warm::auto_after_driver_change(handle).await;
@@ -98,6 +110,9 @@ fn main() {
             commands::share_open,
             commands::share_dismiss,
             commands::share_set_prompt,
+            commands::get_booster,
+            commands::set_booster_level,
+            commands::booster_undo_all,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {
