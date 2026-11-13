@@ -555,8 +555,9 @@ void SelectCurrentThreadCpuSetIds(const std::vector<u32>& ids) {
 
 // EDEN_NX2_HYBRID=1: a plan that replaces the legacy placement above on hybrid CPUs with at least
 // MinHybridPerformanceCores physical performance cores. Latency-critical threads get performance
-// processors and high QoS, background pools the efficiency cores and EcoQoS, and the low-power
-// cores (no L3, slow) are left to nothing that waits on them.
+// processors (on four-P CPUs only the GPU front, back and Vulkan worker; the others also the
+// efficiency cores) and high QoS, background pools the efficiency cores and EcoQoS, and the
+// low-power cores (no L3, slow) are left to nothing that waits on them.
 struct WindowsHybrid {
     Common::HybridPlan plan;
     bool requested = false;
@@ -798,6 +799,17 @@ void SetCurrentThreadToPerformanceCores() {
 #endif
 }
 
+void SetCurrentThreadToRenderCores() {
+#if defined(_WIN32)
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.render);
+        SetCurrentThreadEcoQoS(false);
+        return;
+    }
+#endif
+    SetCurrentThreadToPerformanceCores();
+}
+
 void SetCurrentThreadToResponsiveCores() {
 #if defined(_WIN32)
     if (HybridActive()) {
@@ -958,12 +970,13 @@ void LogHybridPlacement() {
         return;
     }
     LOG_INFO(Common,
-             "EDEN_NX2_HYBRID=1 CPU set ids: performance {} ({} cores), efficiency {}, low-power {}; "
-             "guest cores and latency threads {} with high QoS, GPU front {}, GPU back {}; "
-             "background pools {} with EcoQoS; other threads {}",
-             FormatIds(plan.performance), plan.performance_cores, FormatIds(plan.efficiency),
-             FormatIds(plan.low_power), FormatIds(plan.latency), FormatIds(plan.front),
-             FormatIds(plan.back), FormatIds(plan.efficiency),
+             "EDEN_NX2_HYBRID=1 CPU set ids ({} layout): performance {} ({} cores), efficiency {}, "
+             "low-power {}; guest cores and latency threads {} with high QoS, GPU front {}, "
+             "GPU back {}, Vulkan worker {}; background pools {} with EcoQoS; other threads {}",
+             plan.four_p ? "four-P" : "six-P", FormatIds(plan.performance), plan.performance_cores,
+             FormatIds(plan.efficiency), FormatIds(plan.low_power), FormatIds(plan.latency),
+             FormatIds(plan.front), FormatIds(plan.back), FormatIds(plan.render),
+             FormatIds(plan.efficiency),
              plan.low_power.empty() ? "unrestricted" : "off the low-power cores");
 #endif
 }

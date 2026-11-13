@@ -22,6 +22,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - **Ocarina of Time's frames reach the screen on time.** On Windows integrated GPUs the screen copy now runs on a queue of its own (`EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1`) and the frame budget no longer raises the resolution into the cadence's headroom (`EDEN_NX2_BUDGET_HOLD_RES=1`), by default. In Hyrule Field on the Arc 140T, frames that reached the screen after their refresh went from about 200 per 10 s to 0, and slots shown on time from 475-491 to up to 599 of 600 with 99.5% of frames evenly paced (two paired rounds).
 
 - A borderless fullscreen Vulkan window covers the screen exactly, so it can get independent flip: no desktop composition, up to a refresh less latency. OpenGL keeps the extra row.
+- `EDEN_NX2_HYBRID=1` (off by default) now also places threads on hybrid CPUs with four performance cores (Lunar Lake, Panther Lake-H): the GPU front, back and Vulkan worker keep the P cores, the guest cores and latency threads may also use the E cores, and the low-power island stays out (on Lunar Lake, whose only E cores sit on that island, those cores are used as the E cores). Six-P CPUs are unchanged; 2P+8E CPUs are still left to Windows. Not measured on four-P parts; plan in [docs/switches.md](docs/switches.md).
 
 ### Fixed
 

@@ -129,7 +129,14 @@ enum class ThreadPlacement : u32 {
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
+/// Guest cores and latency threads (present, fencing, timing, vsync, snapshot). With
+/// EDEN_NX2_HYBRID on a four-P CPU this is the performance and efficiency cores; see
+/// SetCurrentThreadToRenderCores.
 void SetCurrentThreadToPerformanceCores();
+/// For the GPU front, GPU back and Vulkan worker. With EDEN_NX2_HYBRID on a four-P CPU, the
+/// performance cores alone while the other latency threads may also use the efficiency cores;
+/// everywhere else the same as SetCurrentThreadToPerformanceCores.
+void SetCurrentThreadToRenderCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
