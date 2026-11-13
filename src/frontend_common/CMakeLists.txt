@@ -16,6 +16,7 @@ add_library(frontend_common STATIC
     data_manager.h data_manager.cpp
     play_time_manager.cpp
     play_time_manager.h
+    problem_report.h problem_report.cpp
     settings_generator.h settings_generator.cpp
     update_installer.h update_installer.cpp
     mod_manager.h mod_manager.cpp
