@@ -116,9 +116,11 @@ public:
     /// still in use by the GPU or only one is left (for the next real frame).
     [[nodiscard]] Frame* TryGetRenderFrame();
 
-    /// Whether the present thread shows frames on the vblank clock (EDEN_NX2_FLUID).
+    /// Whether the present thread shows frames on the vblank clock (EDEN_NX2_FLUID); false once
+    /// its watchdog fell back to presenting in arrival order.
     [[nodiscard]] bool Fluid() const {
-        return fluid_presenter && use_present_thread;
+        return fluid_presenter && use_present_thread &&
+               !fluid_fallback.load(std::memory_order_relaxed);
     }
 
     /// Any thread: the vblank clock as of the present thread's last wake.
@@ -161,8 +163,15 @@ private:
 
     /// EDEN_NX2_FLUID: at every vblank, takes the frames sent, frees those no slot shows and
     /// shows the frames without a slot in arrival order; at the vblank before each slot, shows
-    /// the newest real frame's frame for the slot whose GPU work is done.
-    void FluidPresentThread(std::stop_token token);
+    /// the newest real frame's frame for the slot whose GPU work is done. False when its watchdog
+    /// gave up: the thread then presents in arrival order as without FLUID.
+    bool FluidPresentThread(std::stop_token token);
+
+    /// Frames came but none was shown for FluidStallLimit, and frames still wait or keep coming.
+    [[nodiscard]] bool FluidStalled(std::chrono::steady_clock::time_point now) const;
+
+    /// Logs why, then hands the frames held to the arrival-order loop, for the rest of the session.
+    void FluidFallBack(std::chrono::steady_clock::time_point now);
 
     /// Counts the vblanks since the last wake; returns the refresh period.
     std::chrono::nanoseconds FluidCountVblanks(std::chrono::steady_clock::time_point wake,
@@ -265,6 +274,8 @@ private:
     FluidClock fluid_clock; ///< guarded by fluid_clock_mutex
     u64 fluid_drain_requests{}; ///< guarded by queue_mutex: WaitPresent calls
     u64 fluid_drains{};         ///< guarded by queue_mutex: those the present thread answered
+    /// EDEN_NX2_FLUID's watchdog fell back to arrival order. Set under queue_mutex.
+    std::atomic<bool> fluid_fallback{};
 
     struct FluidWatch {
         u64 tick;
@@ -289,6 +300,12 @@ private:
         u64 watched_batch{};
         std::vector<FluidWatch> watches;
         f64 latency_ns{};
+        /// Since when frames wait unshown (the watchdog): the first received after the last show,
+        /// or that show if frames were still held; zero when none.
+        std::chrono::steady_clock::time_point unshown_since{};
+        std::chrono::steady_clock::time_point last_received{};
+        u64 received{}; ///< since the thread started
+        u64 shown{};
     } fluid;
     /// EDEN_NX2_SHOWN_STATS with EDEN_NX2_FLUID, present thread only.
     struct {
@@ -301,6 +318,7 @@ private:
         u64 in_order{};
         u64 late{};
         u64 dropped{};
+        u64 received{};
         std::array<u64, 4> held{}; ///< frames shown for 1, 2, 3 and 4+ refreshes
         f64 age_ms{};
         f64 latency_ms{};
