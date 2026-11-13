@@ -1,0 +1,105 @@
+# Switch registry
+
+Every `EDEN_NX2_*` switch that Guarana adds, or relies on, with what it does, its status and what it measured. Upstream Lichii has about 170 more; they are in [AGENTS.md](../AGENTS.md) ("Debugging tools"), [nx2/debug-mcp.md](nx2/debug-mcp.md) and [dist/nx2_switches.txt](../dist/nx2_switches.txt), and are listed here only when we rely on them.
+
+A pull request that adds, changes or removes a switch updates its row here. The tree is the source of truth for names and values: `grep -rn "EDEN_NX2_" src`.
+
+## Setting a switch
+
+- As an environment variable before the emulator starts: `set EDEN_NX2_GM=11` in `cmd`, `$env:EDEN_NX2_GM = "11"` in PowerShell, `EDEN_NX2_GM=11 ./lichii` on Linux.
+- Or as a `NAME=VALUE` line in `nx2_switches.txt`, which the GUI reads at start: the copy next to the executable, then your own in `%APPDATA%\lichii\nx2_switches.txt` (or `$XDG_CONFIG_HOME/lichii/nx2_switches.txt`), which wins. A variable in the real environment wins over both. A file next to the executable may set only `EDEN_NX2_*` and diagnostic switches.
+- Most switches are read once, at start: restart after a change. Those marked "live" can also be changed in a running game through the debug server (`EDEN_NX2_DEBUG_SERVER`, [nx2/debug-mcp.md](nx2/debug-mcp.md)).
+- Unset, or `0`, leaves the emulator as it is without the switch, unless the row says otherwise.
+- "Off by default" below is the code's default. A line in the shipped `dist/nx2_switches.txt` turns a switch on in every release package: read that file to see what a release runs with.
+
+## Status
+
+- **proven**: a measured gain on a verified scene: `tools/bench` rows with `scene_ok: true`, paired with a baseline from the same session. Still off by default until it has been checked on more than the scene it was measured in.
+- **experimental**: no verified gain yet, or measured without a gain. "No gain" and "slower" results stay in the row; such a switch is a candidate for removal.
+- **diagnostic**: logs, traces, probes and verifiers. They change no output but can cost time, so do not measure performance with them on unless the row says it is cheap.
+- **default on**: behaviour Guarana ships on, and the switch that turns it off.
+
+"No verified-scene measurement" means nobody has measured it the way rule 1 of AGENTS.md asks. The measurement setup below, "Arc 140T", is: Core Ultra 9 285H, Intel Arc 140T, driver 32.0.101.9175, plugged in, 1280x765 window, Ocarina of Time, Hyrule Field.
+
+Origin is ours unless the row says otherwise. Paths are under `src/`.
+
+## Proven
+
+| Switch | Values | What it does | Measured | Code |
+|---|---|---|---|---|
+| `EDEN_NX2_GM` | Bits; use `11`. Unset: `11` for Ocarina of Time, off elsewhere | Cheaper run-time routing of the global memory accesses of native shaders that stay global. `1`: the buffer base addresses are computed once per invocation, not in every access (only in programs that cannot change them). `2`: a native load searches only the read-only loaded-pointer buffers its address is built on, with the full search below them. `8` (with `2`): zero below them instead of the full search. `4` is reserved. | Arc 140T: the foliage mesh draw went from 15.7 to 5.8 ms of GPU time, and Hyrule Field from 14.8 to 22.8 fps (p99 frame time 96.1 to 51.4 ms). An earlier pair: 14.0 to 17.0 fps, the foliage draw again 15.9 to 5.8 ms. `3` (without bit 8): 16.5 fps. Baselines in this scene wander between about 14 and 16 fps from session to session. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp`, `shader_recompiler/backend/spirv/spirv_emit_context.cpp` |
+
+Known issues of `EDEN_NX2_GM`:
+
+- Bit `8` returns zero for an address outside the buffers the compiler names. It was checked in one scene only: if a game renders wrongly with `11`, try `3`, then no switch.
+- Under review: with bit `2`, a narrowed load carries its buffer list in its flags, and `shader_recompiler/ir_opt/collect_shader_info_pass.cpp` reads the flags of `LoadGlobal*` as its "coherent" bit. Measure `GM` again once that is settled.
+
+## Experimental
+
+| Switch | Values | What it does | Measured | Code |
+|---|---|---|---|---|
+| `EDEN_NX2_EXTRAPOLATE` | `1` | Ocarina of Time with frame generation: generated frames are predicted forward from the game's motion vectors, after the real frame, instead of interpolated before it. | No verified-scene measurement. | `video_core/renderer_vulkan/present/frame_gen.cpp`, `present/frame_extrapolation.cpp`, `present/extrapolation_source.h`, `renderer_vulkan/vk_rasterizer.cpp` |
+| `EDEN_NX2_EXTRAPOLATE_ACTOR` | On unless `0` | With `EXTRAPOLATE`: Link's pose adds his own motion. `0`: the motion comes from the camera alone. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_rasterizer.cpp` |
+| `EDEN_NX2_EXTRAPOLATE_HUD` | On unless `0` | With `EXTRAPOLATE`: the HUD is told apart from the scene and not moved with it. `0`: it moves with the scene. | No verified-scene measurement. | `video_core/renderer_vulkan/present/frame_extrapolation.cpp` |
+| `EDEN_NX2_CADENCE` | `1`, or `2` to `4` | With extrapolated frames, holds real frames to an even share of the frame generation target so every shown frame lasts the same time. `1` picks the share from what the game sustains (60, 30, 20 or 15 real frames for a target of 60); `2` to `4` fix the divisor. Gives its frame cap back on pause, with frame generation off, on unsupported surfaces and after long stretches without motion. | No verified-scene measurement. | `video_core/renderer_vulkan/present/frame_gen.cpp` |
+| `EDEN_NX2_POWER_POLICY` | `igpu` | Windows, integrated GPUs: for a game session, turns processor boost off and sets the minimum processor state to 5% in the active power scheme, so the shared package power goes to the GPU. Restores both at the end; a restore file covers a crash. A governor steps the spin scale down while the GPU is the limit. | No verified-scene measurement. | `common/power_policy.cpp`, `common/power_governor.cpp`, `core/nx2_power_session.cpp` |
+| `EDEN_NX2_POWER_POLICY_FPS` | fps | The power governor's target; else the `TARGET_FPS` target, else the `VRS_AUTO` one, else 30. | Not measured. | `core/nx2_power_session.cpp` |
+| `EDEN_NX2_SPIN_SCALE` | `0` to `1` | Scales the busy-wait bounds of the GPU front and back threads; `0` blocks at once. Live: `power_set`. | No verified-scene measurement. | `common/power_tuning.cpp` |
+| `EDEN_NX2_ECO_BACKGROUND` | `1` | Windows: background workers (shader jobs, pipeline serialization, texture decoding) ask for EcoQoS when they start. Live: `power_set`, for threads started afterwards. | No verified-scene measurement. | `common/power_tuning.cpp` |
+| `EDEN_NX2_TARGET_FPS` | fps | Holds a Switch 2 title at that frame rate: guest presents are held to its interval, and twice a second the GPU time scale moves so that the game's dynamic resolution fits the frame (Ocarina of Time without the Max Resolution add-on). Live: `frame_budget`. | Never measured. | `video_core/frame_budget.cpp`, `core/hle/service/nx2_gsv.h` |
+| `EDEN_NX2_GPU_TIME_SCALE` | number | Multiplies the GPU time a Switch 2 title measures, on top of GPU Clocks; it never exceeds the real time, so `0` to `1` at Normal. A larger value gives Ocarina of Time a lower resolution step. The starting value of the scale `TARGET_FPS` moves; live: `frame_budget`. | Not measured. | `video_core/frame_budget.cpp` |
+| `EDEN_NX2_VRS` | set | Per-fragment-shader shading rates (`VK_KHR_fragment_shading_rate`). The shading-rate governor (`VRS_AUTO`, `set_shading_rate` `auto`) needs it at launch. Each guest graphics pipeline gets its rate from the shading-rate table when it is built; the code that would set the rate as dynamic state at each bind is disabled. | Shading rate on the foliage of the Arc 140T scene: no gain beyond the run-to-run spread. | `video_core/renderer_vulkan/vk_graphics_pipeline.cpp`, `video_core/nx2_debug_control.cpp`, `core/debugger/nx2_debug_tools.cpp` |
+| `EDEN_NX2_VRS_HASHES`, `EDEN_NX2_VRS_DEFAULT` | `<hash>:<rate>,...`; a rate | The shading-rate table at boot (`1x1` to `4x4`): per fragment shader hash, and for all other shaders. Live: `set_shading_rate`. | See `VRS`. | `video_core/nx2_debug_control.cpp` |
+| `EDEN_NX2_VRS_AUTO` | fps | With `VRS`: a governor coarsens the costliest fragment shader one step after two slow samples and takes it back after four fast ones. It leaves alone shaders that write depth, draw only small or side-target draws, or are denied. Live: `set_shading_rate` `auto`. | No verified-scene measurement. | `video_core/auto_shading_rate.cpp`, `video_core/renderer_vulkan/vk_scheduler.cpp` |
+| `EDEN_NX2_VRS_AUTO_MAX`, `EDEN_NX2_VRS_AUTO_DENY` | `3`; `<hash>,...` | `3` lets the governor go to `4x4` (default `2x2`). The deny list is never coarsened. | See `VRS_AUTO`. | `video_core/auto_shading_rate.cpp` |
+| `EDEN_NX2_UMA` | Bits | Buffer uploads and submissions for integrated GPUs, whose device memory is system memory. `1`: copies share commands (uploads coalesced per buffer pair). `2`: the buffer cache's buffers are host-mapped and an upload is written straight into its buffer when no pending GPU work uses those bytes. `8`: the draw budget submits only once the GPU ran out of submitted work, up to 512 draws. `16`: used ranges are forgotten a generation at a time. `4` is reserved and only logged. | The variants measured on the Arc 140T scene showed no gain beyond the run-to-run spread. | `video_core/nx2_uma.h`, `video_core/renderer_vulkan/vk_buffer_cache.cpp`, `vk_scheduler.cpp`, `vk_rasterizer.cpp`, `video_core/buffer_cache/buffer_cache.h` |
+| `EDEN_NX2_QUERY_WAIT_LAST` | `1` | Intel's Windows driver: a query copy waits for the newest query only, as on AMD's drivers, instead of waiting on each query. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_query_cache.cpp` |
+| `EDEN_NX2_DEFER_WFI` | `1` | Wait-for-idle keeps the open render pass on every driver, as on MoltenVK; its query sync waits for the pass to end or for the next fence. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_rasterizer.cpp` |
+| `EDEN_NX2_ALIAS_LAZY` | `1` | A draw marks a render target modified only when its write masks let it write that target, so aliases sampled between such draws are not copied again. | No verified-scene measurement. | `video_core/texture_cache/texture_cache_base.h`, `texture_cache.h` |
+| `EDEN_NX2_RT_USAGE`, `EDEN_NX2_RT_USAGE_SIZE` | `1`; `<width>x<height>` | Images made for a single-sample colour target get no storage usage (Intel drivers can drop colour compression for it); the size limits it to targets of that size. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_texture_cache.cpp` |
+| `EDEN_NX2_DEPTH_OPTIMAL` | `0` to `3` | Depth attachment layout. `0`: `GENERAL`. `1`: depth-stencil optimal during the pass, from `GENERAL` and back. `2`: from `GENERAL` and left there. `3`: already there and left there. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_scheduler.cpp`, `vk_render_pass_cache.h` |
+| `EDEN_NX2_INTEL_VIDS` | `1` | Keeps `VK_EXT_vertex_input_dynamic_state` on Intel Windows drivers 101.x and later. Without it every Intel Windows driver loses the extension: the old-driver check compares Intel's packed `driverVersion` with a number it can never reach. | No verified-scene measurement. | `video_core/vulkan_common/vulkan_device.cpp` |
+| `EDEN_NX2_IGPU_VRAM_MIB` | MiB | The integrated GPU's memory share instead of 4 GiB (6 GiB with aggressive VRAM use), within the same heap and budget bounds. | No verified-scene measurement. | `video_core/vulkan_common/vulkan_device.cpp` |
+| `EDEN_NX2_MESH_CULL` | Bits; `7` is all | Native mesh programs cull their triangles: `1` outside the frustum, `2` covering no pixel centre, `4` no outputs for a workgroup with no triangle left. | Slower on the Arc 140T scene: 12.2 fps against 14.47 fps for its baseline (row `r4-cull1`). | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, mesh emission in `shader_recompiler/backend/spirv/emit_spirv_mesh.cpp` |
+| `EDEN_NX2_MESH_OUT`, `EDEN_NX2_MESH_VRS_PX` | Bits; pixels | Cheaper native mesh outputs. `1`: no output for components the fragment stage never reads. `2`: triangles with a bounding box under `MESH_VRS_PX` pixels (default 4) shade at 2x2 (needs `VRS` and `MESH_CULL` bit 2). `8`: one store per output vector. `16`: only as many vertices as the primitives use. `4` does nothing. | Slower on the Arc 140T scene: bits 16 and 8, 13.4 fps against 16.1 fps (row `k-count-vec`). | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `shader_recompiler/backend/spirv/emit_spirv_mesh.cpp` |
+| `EDEN_NX2_MESH_SIMD` | `8`, `16`, `32` | The subgroup size of every native task and mesh stage (Intel picks SIMD16 by itself). | No gain beyond the run-to-run spread on the Arc 140T scene. | `video_core/renderer_vulkan/vk_graphics_pipeline.cpp` |
+| `EDEN_NX2_TASK_DENSITY` | `0` to `100` | Native task programs launch only this percentage of their mesh workgroups. Geometry goes missing: a probe of what the mesh work costs, not a setting to play with. | Not a performance switch. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp` |
+| `EDEN_NX2_PREPASS_HASHES` | `<hash>,...` | Alpha-test prepass split: draws of the listed fragment shaders run first as a depth-only pass that keeps only their discards, then shade once per visible pixel with an equal depth test. Live: `set_prepass`. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `video_core/nx2_debug_control.cpp` |
+| `EDEN_NX2_PREPASS_FORCE`, `EDEN_NX2_PREPASS_INVARIANT` | `1` | With `PREPASS_HASHES`: take the split even with an earlier stage that writes storage or with the samples-passed counter on; decorate Position as invariant in split pipelines. | See `PREPASS_HASHES`. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp` |
+| `EDEN_NX2_SW_MATRIX_SHARED` | `1`, plus `nobarrier`, `scalar` | Without tensor cores, guest tensor operations gather their operands through shared memory instead of shuffling them between lanes. `nobarrier` drops the subgroup barriers around the gather; `scalar` loads single words. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp` |
+| `EDEN_NX2_LAZY_GUEST_COMMIT` | `1` | Windows: guest memory is committed as the guest kernel hands it out instead of all at boot. | No verified-scene measurement. | `common/host_memory.cpp` |
+| `EDEN_NX2_OOT_BYPASS_ANY` | `1` | Ocarina of Time: the "No sharpening" bypass of the anti-aliasing network also engages at the other resolution steps, knowing the output pass by shader hash. | No verified-scene measurement. | `video_core/engines/kepler_compute.cpp`; [nx2/oot-network-bypass.md](nx2/oot-network-bypass.md) |
+| `EDEN_NX2_OOT_BYPASS_OUTPUT`, `EDEN_NX2_OOT_BYPASS_SKIP` | `<hex>,...` | Output and skipped passes for the bypass, as native program keys or shader hashes from its log lines. | See `OOT_BYPASS_ANY`. | `video_core/engines/kepler_compute.cpp` |
+| `EDEN_NX2_OOT_FSR_ANY` | `1` | Ocarina of Time with FSR as the upscaler: FSR 3.1 replaces the game's upscale at every dynamic resolution step, not only the 3/4-scale one. | Never measured. | `video_core/engines/kepler_compute.cpp`; [native-dlss-replacement.md](native-dlss-replacement.md) |
+| `EDEN_NX2_SHADER_REUSE` | `1` | Graphics pipelines reuse the SPIR-V of an earlier pipeline when their translation inputs match and the guest memory its translation read answers the same (replayed environment reads); up to 4096 shader sets, least recently used dropped first. Pipelines with a native mesh or task program or in a prepass split hash never reuse. Never on AMD's proprietary Windows driver. Off by default: unproven on Intel. From upstream pull request zortos293/Lichii#1378 (Krim), which we carry. `Nx2Perf` verify translates a reusing pipeline anyway and logs a SPIR-V mismatch. | No verified-scene measurement. | `video_core/renderer_vulkan/vk_pipeline_cache.cpp`, `video_core/renderer_vulkan/vk_shader_reuse.cpp` |
+
+## Default on
+
+| Switch | Values | What it turns off or overrides | Measured | Code |
+|---|---|---|---|---|
+| `EDEN_NX2_NO_PRESETS` | `1` | Game presets: settings a game is known to run better with on a kind of GPU, applied for the settings you left at their defaults and kept out of the config files (also off with the `auto_presets` setting). The only preset: Ocarina of Time on an Intel integrated GPU without matrix cores (No sharpening anti-aliasing, FSR and frame generation off, aggressive VRAM use, Auto frame pacing, the Max Resolution add-on). | No paired measurement; the preset's comment gives 9.5 to 15 fps on the Arc 140T without it. | `core/game_presets.cpp` |
+| `EDEN_NX2_NO_FLOAT_ATOMICS` | `1` | Float32 atomic add on storage buffers through `VK_EXT_shader_atomic_float` on Intel, instead of compare-and-swap loops. From Fritchii-Intel-Fixes patch 0010. | By the patch's authors: on an Arc B580 a contended loop of Ocarina of Time took 2 ms of each frame (comment in the code). Not measured by us. | `video_core/vulkan_common/vulkan_device.cpp` |
+| `EDEN_NX2_LOW_MEMORY` | `1` or `0` | Forces low memory mode on or off. Without it the mode is on for hosts with 20 GiB of RAM or less (not Android): caches that hold host memory keep less of it. | Not measured. | `common/memory_detect.cpp` |
+
+## Diagnostic
+
+| Switch | Values | Output | Code |
+|---|---|---|---|
+| `EDEN_NX2_SHOWN_STATS` | `1` | Every 10 s, how evenly frames reached the swapchain, generated ones included: the intervals between presents and the share within 2 ms of the median. | `video_core/renderer_vulkan/vk_present_manager.cpp` |
+| `EDEN_NX2_EXTRAPOLATE_DEBUG` | `1` | Tints each pixel of a generated frame by the way it was predicted. | `video_core/renderer_vulkan/present/frame_extrapolation.cpp` |
+| `EDEN_NX2_COST_SAMPLING` | `1` | GPU time per draw and per pass for one frame a second, for the debug server's `gpu_costs` and the governors, without log lines. Also on with `EDEN_NX2_DEBUG_SERVER` or `EDEN_DKB_FRAME_TRACE`. Live: `gpu_costs` `enable`. | `video_core/renderer_vulkan/vk_scheduler.cpp` |
+| `EDEN_NX2_DRAW_STATS` | fragment shader hash | About once a second, what one mesh draw of that shader does: task and mesh program runs, primitives made, clipped and kept, fragment program runs. | `video_core/renderer_vulkan/vk_rasterizer.cpp` |
+| `EDEN_NX2_DRAW_TEMPLATE_VERIFY` | `1` | Draws a draw template holds for are also resolved in full and compared with it. From upstream pull request zortos293/Lichii#1447 (zortos293), which we carry. | `video_core/renderer_vulkan/vk_graphics_pipeline.cpp` |
+| `EDEN_NX2_PIPELINE_STATS`, `EDEN_NX2_PIPELINE_STATS_IR` | directory; `1` | The driver compiler's statistics for each pipeline build in `<dir>/pipeline_stats.jsonl`; `_IR` adds its internal representations. The session compiles without caches, so its timings mean nothing. Read with `tools/nx2/pipeline_stats.py`. Keep the output local: it is derived from game shaders. | `video_core/renderer_vulkan/pipeline_statistics.cpp` |
+| `EDEN_NX2_ALIAS_TRACE` | `1` | Once a second, the image pairs the texture cache copied most. | `video_core/texture_cache/texture_cache_base.h` |
+| `EDEN_NX2_TRACE_ALL_SUBMISSIONS` | `1` | With the GPU frame trace (`EDEN_DKB_FRAME_TRACE`), one line for every submission of the sampled frame after its histogram. | `video_core/renderer_vulkan/vk_scheduler.cpp` |
+
+## Upstream switches we rely on
+
+| Switch | Used for |
+|---|---|
+| `EDEN_NX2_DEBUG_SERVER`, `EDEN_NX2_DEBUG_DIR` | The debug server (`127.0.0.1:<port>`, loopback only) and its dump directory: agents' live questions, `tools/bench`. [nx2/debug-mcp.md](nx2/debug-mcp.md). |
+| `EDEN_NX2_IDLE_SPIN_US` | How long an idle guest core polls before it blocks, in µs (`-1`: the per-title default). We made it live: `power_set`. |
+| `EDEN_NX2_REJECT_HASH` | Rejecting shaders by hash; `tools/bench` probes use it live (`reject_shaders`). |
+| `EDEN_NX2_FRAME_DUMP` | Frame dumps; the debug server's `capture_frame` uses the same code. |
+| `EDEN_NX2_GPU_PROFILE`, `EDEN_NX2_STUTTER_TRACE`, `EDEN_DKB_FRAME_TRACE` | Where frame time goes and which frames hitch. `tools/bench` suites pair GPU-work variants with an `EDEN_DKB_FRAME_TRACE` twin. |
