@@ -6068,8 +6068,8 @@ Dra punkterna för att ändra position, eller dubbelklicka på tabellcellerna f�
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="32"/>
-        <source>Creating a room failed. Please retry. Restarting Eden might be necessary.</source>
-        <translation>Det gick inte att skapa ett rum. Försök igen. Det kan vara nödvändigt att starta om Eden.</translation>
+        <source>Creating a room failed. Please retry. Restarting Guarana might be necessary.</source>
+        <translation>Det gick inte att skapa ett rum. Försök igen. Det kan vara nödvändigt att starta om Guarana.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="34"/>
@@ -6078,8 +6078,8 @@ Dra punkterna för att ändra position, eller dubbelklicka på tabellcellerna f�
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="37"/>
-        <source>Version mismatch! Please update to the latest version of Eden. If the problem persists, contact the room host and ask them to update the server.</source>
-        <translation>Versionskonflikt! Uppdatera till den senaste versionen av Eden. Om problemet kvarstår, kontakta rummets värd och be dem uppdatera servern.</translation>
+        <source>Version mismatch! Please update to the latest version of Guarana. If the problem persists, contact the room host and ask them to update the server.</source>
+        <translation>Versionskonflikt! Uppdatera till den senaste versionen av Guarana. Om problemet kvarstår, kontakta rummets värd och be dem uppdatera servern.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/message.cpp" line="39"/>
@@ -6550,9 +6550,9 @@ Gå till Konfigurera -&gt; System -&gt; Nätverk och gör ett val.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/multiplayer/host_room.cpp" line="187"/>
-        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Eden account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
+        <source>Failed to announce the room to the public lobby. In order to host a room publicly, you must have a valid Guarana account configured in Emulation -&gt; Configure -&gt; Web. If you do not want to publish a room in the public lobby, then select Unlisted instead.
 Debug Message: </source>
-        <translation>Det gick inte att annonsera rummet i den offentliga lobbyn. För att kunna vara värd för ett offentligt rum måste du ha ett giltigt Eden-konto konfigurerat i Emulering -&gt; Konfigurera -&gt; Webb. Om du inte vill publicera ett rum i den offentliga lobbyn väljer du istället Olistade.
+        <translation>Det gick inte att annonsera rummet i den offentliga lobbyn. För att kunna vara värd för ett offentligt rum måste du ha ett giltigt Guarana-konto konfigurerat i Emulering -&gt; Konfigurera -&gt; Webb. Om du inte vill publicera ett rum i den offentliga lobbyn väljer du istället Olistade.
 Felsökningsmeddelande: </translation>
     </message>
 </context>
@@ -6920,8 +6920,8 @@ Felsökningsmeddelande: </translation>
     <name>MainWindow</name>
     <message>
         <location filename="../../src/lichii/main.ui" line="14"/>
-        <source>Lichii</source>
-        <translation>Lichii</translation>
+        <source>Guarana</source>
+        <translation>Guarana</translation>
     </message>
     <message>
         <location filename="../../src/lichii/main.ui" line="53"/>
@@ -7475,8 +7475,8 @@ Felsökningsmeddelande: </translation>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1839"/>
-        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;How to access log files&lt;/a&gt;.</source>
-        <translation>Detta orsakas vanligtvis av inaktuella grafikdrivrutiner. Se loggen för mer information. Se: &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md&apos;&gt;Så här kommer du åt loggfiler&lt;/a&gt;.</translation>
+        <source>This is usually caused by outdated GPU drivers. Please see the log for more details. See: &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;How to access log files&lt;/a&gt;.</source>
+        <translation>Detta orsakas vanligtvis av inaktuella grafikdrivrutiner. Se loggen för mer information. Se: &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log&apos;&gt;Så här kommer du åt loggfiler&lt;/a&gt;.</translation>
     </message>
     <message>
         <location filename="../../src/lichii/main_window.cpp" line="1852"/>
@@ -9461,8 +9461,8 @@ p, li { white-space: pre-wrap; }
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="328"/>
-        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Eden has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
-        <translation>OVÄNTADE PROBLEM KAN UPPSTÅ OM DU INTE LÄSER DETTA!&lt;br&gt;Eden har upptäckt följande sparningskataloger utan bifogade profiler:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;Följande profiler är giltiga:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Klicka på ”OK” för att öppna din sparningsmapp och rätta till dina profiler.&lt;br&gt;Tips: kopiera innehållet i den största eller senast ändrade mappen till en annan plats, ta bort alla övergivna profiler och flytta det kopierade innehållet till den giltiga profilen.&lt;br&gt;&lt;br&gt;Fortfarande förvirrad? Se &lt;a href=&apos;https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/Orphaned.md&apos;&gt;hjälpsidan&lt;/a&gt;.&lt;br&gt;</translation>
+        <source>UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON&apos;T READ THIS!&lt;br&gt;Guarana has detected the following save directories with no attached profile:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;The following profiles are valid:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Click &quot;OK&quot; to open your save folder and fix up your profiles.&lt;br&gt;Hint: copy the contents of the largest or last-modified folder elsewhere, delete all orphaned profiles, and move your copied contents to the good profile.&lt;br&gt;&lt;br&gt;Still confused? See the &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;help page&lt;/a&gt;.&lt;br&gt;</source>
+        <translation>OVÄNTADE PROBLEM KAN UPPSTÅ OM DU INTE LÄSER DETTA!&lt;br&gt;Guarana har upptäckt följande sparningskataloger utan bifogade profiler:&lt;br&gt;%1&lt;br&gt;&lt;br&gt;Följande profiler är giltiga:&lt;br&gt;%2&lt;br&gt;&lt;br&gt;Klicka på ”OK” för att öppna din sparningsmapp och rätta till dina profiler.&lt;br&gt;Tips: kopiera innehållet i den största eller senast ändrade mappen till en annan plats, ta bort alla övergivna profiler och flytta det kopierade innehållet till den giltiga profilen.&lt;br&gt;&lt;br&gt;Fortfarande förvirrad? Se &lt;a href=&apos;https://github.com/karimalsalah/guarana/blob/main/docs/user/Orphaned.md&apos;&gt;hjälpsidan&lt;/a&gt;.&lt;br&gt;</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="347"/>
@@ -9610,8 +9610,8 @@ Gör detta endast om du är 100 % säker på att du vill radera dessa data.</tra
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="501"/>
-        <source>Install decryption keys and restart Eden before attempting to install firmware.</source>
-        <translation>Installera dekrypteringsnycklar och starta om Eden innan du försöker installera fast programvara.</translation>
+        <source>Install decryption keys and restart Guarana before attempting to install firmware.</source>
+        <translation>Installera dekrypteringsnycklar och starta om Guarana innan du försöker installera fast programvara.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/content.cpp" line="513"/>
@@ -10100,8 +10100,8 @@ De flesta mods är RomFS-mods, men patchar (.pchtxt) är vanligtvis ExeFS-mods.<
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="96"/>
-        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Eden or re-install firmware.</source>
-        <translation>Installationen av firmware avbröts, firmware kan vara i ett felaktigt tillstånd eller skadat. Starta om Eden eller installera om firmware.</translation>
+        <source>Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart Guarana or re-install firmware.</source>
+        <translation>Installationen av firmware avbröts, firmware kan vara i ett felaktigt tillstånd eller skadat. Starta om Guarana eller installera om firmware.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="101"/>

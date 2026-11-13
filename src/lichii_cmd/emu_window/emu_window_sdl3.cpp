@@ -279,7 +279,7 @@ void EmuWindow_SDL3::SetWindowIcon() {
 #else
     SDL_IOStream* const lichii_icon_stream = SDL_IOFromConstMem((void*)lichii_icon, lichii_icon_size);
     if (lichii_icon_stream == nullptr) {
-        LOG_WARNING(Frontend, "Failed to create Eden icon stream.");
+        LOG_WARNING(Frontend, "Failed to create Guarana icon stream.");
         return;
     }
     SDL_Surface* const window_icon = SDL_LoadBMP_IO(lichii_icon_stream, true);
