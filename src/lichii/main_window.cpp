@@ -142,6 +142,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #endif
 
 // Common //
+#include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/memory_detect.h"
@@ -393,6 +394,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
+    // From the process start: the Vulkan startup check (a child process) and Qt's start.
+    Common::BootTiming::Mark("frontend: logging started");
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
@@ -455,6 +458,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     UpdateWindowTitle();
 
     show();
+    Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {
@@ -496,6 +500,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
     game_list->PopulateAsync(UISettings::values.game_dirs);
+    Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
 
     if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
         UISettings::values.show_whats_new.GetValue()) {
@@ -532,7 +537,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         renderer_status_button->setDisabled(true);
         renderer_status_button->setChecked(false);
     } else {
+        const double start = Common::BootTiming::Now();
         VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+        Common::BootTiming::Mark("frontend: Vulkan devices listed for the settings", start);
     }
 
     // On macOS, SDL video would pump AppKit events alongside Qt and disrupt native menus.
@@ -2149,10 +2156,12 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     game_list->SetScanEnabled(false);
     QElapsedTimer boot_timer;
     boot_timer.start();
+    Common::BootTiming::Mark("boot: game boot requested");
     SCOPE_EXIT {
         boot_in_progress = false;
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
+        Common::BootTiming::Mark("boot: launch finished, the loading screen waits for the game");
         if (!emulation_running && !close_pending) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
@@ -2194,6 +2203,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     const auto v_file = Core::GetGameFileFromPath(QtCommon::vfs, filename.toUtf8().constData());
     const auto loader =
         Loader::GetLoader(*QtCommon::system, v_file, params.program_id, params.program_index);
+    Common::BootTiming::Mark(
+        loader != nullptr
+            ? fmt::format("boot: {} loader ready", Loader::GetFileTypeString(loader->GetFileType()))
+            : std::string{"boot: no loader for the file"});
 
     if (loader != nullptr && loader->ReadProgramId(title_id) == Loader::ResultStatus::Success &&
         type == StartGameType::Normal) {
@@ -2260,11 +2273,13 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     QElapsedTimer load_timer;
     load_timer.start();
+    Common::BootTiming::Mark("boot: settings applied, core load starting");
     if (!LoadROM(filename, params)) {
         LOG_ERROR(Frontend, "Core load failed: elapsed_ms={}", load_timer.elapsed());
         return;
     }
     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
+    Common::BootTiming::Mark("boot: core load done");
 
     const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
     if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {

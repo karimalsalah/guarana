@@ -10,6 +10,7 @@
 #include <span>
 
 #include "common/assert.h"
+#include "common/boot_timing.h"
 #include "common/hex_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
@@ -814,13 +815,20 @@ void PatchManager::ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) co
         return;
     }
 
+    // TODO: a NUP or loose dump's RomFS was packed from a directory tree when the game loaded
+    // (Ocarina of Time: 186k files), and is unpacked here and packed again with the mods, about
+    // 0.3 s at boot. Handing the loader's tree to LayeredFS would skip the unpack and first pack;
+    // the loader and RomFSFactory pass only the packed file today.
+    const double unpack_start = Common::BootTiming::Now();
     auto extracted = ExtractRomFS(romfs);
     if (extracted == nullptr) {
         return;
     }
+    Common::BootTiming::Mark("romfs: base RomFS unpacked for LayeredFS", unpack_start);
 
     layers.emplace_back(std::move(extracted));
 
+    const double pack_start = Common::BootTiming::Now();
     auto layered = LayeredVfsDirectory::MakeLayeredDirectory(std::move(layers));
     auto layered_ext = LayeredVfsDirectory::MakeLayeredDirectory(std::move(layers_ext));
     if (layered == nullptr && layered_ext == nullptr) {
@@ -831,6 +839,7 @@ void PatchManager::ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) co
     if (packed == nullptr) {
         return;
     }
+    Common::BootTiming::Mark("romfs: mods layered and the RomFS packed again", pack_start);
 
     LOG_INFO(Loader, "    RomFS: LayeredFS patches applied successfully");
     for (const auto& mod : mods) {
@@ -848,6 +857,11 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
         LOG_INFO(Loader, "{}", log_string);
     } else {
         LOG_DEBUG(Loader, "{}", log_string);
+    }
+    const bool timed = type == ContentRecordType::Program;
+    const double patch_start = timed ? Common::BootTiming::Now() : 0.0;
+    if (timed) {
+        Common::BootTiming::Mark("romfs: game RomFS patch started (the game opened its RomFS)");
     }
 
     auto romfs = base_romfs;
@@ -964,6 +978,9 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
         ApplyLayeredFS(romfs, type);
     }
 
+    if (timed) {
+        Common::BootTiming::Mark("romfs: game RomFS patch done", patch_start);
+    }
     return romfs;
 }
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 
 #include <fmt/ranges.h>
 
+#include "common/boot_timing.h"
 #include "common/display_hdr.h"
 #include "common/logging.h"
 #include <ranges>
@@ -179,13 +181,21 @@ void ApplyGamePresets(const Device& device) {
 Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
                     VkSurfaceKHR surface,
                     const std::function<void(const Device&)>& on_capabilities) {
+    const double enumerate_start = Common::BootTiming::Now();
     const std::vector<VkPhysicalDevice> devices = instance.EnumeratePhysicalDevices();
+    Common::BootTiming::Mark("vulkan: physical devices enumerated", enumerate_start);
     const u32 device_index = Settings::values.vulkan_device.GetValue();
     if (device_index >= u32(devices.size())) {
         LOG_ERROR(Render_Vulkan, "Invalid device index {}!", device_index);
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     const vk::PhysicalDevice physical_device(devices[device_index], dld);
+    const double device_start = Common::BootTiming::Now();
+    SCOPE_EXIT {
+        if (std::uncaught_exceptions() == 0) {
+            Common::BootTiming::Mark("vulkan: device created", device_start);
+        }
+    };
     return Device(*instance, physical_device, surface, dld, on_capabilities);
 }
 

@@ -9,6 +9,7 @@
 #include <span>
 #include <vector>
 
+#include "common/boot_timing.h"
 #include "common/common_types.h"
 #include "common/dynamic_library.h"
 #include "common/logging.h"
@@ -153,6 +154,8 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
+    // The loader finds its drivers and layers on the first enumeration.
+    const double listing_start = Common::BootTiming::Now();
     // Enumerate instance extensions exactly once. RequiredExtensions() used to enumerate a second
     // time internally; if the driver returned a different set between the two calls (a real TOCTOU
     // seen on some AMD iGPU drivers), an extension added to the list could be missing from the
@@ -177,10 +180,13 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
                   VK_VERSION_MAJOR(required_version), VK_VERSION_MINOR(required_version));
         throw vk::Exception(VK_ERROR_INCOMPATIBLE_DRIVER);
     }
+    Common::BootTiming::Mark("vulkan: instance extensions and layers listed", listing_start);
+    const double create_start = Common::BootTiming::Now();
     vk::Instance instance =
         std::async([&] {
             return vk::Instance::Create(available_version, layers, extensions, dld);
         }).get();
+    Common::BootTiming::Mark("vulkan: instance created", create_start);
     if (!vk::Load(*instance, dld)) {
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan instance function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);

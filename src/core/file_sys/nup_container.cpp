@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 #include <list>
 #include <map>
 #include <memory>
@@ -520,6 +522,69 @@ private:
 
 } // namespace
 
+struct NupContainer::Table {
+    /// The package records, without the metadata each container reads itself.
+    std::vector<PackageInfo> packages;
+    std::vector<DirNode> dirs;
+    std::vector<FileNode> files;
+    std::vector<u32> children;
+};
+
+namespace {
+
+/// The tables of the files opened last. The game list, the boot and the process creation each
+/// make their own loader for the same file, and a large TOC (20 MiB, 186k files for one game)
+/// took tens of milliseconds to read, hash and parse every time.
+struct KeptTable {
+    std::array<u8, SuperblockSize> superblock{};
+    u64 size{};
+    std::shared_ptr<const void> table;
+};
+
+constexpr std::size_t MaxKeptTables = 2;
+
+struct KeptTables {
+    std::mutex mutex;
+    /// Most recently used first.
+    std::vector<KeptTable> entries;
+};
+
+KeptTables& GetKeptTables() {
+    static KeptTables kept;
+    return kept;
+}
+
+} // namespace
+
+std::shared_ptr<const NupContainer::Table> NupContainer::FindKeptTable(
+    std::span<const u8, 0x80> superblock, u64 size) {
+    auto& kept = GetKeptTables();
+    std::scoped_lock lock{kept.mutex};
+    const auto it = std::ranges::find_if(kept.entries, [&](const KeptTable& entry) {
+        return entry.size == size && std::ranges::equal(entry.superblock, superblock);
+    });
+    if (it == kept.entries.end()) {
+        return nullptr;
+    }
+    std::rotate(kept.entries.begin(), it, std::next(it));
+    return std::static_pointer_cast<const Table>(kept.entries.front().table);
+}
+
+void NupContainer::KeepTable(std::span<const u8, 0x80> superblock, u64 size,
+                             std::shared_ptr<const Table> parsed) {
+    KeptTable entry{.size = size, .table = std::move(parsed)};
+    std::ranges::copy(superblock, entry.superblock.begin());
+    auto& kept = GetKeptTables();
+    std::scoped_lock lock{kept.mutex};
+    std::erase_if(kept.entries, [&](const KeptTable& other) {
+        return other.size == size && other.superblock == entry.superblock;
+    });
+    kept.entries.insert(kept.entries.begin(), std::move(entry));
+    if (kept.entries.size() > MaxKeptTables) {
+        kept.entries.resize(MaxKeptTables);
+    }
+}
+
 bool NupContainer::IsNupFile(const VirtualFile& file) {
     if (file == nullptr || file->GetSize() < SuperblockSize) {
         return false;
@@ -573,6 +638,51 @@ bool NupContainer::Parse() {
         return false;
     }
 
+    // The superblock holds the TOC's SHA-256: an unchanged superblock and size is the TOC parsed
+    // before. The metadata blocks are outside the TOC, so each container reads them itself.
+    std::array<u8, SuperblockSize> superblock{};
+    std::memcpy(superblock.data(), &super, superblock.size());
+    if (auto kept = FindKeptTable(superblock, file_size)) {
+        UseTable(std::move(kept));
+        LOG_DEBUG(Loader, "NUP: reusing the TOC already read for {}", file->GetName());
+    } else {
+        const auto start = std::chrono::steady_clock::now();
+        auto parsed = std::make_shared<Table>();
+        if (!ParseToc(*parsed, super.toc_sha256, static_cast<u32>(super.package_count))) {
+            return false;
+        }
+        UseTable(parsed);
+        if (!ValidateDirTree()) {
+            status = Loader::ResultStatus::ErrorNUPBadFormat;
+            return false;
+        }
+        KeepTable(superblock, file_size, std::move(parsed));
+        LOG_INFO(Loader, "NUP: read the TOC of {} ({} files, {:.1f} MiB) in {:.1f} ms",
+                 file->GetName(), files.size(), static_cast<double>(toc_size) / (1024.0 * 1024.0),
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           start)
+                     .count());
+    }
+
+    packages = table->packages;
+    for (auto& package : packages) {
+        if (!ParseMeta(package)) {
+            status = Loader::ResultStatus::ErrorNUPBadFormat;
+            return false;
+        }
+    }
+    return true;
+}
+
+void NupContainer::UseTable(std::shared_ptr<const Table> shared) {
+    table = std::move(shared);
+    dirs = table->dirs;
+    files = table->files;
+    children = table->children;
+}
+
+bool NupContainer::ParseToc(Table& out, const std::array<u8, 0x20>& toc_sha256,
+                            u32 package_count) {
     const auto toc = file->ReadBytes(static_cast<std::size_t>(toc_size),
                                      static_cast<std::size_t>(toc_offset));
     if (toc.size() != toc_size) {
@@ -580,7 +690,7 @@ bool NupContainer::Parse() {
         return false;
     }
     std::array<u8, 0x20> toc_hash{};
-    if (!Sha256(toc.data(), toc.size(), toc_hash) || toc_hash != super.toc_sha256) {
+    if (!Sha256(toc.data(), toc.size(), toc_hash) || toc_hash != toc_sha256) {
         LOG_ERROR(Loader, "NUP TOC SHA-256 mismatch, the file is corrupt or was modified");
         status = Loader::ResultStatus::ErrorNUPBadFormat;
         return false;
@@ -593,7 +703,7 @@ bool NupContainer::Parse() {
     }
     std::memcpy(&header, toc.data(), sizeof(header));
     if (header.magic != TocMagic || header.package_count == 0 ||
-        static_cast<u32>(header.package_count) != super.package_count) {
+        static_cast<u32>(header.package_count) != package_count) {
         status = Loader::ResultStatus::ErrorNUPBadFormat;
         return false;
     }
@@ -617,7 +727,7 @@ bool NupContainer::Parse() {
     const u8* base = toc.data();
 
     std::size_t pos = TocHeaderSize;
-    packages.reserve(header.package_count);
+    out.packages.reserve(header.package_count);
     for (u32 i = 0; i < header.package_count; ++i) {
         PackageRecord record{};
         std::memcpy(&record, base + pos, sizeof(record));
@@ -643,10 +753,11 @@ bool NupContainer::Parse() {
             package.meta_offset = record.meta_offset;
             package.meta_size = record.meta_size;
         }
-        packages.push_back(std::move(package));
+        out.packages.push_back(std::move(package));
     }
 
-    dirs.resize(header.dir_count);
+    auto& out_dirs = out.dirs;
+    out_dirs.resize(header.dir_count);
     for (u64 i = 0; i < header.dir_count; ++i) {
         DirRecord record{};
         std::memcpy(&record, base + pos, sizeof(record));
@@ -657,14 +768,15 @@ bool NupContainer::Parse() {
             status = Loader::ResultStatus::ErrorNUPBadFormat;
             return false;
         }
-        dirs[i].name = std::string(reinterpret_cast<const char*>(base) + header.pool_offset +
-                                       record.name_offset,
-                                   record.name_length);
-        dirs[i].first_child = record.first_child;
-        dirs[i].child_count = record.child_count;
+        out_dirs[i].name = std::string(reinterpret_cast<const char*>(base) + header.pool_offset +
+                                           record.name_offset,
+                                       record.name_length);
+        out_dirs[i].first_child = record.first_child;
+        out_dirs[i].child_count = record.child_count;
     }
 
-    files.resize(header.file_count);
+    auto& out_files = out.files;
+    out_files.resize(header.file_count);
     for (u64 i = 0; i < header.file_count; ++i) {
         FileRecord record{};
         std::memcpy(&record, base + pos, sizeof(record));
@@ -679,32 +791,21 @@ bool NupContainer::Parse() {
             status = Loader::ResultStatus::ErrorNUPBadFormat;
             return false;
         }
-        files[i].name = std::string(reinterpret_cast<const char*>(base) + header.pool_offset +
-                                        record.name_offset,
-                                    record.name_length);
-        files[i].size = record.size;
-        files[i].sha256 = record.sha256;
-        files[i].extent_offset = record.extent_offset;
-        files[i].extent_size = record.extent_size;
-        files[i].codec = record.codec;
+        out_files[i].name = std::string(reinterpret_cast<const char*>(base) + header.pool_offset +
+                                            record.name_offset,
+                                        record.name_length);
+        out_files[i].size = record.size;
+        out_files[i].sha256 = record.sha256;
+        out_files[i].extent_offset = record.extent_offset;
+        out_files[i].extent_size = record.extent_size;
+        out_files[i].codec = record.codec;
     }
 
-    children.resize(children_bytes / sizeof(u32));
-    std::memcpy(children.data(), base + children_offset, children_bytes);
-    for (const u32 child : children) {
+    auto& out_children = out.children;
+    out_children.resize(children_bytes / sizeof(u32));
+    std::memcpy(out_children.data(), base + children_offset, children_bytes);
+    for (const u32 child : out_children) {
         if (child >= header.dir_count + header.file_count) {
-            status = Loader::ResultStatus::ErrorNUPBadFormat;
-            return false;
-        }
-    }
-
-    if (!ValidateDirTree()) {
-        status = Loader::ResultStatus::ErrorNUPBadFormat;
-        return false;
-    }
-
-    for (auto& package : packages) {
-        if (!ParseMeta(package)) {
             status = Loader::ResultStatus::ErrorNUPBadFormat;
             return false;
         }
@@ -978,11 +1079,19 @@ void NupContainer::BuildDirTree(u32 dir_index, VectorVfsDirectory& out, bool ser
             // A game .zs is already compressed, so the NUP only recompresses one that shrinks,
             // which a zeroed range does: only those members need their header checked.
             const FileNode& member = files[index];
-            if (serve_stand_ins && member.codec == CodecZstd && member.name.ends_with(".zs") &&
-                HasZstdMagic(index) == false) {
-                damaged.push_back(index);
-            } else {
+            bool sound = true;
+            if (serve_stand_ins && member.codec == CodecZstd && member.name.ends_with(".zs")) {
+                const auto checked = std::chrono::steady_clock::now();
+                sound = HasZstdMagic(index) != false;
+                header_check_ms += std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - checked)
+                                       .count();
+                ++header_checks;
+            }
+            if (sound) {
                 out.AddFile(OpenFile(index));
+            } else {
+                damaged.push_back(index);
             }
         } else {
             auto sub = std::make_shared<VectorVfsDirectory>(std::vector<VirtualFile>{},
@@ -1042,8 +1151,19 @@ VirtualDir NupContainer::GetRomFSDir(std::size_t package_index) {
         romfs_dir_cache.resize(packages.size());
     }
     if (romfs_dir_cache[package_index] == nullptr) {
+        const auto start = std::chrono::steady_clock::now();
+        header_checks = 0;
+        header_check_ms = 0.0;
         // Only the game sees stand-ins; extraction and other package readers get stored bytes.
         romfs_dir_cache[package_index] = BuildPackageDir(packages[package_index].romfs_dir, true);
+        LOG_INFO(Loader,
+                 "NUP: RomFS tree of package {} built in {:.1f} ms, of which {:.1f} ms checked "
+                 "the zstd header of {} recompressed .zs members",
+                 package_index,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           start)
+                     .count(),
+                 header_check_ms, header_checks);
     }
     return romfs_dir_cache[package_index];
 }

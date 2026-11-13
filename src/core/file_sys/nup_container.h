@@ -130,7 +130,19 @@ private:
         u8 codec{};
     };
 
+    /// What the TOC holds, read once and shared by the containers of an unchanged file.
+    struct Table;
+
+    /// The table kept for a file with this superblock (it holds the TOC's SHA-256) and size.
+    static std::shared_ptr<const Table> FindKeptTable(std::span<const u8, 0x80> superblock,
+                                                      u64 size);
+    /// Keeps a parsed table for the next containers of the same file, the latest few files only.
+    static void KeepTable(std::span<const u8, 0x80> superblock, u64 size,
+                          std::shared_ptr<const Table> parsed);
+
     bool Parse();
+    bool ParseToc(Table& out, const std::array<u8, 0x20>& toc_sha256, u32 package_count);
+    void UseTable(std::shared_ptr<const Table> shared);
     bool ParseMeta(PackageInfo& package);
     bool ValidateDirTree() const;
     /// With serve_stand_ins, a .zs member with no zstd header is served from a sound sibling.
@@ -152,13 +164,20 @@ private:
     u64 blob_offset{};
     u64 file_size{};
 
-    std::vector<DirNode> dirs;
-    std::vector<FileNode> files;
-    std::vector<u32> children;
+    /// Owns what dirs, files and children view.
+    std::shared_ptr<const Table> table;
+    std::span<const DirNode> dirs;
+    std::span<const FileNode> files;
+    std::span<const u32> children;
+    /// The package records with the metadata this container read.
     std::vector<PackageInfo> packages;
 
     std::vector<VirtualDir> exefs_dir_cache;
     std::vector<VirtualDir> romfs_dir_cache;
+
+    /// The zstd header checks of the RomFS tree being built, and the time they took.
+    std::size_t header_checks{};
+    double header_check_ms{};
 
     std::shared_ptr<NupDecompressCache> cache;
 };
