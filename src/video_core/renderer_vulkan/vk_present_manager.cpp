@@ -119,6 +119,23 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     }();
     return on;
 }
+
+/// EDEN_NX2_FLUID_HOST_WAIT_US=<us> (500 to 16000): how long that wait lasts at most, by default
+/// 12000 at 60 shown frames a second and 4000 above 75 (at 120 a slot is 8.3 ms: a longer wait makes
+/// the present thread sleep through the next slot).
+[[nodiscard]] u64 FluidHostWaitNs(f64 shown_rate) {
+    static const u64 limit = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_HOST_WAIT_US");
+        return value == nullptr
+                   ? u64{0}
+                   : static_cast<u64>(std::clamp(std::strtol(value, nullptr, 10), 500L, 16000L)) *
+                         1000;
+    }();
+    if (limit != 0) {
+        return limit;
+    }
+    return shown_rate > 75.0 ? 4'000'000 : 12'000'000;
+}
 /// Real frames whose GPU work is watched at once.
 constexpr size_t FluidWatches = 8;
 /// The watchdog: frames came and none was shown for this long.
@@ -1495,10 +1512,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
         if (FluidQueueHostWait()) {
             // A copy still running after this long is late anyway: present and move on.
-            // At 120 a slot is 8.3 ms: a longer wait would make the present thread sleep through
-            // the next slot.
-            const u64 host_wait_ns = FluidShownRate() > 75.0 ? 4'000'000 : 12'000'000;
-            void(frame->present_done.Wait(host_wait_ns));
+            void(frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())));
         }
     } else {
         const vk::CommandBuffer cmdbuf{frame->cmdbuf};

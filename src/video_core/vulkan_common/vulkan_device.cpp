@@ -413,6 +413,10 @@ std::vector<const char*> ExtensionListForVulkan(
 /// rendering without preempting it. On the Arc 140T (driver 9175), presenting from the compute
 /// family (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost
 /// 17% of the real frame rate in Hyrule Field (20.0 against 24.0 fps) in one unpaired run.
+/// 6: as 5 on the GPU's copy engine, a transfer-only family, when there is one, so the copy does
+/// not share the shader cores with the game's rendering (on the Arc 140T family 1 is compute and
+/// family 2 transfer only). 7: as 6, also presenting from that queue. Both not yet measured in a
+/// paired run.
 [[nodiscard]] u32 FluidQueueMode() {
     const char* fluid = std::getenv("EDEN_NX2_FLUID");
     if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
@@ -589,6 +593,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         const std::vector family_properties = physical.GetQueueFamilyProperties();
         std::optional<u32> chosen;
         int chosen_score = -1;
+        const bool copy_engine = fluid_queue_mode == 6 || fluid_queue_mode == 7;
         for (u32 index = 0; index < static_cast<u32>(family_properties.size()); ++index) {
             const VkQueueFamilyProperties& family = family_properties[index];
             if (index == graphics_family || index == present_family || family.queueCount == 0 ||
@@ -596,11 +601,16 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                 continue;
             }
             const bool presents = surface && physical.GetSurfaceSupportKHR(index, surface);
-            const int score = (presents ? 2 : 0) + ((family.queueFlags & VK_QUEUE_COMPUTE_BIT) ? 1 : 0);
+            const bool copy_only =
+                (family.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) == 0;
+            const int score =
+                copy_engine ? (copy_only ? 4 : 0) + (presents ? 2 : 0)
+                            : (presents ? 2 : 0) + ((family.queueFlags & VK_QUEUE_COMPUTE_BIT) ? 1 : 0);
             if (score > chosen_score) {
                 chosen = index;
                 chosen_score = score;
-                fluid_presents = presents && fluid_queue_mode != 3 && fluid_queue_mode != 5;
+                fluid_presents = presents && fluid_queue_mode != 3 && fluid_queue_mode != 5 &&
+                                 fluid_queue_mode != 6;
             }
         }
         if (chosen) {
@@ -608,7 +618,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             has_fluid_queue = true;
             const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
             fluid_high_priority =
-                fluid_queue_mode != 2 && fluid_queue_mode != 5 &&
+                fluid_queue_mode != 2 && fluid_queue_mode != 5 && !copy_engine &&
                 (supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
                  supported_extensions.contains(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)) &&
                 std::ranges::find(priorities, VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) !=
