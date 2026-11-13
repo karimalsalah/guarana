@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -28,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
+#include "video_core/renderer_vulkan/vk_pipeline_library.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/texture_cache/draw_template.h"
@@ -138,15 +140,28 @@ struct KeptGraphicsStages {
     std::array<std::unique_ptr<Shader::Info>, NUM_STAGES> infos;
     std::optional<MeshEmulationSetup> mesh_emulation;
     VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    bool libraries{}; ///< built from graphics pipeline libraries (per-stage descriptor sets)
 
     /// Memory it holds, roughly
     [[nodiscard]] u64 Bytes() const noexcept;
+};
+
+/// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
+/// from shared per-stage libraries.
+struct GraphicsPipelineLibraryParams {
+    GraphicsPipelineLibraryCache* library_cache{};
 };
 
 class GraphicsPipeline {
     static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
 
 public:
+    /// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
+    /// from per-stage libraries; the stages were emitted with one descriptor set per stage.
+    // Declared outside the class: GCC rejects a default argument `= {}` of a nested struct
+    // with member initializers inside its enclosing class.
+    using LibraryParams = GraphicsPipelineLibraryParams;
+
     explicit GraphicsPipeline(
         Scheduler& scheduler, BufferCache& buffer_cache, TextureCache& texture_cache,
         vk::PipelineCache& pipeline_cache, PipelineBinaries* binaries,
@@ -159,7 +174,8 @@ public:
         const std::array<const Shader::Info*, NUM_STAGES>& infos,
         std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages = {},
         std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt,
-        std::shared_ptr<PrepassShaders> prepass_shaders = nullptr);
+        std::shared_ptr<PrepassShaders> prepass_shaders = nullptr,
+        LibraryParams library_params = {});
 
     static std::chrono::nanoseconds TakeHoldTime() noexcept;
     /// Draws resolved from the texture memo and in full since the last call.
@@ -492,6 +508,31 @@ private:
     /// stages before the fragment one. A failure leaves the pipeline without them.
     void MakePrepassPipelines(VkRenderPass render_pass);
 
+    struct PipelineStates;
+
+    /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
+    void FillStates(PipelineStates& states, PipelineVariant variant) const;
+
+    /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then links them
+    /// with this pipeline's vertex input and fragment output parts. False when a library
+    /// failed; the caller then builds the pipeline the monolithic way.
+    bool MakeLibraryPipeline(VkRenderPass render_pass);
+
+    GplLibrary MakeShaderLibrary(GplPart part, const PipelineStates& states,
+                                 VkRenderPass render_pass) const;
+
+    std::string ShaderLibraryKey(GplPart part, const PipelineStates& states,
+                                 VkRenderPass render_pass) const;
+
+    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized);
+
+    /// Build body with libraries: the fast link (or monolithic fallback), then the optimized link
+    /// in the background.
+    void MakeLibraryBuild(VkRenderPass render_pass);
+
+    /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
+    void FallBackToMonolithic(VkRenderPass render_pass);
+
     void Validate();
 
     const GraphicsPipelineCacheKey key;
@@ -577,11 +618,40 @@ private:
     u64 kept_scale_epoch{};
     bool kept_images_valid{};
 
+    /// Graphics pipeline libraries (EDEN_NX2_GPL): one descriptor set per stage (set index =
+    /// stage index), the shader libraries, and this pipeline's own vertex input and fragment
+    /// output libraries.
+    GraphicsPipelineLibraryCache* const library_cache;
+    std::array<u128, NUM_STAGES> spirv_hashes{};
+    std::array<vk::DescriptorSetLayout, NUM_STAGES> stage_set_layouts;
+    std::array<std::string, NUM_STAGES> stage_set_signatures;
+    std::array<DescriptorAllocator, NUM_STAGES> stage_allocators;
+    std::array<vk::DescriptorUpdateTemplate, NUM_STAGES> stage_templates;
+    std::array<size_t, NUM_STAGES> stage_descriptor_offsets{}; ///< Bytes into the update data
+    bool has_stage_sets{};
+    std::array<std::shared_ptr<const GplLibrary>, 2> shader_libraries;
+    vk::Pipeline vertex_input_library;
+    vk::Pipeline fragment_output_library;
+    vk::DescriptorSetLayout fallback_empty_set_layout;
+    std::atomic_bool linked{};
+
     vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;
     vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
+    /// Optimized link (GplOptimizeEnabled): the optimized pipeline once its build is done, and
+    /// the first one kept alive after the swap for the command buffers that bound it.
+    vk::Pipeline optimized_pipeline;
+    vk::Pipeline retired_pipeline;
+    std::atomic_bool optimized_ready{};
+    bool optimized_bound{};
+    /// The build produced a pipeline. Written by the build before it completes, read by the GPU
+    /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
+    bool has_pipeline{};
+    /// The scheduler of the build's job (PipelineBuildQueue::jobs), which also runs the optimized
+    /// build as a Background job. Null when built without jobs.
+    VideoCommon::ShaderJobScheduler* const build_jobs;
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
@@ -621,6 +691,9 @@ private:
     std::array<vk::ShaderModule, 2> prepass_modules;
     std::array<vk::Pipeline, 2> prepass_pipelines;
 
+    /// Declared before `build`: destroyed after it, so the first build (which starts this one)
+    /// has finished when this one is waited for.
+    std::optional<PipelineBuild> optimized_build;
     std::optional<PipelineBuild> build;
 };
 

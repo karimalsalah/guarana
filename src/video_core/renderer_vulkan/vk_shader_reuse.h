@@ -209,6 +209,10 @@ struct ReusableShaders {
     std::array<Shader::Info, Maxwell::MaxShaderStage> infos;
     /// What translation asked each program's environment, in the order the environments come.
     boost::container::static_vector<TranslationReads, Maxwell::MaxShaderProgram> reads;
+    /// The SPIR-V was emitted with one descriptor set per stage (graphics pipeline libraries),
+    /// and whether the shaders alone allow that (a pipeline with other state may differ).
+    bool libraries{};
+    bool libraries_fit{};
 
     /// Compresses the SPIR-V of the stages into `spirv`.
     void SetSpirv(std::span<const std::vector<u32>> code);
