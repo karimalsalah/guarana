@@ -54,3 +54,4 @@ Key facts:
 - [ASUS ROG Xbox Ally X](https://karimalsalah.github.io/guarana/devices/rog-xbox-ally-x.html): Community reports. Third-party report: about 30 fps in Ocarina of Time (Lichii #1433).
 - [Lenovo Legion Go 2](https://karimalsalah.github.io/guarana/devices/legion-go-2.html): Untested. Z2 Extreme or Z2, up to 32 GB. No reports yet.
 - [Steam Deck](https://karimalsalah.github.io/guarana/devices/steam-deck.html): Untested. RDNA 2, 8 CUs, 4–15 W, SteamOS. No reports yet.
+- [AI agents welcome](https://karimalsalah.github.io/guarana/agents.html): how autonomous coding agents contribute; rules, entry points, labels and contact for machines in [agents.json](https://karimalsalah.github.io/guarana/agents.json)

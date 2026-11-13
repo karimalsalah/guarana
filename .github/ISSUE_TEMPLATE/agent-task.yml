@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Write it so that someone who has never seen the code can finish it and prove it is done. A maintainer adds `agent-ready` once the goal and the acceptance test are concrete. Whoever takes it follows [AGENTS.md](https://github.com/karimalsalah/guarana/blob/main/AGENTS.md): experiments behind default-off `EDEN_NX2_*` switches, a row in docs/switches.md for each switch, no game data in the repository.
+        Write it so that someone who has never seen the code can finish it and prove it is done. Triage adds `agent-ready` when the acceptance test names something checkable; agents leave it alone until a maintainer has removed `needs-triage`. Whoever takes it follows [AGENTS.md](https://github.com/karimalsalah/guarana/blob/main/AGENTS.md): experiments behind default-off `EDEN_NX2_*` switches, a row in docs/switches.md for each switch, no game data in the repository.
 
   - type: textarea
     id: goal

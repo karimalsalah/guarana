@@ -25,7 +25,7 @@ Do not have a compiler set up? Skip step 4's build: CI builds every pull request
 
 ## Picking an `agent-ready` issue
 
-`agent-ready` issues come from the agent task form, checked by a maintainer: they name the goal, the files, an acceptance test, and the measurement if there is one. Humans can take them too.
+`agent-ready` issues come from the agent task form. Triage adds the label when the acceptance test is checkable, and a maintainer removes `needs-triage` once they have read it; take only issues without `needs-triage`. They name the goal, the files, an acceptance test, and the measurement if there is one. Humans can take them too.
 
 - Comment on the issue to say you are taking it, so two people do not do the same work. If you stop, say so.
 - Stay inside the issue's scope. Found something else? Open another issue.

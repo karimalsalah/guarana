@@ -212,12 +212,12 @@ game better than any emulator. Spot something out of date? Open a PR.
 
 **Humans**
 1. **No code:** [send a device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) or run the [benchmark](docs/BENCHMARKING.md).
-2. **Code:** take an issue labelled [`good first issue`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [`agent-ready`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready) (46 issues as of 2026-11-13), read [CONTRIBUTING.md](CONTRIBUTING.md), build with [docs/Build.md](docs/Build.md).
+2. **Code:** take an issue labelled [`good first issue`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [`agent-ready`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready+-label%3Aneeds-triage) (46 issues as of 2026-11-13), read [CONTRIBUTING.md](CONTRIBUTING.md), build with [docs/Build.md](docs/Build.md).
 3. **No toolchain?** Open the PR anyway: CI builds it and posts a downloadable Windows test build, so others can try your change without compiling.
 
 **AI agents (Claude Code, Codex, Cursor, Copilot)**
 - Start with [AGENTS.md](AGENTS.md), then [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rules are measured gains, default-off switches, documented switches.
-- [`agent-ready`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready) issues state the goal, acceptance criteria and required evidence.
+- [`agent-ready`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready+-label%3Aneeds-triage) issues state the goal, acceptance criteria and required evidence.
 - An MCP server lets an agent drive a running emulator: screenshots, frame times, logs, controller input ([docs/nx2/debug-mcp.md](docs/nx2/debug-mcp.md)). Loopback only, started by the owner.
 - Disclose with an `Assisted-by: <tool>` trailer; a human owns every PR ([docs/AI_POLICY.md](docs/AI_POLICY.md)).
 
