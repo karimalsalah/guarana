@@ -45,6 +45,7 @@
 #include "util/util.h"
 #include "lichii/game/game_list.h"
 #include "lichii/nup_dialogs.h"
+#include "lichii/problem_report.h"
 #include "lichii/recommended_settings_dialog.h"
 #include "lichii/shader_warm_dialog.h"
 #include "lichii/whats_new_dialog.h"
@@ -1654,6 +1655,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Stop, &MainWindow::OnStopGame);
     connect_menu(ui->action_Open_Mods_Page, &MainWindow::OnOpenModsPage);
     connect_menu(ui->action_Open_UserHandbook, &MainWindow::OnOpenUserHandbook);
+    connect_menu(ui->action_Report_Problem, &MainWindow::OnReportProblem);
     connect_menu(ui->action_Restart, &MainWindow::OnRestartGame);
     connect_menu(ui->action_Configure, &MainWindow::OnConfigure);
     connect_menu(ui->action_Configure_Current_Game, &MainWindow::OnConfigurePerGame);
@@ -3725,6 +3727,14 @@ void MainWindow::OnOpenModsPage() {
 
 void MainWindow::OnOpenUserHandbook() {
     OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
+}
+
+void MainWindow::OnReportProblem() {
+    ProblemReport::Context context{.session = report_session};
+    for (const VkDeviceInfo::Record& record : vk_device_records) {
+        context.vulkan_devices << QString::fromStdString(record.name);
+    }
+    ProblemReport::Run(this, context);
 }
 
 void MainWindow::ToggleFullscreen() {
@@ -6036,7 +6046,7 @@ static QPalette LichiiPalette() {
 }
 
 void MainWindow::UpdateMenuIcons() {
-    const std::array<std::pair<QAction*, const char*>, 55> icons{{
+    const std::array<std::pair<QAction*, const char*>, 56> icons{{
         {ui->action_Install_File_NAND, "download"},
         {ui->action_Load_File, "file"},
         {ui->action_Load_Folder, "folder"},
@@ -6087,6 +6097,7 @@ void MainWindow::UpdateMenuIcons() {
         {ui->action_Launch_PhotoViewer, "image"},
         {ui->action_Open_Mods_Page, "puzzle"},
         {ui->action_Open_UserHandbook, "help"},
+        {ui->action_Report_Problem, "bug"},
         {ui->action_Apply_Recommended_Settings, "wand"},
         {ui->action_Restore_Previous_Settings, "restart"},
         {ui->action_Whats_New, "sparkles"},

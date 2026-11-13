@@ -235,6 +235,7 @@ add_executable(lichii
     lichii.rc
     migration_dialog.h migration_dialog.cpp
     nup_dialogs.h nup_dialogs.cpp
+    problem_report.h problem_report.cpp
     shader_warm_dialog.h shader_warm_dialog.cpp
     recommended_settings_dialog.h recommended_settings_dialog.cpp
     whats_new_dialog.h whats_new_dialog.cpp

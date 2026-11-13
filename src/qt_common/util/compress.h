@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QDir>
+#include <QList>
+#include <QPair>
 #include <QString>
 #include <quazip.h>
 #include <zlib.h>
@@ -95,6 +98,16 @@ private:
  */
 bool compressDir(QString fileCompressed, QString dir, const Options& options = Options(),
                  QtCommon::QtProgressCallback callback = {});
+
+/**
+ * @brief Writes files held in memory to a new zip, replacing any file of that name.
+ * @param fileCompressed Destination file
+ * @param files          Each file's name in the archive and its contents
+ * @param options        Compression level, etc
+ */
+bool compressBuffers(const QString& fileCompressed,
+                     const QList<QPair<QString, QByteArray>>& files,
+                     const Options& options = Options());
 
 // Internal //
 bool compressSubDir(QuaZip* zip, QString dir, QString origDir, const Options& options,
