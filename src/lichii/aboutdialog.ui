@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-    <string>About Lichii</string>
+    <string>About Guarana</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_3">
    <item>
@@ -95,7 +95,7 @@
           </sizepolicy>
          </property>
          <property name="text">
-          <string>Lichii is an experimental open-source emulator for the Nintendo Switch 2, based on Eglantine and Eden.
+          <string>Guarana is an experimental open-source emulator for the Nintendo Switch 2, based on Lichii, Eden, Eglantine and yuzu.
 
 This software should not be used to play games you have not legally obtained.</string>
          </property>
@@ -126,7 +126,7 @@ This software should not be used to play games you have not legally obtained.</s
           </sizepolicy>
          </property>
          <property name="text">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Lichii is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:7pt;&quot;&gt;&amp;quot;Nintendo Switch&amp;quot; is a trademark of Nintendo. Guarana is not affiliated with Nintendo in any way.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
          </property>
         </widget>
        </item>

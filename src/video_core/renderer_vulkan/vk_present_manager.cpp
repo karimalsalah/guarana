@@ -23,6 +23,7 @@
 #include "common/windows/timer_resolution.h"
 #endif
 #include "core/frontend/emu_window.h"
+#include "video_core/autopilot_feed.h"
 #include "video_core/nx2_profile.h"
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
@@ -115,6 +116,7 @@ void ResetFrame(Frame* frame) {
     frame->present_spacing = {};
     frame->fluid_slot = 0;
     frame->fluid_batch = 0;
+    frame->fluid_final = false;
     frame->fluid_recorded = {};
     frame->gpu_tick = 0;
 #ifdef EGLANTINE_STREAMLINE
@@ -426,11 +428,13 @@ void PresentManager::Present(Frame* frame) {
             scheduler.WaitWorker();
         }
         CopyToSwapchain(frame);
+        VideoCore::AutopilotFeed::NoteShown();
         free_queue.push_back(frame);
     }
 }
 
 void PresentManager::NoteShownFrame() {
+    VideoCore::AutopilotFeed::NoteShown();
     // EDEN_NX2_SHOWN_STATS=1: every 10 s, how evenly frames reached the swapchain (generated ones
     // included): the intervals between presents and the share within 2 ms of the median.
     static const bool enabled = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
@@ -680,6 +684,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                      Common::VblankClock::SourceName(source));
         }
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
+        VideoCore::AutopilotFeed::SetRefreshPeriod(period);
         const auto offset = (std::min)(FluidPresentOffset, period * 42 / 100);
         {
             std::scoped_lock lock{fluid_clock_mutex};
@@ -814,8 +819,11 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
     }
     fluid.vblank += static_cast<u64>(elapsed);
     fluid.last_wake = wake;
-    // Slots of about 16.7 ms: every round(refresh / 60) vblanks.
-    const f64 per_slot = 1.0e9 / (60.0 * static_cast<f64>(period.count()));
+    // Slots of about 16.7 ms: every round(refresh / 60) vblanks, or of the shown rate the
+    // autopilot steers towards (EDEN_NX2_AUTOPILOT).
+    const f64 slot_rate = VideoCore::AutopilotFeed::SlotRate();
+    const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : 60.0) *
+                                  static_cast<f64>(period.count()));
     fluid.divisor =
         static_cast<u64>(std::clamp<s64>(static_cast<s64>(std::llround(per_slot)), 1, 8));
     return period;
@@ -841,6 +849,7 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
             continue;
         }
         fluid.watched_batch = frame->fluid_batch;
+        fluid.newest_batch = (std::max)(fluid.newest_batch, frame->fluid_batch);
         if (fluid.watches.size() >= FluidWatches) {
             fluid.watches.erase(fluid.watches.begin());
         }
@@ -933,7 +942,7 @@ void PresentManager::FluidRelease(std::chrono::steady_clock::time_point now) {
                         [this, frame, slot](const Frame* other) {
                             return FluidScheduled(other) &&
                                    other->fluid_batch > frame->fluid_batch &&
-                                   FluidSlotOf(other, fluid.divisor) == slot &&
+                                   FluidSlotOf(other, fluid.divisor) <= slot &&
                                    scheduler.IsFree(other->gpu_tick);
                         });
         if (replaced) {
@@ -986,9 +995,13 @@ bool PresentManager::FluidPresentUnscheduled(std::chrono::steady_clock::time_poi
 
 void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_point slot_time,
                                       bool count) {
+    constexpr auto MaxRollAge = std::chrono::milliseconds{250};
     const u64 after = fluid.last_slot;
     fluid.last_slot = slot;
     Frame* best = nullptr;
+    // The frame to move to the next slot rather than drop: the newest one the slot found not done,
+    // or the one a copy still queued kept from being shown.
+    Frame* keep = nullptr;
     if (count) {
         if (after != 0 && slot > after + fluid.divisor) {
             // The present thread slept through these.
@@ -997,32 +1010,67 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
             fluid_stats.overslept += skipped;
         }
         ++fluid_stats.slots;
+        FluidPredictHold(slot, after); // EDEN_NX2_PREDICT
+        const auto newer = [](const Frame* frame, const Frame* than) {
+            return than == nullptr || frame->fluid_batch > than->fluid_batch ||
+                   (frame->fluid_batch == than->fluid_batch && frame->fluid_slot > than->fluid_slot);
+        };
         // The newest real frame's frame for the slot whose GPU work is done.
+        Frame* latest = nullptr;
         for (Frame* const frame : fluid.pending) {
-            if (!FluidScheduled(frame) || frame->fluid_slot <= after || frame->fluid_slot > slot ||
-                !scheduler.IsFree(frame->gpu_tick)) {
+            if (!FluidScheduled(frame) || frame->fluid_slot <= after || frame->fluid_slot > slot) {
                 continue;
             }
-            if (best == nullptr || frame->fluid_batch > best->fluid_batch ||
-                (frame->fluid_batch == best->fluid_batch && frame->fluid_slot > best->fluid_slot)) {
+            if (newer(frame, latest)) {
+                latest = frame;
+            }
+            if (scheduler.IsFree(frame->gpu_tick) && newer(frame, best)) {
                 best = frame;
             }
         }
+        FluidPredictNote(slot, best); // EDEN_NX2_PREDICT
         if (best == nullptr) {
             ++fluid_stats.no_frame;
+            ++(latest != nullptr ? fluid_stats.not_done : fluid_stats.uncovered);
+            keep = latest;
         } else if (fluid.showing != nullptr) {
             // The last copy is still queued: presenting this one would queue a second.
             ++fluid_stats.queued;
+            keep = best;
             best = nullptr;
         }
+        if (keep != nullptr) {
+            // Dropped, it would leave the screen on the last frame until the next batch; shown a
+            // slot late it is still the newest picture, unless a frame of its batch or a newer
+            // one waits for a later slot.
+            const bool superseded = std::any_of(
+                fluid.pending.begin(), fluid.pending.end(), [&](const Frame* other) {
+                    return other != keep && FluidScheduled(other) && other->fluid_slot > slot &&
+                           other->fluid_batch >= keep->fluid_batch;
+                });
+            if (superseded || slot_time - keep->fluid_recorded > MaxRollAge) {
+                keep = nullptr;
+            }
+        }
     }
+    const u64 final_batch = best != nullptr && best->fluid_final ? best->fluid_batch : 0;
     std::scoped_lock swapchain_lock{swapchain_mutex};
+    if (keep != nullptr) {
+        keep->fluid_slot = slot + fluid.divisor;
+        ++fluid_stats.rolled;
+    }
     // The slot is over for the frames up to it.
-    std::erase_if(fluid.pending, [this, slot, best](Frame* frame) {
+    std::erase_if(fluid.pending, [this, slot, best, final_batch](Frame* frame) {
         if (frame == best) {
             return true;
         }
-        if (!FluidScheduled(frame) || frame->fluid_slot > slot) {
+        if (!FluidScheduled(frame)) {
+            return false;
+        }
+        if (final_batch != 0 && frame->fluid_batch < final_batch) {
+            // Predicted from the scene before a cut: shown after the cut frame it would flash back.
+            ++fluid_stats.stale;
+        } else if (frame->fluid_slot > slot) {
             return false;
         }
         FluidDiscard(frame);
@@ -1033,6 +1081,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
         return;
     }
     ++fluid_stats.hits;
+    fluid_stats.spare += best->fluid_batch < fluid.newest_batch ? 1 : 0;
     fluid_stats.age_ms +=
         std::chrono::duration<f64, std::milli>(slot_time - best->fluid_recorded).count();
     FluidShow(best, slot);
@@ -1094,12 +1143,12 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
     };
     LOG_INFO(Render_Vulkan,
              "Fluid presenter (10 s, {} at {:.2f} Hz, a slot every {} refreshes): {} slots, {} "
-             "shown on their slot, {} missed ({} with no frame ready, {} with the last copy still "
-             "queued, {} slept through), {} shown in arrival order, {} copies done after their "
-             "vblank",
+             "shown on their slot, {} missed ({} with no frame ready: {} scheduled but their GPU "
+             "work not done, {} with nothing scheduled; {} with the last copy still queued, {} "
+             "slept through), {} shown in arrival order, {} copies done after their vblank",
              source, HertzOf(period), fluid.divisor, stats.slots, stats.hits,
-             stats.no_frame + stats.queued + stats.overslept, stats.no_frame, stats.queued,
-             stats.overslept, stats.in_order, stats.late);
+             stats.no_frame + stats.queued + stats.overslept, stats.no_frame, stats.not_done,
+             stats.uncovered, stats.queued, stats.overslept, stats.in_order, stats.late);
     LOG_INFO(Render_Vulkan,
              "Fluid presenter (10 s): {:.0f}% of shown frames held one slot, held 1/2/3/4+ "
              "refreshes {}/{}/{}/{}; real frame age at display {:.1f} ms; GPU work done {:.1f} ms "
@@ -1107,6 +1156,15 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              share(one_slot, held), stats.held[0], stats.held[1], stats.held[2], stats.held[3],
              mean(stats.age_ms, stats.hits), mean(stats.latency_ms, stats.latency_samples),
              stats.latency_samples, stats.received, stats.dropped);
+    LOG_INFO(Render_Vulkan,
+             "Fluid presenter (10 s): {} late or blocked frames shown a slot later instead of "
+             "dropped, {} shown frames predicted from an older real frame than the newest, {} "
+             "frames dropped as older than a real frame no prediction follows; real frames: {} "
+             "recorded, {} not predictable, {} with fewer predictions than slots for lack of a "
+             "free frame, {} ended by the prediction limit",
+             stats.rolled, stats.spare, stats.stale, fluid_batches.exchange(0),
+             fluid_unpredictable.exchange(0), fluid_cut_short.exchange(0),
+             fluid_capped.exchange(0));
     stats = {.since = now};
 }
 

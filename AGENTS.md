@@ -26,8 +26,8 @@ This section is the fork's. Everything under "Upstream Lichii guidance" is upstr
 | `src/video_core` | GPU emulation and the Vulkan renderer: buffer and texture caches, `renderer_vulkan/present/` (frame generation, extrapolation, cadence), frame budget, shading-rate governor, `nx2_uma.h` |
 | `src/shader_recompiler` | Maxwell and Ampere programs to SPIR-V. `EDEN_NX2_GM` lives in `ir_opt/global_memory_to_storage_buffer_pass.cpp` and `backend/spirv/` |
 | `src/common` | Settings, logging, host memory, power meter, policy, governor and tuning |
-| `src/lichii`, `src/qt_common` | The Qt frontend (`lichii.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
-| `src/lichii_cmd` | The SDL frontend (`eden-cli`) |
+| `src/lichii`, `src/qt_common` | The Qt frontend (`guarana.exe`). `src/lichii/nx2_switches.h` loads `nx2_switches.txt` |
+| `src/lichii_cmd` | The SDL frontend (`guarana-cli`) |
 | `src/frontend_common` | Shared frontend code, config, the update checker (off in our release builds) |
 | `src/tests` | Catch2 unit tests, built with `-DLICHII_TESTS=ON` into `build/bin/tests` and a few smaller test programs |
 | `tools/nx2` | The debug server's MCP adapter (`debug_mcp.py`), the shader sweep, frame dump index, pipeline statistics, cache metrics, and their `test_*.py` |
@@ -61,7 +61,7 @@ Linux, bash, after installing your distribution's packages from [docs/Deps.md](d
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLICHII_TESTS=ON && cmake --build build --parallel "$(nproc)" && ctest --test-dir build --output-on-failure --parallel "$(nproc)"
 ```
 
-When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/lichii` (`lichii.exe`) and `bin/eden-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
+When these commands and `.github/workflows/build-check.yml` disagree, the workflow is right: fix this file. The programs are `bin/guarana` (`guarana.exe`) and `bin/guarana-cli` in the build directory. Run one group of unit tests by its tag: `build/bin/tests "[frame_budget]"`.
 
 ### Verify a change
 
@@ -227,7 +227,9 @@ Use these before guessing. All are off unless the variable is set; pass them as 
 | Commands read from memory instead of their submit-time copy (frames ahead, #392) | `EDEN_NX2_LIVE_READ_CHECK=1` | Every 10000 such entries, `Entries parsed from memory (<reason>): N checked, M differ` per reason, plus the first four differing entries per reason. GPU-written pages differ by design (the GPU rewrote them after submit), so compare against a frames-ahead-0 run. |
 | Split GPU thread races | `EDEN_NX2_SPLIT_CHECK=1` | Reports scheduler use from the wrong thread. |
 | Wrong bytes where the guest reads GPU-written buffer memory | `EDEN_NX2_READ_CHECK=<n>` (1 checks every read download) | Compares 1 in n read downloads with a synchronous flush's copy. Every 10 s a `Read download check` line: bytes that differ, by who wrote them to guest memory, and GPU-modified bytes no download brought (both must stay 0). The first 16 differences get their own line. |
+| Wrong 3D state from the split front's register blocks (state writes sent in one entry) | `EDEN_NX2_REG_BLOCK_VERIFY=1` | Each block the back would store at once also runs write by write from the same state, and that result stays. Every 10 s a `Register block verify` line: blocks and writes compared, those that differ (registers, shadow RAM, dirty flags or the fast draw break; must stay 0), and blocks written one by one because a write kept its register's value. The first 16 differing blocks get their own error line. |
 | Wrong macro parameters read by DMA on the split's front | `EDEN_NX2_DMA_READ_VERIFY=1` | A macro DMA read made without draining the split drains it anyway and is compared. Every 10 s a `Macro DMA read checks` line: reads, those made without a drain and those that read other words than after a drain (must stay 0), with the first 16 differing reads. |
+| GPU back skipped a lock or gather it needed (inline writes, collected CPU writes, buffer usage resets) | `EDEN_NX2_BACKX_VERIFY=1` | Each skip also runs the locked check it replaces and then does the locked work. A `BackX verify mismatch` error (first 64) names the case: an inline write into GPU-written buffer data, a collected CPU write no manager showed, or a usage word set outside the tracked extent. Every 10 s a `BackX gather checks` line: skipped gathers, those that found writes a manager collected after the check (a race the next call covers) and those that found writes with nothing collected since (must stay 0). |
 | Upscaler and DLSS contracts | `EDEN_NX2_DLSS_CONTRACT_TRACE=1` | Inputs and outputs of replaced upscaler networks. |
 | Service calls | `EDEN_NX2_IPC_TRACE=1` | IPC command trace. |
 | Read stalls (loading hitches, NUP vs other containers) | `EDEN_NX2_FS_READ_TRACE=1` | About once a second while the guest reads, one `Guest storage reads` line (`IStorage`, the RomFS) and one `Guest file reads` line (`IFile`): count, MiB, p50/p99/max latency and reads over 1 ms and 16 ms, plus totals and read time since boot. Times cover the backend read (NUP decompression included), not the Switch 1 SD-card throttle. |

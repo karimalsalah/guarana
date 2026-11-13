@@ -31,12 +31,12 @@ Seule la Arc 140T a été testée. Les autres GPU (Arc 140V, Arc B390, Radeon 78
 ## Démarrage rapide
 
 1. Téléchargez le zip le plus récent depuis [Releases](https://github.com/karimalsalah/guarana/releases). Cette page est le seul téléchargement officiel.
-2. Extrayez tout le zip dans un dossier où vous avez les droits d'écriture, puis lancez **`lichii.exe`**.
+2. Extrayez tout le zip dans un dossier où vous avez les droits d'écriture, puis lancez **`guarana.exe`**.
 3. Installez vos clés et votre micrologiciel : **Tools → Install Decryption Keys**, puis **Tools → Install Firmware**.
 4. Ajoutez votre dossier de jeux (double-clic sur la liste vide) et lancez un jeu. La première visite de chaque zone compile les shaders et provoque des saccades ; les visites suivantes utilisent le cache.
 5. Facultatif : activez **Enable Frame Generation** dans **Emulation → Configure… → Graphics**.
 
-Les paramètres, sauvegardes et caches se trouvent dans `%APPDATA%\lichii`, le même dossier que Lichii d'origine. Faites une sauvegarde avant de passer de l'un à l'autre. Tous les commutateurs sont décrits dans [docs/switches.md](../../docs/switches.md) et les problèmes courants dans [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md).
+Les paramètres, sauvegardes et caches se trouvent dans `%APPDATA%\guarana`. Au premier démarrage, vos paramètres sont repris automatiquement depuis l'ancien dossier `%APPDATA%\lichii` (l'ancien dossier reste en place). Tous les commutateurs sont décrits dans [docs/switches.md](../../docs/switches.md) et les problèmes courants dans [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md).
 
 ## Clés, micrologiciel et jeux (mentions légales)
 

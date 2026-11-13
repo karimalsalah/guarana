@@ -168,7 +168,7 @@ Otherwise, feel free to ask for help in Stoat or Discord.
 
 ### Linker errors with the bundled Qt on Visual Studio 2022
 
-On MSVC, a prebuilt static Qt is downloaded by default (`LICHII_USE_BUNDLED_QT`). It is built with a newer MSVC toolset than the one in Visual Studio 2022, so with VS 2022 (MSVC 14.44) configuring succeeds but linking `lichii.exe` fails with unresolved symbols such as `__std_rotate` or `__std_unique_4`, ending in `LNK1120`.
+On MSVC, a prebuilt static Qt is downloaded by default (`LICHII_USE_BUNDLED_QT`). It is built with a newer MSVC toolset than the one in Visual Studio 2022, so with VS 2022 (MSVC 14.44) configuring succeeds but linking `guarana.exe` fails with unresolved symbols such as `__std_rotate` or `__std_unique_4`, ending in `LNK1120`.
 
 Use the same Qt as CI instead of the bundled one:
 

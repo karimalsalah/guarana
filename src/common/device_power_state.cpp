@@ -34,6 +34,7 @@ namespace Common {
 #if defined(_WIN32)
         SYSTEM_POWER_STATUS status;
         if (GetSystemPowerStatus(&status)) {
+            info.ac_online = status.ACLineStatus == 255 ? -1 : status.ACLineStatus;
             if (status.BatteryFlag == 128) {
                 info.has_battery = false;
             } else {

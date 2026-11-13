@@ -481,6 +481,22 @@ public:
         return pipeline_cache_builds.load(std::memory_order_relaxed);
     }
 
+    /// Whether pipelines linked from graphics pipeline libraries without link time optimization
+    /// draw correctly. On AMD's Windows driver such links draw white fringes around alpha blended
+    /// effects (clouds, particles and glows in a test title, RX 7800 XT), while optimized links
+    /// and monolithic pipelines from the same SPIR-V do not, so libraries are linked optimized
+    /// there. EDEN_NX2_GPL_FAST_LINK=1 allows fast links on any driver, =0 on none.
+    bool CanFastLinkGraphicsLibraries() const {
+        static const char forced = [] {
+            const char* value = std::getenv("EDEN_NX2_GPL_FAST_LINK");
+            return value == nullptr ? '\0' : value[0];
+        }();
+        if (forced == '0' || forced == '1') {
+            return forced == '1';
+        }
+        return GetDriverID() != VK_DRIVER_ID_AMD_PROPRIETARY;
+    }
+
     /// Returns true for tile-based deferred renderers.
     bool IsTiler() const {
         switch (GetDriverID()) {
@@ -828,6 +844,13 @@ FN_MAX_LIMIT_LIST
         return properties.properties.limits.maxTessellationPatchSize;
     }
 
+    /// Graphics pipelines are linked from per-stage libraries: the use_graphics_pipeline_library
+    /// setting (or EDEN_NX2_GPL=1) is on and the device has VK_EXT_graphics_pipeline_library
+    /// with fast linking.
+    bool IsExtGraphicsPipelineLibrarySupported() const {
+        return graphics_pipeline_library_enabled;
+    }
+
     /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
     bool IsExtMeshShaderSupported() const {
         return extensions.mesh_shader && features.mesh_shader.taskShader &&
@@ -835,27 +858,11 @@ FN_MAX_LIMIT_LIST
     }
 
     /// Returns true if per-draw shading rates are in use (VK_KHR_fragment_shading_rate with
-    /// EDEN_NX2_VRS set): every guest graphics pipeline then has the rate as dynamic state.
+    /// EDEN_NX2_VRS set): every guest graphics pipeline then takes the rate of its fragment
+    /// shader when it is built.
     bool IsKhrFragmentShadingRateSupported() const {
         return extensions.fragment_shading_rate &&
                features.fragment_shading_rate.pipelineFragmentShadingRate;
-    }
-
-    /// Returns true if native mesh programs may write PrimitiveShadingRateKHR (EDEN_NX2_VRS and
-    /// EDEN_NX2_MESH_OUT bit 2). Guest pipelines have several viewports, so it needs that limit.
-    bool IsMeshPrimitiveShadingRateSupported() const {
-        return IsKhrFragmentShadingRateSupported() && IsExtMeshShaderSupported() &&
-               features.fragment_shading_rate.primitiveFragmentShadingRate &&
-               features.mesh_shader.primitiveFragmentShadingRateMeshShader &&
-               properties.fragment_shading_rate.primitiveFragmentShadingRateWithMultipleViewports;
-    }
-
-    /// Returns how a mesh program's per-primitive rate combines with the per-draw one: the
-    /// coarser of the two where the device can, else the primitive's.
-    VkFragmentShadingRateCombinerOpKHR MeshPrimitiveRateCombiner() const {
-        return properties.fragment_shading_rate.fragmentShadingRateNonTrivialCombinerOps
-                   ? VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR
-                   : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
     }
 
     /// Returns the largest supported fragment size that fits in the wanted one.
@@ -1517,6 +1524,7 @@ private:
         VkPhysicalDeviceSubgroupSizeControlProperties subgroup_size_control{};
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback{};
         VkPhysicalDeviceMaintenance5PropertiesKHR maintenance5{};
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT graphics_pipeline_library{};
         VkPhysicalDevicePipelineBinaryPropertiesKHR pipeline_binary{};
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
@@ -1530,6 +1538,12 @@ private:
     Extensions extensions{};
     Features features{};
     Properties properties{};
+
+    /// EDEN_NX2_GPL: kept out of the extension tables so a run without the switch creates the
+    /// device exactly as before.
+    bool graphics_pipeline_library_requested{};
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT graphics_pipeline_library_features{};
+    bool graphics_pipeline_library_enabled{};
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};

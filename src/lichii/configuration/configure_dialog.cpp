@@ -27,6 +27,7 @@
 #include "lichii/configuration/configure_graphics.h"
 #include "lichii/configuration/configure_graphics_advanced.h"
 #include "lichii/configuration/configure_graphics_extensions.h"
+#include "lichii/configuration/configure_guarana.h"
 #include "lichii/configuration/configure_hotkeys.h"
 #include "lichii/configuration/configure_input.h"
 #include "lichii/configuration/configure_input_player.h"
@@ -61,6 +62,7 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
               ui_tab->UpdateScreenshotInfo(ratio, setup);
           },
           nullptr, *builder, this)},
+      guarana_tab{std::make_unique<ConfigureGuarana>(system_.IsPoweredOn(), this)},
       hotkeys_tab{std::make_unique<ConfigureHotkeys>(system_.HIDCore(), this)},
       input_tab{std::make_unique<ConfigureInput>(system_, this)},
       network_tab{std::make_unique<ConfigureNetwork>(system_, this)},
@@ -97,7 +99,8 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
 
     SetConfiguration();
 
-    const std::array<std::pair<QWidget*, const char*>, 15> tab_icons{{
+    const std::array<std::pair<QWidget*, const char*>, 16> tab_icons{{
+        {guarana_tab.get(), "wand"},
         {general_tab.get(), "sliders"},
         {hotkeys_tab.get(), "keyboard"},
         {ui_tab.get(), "list"},
@@ -129,6 +132,11 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
             debug_tab_tab->SetCurrentIndex(0);
         }
     });
+    connect(guarana_tab.get(), &ConfigureGuarana::OpenControlsRequested, this, [this] {
+        ui->selectorList->setCurrentRow(ui->selectorList->count() - 1);
+    });
+    connect(guarana_tab.get(), &ConfigureGuarana::ReportProblemRequested, this,
+            &ConfigureDialog::ReportProblemRequested);
     connect(ui_tab.get(), &ConfigureUi::LanguageChanged, this, &ConfigureDialog::OnLanguageChanged);
     connect(general_tab.get(), &ConfigureGeneral::ExternalContentDirsChanged, this,
             &ConfigureDialog::ExternalContentDirsChanged);
@@ -171,6 +179,7 @@ void ConfigureDialog::ApplyConfiguration() {
     web_tab->ApplyConfiguration();
     network_tab->ApplyConfiguration();
     applets_tab->ApplyConfiguration();
+    guarana_tab->ApplyConfiguration();
     system.ApplySettings();
     Settings::LogSettings();
 }
@@ -204,8 +213,9 @@ void ConfigureDialog::HandleApplyButtonClicked() {
 Q_DECLARE_METATYPE(QList<QWidget*>);
 
 void ConfigureDialog::PopulateSelectionList() {
-    const std::array<std::tuple<QString, const char*, QList<QWidget*>>, 6> items{
-        {{tr("General"),
+    const std::array<std::tuple<QString, const char*, QList<QWidget*>>, 7> items{
+        {{tr("Guarana"), "wand", {guarana_tab.get()}},
+         {tr("General"),
           "sliders",
           {general_tab.get(), hotkeys_tab.get(), ui_tab.get(), web_tab.get(), debug_tab_tab.get()}},
          {tr("System"),

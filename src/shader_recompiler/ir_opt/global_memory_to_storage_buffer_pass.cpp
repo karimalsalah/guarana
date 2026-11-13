@@ -25,6 +25,7 @@
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/breadth_first_search.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
+#include "shader_recompiler/frontend/ir/modifiers.h"
 #include "shader_recompiler/frontend/ir/value.h"
 #include "shader_recompiler/host_translate_info.h"
 #include "shader_recompiler/ir_opt/passes.h"
@@ -2607,26 +2608,26 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
             }
         }
     }
-    // EDEN_NX2_GM bit 2: a load that stayed global names, in its flags, the descriptors its
-    // address can only be in (a byte each, index + 1, zero after the last), for the backend to
-    // search only those. Only read-only buffers of loaded pointers: those are bound from the
-    // pointer to the end of its mapping, so they hold every address above the pointer that a
-    // search of all the buffers would find in another one.
+    // EDEN_NX2_GM bit 2: a load that stayed global names, in its flags (IR::GlobalLoadFlags: the
+    // bits above the coherent bit, 7 bits each, index + 1, zero after the last), the descriptors
+    // its address can only be in, for the backend to search only those. Only read-only buffers
+    // of loaded pointers: those are bound from the pointer to the end of its mapping, so they
+    // hold every address above the pointer that a search of all the buffers would find in
+    // another one. A load that cannot be narrowed keeps no list, and always its coherent bit.
     for (auto& [inst, pointers] : info.narrowed) {
-        u32 flags{};
-        u32 shift{};
+        u32 list{};
+        u32 count{};
         for (const StorageBufferAddr& pointer : pointers) {
             const auto it{info.set.find(pointer)};
             const size_t index{it == info.set.end() ? ~size_t{0} : info.set.index_of(it)};
-            if (index >= 0xff || pointer.indirect == ~0U || info.writes.contains(pointer) ||
-                shift >= 32) {
-                flags = 0;
+            if (index == ~size_t{0} || pointer.indirect == ~0U || info.writes.contains(pointer) ||
+                !IR::GlobalLoadFlags::AppendNarrowBuffer(list, count, static_cast<u32>(index))) {
+                list = 0;
                 break;
             }
-            flags |= static_cast<u32>(index + 1) << shift;
-            shift += 8;
+            ++count;
         }
-        inst->SetFlags(flags);
+        inst->SetFlags(IR::GlobalLoadFlags::WithNarrowList(inst->Flags<u32>(), list));
     }
     for (const RebasedLoad& load : rebased) {
         const auto it{info.set.find(load.pointer)};

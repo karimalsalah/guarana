@@ -493,18 +493,19 @@ void QueryCacheBase<Traits>::UnregisterPending() {
 }
 
 template <typename Traits>
-void QueryCacheBase<Traits>::NotifyWFI() {
+bool QueryCacheBase<Traits>::NotifyWFI() {
     bool should_sync = false;
     impl->ForEachStreamer(
         [&should_sync](StreamerInterface* streamer) { should_sync |= streamer->HasPendingSync(); });
     if (!should_sync) {
-        return;
+        return false;
     }
 
     impl->ForEachStreamer([](StreamerInterface* streamer) { streamer->PresyncWrites(); });
     impl->runtime.Barriers(true);
     impl->ForEachStreamer([](StreamerInterface* streamer) { streamer->SyncWrites(); });
     impl->runtime.Barriers(false);
+    return true;
 }
 
 template <typename Traits>

@@ -39,7 +39,7 @@ with a present-level tool such as Intel's PresentMon, and say which tool you use
 
 Useful to explore, not a published number: nothing checks the scene or the save.
 
-1. Add `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545` to `%APPDATA%\lichii\nx2_switches.txt` and start the
+1. Add `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545` to `%APPDATA%\guarana\nx2_switches.txt` and start the
    game. The server listens on your own machine only.
 2. Stand in your scene, leave the controls alone, and run from the repository root (Python 3,
    standard library only):
@@ -65,7 +65,7 @@ checks the scene against a reference screenshot, measures, and puts back everyth
 2. **Set the common options** (PowerShell):
 
    ```powershell
-   $common = '--exe', 'C:\path\lichii.exe', '--game', 'C:\path\game.nup', '--save-backup', 'C:\path\save-backup',
+   $common = '--exe', 'C:\path\guarana.exe', '--game', 'C:\path\game.nup', '--save-backup', 'C:\path\save-backup',
              '--reference', 'tools\bench\reference\oot-hyrule-field.png'
    ```
 

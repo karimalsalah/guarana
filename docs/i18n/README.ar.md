@@ -33,12 +33,12 @@ Guarana فرع مفتوح المصدر من [Lichii](https://github.com/zortos29
 ## البدء السريع
 
 1. نزّل أحدث ملف zip من صفحة [Releases](https://github.com/karimalsalah/guarana/releases). هذه الصفحة هي مصدر التنزيل الرسمي الوحيد.
-2. فكّ ضغط ملف zip كاملاً في مجلد تستطيع الكتابة فيه، ثم شغّل **`lichii.exe`**.
+2. فكّ ضغط ملف zip كاملاً في مجلد تستطيع الكتابة فيه، ثم شغّل **`guarana.exe`**.
 3. ثبّت المفاتيح والبرنامج الثابت: **Tools → Install Decryption Keys** ثم **Tools → Install Firmware**.
 4. أضف مجلد الألعاب (انقر مرتين على قائمة الألعاب الفارغة) وشغّل لعبة. عند أول دخول إلى كل منطقة تُترجم المظللات، وقد تحدث تقطعات؛ بعدها تُحمَّل من الذاكرة المؤقتة.
 5. اختياري: فعّل **Enable Frame Generation** من **Emulation → Configure… → Graphics**.
 
-تُحفظ الإعدادات وحفظ الألعاب والذاكرة المؤقتة في `%APPDATA%\lichii`، وهو المجلد نفسه الذي يستخدمه Lichii الأصلي. انسخ احتياطياً قبل التبديل بينهما. جميع المفاتيح في [docs/switches.md](../../docs/switches.md)، والمشكلات الشائعة في [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md).
+تُحفظ الإعدادات وحفظ الألعاب والذاكرة المؤقتة في `%APPDATA%\guarana`، وعند أول تشغيل تُنقل إعداداتك تلقائياً من المجلد القديم `%APPDATA%\lichii` (يبقى المجلد القديم في مكانه). جميع المفاتيح في [docs/switches.md](../../docs/switches.md)، والمشكلات الشائعة في [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md).
 
 ## المفاتيح والبرنامج الثابت والألعاب (ملاحظة قانونية)
 

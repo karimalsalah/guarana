@@ -36,12 +36,14 @@
 #include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
+#include "core/nx2_autopilot_session.h"
 #include "core/nx2_power_session.h"
 #include "hid_core/hid_core.h"
 #include "video_core/auto_shading_rate.h"
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_frame_predictor.h"
 #include "video_core/renderer_base.h"
 
 namespace Core::Nx2Debug {
@@ -191,6 +193,44 @@ void AppendPng(void* context, void* data, int size) {
     png.insert(png.end(), bytes, bytes + size);
 }
 
+json AutopilotState();
+
+/// EDEN_NX2_PREDICT: the frame predictor's model in use, its interval errors and the slot
+/// outcomes, since the game started ("total", no p90s) and over the last 10 s ("last_window").
+json FramePredictorState() {
+    namespace Predict = VideoCore::Nx2Predict;
+    const Predict::Snapshot snapshot = Predict::FramePredictor::Instance().GetSnapshot();
+    const auto window = [](const Predict::Window& w) {
+        return json{{"samples", w.samples},
+                    {"interval_mae_ms", {{"in_use", w.mae_active_ms},
+                                         {"rls", w.mae_rls_ms},
+                                         {"ewma", w.mae_ewma_ms}}},
+                    {"interval_p90_error_ms", {{"in_use", w.p90_active_ms},
+                                               {"rls", w.p90_rls_ms},
+                                               {"ewma", w.p90_ewma_ms}}},
+                    {"p90_coverage_percent", w.coverage_percent},
+                    {"slots", w.slots},
+                    {"slots_no_frame", w.misses},
+                    {"slots_avoided", w.avoided},
+                    {"misses_avoidable", w.avoidable},
+                    {"holds", w.holds},
+                    {"holds_landed", w.landed},
+                    {"holds_timed_out", w.timeouts},
+                    {"hold_wait_ms", w.waited_ms}};
+    };
+    return {{"mode", snapshot.mode},
+            {"model", snapshot.using_rls ? "rls" : "ewma"},
+            {"samples", snapshot.samples},
+            {"switches", snapshot.switches},
+            {"resets", snapshot.resets},
+            {"mean_interval_ms", snapshot.mean_interval_ms},
+            {"next_interval_ms", snapshot.next_mean_ms},
+            {"next_interval_p90_ms", snapshot.next_p90_ms},
+            {"hold_cap_ms", snapshot.hold_cap_ms},
+            {"total", window(snapshot.total)},
+            {"last_window", window(snapshot.last)}};
+}
+
 json Status(ToolState& state, const json& params) {
     const auto window = std::chrono::milliseconds{Param<int>(params, "fps_window_ms", 500, 0, 5000)};
     const u64 before = g_nx2_present_count.load(std::memory_order_relaxed);
@@ -218,6 +258,8 @@ json Status(ToolState& state, const json& params) {
         {"dump_dir", state.dump_directory.generic_string()},
         {"log_filter", state.log_filter},
         {"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
+        {"autopilot", AutopilotState()},
+        {"frame_predictor", FramePredictorState()},
     };
 }
 
@@ -843,6 +885,37 @@ json FrameBudgetTool(ToolState&, const json& params) {
             {"last_change", status.last_change}};
 }
 
+// The autopilot (EDEN_NX2_AUTOPILOT=1): what its last 2 s window measured and what it holds.
+json AutopilotState() {
+    const Core::Nx2AutopilotSession::State state = Core::Nx2AutopilotSession::LastState();
+    return {{"requested", Core::Nx2AutopilotSession::Requested()},
+            {"running", state.running},
+            {"windows", state.windows},
+            {"changes", state.changes},
+            {"real_fps", state.real_fps},
+            {"shown_p50_ms", state.shown_p50_ms},
+            {"shown_p95_ms", state.shown_p95_ms},
+            {"shown_even_percent", state.shown_even_percent},
+            {"shown_samples", state.shown_samples},
+            {"refresh_hz", state.refresh_hz},
+            {"refresh_source", state.refresh_source},
+            {"gpu_busy", state.gpu_busy},
+            {"power", state.power},
+            {"frame_gen_on", state.frame_gen_on},
+            {"frame_gen_target", state.frame_gen_target},
+            {"frame_gen_multiplier", state.frame_gen_multiplier},
+            {"gpu_time_scale", state.scale},
+            {"gpu_time_scale_base", state.scale_base},
+            {"resolution_available", state.resolution_available},
+            {"power_policy_available", state.power_available},
+            {"power_policy_applied", state.power_applied},
+            {"last_change", state.last_change}};
+}
+
+json AutopilotTool(ToolState&, const json&) {
+    return AutopilotState();
+}
+
 /// Host memory of the process and the system, and what the caches last published
 /// (Common::g_memory_counters). All sizes in bytes.
 json MemoryReport(ToolState&, const json&) {
@@ -1096,6 +1169,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},
         {"frame_budget", handler(FrameBudgetTool)},
+        {"autopilot", handler(AutopilotTool)},
         {"memory", handler(MemoryReport)},
         {"read_memory", handler(ReadMemory)},
         {"search_memory", handler(SearchMemory)},

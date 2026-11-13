@@ -67,6 +67,7 @@ WriterStats CacheWriter::Stats() const {
 
 void CacheWriter::Run(std::stop_token stop) {
     Common::SetCurrentThreadName("ShaderCacheWriter");
+    Common::SetCurrentThreadToBackgroundWork();
     std::unique_lock lock{mutex};
     while (!stop.stop_requested()) {
         const auto now = Clock::now();

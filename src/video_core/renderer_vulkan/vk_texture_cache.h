@@ -9,6 +9,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <span>
 
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -84,7 +85,9 @@ public:
                                  DescriptorPool& descriptor_pool,
                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
 
-    void Finish();
+    /// Submits and waits for the host GPU; the location names the caller in the Finish trace
+    /// (EDEN_NX2_HITCH_FINISH_TRACE).
+    void Finish(std::source_location location = std::source_location::current());
 
     StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
 
@@ -399,31 +402,9 @@ public:
         return render_pass_key;
     }
 
-    /// `depth_layout` is RenderPassKey::depth_layout.
     [[nodiscard]] VkRenderPass RenderPassVariant(u32 color_clear_mask, bool depth_stencil_clear,
                                                  u32 color_discard_mask,
-                                                 bool depth_stencil_discard,
-                                                 u8 depth_layout = 0) const;
-
-    /// The depth-stencil attachment's image, null without one.
-    [[nodiscard]] VkImage DepthImage() const noexcept {
-        return has_depth || has_stencil ? images[num_images - 1] : VkImage{};
-    }
-
-    /// The depth-stencil attachment's range; only with a DepthImage.
-    [[nodiscard]] const VkImageSubresourceRange& DepthImageRange() const noexcept {
-        return image_ranges[num_images - 1];
-    }
-
-    /// EDEN_NX2_DEPTH_OPTIMAL: a draw sampled this framebuffer's own depth attachment, so its
-    /// passes keep that attachment in GENERAL from now on.
-    void NoteDepthSampledInPass() noexcept {
-        depth_sampled_in_pass = true;
-    }
-
-    [[nodiscard]] bool DepthSampledInPass() const noexcept {
-        return depth_sampled_in_pass;
-    }
+                                                 bool depth_stencil_discard) const;
 
     [[nodiscard]] VkExtent2D RenderArea() const noexcept {
         return render_area;
@@ -497,7 +478,6 @@ private:
     bool has_depth{};
     bool has_stencil{};
     bool is_rescaled{};
-    bool depth_sampled_in_pass{};
     std::array<VkImage, 9> resolve_shadow_images{};
     u32 num_resolve_shadows = 0;
     TextureCacheRuntime* runtime_ptr{nullptr};

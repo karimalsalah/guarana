@@ -12,6 +12,7 @@ add_executable(tests
     video_core/aftermath_dump.cpp
     video_core/frame_dump_schedule.cpp
     video_core/nx2_stutter_trace.cpp
+    video_core/nx2_frame_predictor.cpp
     video_core/back_idle_trace.cpp
     video_core/list_macro_trace.cpp
     video_core/nx2_list_grid.cpp
@@ -58,6 +59,7 @@ add_executable(tests
     video_core/fast_fusion_byte_store.cpp
     video_core/vk_byte_addressed_shadow.cpp
     video_core/global_memory_coherence.cpp
+    video_core/global_memory_narrow_flags.cpp
     video_core/storage_buffer_pointer_tracking.cpp
     video_core/storage_write_extent.cpp
     video_core/storage_buffer_control_flow.cpp
@@ -82,8 +84,10 @@ add_executable(tests
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
     video_core/cost_governor.cpp
+    video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp
     video_core/auto_shading_rate.cpp
+    common/guarana_modes.cpp
     common/power_governor.cpp
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
@@ -104,6 +108,7 @@ add_executable(tests
     video_core/bounded_store.cpp
     video_core/pipeline_eviction_policy.cpp
     video_core/async_shader_emission.cpp
+    video_core/graphics_pipeline_library_policy.cpp
     video_core/oot_network.cpp
     video_core/page_filter.cpp
     video_core/query_stream.cpp
@@ -172,6 +177,7 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
+    common/data_dir_migration.cpp
     common/event.cpp
     common/fibers.cpp
     common/fs_iterate.cpp
@@ -232,6 +238,8 @@ add_executable(tests
     video_core/turing_macro_ram.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
+    video_core/nx2_backx.cpp
+    video_core/vertex_input_cache.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
     video_core/draw_template.cpp
@@ -262,6 +270,8 @@ target_compile_definitions(tests PRIVATE
     LICHII_NX_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/nx_fixtures")
 
 add_test(NAME tests COMMAND tests)
+# The path manager copies the old "lichii" user data folder on first use; a test run must not.
+set_tests_properties(tests PROPERTIES ENVIRONMENT "GUARANA_SKIP_DATA_MIGRATION=1")
 
 add_executable(profile_migration_tests
     common/profile_migration.cpp)

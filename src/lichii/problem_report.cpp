@@ -68,8 +68,8 @@ struct Kind {
 constexpr std::array<Kind, 4> Kinds{{
     {"game_bug.yml", "[GBug] ", QT_TRANSLATE_NOOP("QObject", "A game does not play right")},
     {"visual_bug.yml", "[VBug] ", QT_TRANSLATE_NOOP("QObject", "A game does not look right")},
-    {"crash.yml", "[Crash] ", QT_TRANSLATE_NOOP("QObject", "Lichii or a game crashed or froze")},
-    {"ui_bug.yml", "[UIBug] ", QT_TRANSLATE_NOOP("QObject", "Lichii's windows or menus")},
+    {"crash.yml", "[Crash] ", QT_TRANSLATE_NOOP("QObject", "Guarana or a game crashed or froze")},
+    {"ui_bug.yml", "[UIBug] ", QT_TRANSLATE_NOOP("QObject", "Guarana's windows or menus")},
 }};
 constexpr int GameBug = 0;
 constexpr int Crash = 2;
@@ -234,7 +234,7 @@ void Run(QWidget* parent, const Context& context) {
     }
 
     QStringList details;
-    details << QStringLiteral("Lichii: %1").arg(BuildText());
+    details << QStringLiteral("Guarana: %1").arg(BuildText());
     details << QStringLiteral("OS: %1").arg(os);
     details << QStringLiteral("CPU: %1").arg(cpu);
     details << QStringLiteral("RAM: %1").arg(ram);
@@ -277,11 +277,11 @@ void Run(QWidget* parent, const Context& context) {
     dialog.setWindowTitle(QObject::tr("Report a Problem"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* intro = new QLabel(
-        QObject::tr("Lichii puts the logs of this session and the last one, with what it knows "
+        QObject::tr("Guarana puts the logs of this session and the last one, with what it knows "
                     "about this PC and the game, in a zip next to the log folder. Your user "
                     "name, home folder and computer name are taken out. Then it opens that "
                     "folder, and a GitHub issue form with a summary filled in, where you attach "
-                    "the zip. Lichii sends nothing itself."),
+                    "the zip. Guarana sends nothing itself."),
         &dialog);
     intro->setWordWrap(true);
     layout->addWidget(intro);
@@ -326,7 +326,7 @@ void Run(QWidget* parent, const Context& context) {
                                  .arg(QDateTime::currentDateTime().toString(
                                      QStringLiteral("yyyyMMdd-HHmmss")));
     const QString attach =
-        QStringLiteral("Attach %1 from the reports folder that Lichii opened.").arg(zip_name);
+        QStringLiteral("Attach %1 from the reports folder that Guarana opened.").arg(zip_name);
 
     QStringList info;
     info << QStringLiteral("Problem: %1").arg(QString::fromUtf8(chosen.label));
@@ -366,7 +366,7 @@ void Run(QWidget* parent, const Context& context) {
     if (!QtCommon::Compress::compressBuffers(zip_path, files)) {
         LOG_ERROR(Frontend, "Problem report: {} could not be written", zip_name.toStdString());
         QMessageBox::warning(parent, QObject::tr("Report a Problem"),
-                             QObject::tr("Lichii could not write %1.")
+                             QObject::tr("Guarana could not write %1.")
                                  .arg(QDir::toNativeSeparators(zip_path)));
         return;
     }
@@ -413,7 +413,7 @@ void Run(QWidget* parent, const Context& context) {
     if (!opened) {
         QGuiApplication::clipboard()->setText(QString::fromStdString(link));
         QMessageBox::information(parent, QObject::tr("Report a Problem"),
-                                 QObject::tr("Lichii could not open the browser. The link to the "
+                                 QObject::tr("Guarana could not open the browser. The link to the "
                                              "filled-in issue form is on the clipboard: paste it "
                                              "into a browser, then attach %1 from the folder "
                                              "that opened.")

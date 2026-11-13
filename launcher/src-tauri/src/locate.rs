@@ -86,7 +86,7 @@ const KNOWN_TITLES: [(&str, &str); 31] = [
 ];
 
 /// Emulator folders under `%APPDATA%` checked by the quick scan.
-const EMULATORS: [&str; 7] = ["lichii", "eden", "yuzu", "suyu", "citron", "Ryujinx", "sudachi"];
+const EMULATORS: [&str; 8] = ["guarana", "lichii", "eden", "yuzu", "suyu", "citron", "Ryujinx", "sudachi"];
 
 pub struct Root {
     pub path: PathBuf,
@@ -106,7 +106,12 @@ pub fn quick_roots(known: &[(PathBuf, &str)]) -> Vec<Root> {
         if !base.is_dir() {
             continue;
         }
-        let hint = if emu == "lichii" { "Guarana (already in use)".to_string() } else { emu.to_string() };
+        // `lichii` is Guarana's folder from before the rename; the emulator copies it to `guarana`.
+        let hint = match emu {
+            "guarana" => "Guarana (already in use)".to_string(),
+            "lichii" => "Guarana (old folder)".to_string(),
+            _ => emu.to_string(),
+        };
         for (sub, depth) in [
             (base.join("keys"), 1),
             (base.join("system"), 1),

@@ -4,8 +4,8 @@
 # Builds Guarana on Linux from a fresh clone. It installs what is missing (the apt packages of
 # .github/workflows/release-binaries.yml; clang and lld from apt.llvm.org for the PGO build; CMake
 # and Qt 6.8.3 through pip under .deps/), configures build/release with the release flags of the
-# linux-x86_64-pgo job (clang with eglantine.profdata) plus -march=x86-64-v3, and builds lichii and
-# eden-cli. A second run reuses everything and rebuilds only what changed.
+# linux-x86_64-pgo job (clang with eglantine.profdata) plus -march=x86-64-v3, and builds guarana and
+# guarana-cli (lichii and eden-cli in a tree from before the rename). A second run reuses everything and rebuilds only what changed.
 #
 #   bash scripts/build-linux.sh [options] [-- extra cmake arguments]
 #
@@ -337,7 +337,7 @@ step "Build with $jobs jobs"
 case $build_dir in "$root"/build/*) cp -f "$build_dir/compile_commands.json" "$root/build/compile_commands.json" 2>/dev/null || true ;; esac
 
 printf '\nBuilt (%s) in %d min:\n' "$describe" $((SECONDS / 60))
-for exe in lichii eden-cli; do
+for exe in guarana guarana-cli lichii eden-cli; do
   if [ -x "$build_dir/bin/$exe" ]; then printf '  %s\n' "$build_dir/bin/$exe"; fi
 done
 printf 'Tests: bash scripts/run-tests.sh\n'

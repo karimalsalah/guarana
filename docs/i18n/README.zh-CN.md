@@ -31,12 +31,12 @@ Guarana 是 [Lichii](https://github.com/zortos293/Lichii)（`nx2` 分支）的�
 ## 快速开始
 
 1. 从 [Releases](https://github.com/karimalsalah/guarana/releases) 下载最新的 zip 文件。这是唯一的官方下载地址。
-2. 将整个 zip 解压到你有写入权限的文件夹，然后运行 **`lichii.exe`**。
+2. 将整个 zip 解压到你有写入权限的文件夹，然后运行 **`guarana.exe`**。
 3. 安装你自己的密钥和固件：依次点击 **Tools → Install Decryption Keys** 和 **Tools → Install Firmware**。
 4. 添加游戏文件夹（双击空的游戏列表），然后启动游戏。每个区域第一次进入时会编译着色器并出现卡顿，之后会从缓存加载。
 5. 可选：在 **Emulation → Configure… → Graphics** 中开启 **Enable Frame Generation**。
 
-设置、存档和缓存位于 `%APPDATA%\lichii`，与上游 Lichii 使用同一目录。升级或切换版本前请先备份。所有开关见 [docs/switches.md](../../docs/switches.md)，遇到问题请看 [故障排除](../../docs/TROUBLESHOOTING.md)。
+设置、存档和缓存位于 `%APPDATA%\guarana`。首次启动时，设置会自动从旧文件夹 `%APPDATA%\lichii` 迁移过来（旧文件夹保持原样）。所有开关见 [docs/switches.md](../../docs/switches.md)，遇到问题请看 [故障排除](../../docs/TROUBLESHOOTING.md)。
 
 ## 自备密钥、固件和游戏
 

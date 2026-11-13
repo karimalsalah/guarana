@@ -64,6 +64,10 @@ add_library(video_core STATIC
     engines/maxwell_dma.h
     engines/puller.cpp
     engines/puller.h
+    autopilot_controller.cpp
+    autopilot_controller.h
+    autopilot_feed.cpp
+    autopilot_feed.h
     frame_budget.cpp
     frame_budget.h
     frame_budget_controller.cpp
@@ -141,9 +145,14 @@ add_library(video_core STATIC
     nx2_profile.h
     nx2_stutter_trace.cpp
     nx2_stutter_trace.h
+    nx2_frame_predictor.cpp
+    nx2_frame_predictor.h
     nx2_perf.h
+    nx2_gpucost.h
     nx2_uma.h
+    nx2_hitch.h
     nx2_async_readback.h
+    nx2_backx.h
     nx2_download_trace.h
     pending_maps.h
     pipeline_cache_policy.h
@@ -245,6 +254,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_frame_dump.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
+    renderer_vulkan/vk_pipeline_library.cpp
+    renderer_vulkan/vk_pipeline_library.h
     renderer_vulkan/vk_multi_range_buffer.cpp
     renderer_vulkan/vk_multi_range_buffer.h
     renderer_vulkan/vk_master_semaphore.cpp
@@ -259,6 +270,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_cache_v2.h
     renderer_vulkan/vk_present_manager.cpp
     renderer_vulkan/vk_present_manager.h
+    renderer_vulkan/vk_present_predict.cpp
     renderer_vulkan/vk_query_cache.cpp
     renderer_vulkan/vk_query_cache.h
     renderer_vulkan/vk_rasterizer.cpp
@@ -294,6 +306,7 @@ add_library(video_core STATIC
     vulkan_common/vulkan_debug_callback.h
     vulkan_common/vulkan_device.cpp
     vulkan_common/vulkan_device.h
+    vulkan_common/graphics_pipeline_library_policy.h
     vulkan_common/vulkan_instance.cpp
     vulkan_common/vulkan_instance.h
     vulkan_common/vulkan_library.cpp
@@ -391,6 +404,7 @@ add_library(video_core STATIC
     textures/workers.h
     transform_feedback.cpp
     transform_feedback.h
+    vertex_input_cache.h
     video_core.cpp
     video_core.h
 )

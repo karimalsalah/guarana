@@ -3,12 +3,16 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <list>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <utility>
 
 #include "common/assert.h"
@@ -36,6 +40,7 @@
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/pending_maps.h"
+#include "video_core/gpu_split.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_timestamp.h"
 #include "video_core/host1x/host1x.h"
@@ -43,6 +48,7 @@
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
+#include "video_core/nx2_backx.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
@@ -114,6 +120,33 @@ struct GPU::Impl {
 
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache() {
+        // ~900 calls a frame, most with nothing collected: gather (applying_writes_mutex and two
+        // locks per core's manager) only when a manager shows a write. One collected after this
+        // check is gathered by the next call, as one collected just after the gather would be.
+        const auto managers = system.GetGPUDirtyMemoryManager();
+        const auto collects = [&managers] {
+            u64 sum = 0;
+            for (const Core::GPUDirtyMemoryManager& manager : managers) {
+                sum += manager.Collects();
+            }
+            return sum;
+        };
+        const u64 collects_before = VideoCommon::BackX::g_verify ? collects() : 0;
+        if (std::ranges::none_of(managers, &Core::GPUDirtyMemoryManager::MayHavePending)) {
+            if (VideoCommon::BackX::g_verify) {
+                const auto first_write = ApplyCollectedWrites();
+                VideoCommon::BackX::SkippedGather(first_write.has_value(),
+                                                  collects() != collects_before,
+                                                  first_write.value_or(std::pair<DAddr, u64>{}));
+            }
+            return;
+        }
+        ApplyCollectedWrites();
+    }
+
+    /// Gathers the CPU writes collected into GPU-written pages and applies them to the caches.
+    /// Returns the first of them, if there were some.
+    std::optional<std::pair<DAddr, u64>> ApplyCollectedWrites() {
         std::vector<std::pair<DAddr, u64>> writes;
         {
             // Gathered writes stay pending (ForEachPendingCpuWrite) until they are applied: a
@@ -124,7 +157,7 @@ struct GPU::Impl {
                 [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
             system.GatherGPUDirtyMemory(callback_writes);
             if (writes.empty()) {
-                return;
+                return std::nullopt;
             }
             applying_writes.push_back(&writes);
         }
@@ -135,6 +168,7 @@ struct GPU::Impl {
             std::erase(applying_writes, &writes);
         };
         renderer->ReadRasterizer()->OnCacheInvalidations(writes);
+        return writes.front();
     }
 
     void ForEachPendingCpuWrite(const std::function<void(DAddr, size_t)>& callback) {
@@ -199,6 +233,84 @@ struct GPU::Impl {
         }
     }
 
+    /// The split's back, between two ring entries (GpuSplit::SetReadLaneHook): runs the reads'
+    /// sync operations that RunReadFast handed it, ahead of the work still queued.
+    void TickReadLane() {
+        std::unique_lock lck{read_lane_mutex};
+        while (!read_lane_requests.empty()) {
+            ReadLaneRequest request = std::move(read_lane_requests.front());
+            read_lane_requests.pop_front();
+            lck.unlock();
+            VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::TickWork);
+            request.action();
+            VideoCommon::GpuSplit::Get().NoteReadServed(request.target,
+                                                        VideoCore::AsyncReadback::Now());
+            lck.lock();
+            read_lane_done = request.fence;
+            read_lane_cv.notify_all();
+        }
+    }
+
+    /// EDEN_NX2_READ_FAST: has the split's back run `action` (a read's sync operation) at its next
+    /// entry boundary instead of after the queued work, and waits for it. Returns false, with
+    /// `action` not run and a miss counted, when the back cannot take it: the caller queues it the
+    /// ordinary way (RequestSyncOperation).
+    ///
+    /// Any guest thread. Not the GPU threads: the front would wait for itself, and the back
+    /// cannot wait for its own lane.
+    [[nodiscard]] bool RunReadFast(const std::function<void()>& action) {
+        namespace AsyncReadback = VideoCore::AsyncReadback;
+        auto& split = VideoCommon::GpuSplit::Get();
+        if (VideoCommon::GpuSplit::OnGpuThread() || VideoCommon::GpuSplit::OnBackThread()) {
+            AsyncReadback::CountFastMiss(AsyncReadback::FastMiss::GpuThread);
+            return false;
+        }
+        u64 fence;
+        {
+            std::scoped_lock lock{read_lane_mutex};
+            if (read_lane_dropped) {
+                AsyncReadback::CountFastMiss(AsyncReadback::FastMiss::NoBack);
+                return false;
+            }
+            fence = ++read_lane_last;
+            read_lane_requests.push_back({fence, split.PublishedPosition(), action});
+        }
+        const auto take_back = [this, fence] {
+            // Under the lock. Whether the request was still queued: the back never ran it.
+            const auto it = std::ranges::find(read_lane_requests, fence, &ReadLaneRequest::fence);
+            if (it == read_lane_requests.end()) {
+                return false;
+            }
+            read_lane_requests.erase(it);
+            return true;
+        };
+        if (!split.RequestReadLane()) {
+            std::scoped_lock lock{read_lane_mutex};
+            if (take_back()) {
+                AsyncReadback::CountFastMiss(AsyncReadback::FastMiss::NoBack);
+                return false;
+            }
+            // Served by an earlier request's pass already.
+            return true;
+        }
+        std::unique_lock lock{read_lane_mutex};
+        const auto finished = [this, fence] {
+            return read_lane_done >= fence || read_lane_dropped;
+        };
+        while (!finished()) {
+            if (read_lane_cv.wait_for(lock, std::chrono::milliseconds{20}, finished)) {
+                break;
+            }
+            // The back stopped with the request unserved: queue it the ordinary way. (If it was
+            // served, `finished` is true already.)
+            if (!split.BackRunning() && take_back()) {
+                AsyncReadback::CountFastMiss(AsyncReadback::FastMiss::BackStopped);
+                return false;
+            }
+        }
+        return true;
+    }
+
     [[nodiscard]] u64 GetTicks() const {
         return ReadGpuTimestamp(system.CoreTiming(), g_nx2_ampere.load(std::memory_order_relaxed),
                                 Settings::values.gpu_clock.GetValue(),
@@ -222,10 +334,21 @@ struct GPU::Impl {
     void Start() {
         Settings::UpdateGPUAccuracy();
         gpu_thread.StartThread(*renderer, renderer->Context(), scheduler);
+        VideoCommon::GpuSplit::Get().SetReadLaneHook(
+            [](void* argument) { static_cast<Impl*>(argument)->TickReadLane(); }, this);
     }
 
     void NotifyShutdown() {
         gpu_thread.NotifyShutdown();
+        {
+            // The back stopped with the GPU thread: nothing serves the read lane anymore. Its
+            // requests may refer to their waiters' frames; release the waiters like the others.
+            VideoCommon::GpuSplit::Get().SetReadLaneHook(nullptr, nullptr);
+            std::scoped_lock lane_lock{read_lane_mutex};
+            read_lane_requests.clear();
+            read_lane_dropped = true;
+        }
+        read_lane_cv.notify_all();
         {
             // The GPU threads stopped: no sync operation runs anymore. Guest threads still run
             // until the kernel suspends them, and one waiting for a read's flush (OnCPURead)
@@ -304,7 +427,7 @@ struct GPU::Impl {
         const u64 area_size = raster_area.end_address - raster_area.start_address;
         // In flight: an earlier read's downloads cover the area, only FinishRead is left.
         if (!raster_area.in_flight) {
-            const u64 fence = RequestSyncOperation([this, raster_area, area_size, request]() {
+            const std::function<void()> flush = [this, raster_area, area_size, request]() {
                 const u64 start = AsyncReadback::Now();
                 AsyncReadback::CountSyncOp(start - request);
                 // Apply collected guest writes before downloading GPU data over guest memory.
@@ -313,9 +436,17 @@ struct GPU::Impl {
                                                                area_size);
                 AsyncReadback::Add(AsyncReadback::g_counters.flush_ns,
                                    AsyncReadback::Now() - start);
-            });
-            gpu_thread.TickGPU(is_async);
-            WaitForSyncOperation(fence);
+            };
+            // EDEN_NX2_READ_FAST: the back runs the flush between two ring entries, not after the
+            // work queued before this read. It then downloads every GPU write the back has
+            // recorded so far, which includes all the guest saw complete: the guest learns of
+            // a write's completion from a fence, semaphore or syncpoint that the back signals
+            // only after recording the write.
+            if (!AsyncReadback::ReadFast() || !RunReadFast(flush)) {
+                const u64 fence = RequestSyncOperation(flush);
+                gpu_thread.TickGPU(is_async);
+                WaitForSyncOperation(fence);
+            }
         }
         // The GPU thread submitted the downloads without waiting for the host GPU: this thread
         // waits for them and writes them to guest memory, while the GPU thread goes on.
@@ -450,6 +581,18 @@ struct GPU::Impl {
     u64 last_sync_fence{};
 
     VideoCommon::PendingMaps pending_maps;
+    /// EDEN_NX2_READ_FAST: reads' sync operations for the split's back (RunReadFast), in order.
+    struct ReadLaneRequest {
+        u64 fence;
+        u64 target; ///< The ring position published when it was requested
+        std::function<void()> action;
+    };
+    std::list<ReadLaneRequest> read_lane_requests;
+    u64 read_lane_last{};
+    u64 read_lane_done{};
+    bool read_lane_dropped{};
+    std::mutex read_lane_mutex;
+    std::condition_variable read_lane_cv;
     std::mutex sync_request_mutex;
     std::condition_variable sync_request_cv;
     /// The GPU threads stopped and the requests were dropped (NotifyShutdown, under the mutex).

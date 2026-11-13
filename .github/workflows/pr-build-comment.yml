@@ -75,7 +75,7 @@ jobs:
                 marker,
                 `**Windows test build** of ${short}: [${build.name}](${url})`,
                 "",
-                "Extract it into an empty folder and run `lichii.exe`. It is a Release build of this pull request merged into its base branch, without the ThinLTO and PGO of the release builds, so compare its fps only with another test build. Downloading needs a GitHub account; the build is kept for 14 days.",
+                "Extract it into an empty folder and run `guarana.exe` (`lichii.exe` if the build predates the rename). It is a Release build of this pull request merged into its base branch, without the ThinLTO and PGO of the release builds, so compare its fps only with another test build. Downloading needs a GitHub account; the build is kept for 14 days.",
                 "",
                 "Testers: post the device, driver, scene and fps or frame times here (`tools/bench` rows if you can, see `tools/bench/CONTRIBUTING-bench.md`). Use your own keys, firmware and games, and never attach them or logs with personal paths.",
               ].join("\n");

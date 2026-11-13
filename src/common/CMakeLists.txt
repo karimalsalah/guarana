@@ -72,10 +72,14 @@ add_library(
     fs/fs_types.h
     fs/fs_util.cpp
     fs/fs_util.h
+    fs/data_dir_migration.cpp
+    fs/data_dir_migration.h
     fs/path_util.cpp
     fs/path_util.h
     fs/profile_migration.cpp
     fs/profile_migration.h
+    guarana_modes.cpp
+    guarana_modes.h
     hash.h
     heap_tracker.cpp
     heap_tracker.h

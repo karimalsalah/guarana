@@ -26,8 +26,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <string>6.0</string>
     <key>CFBundleLongVersionString</key>
     <string></string>
+    <key>CFBundleDisplayName</key>
+    <string>Guarana</string>
     <key>CFBundleName</key>
-    <string>lichii</string>
+    <string>Guarana</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

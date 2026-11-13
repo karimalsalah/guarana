@@ -28,6 +28,7 @@
 #include "video_core/gpu.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_frame_predictor.h"
 #include "video_core/present.h"
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -74,6 +75,28 @@ constexpr f64 FLUID_MAX_ADVANCE = 3.0;
 constexpr size_t FLUID_MAX_PREDICTIONS = 6;
 /// EDEN_NX2_CADENCE: real frames are paced to be done this long before their slot's present.
 constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
+
+/// EDEN_NX2_FLUID_SPARE=<n>: predictions for n slots beyond the one the next real frame is
+/// expected for (default 0), so a real frame later than that leaves no slot with nothing to show.
+/// Each costs one frame dispatch and one of the presenter's frames, and reaches at most
+/// FLUID_MAX_ADVANCE frame intervals ahead.
+[[nodiscard]] u32 FluidSpareSlots() {
+    static const u32 spare = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_SPARE");
+        return value ? (std::min)(static_cast<u32>(std::strtoul(value, nullptr, 10)), 4U) : 0U;
+    }();
+    return spare;
+}
+
+/// EDEN_NX2_FLUID_PREDICT_ALL=1: EDEN_NX2_FLUID=1 predicts the first slot of every real frame, also
+/// when real frames come at least as fast as the slots. By default those frames are shown as drawn.
+[[nodiscard]] bool FluidPredictAll() {
+    static const bool all = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_PREDICT_ALL");
+        return value && *value != '\0' && *value != '0';
+    }();
+    return all;
+}
 
 [[nodiscard]] VkExtent2D GuestExtent(std::span<const Tegra::FramebufferConfig> framebuffers) {
     if (framebuffers.empty()) {
@@ -497,8 +520,25 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     // The first slot the frame's GPU work can be done for.
     const u64 first = slots.FirstSlotPresentedAfter(recorded + slots.latency);
     frame->fluid_slot = first;
+    // EDEN_NX2_PREDICT (nx2_frame_predictor.h): the model learns from every real frame.
+    VideoCore::Nx2Predict::FramePredictor& predictor = VideoCore::Nx2Predict::FramePredictor::Instance();
+    if (predictor.Enabled()) {
+        const auto slot_ns = (slots.refresh * static_cast<s64>(slots.divisor)).count();
+        const auto ahead = duration_cast<nanoseconds>(slots.SlotTime(first) - recorded - slots.latency);
+        const auto& semaphore = scheduler.GetMasterSemaphore();
+        predictor.OnRealFrame(duration_cast<nanoseconds>(recorded.time_since_epoch()).count(),
+                              slots.latency.count(), semaphore.CurrentTick() - semaphore.KnownGpuTick(),
+                              static_cast<double>(ahead.count()) / static_cast<double>(slot_ns));
+    }
     const f32 interval = frame_gen.FluidInterval();
-    if (interval <= 0.0f || !frame_gen.CanPredict()) {
+    if (interval <= 0.0f) {
+        return;
+    }
+    if (!frame_gen.CanPredict()) {
+        // A camera cut, a scene without motion data, HDR: predictions of older real frames are
+        // stale once this one is shown.
+        frame->fluid_final = true;
+        present_manager.NoteFluidBatch(false, false, false);
         return;
     }
     const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
@@ -522,25 +562,40 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
             std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
     }
     const auto real_interval = duration_cast<nanoseconds>(std::chrono::duration<f32>(interval));
+    const nanoseconds slot_period = slots.refresh * static_cast<s64>(slots.divisor);
+    // Real frames at least as fast as the slots fill them: the first slot shows the frame as
+    // drawn, not a prediction of the latency ahead (EDEN_NX2_FLUID=1).
+    const bool filled = FluidMode() == 1 && !FluidPredictAll() &&
+                        real_interval.count() <= slot_period.count() + slot_period.count() / 20;
     // Through the slot the next real frame is expected for: one spare covers it coming late.
-    const u64 last = slots.FirstSlotPresentedAfter(recorded + slots.latency + real_interval);
+    u64 last = slots.FirstSlotPresentedAfter(
+        recorded + slots.latency + real_interval + slot_period * FluidSpareSlots());
+    if (predictor.Enabled()) {
+        // EDEN_NX2_PREDICT: through the slot the next real frame is expected for at the model's p90.
+        const nanoseconds cover{predictor.Cover(real_interval.count())};
+        last = predictor.PlanSlots(frame->fluid_batch, first, last,
+                                   slots.FirstSlotPresentedAfter(recorded + slots.latency + cover),
+                                   slots.divisor, FLUID_MAX_PREDICTIONS);
+    }
     // EDEN_NX2_FLUID=2: each prediction is as of its slot less the latency a real frame can be
     // shown at.
     const nanoseconds behind = FluidMode() == 2 ? slots.latency + slots.lead : nanoseconds{};
     size_t predicted = 0;
-    for (u64 slot = first; slot <= last && predicted < FLUID_MAX_PREDICTIONS;
-         slot += slots.divisor) {
+    bool cut_short = false;
+    u64 slot = first;
+    for (; slot <= last && predicted < FLUID_MAX_PREDICTIONS; slot += slots.divisor) {
         const nanoseconds ahead =
             duration_cast<nanoseconds>(slots.SlotTime(slot) - recorded - behind);
         const f64 advance =
             static_cast<f64>(ahead.count()) / static_cast<f64>(real_interval.count());
-        if (slot == first && advance <= FLUID_REAL_ADVANCE) {
+        if (slot == first && (advance <= FLUID_REAL_ADVANCE || filled)) {
             // The real frame is on time for its slot.
             continue;
         }
         // Never waits: with no frame to spare the batch ends here.
         Frame* const generated = present_manager.TryGetRenderFrame();
         if (generated == nullptr) {
+            cut_short = true;
             break;
         }
         generated->color_space = output.color_space;
@@ -560,6 +615,8 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
         predicted_frames.push_back(generated);
     }
     frame_gen.NoteFluidGenerated(predicted);
+    present_manager.NoteFluidBatch(true, cut_short,
+                                   !cut_short && slot <= last && predicted >= FLUID_MAX_PREDICTIONS);
 }
 #endif
 

@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "lichii/configuration/shared_widget.h"
+#include "qt_common/config/uisettings.h"
 
 #include <functional>
 #include <limits>
@@ -106,7 +107,10 @@ QPushButton* Widget::CreateRestoreGlobalButton(bool using_global, QWidget* paren
     restore_button_count++;
 
     QPushButton* restore_button =
-        new QPushButton(QIcon(QStringLiteral(":/lichii/icons/reset.png")), QString(), parent);
+        new QPushButton(QIcon(UISettings::IsGuaranaTheme()
+                                  ? QStringLiteral(":/guarana/icons/reset.png")
+                                  : QStringLiteral(":/lichii/icons/reset.png")),
+                        QString(), parent);
     restore_button->setObjectName(QStringLiteral("RestoreButton%1").arg(restore_button_count));
     restore_button->setProperty("restore", true);
     restore_button->setToolTip(

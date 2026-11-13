@@ -1,8 +1,8 @@
 # User Handbook - Command Line
 
-There are two main applications, an SDL-based app (`eden-cli`) and a Qt based app (`eden`); both accept the same command line arguments.
+There are two main applications, an SDL-based app (`guarana-cli`) and a Qt based app (`guarana`); both accept the same command line arguments.
 
-- `./eden <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `eden-cli`; allows dragging and dropping games into the application.
+- `./guarana <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `guarana-cli`; allows dragging and dropping games into the application.
 - `--debug/-d`: Enter debug mode, allow gdb stub at port `1234`
 - `--config/-c`: Specify alternate configuration file.
 - `--fullscreen/-f`: Use fullscreen.
@@ -37,7 +37,7 @@ Only the Qt frontend supports the following arguments:
 - `-i/--preferred-game-id`: The preferred game-id for this room.
 - `-u/--username`: The username used for announce.
 - `-t/--token`: The token used for announce.
-- `-a/--web-api-url`: Lichii Web API url.
+- `-a/--web-api-url`: Guarana Web API url.
 - `-b/--ban-list-file`: The file for storing the room ban list.
 - `-l/--log-file`: The file for storing the room log.
 - `-h/--help`: Display this help and exit.

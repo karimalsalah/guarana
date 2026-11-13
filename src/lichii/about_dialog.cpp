@@ -26,12 +26,12 @@ AboutDialog::AboutDialog(QWidget* parent)
     ui->setupUi(this);
     // Try and request the icon from Qt theme (Linux?)
     const QIcon lichii_logo = QIcon::fromTheme(QStringLiteral("io.github.zortos293.lichii"),
-                                           QIcon(QStringLiteral(":/img/lichii.ico")));
+                                           QIcon(QStringLiteral(":/img/guarana.ico")));
     if (!lichii_logo.isNull()) {
         ui->labelLogo->setPixmap(lichii_logo.pixmap(112));
     }
     ui->labelLichii->setPixmap(QIcon(QStringLiteral(":/img/lichii_wordmark.png")).pixmap(113, 48));
-    ui->labelLichii->setAccessibleName(QStringLiteral("Lichii"));
+    ui->labelLichii->setAccessibleName(QStringLiteral("Guarana"));
     ui->verticalLayout_3->setContentsMargins(32, 28, 32, 20);
     ui->horizontalLayout->setSpacing(32);
     ui->verticalLayout->setSpacing(10);

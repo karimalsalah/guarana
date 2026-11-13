@@ -12,7 +12,36 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
+- Guarana window and play mode: Guarana Dark theme (new default), a Guarana settings page (play mode, frame generation, resolution, controller, report a problem), a compact brand performance overlay, per-monitor window memory, a menu hint when a game goes fullscreen, a clean release window title and icon, and a first-run panel on the empty game list. Settings: `guarana_remember_window`, `guarana_play_toast`, `guarana_overlay_compact`, `guarana_mode`. See `docs/user/ui.md`.
+
 - Launcher: after a session with at least a minute of gameplay, a card offers to share your numbers (game fps, frame pacing, device, driver) as a prefilled device report you review and submit yourself; a setting stops it asking.
+
+- **Graphics pipeline library fast-link** (`EDEN_NX2_GPL=1`, opt-in, experimental): a pipeline is linked from cached per-stage shader libraries (`VK_EXT_graphics_pipeline_library`), so a pipeline whose stages were seen before costs a fast link instead of a 400 to 1000 ms driver build, and an optimized link replaces it in the background (`EDEN_NX2_GPL_OPTIMIZE=0` skips that). Off on AMD's Windows driver unless `EDEN_NX2_GPL_FAST_LINK=1`. Port of upstream pull requests [#1173](https://github.com/zortos293/Lichii/pull/1173), [#1177](https://github.com/zortos293/Lichii/pull/1177) and [#1185](https://github.com/zortos293/Lichii/pull/1185) by PantACRO4life and justin-wq1337, adapted to this tree. Not measured on a verified scene yet; the plan is in [docs/switches.md](docs/switches.md).
+- Opt-in experiments, all off by default and described in [docs/switches.md](docs/switches.md):
+  - `EDEN_NX2_READ_FAST=1`: an async read's sync operation is served ahead of the GPU split's queue.
+  - `EDEN_NX2_HYBRID=1`: threads are placed by role on hybrid Intel CPUs (performance cores for the guest, GPU and Vulkan threads) on Windows.
+  - `EDEN_NX2_HITCH_FINISH_TRACE`, `EDEN_NX2_HITCH_GC_BATCH`, `EDEN_NX2_HITCH_GC_CLEAN_FIRST` and `EDEN_NX2_HITCH_UMA_BUDGET_MIB`: where full GPU waits come from, batched and reordered texture-collector downloads, and a smaller memory budget cap on integrated GPUs. Analysis in [docs/hitches.md](docs/hitches.md).
+  - `EDEN_NX2_GPUCOST_QUERY` and `EDEN_NX2_GPUCOST_PRESENT`: fewer barriers per query sync, and no redundant clear before a full-frame present.
+  - `EDEN_NX2_BOOT_ASYNC=1`: the Vulkan instance is created ahead of the renderer, and boot does not wait for cached graphics pipelines; they are built from the order recent sessions first used them, and an interrupted warm-up resumes.
+  - `EDEN_NX2_PREDICT=1`, with `EDEN_NX2_FLUID`: a small online model of the real-frame interval schedules the predictions. See [docs/frame-generation.md](docs/frame-generation.md).
+  - `EDEN_NX2_AUTOPILOT=1`: every 2 s steers frame generation target, GPU time scale and, on battery, the power policy to the display.
+  - New diagnostics from the upstream merge: `EDEN_NX2_PERF_VERIFY`, `EDEN_NX2_FAST_DRAW_VERIFY`, `EDEN_NX2_REG_BLOCK_VERIFY` and `EDEN_NX2_BACKX_VERIFY`.
+- Frame generation: an extrapolation debug overlay (`EDEN_NX2_EXTRAPOLATE_DEBUG=2`), `EDEN_NX2_EXTRAPOLATE_HUD_DILATE` and `EDEN_NX2_FLUID_SPARE`, and a Fluid presenter that counts its misses by cause. See [docs/frame-generation.md](docs/frame-generation.md).
+
+### Changed
+
+- **Guarana rebrand** (player-visible): the programs are `guarana.exe` and `guarana-cli.exe` (`lichii.exe` and `eden-cli.exe` before), the data folder is `%APPDATA%\guarana`, and on first start your settings, saves and caches are copied over from `%APPDATA%\lichii` (copy only: staged, rolled back on failure, the old folder stays; the copied settings name the new folder, so saves, the SD card and mods are read from it). Windows version info, installer, desktop and metainfo files, icons, translations and the About credits say Guarana; the launcher, the release workflow and the docs use the new names and fall back to the old ones for older builds. Internal identifiers do not change. The first boot after the rename recompiles shaders once, because Intel's driver cache is per program name.
+- Integrated GPU measurements in Ocarina of Time (Hyrule Field, Arc 140T) with the frame generation, hitch and boot changes of this release: 24.5 to 25.2 game fps, p99 frame time 47 ms and 0 stutters in 30 s in two clean runs, against p99 135 to 158 ms and 37 to 92 stutters for the v20 desktop setup.
+- Upstream merge: [#1580](https://github.com/zortos293/Lichii/pull/1580) (the zero-page pass reads less and backs off to 5 minutes), [#1582](https://github.com/zortos293/Lichii/pull/1582) (Android docs), [#1585](https://github.com/zortos293/Lichii/pull/1585) (3D state writes sent to the GPU back thread as register blocks), [#1586](https://github.com/zortos293/Lichii/pull/1586) (back-thread micro-cuts and a dirty-memory page-crossing fix), [#1589](https://github.com/zortos293/Lichii/pull/1589) (the DLSS quality setting changes Ocarina of Time's render resolution), [#1590](https://github.com/zortos293/Lichii/pull/1590) (vi2 timestamp recorders), [#1591](https://github.com/zortos293/Lichii/pull/1591) (`GPUDirtyMemoryManager::Collect` takes `size_t`) and [#1592](https://github.com/zortos293/Lichii/pull/1592).
+
+### Fixed
+
+- Frame generation (FLUID presenter): a late real frame is rolled to the next slot instead of leaving it empty, no stale frame of an old scene is shown after a camera cut, the HUD edge mask covers anti-aliased text and icon edges so they are not moved with the scene, and when real frames come as fast as the slots the real frame is shown as drawn.
+- Shader translation: a narrowed global-memory load (`EDEN_NX2_GM` bit 2) kept its buffer list in the flags that the shader info pass reads as the coherent bit, so every narrowed program was marked coherent. The routing now uses a separate field (public issue #6).
+
+### Removed
+
+- Experiments a paired run showed gave no gain, or harm, with their code: `EDEN_NX2_MESH_SIMD`, `EDEN_NX2_IGPU_VRAM_MIB`, `EDEN_NX2_DEPTH_OPTIMAL`, `EDEN_NX2_RT_USAGE` and `EDEN_NX2_RT_USAGE_SIZE`, `EDEN_NX2_ALIAS_LAZY`, `EDEN_NX2_DEFER_WFI`, `EDEN_NX2_MESH_OUT` and `EDEN_NX2_MESH_VRS_PX`, `EDEN_NX2_MESH_CULL`, and the disabled dynamic fragment shading rate path. They are listed under "Removed experiments" in [docs/switches.md](docs/switches.md).
 
 ## [20.1.0] - 2026-11-13
 

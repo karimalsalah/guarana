@@ -180,10 +180,10 @@
   <p class="section-intro">On Windows, Guarana Setup (since v20.1) installs and updates the emulator in one click; the zip is the same emulator without an installer.</p>
 <ol class="steps">
 <li><h3>Download</h3><p>Get the Windows x86-64 zip from the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest release</a>, the only official download. Check it against <code>SHA256SUMS</code> on the same page.</p></li>
-<li><h3>Extract and run</h3><p>Extract to a writable folder and start <code>lichii.exe</code>.</p></li>
+<li><h3>Extract and run</h3><p>Extract to a writable folder and start <code>guarana.exe</code>.</p></li>
 <li><h3>Bring your own keys and firmware</h3><p><em>Tools &rarr; Install Decryption Keys</em>, then <em>Tools &rarr; Install Firmware</em>, with files you dumped from hardware you own. Guarana includes neither and will not tell you where to find them.</p></li>
 <li><h3>Add your game</h3><p>Double-click the empty game list, pick the folder with your own game dump, start <em>The Legend of Zelda: Ocarina of Time</em>. Each new area compiles shaders and hitches once; later visits use the cache (<a href="fix-stutter-switch-2-emulator.html">why, and what helps</a>).</p></li>
-<li><h3>Use the Ocarina of Time defaults</h3><p>For this game the global-memory fix (<code>EDEN_NX2_GM=11</code>) is already on, and extrapolation (<code>EDEN_NX2_EXTRAPOLATE=1</code>) is on in the shipped <code>nx2_switches.txt</code>. Then go to <em>Emulation &rarr; Configure&hellip; &rarr; Graphics</em>: <em>Enable Frame Generation</em> on, <em>Frame Generation Multiplier</em> 3, <em>Target Frame Rate</em> 60. Put your own switch lines in <code>%APPDATA%\lichii\nx2_switches.txt</code>, not the copy next to the executable.</p></li>
+<li><h3>Use the Ocarina of Time defaults</h3><p>For this game the global-memory fix (<code>EDEN_NX2_GM=11</code>) is already on, and extrapolation (<code>EDEN_NX2_EXTRAPOLATE=1</code>) is on in the shipped <code>nx2_switches.txt</code>. Then go to <em>Emulation &rarr; Configure&hellip; &rarr; Graphics</em>: <em>Enable Frame Generation</em> on, <em>Frame Generation Multiplier</em> 3, <em>Target Frame Rate</em> 60. Put your own switch lines in <code>%APPDATA%\guarana\nx2_switches.txt</code>, not the copy next to the executable.</p></li>
 </ol>
   <p>Control it with a pad: <a href="controller-setup.html">controller setup</a>. Own a handheld: <a href="switch-2-emulator-handheld.html">what to expect</a>.</p>
 </section>

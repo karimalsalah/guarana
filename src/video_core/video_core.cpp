@@ -11,9 +11,11 @@
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/nx2_async_readback.h"
+#include "video_core/nx2_backx.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_download_trace.h"
 #include "video_core/nx2_list_grid.h"
@@ -21,6 +23,7 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/nx2_uma.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
@@ -28,6 +31,7 @@
 #include "video_core/renderer_opengl/renderer_opengl.h"
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/video_core.h"
 
 namespace {
@@ -54,6 +58,13 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
 
 namespace VideoCore {
 
+void PrepareRenderer(Core::Frontend::EmuWindow& emu_window) {
+    if (Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan) {
+        Vulkan::PrecreateInstance(emu_window.GetWindowInfo().type,
+                                  Settings::values.renderer_debug.GetValue());
+    }
+}
+
 /// @brief Creates an emulated GPU instance using the given system context.
 void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
     Settings::UpdateRescalingInfo();
@@ -66,6 +77,9 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     VideoCore::AsyncReadback::ReadSwitch();
     VideoCommon::Nx2Perf::ReadSwitch();
     VideoCommon::Nx2Uma::ReadSwitch();
+    VideoCommon::Nx2GpuCost::ReadSwitch();
+    VideoCommon::BackX::ReadSwitch();
+    Core::GPUDirtyMemoryManager::count_collects = VideoCommon::BackX::g_verify;
 
     const auto nvdec_value = Settings::values.nvdec_emulation.GetValue();
     const bool use_nvdec = nvdec_value != Settings::NvdecEmulation::Off;

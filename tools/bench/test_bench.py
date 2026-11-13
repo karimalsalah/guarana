@@ -1535,12 +1535,7 @@ class SuiteTest(RunCase):
         vrs = {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}
         self.assertEqual(env, {
             "baseline": {}, "baseline-trace": trace,
-            "mesh-cull-1": {"EDEN_NX2_MESH_CULL": "1"}, "mesh-cull-1-trace": {"EDEN_NX2_MESH_CULL": "1", **trace},
-            "mesh-cull-5": {"EDEN_NX2_MESH_CULL": "5"}, "mesh-cull-5-trace": {"EDEN_NX2_MESH_CULL": "5", **trace},
-            "mesh-cull-7": {"EDEN_NX2_MESH_CULL": "7"}, "mesh-cull-7-trace": {"EDEN_NX2_MESH_CULL": "7", **trace},
             "vrs-2x2": vrs, "vrs-2x2-trace": {**vrs, **trace},
-            "vrs-2x2-mesh-cull-7": {**vrs, "EDEN_NX2_MESH_CULL": "7"},
-            "vrs-2x2-mesh-cull-7-trace": {**vrs, "EDEN_NX2_MESH_CULL": "7", **trace},
             "spin-scale-0.25": {"EDEN_NX2_SPIN_SCALE": "0.25"},
             "eco-background": {"EDEN_NX2_ECO_BACKGROUND": "1"},
             "low-memory": {"EDEN_NX2_LOW_MEMORY": "1"}})
@@ -1554,7 +1549,7 @@ class SuiteTest(RunCase):
         with contextlib.redirect_stdout(output):
             self.assertEqual(bench.command_suite(args.__class__(**{**vars(args), "dry_run": True}), defaults,
                                                  self.deps), 0)
-        self.assertIn("variant vrs-2x2-mesh-cull-7-trace:", output.getvalue())
+        self.assertIn("variant vrs-2x2-trace:", output.getvalue())
         self.assertEqual((self.launches, self.host.commands), ([], []))
 
     def write_suite(self, **fields):
@@ -1724,12 +1719,12 @@ class PlayTest(unittest.TestCase):
 
     def test_session_applies_the_profile_and_restores(self):
         self.game_result = 3
-        code = self.play("--profile", self.profile(env={"EDEN_NX2_MESH_CULL": 7}, power_policy={"PERFBOOSTMODE": 0}),
+        code = self.play("--profile", self.profile(env={"EDEN_NX2_LOW_MEMORY": 1}, power_policy={"PERFBOOSTMODE": 0}),
                          "--power-policy", "PROCTHROTTLEMIN=5", "--power-policy", "NOSUCHSETTING=1")
         self.assertEqual(code, 3)
         launch = self.launches[0]
         self.assertEqual((launch["exe"], launch["game"]), (self.exe, self.game))
-        self.assertEqual(launch["env"]["EDEN_NX2_MESH_CULL"], "7")
+        self.assertEqual(launch["env"]["EDEN_NX2_LOW_MEMORY"], "1")
         self.assertNotIn(bench.DEBUG_ENV, {key for key in launch["env"] if key not in os.environ})
         self.assertEqual((launch["power"]["PERFBOOSTMODE"], launch["power"]["PROCTHROTTLEMIN"]), (0, 5))
         self.assertTrue(launch["restore_file"])
@@ -1737,7 +1732,7 @@ class PlayTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.restore))
         text = "\n".join(self.log)
         self.assertIn("PERFBOOSTMODE 2 -> 0, PROCTHROTTLEMIN 100 -> 5; not on this machine: NOSUCHSETTING", text)
-        self.assertIn("environment: EDEN_NX2_MESH_CULL=7", text)
+        self.assertIn("environment: EDEN_NX2_LOW_MEMORY=1", text)
         self.assertIn("power settings restored", text)
         self.assertEqual(self.host.ran("taskkill"), [])
 

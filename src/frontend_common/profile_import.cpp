@@ -52,7 +52,7 @@ bool NeedsLegacyProfileImport() {
 void CheckLegacyProfileBeforeConfig() {
     if (NeedsLegacyProfileImport()) {
         throw std::runtime_error("Legacy emulator data or an unfinished import was found. "
-                                 "Open the Lichii GUI to import it or explicitly start fresh "
+                                 "Open the Guarana GUI to import it or explicitly start fresh "
                                  "before using eden-cli. No configuration was created.");
     }
 }

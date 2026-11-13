@@ -316,7 +316,7 @@ endif()
 
 if (LICHII_CMD)
     add_subdirectory(lichii_cmd)
-    set_target_properties(lichii-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+    set_target_properties(lichii-cmd PROPERTIES OUTPUT_NAME "guarana-cli")
 endif()
 
 if (ENABLE_QT)

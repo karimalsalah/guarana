@@ -22,12 +22,12 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
 - **One switch, self-tuning.** Home has Auto, Smooth, Quality and Battery; Auto picks from this PC's detection and the community's verified settings (`best-settings.json`, cached 24 h, offline-safe). After each game an autopilot reads the log and makes at most one small, undoable change within the mode's limits; Home says what it changed and why.
 - **Ask AI**: Doctor and Report build a scrubbed summary and open a prefilled Claude or ChatGPT chat that points at Guarana's docs.
 - **Applies a profile** to the emulator's own files: a marked block in
-  `%APPDATA%\lichii\nx2_switches.txt` (your own lines stay as they are) and a few `[Renderer]` keys
-  in `%APPDATA%\lichii\config\qt-config.ini`. Both are backed up to `guarana-backups\` first.
-- **Starts games** with `lichii.exe -f -g "<game file>"` (`-g/--game` boots the file,
+  `%APPDATA%\guarana\nx2_switches.txt` (your own lines stay as they are) and a few `[Renderer]` keys
+  in `%APPDATA%\guarana\config\qt-config.ini`. Both are backed up to `guarana-backups\` first.
+- **Starts games** with `guarana.exe -f -g "<game file>"` (`-g/--game` boots the file,
   `-f/--fullscreen` starts fullscreen; `src/core/launch_params.cpp`), can warm the title's shader
   cache files into memory first, and prepares a title's shaders for a new GPU driver with
-  `eden-cli.exe --warm-pipelines <title id> -c <qt-config.ini>` (`docs/warm-up.md`).
+  `guarana-cli.exe --warm-pipelines <title id> -c <qt-config.ini>` (`docs/warm-up.md`).
 - **Doctor**: driver, Vulkan, Visual C++ runtime, AVX2, memory and page file, disk, power, HDR,
   controllers, keys, firmware, games, updates. Fixes open the official Windows or vendor page, or
   act inside Guarana's own folders (deleting stale shader-cache temp files, installing an update).
@@ -42,7 +42,7 @@ It never downloads, bundles or uploads keys, firmware or games.
 | Folder | Holds |
 | --- | --- |
 | `%LOCALAPPDATA%\Guarana` | `versions\`, `current.json`, `launcher-state.json`, `launcher.log`, `downloads\`, `reports\` |
-| `%APPDATA%\lichii` | The emulator's own user folder (keys, config, caches, logs). The launcher does not move it. |
+| `%APPDATA%\guarana` | The emulator's own user folder (keys, config, caches, logs), copied from `%APPDATA%\lichii` by the emulator on its first start. The launcher does not move it, and keeps using `lichii` until then or with an emulator from before the rename. |
 
 ## Build
 

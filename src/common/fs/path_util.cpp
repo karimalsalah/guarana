@@ -5,11 +5,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include "common/container/unordered_map.h"
 
 #include "common/assert.h"
+#include "common/fs/data_dir_migration.h"
 #include "common/fs/fs.h"
 #ifdef __ANDROID__
 #include "common/fs/fs_android.h"
@@ -119,7 +122,9 @@ public:
         eden_path = GetExeDirectory() / PORTABLE_DIR;
         portable = IsDir(eden_path);
         if (!Exists(eden_path) || !IsDir(eden_path)) {
-            eden_path = GetAppDataRoamingDirectory() / EDEN_DIR;
+            const auto appdata = GetAppDataRoamingDirectory();
+            eden_path = appdata / EDEN_DIR;
+            ApplyDataMigration({{appdata / PRE_GUARANA_DIR, eden_path}}, eden_path);
         }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
@@ -144,6 +149,11 @@ public:
             eden_path = GetDataDirectory("XDG_DATA_HOME") / EDEN_DIR;
             eden_path_cache = GetDataDirectory("XDG_CACHE_HOME") / EDEN_DIR;
             eden_path_config = GetDataDirectory("XDG_CONFIG_HOME") / EDEN_DIR;
+            ApplyDataMigration(
+                {{GetDataDirectory("XDG_DATA_HOME") / PRE_GUARANA_DIR, eden_path},
+                 {GetDataDirectory("XDG_CONFIG_HOME") / PRE_GUARANA_DIR, eden_path_config},
+                 {GetDataDirectory("XDG_CACHE_HOME") / PRE_GUARANA_DIR, eden_path_cache}},
+                eden_path, &eden_path_config, &eden_path_cache);
         } else {
             eden_path_cache = eden_path / CACHE_DIR;
             eden_path_config = eden_path / CONFIG_DIR;
@@ -194,6 +204,32 @@ public:
     }
 
 private:
+    /// Copies the pre-rename "lichii" folders to the "guarana" ones the first time, and points the
+    /// given paths back at the old folders for this session when that copy failed. Runs once per
+    /// process: a later Reinitialize keeps the first answer instead of copying again.
+    void ApplyDataMigration(std::vector<DataDirMigration::Root> roots, fs::path& data,
+                            fs::path* config = nullptr, fs::path* cache = nullptr) {
+        if (!migration_outcome) {
+            // Test runs set this so they never copy the developer's real user data.
+            if (const char* skip = std::getenv("GUARANA_SKIP_DATA_MIGRATION"); skip && *skip) {
+                migration_outcome = DataDirMigration::Outcome::UseCurrent;
+                return;
+            }
+            const auto result = DataDirMigration::Resolve(roots);
+            DataDirMigration::SetPendingReport(result);
+            migration_outcome = result.outcome;
+        }
+        if (*migration_outcome == DataDirMigration::Outcome::UseLegacy) {
+            data = roots[0].legacy;
+            if (config) {
+                *config = roots[1].legacy;
+            }
+            if (cache) {
+                *cache = roots[2].legacy;
+            }
+        }
+    }
+
     PathManagerImpl() {
         Reinitialize();
     }
@@ -212,6 +248,7 @@ private:
     ::Common::unordered_map<EdenPath, fs::path> eden_paths;
     ::Common::unordered_map<EmuPath, fs::path> legacy_paths;
     bool portable{};
+    std::optional<DataDirMigration::Outcome> migration_outcome;
 };
 
 bool ValidatePath(const fs::path& path) {

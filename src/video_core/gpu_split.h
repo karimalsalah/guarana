@@ -14,6 +14,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
@@ -166,6 +167,34 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
+    /// Called on the back between entries, and at once when it waits for work, after
+    /// RequestReadLane: runs the reads' sync operations ahead of the queued work (GPU::OnCPURead,
+    /// EDEN_NX2_READ_FAST).
+    void SetReadLaneHook(void (*hook)(void*), void* argument) {
+        read_lane_hook = hook;
+        read_lane_argument = argument;
+    }
+    /// Any thread: asks the back to call the read lane hook before its next entry. Returns false
+    /// (and does nothing) when the back is not running or has no hook: the caller uses the
+    /// ordinary queue then. A true return can still go unserved if the back stops meanwhile.
+    [[nodiscard]] bool RequestReadLane() {
+        if (!back_running.load(std::memory_order_acquire) || read_lane_hook == nullptr) {
+            return false;
+        }
+        read_lane_requested.store(true, std::memory_order_seq_cst);
+        wake.fetch_add(1, std::memory_order_seq_cst);
+        wake.notify_one();
+        return true;
+    }
+    /// Any thread: the ring position the front has published so far (the entries a read lane
+    /// request skips are those the back has not run past it).
+    [[nodiscard]] u64 PublishedPosition() const {
+        return published.load(std::memory_order_acquire);
+    }
+    /// Back thread, from the read lane hook: a read was served at `served_ns` (AsyncReadback::Now)
+    /// ahead of the entries up to `target` (PublishedPosition when it was requested). Counts the
+    /// time the back then takes to run past `target` as saved.
+    void NoteReadServed(u64 target, u64 served_ns);
     /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);
@@ -217,6 +246,30 @@ public:
         if (writes == Writes::Anywhere) {
             NoteAnyWrite();
         }
+    }
+
+    /// A Maxwell3D state register write (not in execution_mask) from the front, shadow RAM
+    /// applied (not in replay) and changing the front's copy of the register. Writes in a row go
+    /// to the back as one entry once another entry follows or the front publishes or waits; the
+    /// back stores them and sets their dirty flags at once (Maxwell3D::WriteStateRegisters).
+    /// `flags`: the dirty flags the register sets; `breaks`: changing it ends fast draw reuse;
+    /// `anywhere`: the back may issue a deferred draw with it, which can write guest memory
+    /// anywhere. Port of Damfortx's state blocks (76548f0bf1), after #717's StateDelta.
+    void StateWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 value,
+                    std::array<u8, 2> flags, bool breaks, bool anywhere) {
+        if (engine != state_engine || state_count == MaxStateWrites) {
+            FlushState();
+            state_engine = engine;
+        }
+        state_writes[state_count++] = u64{method} | (u64{value} << 32);
+        for (const u8 flag : flags) {
+            state_flags[flag / 64] |= u64{1} << (flag % 64);
+        }
+        if (breaks) {
+            state_break = method;
+            state_breaks = true;
+        }
+        state_anywhere = state_anywhere || anywhere;
     }
 
     /// Defer flag: the call doesn't end fast draw reuse (nx2_fast_draw.h).
@@ -283,6 +336,10 @@ public:
     /// runs its idle hook (the deferred submit) and sleeps now instead of spinning for more, as it
     /// did when every poll drained (Drain asks for the hook), but without the wait.
     void SettleIdleBack() {
+        if (state_count != 0) {
+            Publish();
+            return;
+        }
         if (hook_requested.load(std::memory_order_relaxed) || BackQuiet() ||
             consumed.load(std::memory_order_acquire) != write_position) {
             return;
@@ -295,7 +352,8 @@ public:
     /// Waits until the back executed everything sent so far.
     void Drain(DrainSite site = DrainSite::Other);
     /// The ring position after the entries sent so far, for WaitUntil.
-    [[nodiscard]] u64 Position() const {
+    [[nodiscard]] u64 Position() {
+        FlushState();
         return write_position;
     }
     /// Waits until the back executed the entries sent before `position`. Returns whether any of
@@ -358,10 +416,15 @@ private:
         Method, ///< Bits 8-23 method, 32-63 argument; flags IsLast, HasSegment (word 1)
         Multi,  ///< Bits 8-23 method, 32-63 amount; word 1 methods pending, [segment], words
         Call,   ///< Bits 8-31 payload size in words; word 1 thunk, then the payload
+        State,  ///< Bits 8-23 last method that breaks, 32-63 count; flag HasBreak; words 1-4
+                ///< dirty flags; then (method | value << 32) per write (StateWrite)
     };
     static constexpr u64 IsLast = 1 << 4;
     static constexpr u64 HasSegment = 1 << 5;
     static constexpr u64 Direct = 1 << 6; ///< Method: call it even if not executable (macros)
+    static constexpr u64 HasBreak = 1 << 4; ///< State: a write ends fast draw reuse
+    static constexpr size_t StateFlagWords = 4;
+    static constexpr u32 MaxStateWrites = 128;
 
     static constexpr size_t RingWords = size_t{1} << 20; // 8 MiB
     static constexpr size_t RingMask = RingWords - 1;
@@ -398,8 +461,17 @@ private:
                                  static_cast<size_t>(payload[function_words])});
     }
 
+    /// Sends the state writes gathered so far (before any other entry, publish or wait).
+    void FlushState() {
+        if (state_count != 0) {
+            FlushStateSlow();
+        }
+    }
+    void FlushStateSlow();
+
     /// Room for an entry of `words` at the write position (never across the ring's end).
     u64* Reserve(size_t words) {
+        FlushState();
         const size_t index = write_position & RingMask;
         if (index + words <= RingWords && write_position + words - consumed_cache <= RingWords)
             [[likely]] {
@@ -425,6 +497,7 @@ private:
     }
     void WaitForSpace(size_t words);
     void SelectEngine(Tegra::Engines::EngineInterface* engine) {
+        FlushState();
         if (engine != front_engine) [[unlikely]] {
             SwitchEngine(engine);
         }
@@ -443,6 +516,10 @@ private:
     }
 
     void BackLoop(std::stop_token stop_token);
+    /// Back thread: runs the read lane's requests (RequestReadLane), `position` entries in.
+    void ServeReadLane(u64 position);
+    /// Back thread: counts the reads served ahead of entries that the back has now run (position).
+    void SettleReadShadows(u64 position);
     /// Runs the entry at `entry` (of the `words` published before the ring's end), returns its size.
     size_t Execute(const u64* entry, size_t words);
 
@@ -477,9 +554,25 @@ private:
     /// Words between publishes: small right after a drain, while the back has nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
+    /// The state writes being gathered (StateWrite).
+    Tegra::Engines::EngineInterface* state_engine{};
+    u32 state_count{};
+    u32 state_break{};
+    bool state_breaks{};
+    bool state_anywhere{};
+    std::array<u64, StateFlagWords> state_flags{};
+    std::array<u64, MaxStateWrites> state_writes{};
 
     // Back side, in its own block.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};
+    /// Reads served ahead of the ring (NoteReadServed) until the back runs past their target.
+    struct ReadShadow {
+        u64 target;
+        u64 served_ns;
+    };
+    std::vector<ReadShadow> read_shadows;
+    /// The back's position while it serves the read lane.
+    u64 read_lane_position{};
 
     /// Whether the back is done with the Vulkan scheduler until it gets more work: set after its
     /// idle hook ran, cleared before it executes entries.
@@ -493,6 +586,9 @@ private:
     static inline thread_local bool on_gpu_thread{};
     void (*idle_hook)(void*){};
     void* idle_argument{};
+    void (*read_lane_hook)(void*){};
+    void* read_lane_argument{};
+    alignas(64) std::atomic<bool> read_lane_requested{};
     alignas(64) std::atomic<bool> hook_requested{};
     std::atomic<bool> back_running{};
     std::atomic<bool> back_quiet{true};

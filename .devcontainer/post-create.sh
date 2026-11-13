@@ -22,8 +22,8 @@ Guarana dev container
 Next steps:
   bash scripts/run-tests.sh                 unit and tool tests, built as CI's build-check (GCC, Release)
   bash scripts/run-tests.sh --python-only   only the Python tool tests, in seconds
-  bash scripts/build-linux.sh               release build (clang PGO, x86-64-v3): build/release/bin/lichii
-  bash scripts/build-linux.sh --no-pgo      GCC release build: build/release-nopgo/bin/lichii
+  bash scripts/build-linux.sh               release build (clang PGO, x86-64-v3): build/release/bin/guarana
+  bash scripts/build-linux.sh --no-pgo      GCC release build: build/release-nopgo/bin/guarana
 
 The first C++ build takes a while on 4 cores; ccache keeps the next ones short. Games do not run here
 (no GPU): use the container to build and test, and a PC or a pull request's test build to play.

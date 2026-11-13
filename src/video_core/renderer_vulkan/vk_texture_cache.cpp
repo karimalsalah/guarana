@@ -190,36 +190,6 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
     return usage;
 }
 
-// EDEN_NX2_RT_USAGE=1: images made for a single-sample color target get no STORAGE usage (Intel
-// drivers can drop color compression for it). EDEN_NX2_RT_USAGE_SIZE=<width>x<height> limits it
-// to targets of that size. Depth targets have no STORAGE usage or MUTABLE_FORMAT to begin with.
-[[nodiscard]] bool IsLeanRenderTarget(const ImageInfo& info) {
-    struct Config {
-        bool enabled{};
-        u32 width{};
-        u32 height{};
-    };
-    static const Config config = [] {
-        Config result{};
-        const char* const value = std::getenv("EDEN_NX2_RT_USAGE");
-        result.enabled = value != nullptr && std::atoi(value) != 0;
-        if (const char* const size = std::getenv("EDEN_NX2_RT_USAGE_SIZE")) {
-            char* end = nullptr;
-            result.width = static_cast<u32>(std::strtoul(size, &end, 10));
-            if (end != nullptr && *end == 'x') {
-                result.height = static_cast<u32>(std::strtoul(end + 1, nullptr, 10));
-            }
-        }
-        return result;
-    }();
-    if (!config.enabled || !info.render_target || info.num_samples != 1 ||
-        VideoCore::Surface::GetFormatType(info.format) != SurfaceType::ColorTexture) {
-        return false;
-    }
-    return config.width == 0 ||
-           (info.size.width == config.width && info.size.height == config.height);
-}
-
 // An ASTC 2D array whose RGBA8 decode exceeds 1 GiB (title 1's 8192x8192x68 terrain textures).
 // These stay on the GPU decoder as RGBA8 with trimmed levels (TrimmedHostInfo) even when other
 // ASTC images are re-compressed to BC1/BC3 on the CPU: re-compressing them would not fit either.
@@ -519,8 +489,7 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
     }
     const auto [samples_x, samples_y] = VideoCommon::SamplesLog2(info.num_samples);
     const bool allow_storage =
-        (info.num_samples == 1 || device.IsStorageImageMultisampleSupported()) &&
-        !IsLeanRenderTarget(info);
+        info.num_samples == 1 || device.IsStorageImageMultisampleSupported();
     if (HostMipCount(info) < static_cast<u32>(info.resources.levels)) {
         static std::atomic<u32> reported{};
         if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
@@ -589,23 +558,12 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
                 return device.IsFormatSupported(view_format, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT,
                                                 FormatType::Optimal);
             });
-        if (has_storage_compatible_view && !IsLeanRenderTarget(info)) {
+        if (has_storage_compatible_view) {
             image_ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         }
 
         if (device.IsKhrImageFormatListSupported()) {
             image_ci.pNext = &image_format_list;
-        }
-    }
-    if (info.render_target) {
-        static std::atomic<u32> logged{};
-        if (logged.fetch_add(1, std::memory_order_relaxed) < 20) {
-            LOG_INFO(Render_Vulkan,
-                     "Render target image: {} {}x{} samples={} vk_format={} usage={:#x} "
-                     "flags={:#x} view_formats={} format_list={} no_storage={}",
-                     info.format, info.size.width, info.size.height, info.num_samples,
-                     static_cast<u32>(image_ci.format), image_ci.usage, image_ci.flags,
-                     view_formats.size(), image_ci.pNext != nullptr, IsLeanRenderTarget(info));
         }
     }
     if (unbacked) {
@@ -1386,8 +1344,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
     }
 }
 
-void TextureCacheRuntime::Finish() {
-    scheduler.Finish();
+void TextureCacheRuntime::Finish(std::source_location location) {
+    scheduler.Finish({}, {}, location);
 }
 
 StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {
@@ -3316,7 +3274,7 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
         return;
     }
 
-    scheduler->RequestOutsideRenderPassImageContext(*original_image);
+    scheduler->RequestOutsideRenderPassOperationContext();
     auto vk_copies = TransformBufferImageCopies(copies, offset, aspect_mask);
     const VkBuffer src_buffer = buffer;
     const VkImage vk_image = *original_image;
@@ -4653,15 +4611,6 @@ VkImageView ImageView::StorageView(Shader::TextureType texture_type,
                                    range.extent.levels, size.width, size.height, size.depth);
     }
     if (image_handle) {
-        if (const Image* const image = BackingImage(); image && IsLeanRenderTarget(image->info)) {
-            static std::atomic<u32> reported{};
-            if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
-                LOG_ERROR(Render_Vulkan,
-                          "Storage view of a {} render target at 0x{:x} that EDEN_NX2_RT_USAGE "
-                          "made without STORAGE usage",
-                          format, gpu_addr);
-            }
-        }
         if (image_format == Shader::ImageFormat::Typeless) {
             if (!typeless_storage_view) {
                 auto info = MaxwellToVK::SurfaceFormat(*device, FormatType::Optimal, true, format);
@@ -5185,16 +5134,15 @@ void Framebuffer::MarkResolveShadowsUpToDate() const {
 
 VkRenderPass Framebuffer::RenderPassVariant(u32 color_clear_mask, bool depth_stencil_clear,
                                             u32 color_discard_mask,
-                                            bool depth_stencil_discard, u8 depth_layout) const {
+                                            bool depth_stencil_discard) const {
     if (color_clear_mask == 0 && !depth_stencil_clear && color_discard_mask == 0 &&
-        !depth_stencil_discard && depth_layout == 0) {
+        !depth_stencil_discard) {
         return renderpass;
     }
     static_assert(NUM_RT <= 8);
     const u32 variant_key = color_clear_mask | (color_discard_mask << 8) |
                             (static_cast<u32>(depth_stencil_clear) << 16) |
-                            (static_cast<u32>(depth_stencil_discard) << 17) |
-                            (static_cast<u32>(depth_layout) << 18);
+                            (static_cast<u32>(depth_stencil_discard) << 17);
     for (u32 index = 0; index < num_memoized_variants; ++index) {
         if (variant_keys[index] == variant_key) {
             return variant_render_passes[index];
@@ -5205,7 +5153,6 @@ VkRenderPass Framebuffer::RenderPassVariant(u32 color_clear_mask, bool depth_ste
     key.depth_stencil_clear = depth_stencil_clear;
     key.color_discard_mask = color_discard_mask;
     key.depth_stencil_discard = depth_stencil_discard;
-    key.depth_layout = depth_layout;
     const VkRenderPass variant = render_pass_cache->Get(key);
     if (num_memoized_variants < variant_keys.size()) {
         variant_keys[num_memoized_variants] = variant_key;

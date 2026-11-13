@@ -1,6 +1,6 @@
 # Opt-in desktop compatibility reports
 
-After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Lichii process. Starting another game clears that session, and closing Lichii discards it. This feature does not store play history.
+After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Guarana process. Starting another game clears that session, and closing Guarana discards it. This feature does not store play history.
 
 Search the website catalog, select the exact game, and press **Confirm game**. Search is explicit and supports catalog pages. A Nintendo title ID is never used as a catalog ID. The search box uses control metadata or the loader's known title, including NUP package titles. Missing title metadata leaves the search blank rather than using a filename.
 

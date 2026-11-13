@@ -45,15 +45,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         const DWORD wait = WaitForSingleObject(process, 120000);
         CloseHandle(process);
         if (wait != WAIT_OBJECT_0) {
-            Log(install_dir, "Lichii did not close in time, the update was not installed");
+            Log(install_dir, "Guarana did not close in time, the update was not installed");
             if (staging.filename() == ".update-staging") {
                 std::error_code ignored;
                 fs::remove_all(staging, ignored);
             }
             MessageBoxW(nullptr,
-                        L"Lichii did not close in time, so the update was not installed. Your "
+                        L"Guarana did not close in time, so the update was not installed. Your "
                         L"installation was not changed. Try the update again.",
-                        L"Lichii update", MB_OK | MB_ICONINFORMATION);
+                        L"Guarana update", MB_OK | MB_ICONINFORMATION);
             return 1;
         }
     }
@@ -65,9 +65,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     } else {
         Log(install_dir, "Install failed, the previous files were put back: " + ec.message());
         MessageBoxW(nullptr,
-                    L"Lichii could not install the update. Your previous version was put back and "
-                    L"will start now. See .update-helper.log in the Lichii folder for details.",
-                    L"Lichii update", MB_OK | MB_ICONERROR);
+                    L"Guarana could not install the update. Your previous version was put back and "
+                    L"will start now. See .update-helper.log in the Guarana folder for details.",
+                    L"Guarana update", MB_OK | MB_ICONERROR);
     }
 
     std::wstring command = L"\"" + program.wstring() + L"\"";

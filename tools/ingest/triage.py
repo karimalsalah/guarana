@@ -78,7 +78,7 @@ HARDWARE_KEYWORDS = {
 # Labels this script may add; tests/test_triage.py checks each is in .github/labels.yml.
 LABELS = tuple(KEYWORDS) + tuple(HARDWARE_KEYWORDS) + ("needs-info", "agent-ready")
 
-_LOG_LINES = re.compile(r"(?i)\[\s*\d+\.\d+\s*\]|<(?:critical|error|warning|info|debug|trace)>|lichii version|"
+_LOG_LINES = re.compile(r"(?i)\[\s*\d+\.\d+\s*\]|<(?:critical|error|warning|info|debug|trace)>|(?:lichii|guarana) version|"
                         r"booting game|host crash|eden_log")
 _ATTACHMENT = re.compile(r"(?i)github\.com/user-attachments/files/\S+|\]\([^)\s]+\.(?:txt|log|zip|7z)\)")
 _PLACEHOLDER = re.compile(r"(?i)^(?:n/?a|tbd|tba|todo|to do|none|nothing|unknown|later|not sure|idk|see above|"
@@ -87,7 +87,7 @@ _PLACEHOLDER = re.compile(r"(?i)^(?:n/?a|tbd|tba|todo|to do|none|nothing|unknown
 LOG_REQUEST = LOG_MARKER + """
 Thanks for the report! A crash is much easier to track down with the emulator's log. Could you attach it to this issue?
 
-1. In the emulator, open **File → Open Lichii Folders → Log Folder**. On Windows that is `%APPDATA%\\lichii\\log`, or `user\\log` next to `lichii.exe` in a portable install.
+1. In the emulator, open **File → Open Guarana Folders → Log Folder**. On Windows that is `%APPDATA%\\guarana\\log` (`%APPDATA%\\lichii\\log` if you last ran a build from before the rename), or `user\\log` next to `guarana.exe` in a portable install.
 2. Take `eden_log.txt`. If you started the emulator again after the crash, the crashed session is `eden_log.txt.old.txt`.
 3. The log has folder paths from your machine in it: replace your user name in them (as in `C:\\Users\\<name>`) with `<user>` before you share it.
 4. Drag the file into a comment here.

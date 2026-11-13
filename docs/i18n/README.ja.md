@@ -31,12 +31,12 @@ Guarana は [Lichii](https://github.com/zortos293/Lichii)（`nx2` ブランチ�
 ## クイックスタート
 
 1. [Releases](https://github.com/karimalsalah/guarana/releases) から最新の zip をダウンロードします。公式の配布元はこのページのみです。
-2. zip の中身をすべて、書き込み可能なフォルダーに展開し、**`lichii.exe`** を実行します。
+2. zip の中身をすべて、書き込み可能なフォルダーに展開し、**`guarana.exe`** を実行します。
 3. 鍵とファームウェアをインストールします。**Tools → Install Decryption Keys**、次に **Tools → Install Firmware** の順に選択します。
 4. ゲームフォルダーを追加し（空のゲーム一覧をダブルクリック）、ゲームを起動します。各エリアに初めて入ったときはシェーダーのコンパイルでカクつくことがあります。以降はキャッシュから読み込まれます。
 5. 任意：**Emulation → Configure… → Graphics** で **Enable Frame Generation** を有効にします。
 
-設定、セーブデータ、キャッシュは `%APPDATA%\lichii` に保存されます。これは上流の Lichii と同じフォルダーです。切り替える前にバックアップを取ってください。すべてのスイッチは [docs/switches.md](../../docs/switches.md)、よくある問題は [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md) にあります。
+設定、セーブデータ、キャッシュは `%APPDATA%\guarana` に保存されます。初回起動時に、旧フォルダー `%APPDATA%\lichii` から設定が自動的に移行されます（旧フォルダーはそのまま残ります）。すべてのスイッチは [docs/switches.md](../../docs/switches.md)、よくある問題は [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md) にあります。
 
 ## 鍵、ファームウェア、ゲームについて（法的注意）
 
