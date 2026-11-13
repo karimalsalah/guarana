@@ -208,7 +208,10 @@ std::span<const Preset> Presets() {
 bool Matches(const GpuMatch& match, const GpuInfo& gpu) {
     return (match.vendor == GameSettings::GPUVendor::Unknown || match.vendor == gpu.vendor) &&
            (!match.integrated || gpu.integrated) &&
-           (!match.software_tensor_math || gpu.software_tensor_math);
+           (!match.software_tensor_math || gpu.software_tensor_math) &&
+           (match.device_class == Common::DeviceClass::Unknown ||
+            match.device_class == gpu.device_class) &&
+           (match.gpu_family == Common::GpuFamily::None || match.gpu_family == gpu.gpu_family);
 }
 
 const Preset* Find(std::span<const Preset> presets, u64 title_id, const GpuInfo& gpu) {
@@ -270,9 +273,10 @@ std::span<const SwitchValue> SwitchDefaults([[maybe_unused]] u64 title_id,
         }
     }
 #endif
-    // TODO(measure): defaults by device class (gpu.device_class) go here, and settings presets by
-    // class with a device_class in GpuMatch. Each needs a paired run on a verified scene of that
-    // class first (AGENTS.md, rule 1); until then the class changes nothing.
+    // TODO(measure): defaults by device class or GPU family (gpu.device_class, gpu.gpu_family) go
+    // here; settings presets by class or family set GpuMatch's device_class or gpu_family. Each
+    // needs a paired run on a verified scene of that class or family first (AGENTS.md, rule 1);
+    // until then neither changes anything.
     return {};
 }
 

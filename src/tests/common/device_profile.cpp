@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -15,9 +17,18 @@ using namespace Common::Literals;
 using Common::CpuCore;
 using Common::DeviceClass;
 using Common::DeviceProfile;
+using Common::GpuFamily;
 using Common::GpuKind;
 using Common::NpuPresence;
 using Common::PowerSource;
+
+// VkDriverId values.
+constexpr u32 AmdWindows = 1;   // VK_DRIVER_ID_AMD_PROPRIETARY
+constexpr u32 Radv = 3;         // VK_DRIVER_ID_MESA_RADV
+constexpr u32 Nvidia = 4;       // VK_DRIVER_ID_NVIDIA_PROPRIETARY
+constexpr u32 IntelWindows = 5; // VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS
+constexpr u32 Anv = 6;          // VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA
+constexpr u32 Venus = 22;       // VK_DRIVER_ID_MESA_VENUS, a virtual GPU with the host's IDs
 
 void AddCores(std::vector<CpuCore>& cores, u32 count, u32 threads, u8 efficiency_class) {
     for (u32 i = 0; i < count; ++i) {
@@ -25,12 +36,31 @@ void AddCores(std::vector<CpuCore>& cores, u32 count, u32 threads, u8 efficiency
     }
 }
 
-// A Core Ultra 9 285H laptop with its Arc 140T and 32 GB, on AC.
+GpuFamily IntelFamily(u32 device_id, std::string_view name, u32 driver = IntelWindows) {
+    return Common::ClassifyGpuFamily(0x8086, device_id, name, driver, GpuKind::Integrated);
+}
+
+GpuFamily AmdFamily(u32 device_id, std::string_view name, u32 driver = AmdWindows) {
+    return Common::ClassifyGpuFamily(0x1002, device_id, name, driver, GpuKind::Integrated);
+}
+
+// Every family but None, from the enum itself.
+std::vector<GpuFamily> AllFamilies() {
+    std::vector<GpuFamily> families;
+    for (u32 i = 1; i < static_cast<u32>(GpuFamily::Count); ++i) {
+        families.push_back(static_cast<GpuFamily>(i));
+    }
+    return families;
+}
+
+// A Core Ultra 9 285H laptop with its Arc 140T (8086:7D51) and 32 GB, on AC.
 DeviceProfile Arc140T() {
     DeviceProfile profile;
     profile.gpu = {.vendor_id = 0x8086,
+                   .device_id = 0x7D51,
                    .model = "Intel(R) Arc(TM) 140T GPU (16GB)",
                    .driver = "101.9175",
+                   .driver_id = IntelWindows,
                    .kind = GpuKind::Integrated,
                    .local_memory = 16_GiB,
                    .uma = true};
@@ -222,7 +252,8 @@ TEST_CASE("Unified memory: integrated GPUs, software renderers and one shared he
 TEST_CASE("Device profile: one log line of fields", "[common][device_profile]") {
     const DeviceProfile profile = Arc140T();
     CHECK(Common::DescribeDeviceProfile(profile, Common::Classify(profile)) ==
-          "class=Integrated label=\"Intel Arc 140T, integrated, 32 GB, hybrid 6P+8E+2LPE, NPU\" "
+          "class=Integrated gpu_family=IntelArrowLakeH "
+          "label=\"Intel Arc 140T, integrated, 32 GB, hybrid 6P+8E+2LPE, NPU\" "
           "gpu_vendor=Intel gpu_model=\"Intel(R) Arc(TM) 140T GPU (16GB)\" gpu_type=integrated "
           "gpu_driver=101.9175 gpu_local_mib=16384 gpu_uma=yes cpu_logical=16 cpu_physical=16 "
           "cpu_hybrid=6P+8E+2LPE ram_mib=32768 ram_source=installed power=ac display_hz=60.00 "
@@ -230,10 +261,124 @@ TEST_CASE("Device profile: one log line of fields", "[common][device_profile]") 
 
     const DeviceProfile unknown{};
     CHECK(Common::DescribeDeviceProfile(unknown, Common::Classify(unknown)) ==
-          "class=Unknown label=\"unknown GPU, unknown kind\" gpu_vendor=unknown gpu_model=\"\" "
-          "gpu_type=unknown gpu_driver=unknown gpu_local_mib=0 gpu_uma=no cpu_logical=0 "
-          "cpu_physical=0 cpu_hybrid=no ram_mib=0 ram_source=unknown power=unknown "
-          "display_hz=unknown npu=unknown");
+          "class=Unknown gpu_family=None label=\"unknown GPU, unknown kind\" gpu_vendor=unknown "
+          "gpu_model=\"\" gpu_type=unknown gpu_driver=unknown gpu_local_mib=0 gpu_uma=no "
+          "cpu_logical=0 cpu_physical=0 cpu_hybrid=no ram_mib=0 ram_source=unknown "
+          "power=unknown display_hz=unknown npu=unknown");
+}
+
+TEST_CASE("GPU family: known integrated GPUs map to their family", "[common][device_profile]") {
+    // Panther Lake: the "Intel(R) Graphics" with 4 Xe3 cores at B0A0 (Windows driver and ANV) is a
+    // family of its own, apart from the Arc B390 and B370.
+    CHECK(IntelFamily(0xB0A0, "Intel(R) Graphics") == GpuFamily::IntelGraphicsPantherLake);
+    CHECK(IntelFamily(0xB0A0, "Intel(R) Graphics", Anv) == GpuFamily::IntelGraphicsPantherLake);
+    CHECK(IntelFamily(0xB090, "Intel(R) Graphics") == GpuFamily::IntelGraphicsPantherLake);
+    CHECK(IntelFamily(0xB080, "Intel(R) Arc(TM) B390 GPU") == GpuFamily::IntelArcB390);
+    CHECK(IntelFamily(0xB086, "Intel(R) Arc(tm) Pro B390", Anv) == GpuFamily::IntelArcB390);
+    CHECK(IntelFamily(0xB081, "Intel(R) Arc(TM) B370 GPU") == GpuFamily::IntelArcB370);
+    CHECK(IntelFamily(0xB087, "Intel(R) Arc(tm) Pro B370", Anv) == GpuFamily::IntelArcB370);
+
+    // Arrow Lake-H, Lunar Lake and Meteor Lake by ID, whatever name the driver gives.
+    CHECK(IntelFamily(0x7D51, "Intel(R) Arc(TM) 140T GPU (16GB)") == GpuFamily::IntelArrowLakeH);
+    CHECK(IntelFamily(0x7D51, "Intel(R) Graphics", Anv) == GpuFamily::IntelArrowLakeH);
+    CHECK(IntelFamily(0x64A0, "Intel(R) Arc(TM) 140V GPU (16GB)") ==
+          GpuFamily::IntelArcLunarLake);
+    CHECK(IntelFamily(0x64A0, "Intel(R) Graphics", Anv) == GpuFamily::IntelArcLunarLake);
+    CHECK(IntelFamily(0x7D55, "Intel(R) Arc(TM) Graphics") == GpuFamily::IntelArcMeteorLake);
+
+    // IDs Intel does not list go by the marketing name.
+    CHECK(IntelFamily(0x7DD1, "Intel(R) Arc(TM) 130T GPU") == GpuFamily::IntelArrowLakeH);
+    CHECK(IntelFamily(0x64B0, "Intel(R) Arc(TM) 140V GPU") == GpuFamily::IntelArcLunarLake);
+
+    // AMD shares one ID between several parts: the name decides.
+    CHECK(AmdFamily(0x15BF, "AMD Radeon 780M Graphics") == GpuFamily::AmdRadeon780M);
+    CHECK(AmdFamily(0x15BF, "AMD Radeon 780M Graphics (RADV PHOENIX)", Radv) ==
+          GpuFamily::AmdRadeon780M);
+    CHECK(AmdFamily(0x1900, "AMD Radeon 780M Graphics") == GpuFamily::AmdRadeon780M);
+    CHECK(AmdFamily(0x150E, "AMD Radeon 880M Graphics") == GpuFamily::AmdRadeon880M);
+    CHECK(AmdFamily(0x150E, "AMD Radeon 890M Graphics") == GpuFamily::AmdRadeon890M);
+    CHECK(AmdFamily(0x1586, "AMD Radeon 8060S Graphics") == GpuFamily::AmdRadeon8060S);
+    CHECK(AmdFamily(0x163F, "AMD Custom GPU 0405 (RADV VANGOGH)", Radv) ==
+          GpuFamily::AmdCustomGpu0405);
+    CHECK(AmdFamily(0x1435, "AMD Custom GPU 0932") == GpuFamily::AmdCustomGpu0932);
+}
+
+TEST_CASE("GPU family: unknown GPUs, foreign drivers and other kinds are in none",
+          "[common][device_profile]") {
+    // Smaller parts of the same generations, and IDs Intel does not list without a known name.
+    CHECK(IntelFamily(0x6420, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0x7DD5, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0x7D40, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0x7D41, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0xB0B0, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0xB08F, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0x7DD1, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(IntelFamily(0x64B0, "Intel(R) Graphics") == GpuFamily::None);
+    CHECK(AmdFamily(0x15BF, "AMD Radeon 760M Graphics") == GpuFamily::None);
+    CHECK(AmdFamily(0x1900, "AMD Radeon 760M Graphics") == GpuFamily::None);
+    CHECK(AmdFamily(0x15BF, "AMD Radeon Graphics (RADV PHOENIX)", Radv) == GpuFamily::None);
+    CHECK(AmdFamily(0x1586, "AMD Radeon 8050S Graphics") == GpuFamily::None);
+    // A known name on an ID it does not belong to.
+    CHECK(IntelFamily(0x1234, "Intel(R) Arc(TM) 140V GPU") == GpuFamily::None);
+    CHECK(AmdFamily(0x1234, "AMD Radeon 780M Graphics") == GpuFamily::None);
+    CHECK(AmdFamily(0xB0A0, "Intel(R) Graphics", IntelWindows) == GpuFamily::None);
+    // A driver that is not the vendor's own: another vendor's, a virtual GPU's, or none.
+    CHECK(Common::ClassifyGpuFamily(0x10DE, 0xB0A0, "Intel(R) Graphics", Nvidia,
+                                    GpuKind::Integrated) == GpuFamily::None);
+    CHECK(IntelFamily(0xB0A0, "Intel(R) Graphics", Radv) == GpuFamily::None);
+    CHECK(IntelFamily(0xB0A0, "Intel(R) Graphics", Venus) == GpuFamily::None);
+    CHECK(AmdFamily(0x163F, "AMD Custom GPU 0405", Venus) == GpuFamily::None);
+    CHECK(AmdFamily(0x163F, "AMD Custom GPU 0405", 0) == GpuFamily::None);
+    // Not integrated.
+    for (const GpuKind kind :
+         {GpuKind::Discrete, GpuKind::Virtual, GpuKind::Cpu, GpuKind::Unknown}) {
+        CHECK(Common::ClassifyGpuFamily(0x8086, 0xB0A0, "Intel(R) Graphics", IntelWindows, kind) ==
+              GpuFamily::None);
+    }
+    CHECK(Common::ClassifyGpuFamily(0, 0, "", 0, GpuKind::Unknown) == GpuFamily::None);
+}
+
+TEST_CASE("GPU family names", "[common][device_profile]") {
+    CHECK(Common::GpuFamilyName(GpuFamily::None) == "None");
+    CHECK(Common::GpuFamilyName(GpuFamily::Count) == "None");
+    CHECK(Common::GpuFamilyName(GpuFamily::IntelGraphicsPantherLake) ==
+          "IntelGraphicsPantherLake");
+    // Every family has a name of its own.
+    const std::vector<GpuFamily> families = AllFamilies();
+    CHECK(families.size() == std::size_t{12});
+    for (std::size_t i = 0; i < families.size(); ++i) {
+        const std::string_view name = Common::GpuFamilyName(families[i]);
+        CHECK_FALSE(name.empty());
+        CHECK(name != "None");
+        for (std::size_t j = i + 1; j < families.size(); ++j) {
+            CHECK(name != Common::GpuFamilyName(families[j]));
+        }
+    }
+}
+
+TEST_CASE("GPU family: the profile carries it apart from the class", "[common][device_profile]") {
+    CHECK(Common::Classify(Arc140T()).gpu_family == GpuFamily::IntelArrowLakeH);
+
+    // The Panther Lake part with 4 Xe3 cores is in the same class as the Arc 140T; its family
+    // tells them apart.
+    DeviceProfile panther_lake = Arc140T();
+    panther_lake.gpu.device_id = 0xB0A0;
+    panther_lake.gpu.model = "Intel(R) Graphics";
+    const Common::DeviceClassification classified = Common::Classify(panther_lake);
+    CHECK(classified.device_class == DeviceClass::Integrated);
+    CHECK(classified.gpu_family == GpuFamily::IntelGraphicsPantherLake);
+
+    // The family does not follow the power source or the RAM; the class does.
+    panther_lake.power = PowerSource::Battery;
+    CHECK(Common::Classify(panther_lake).device_class == DeviceClass::IntegratedLowPower);
+    CHECK(Common::Classify(panther_lake).gpu_family == GpuFamily::IntelGraphicsPantherLake);
+
+    // Without the driver ID there is no family.
+    panther_lake.gpu.driver_id = 0;
+    CHECK(Common::Classify(panther_lake).gpu_family == GpuFamily::None);
+
+    CHECK(Common::Classify(Discrete(12_GiB)).gpu_family == GpuFamily::None);
+    CHECK(Common::Classify({}).gpu_family == GpuFamily::None);
 }
 
 TEST_CASE("Device profile: the host reports its processors", "[common][device_profile]") {
