@@ -37,7 +37,9 @@ constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
 
 /// EDEN_NX2_CADENCE: with extrapolated frames, hold real frames to an even share of the target
 /// rate so that every shown frame lasts the same time. 1 chooses the share (60, 30, 20 or 15 real
-/// frames for a target of 60) from what the game sustains; 2 to 4 fix the divisor.
+/// frames) from what the game sustains; 2 to 4 fix it (30, 20 or 15 real frames). The shares are
+/// of 60: at a target of 120 each real frame is shown twice as many times, so 3 still means 20
+/// real frames, six shown frames each.
 [[nodiscard]] u32 CadenceSetting() {
     static const u32 setting = [] {
         const char* value = std::getenv("EDEN_NX2_CADENCE");
@@ -49,6 +51,10 @@ constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
 constexpr u32 CADENCE_MAX_DIVISOR = 4;
 
 [[nodiscard]] f32 CadenceTargetRate() {
+    // EDEN_NX2_SHOWN_RATE=<hz>: the shown rate the FLUID presenter uses, over the setting.
+    if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
+        return static_cast<f32>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
+    }
     const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
     return rate != 0 ? static_cast<f32>(rate) : 60.0f;
 }
@@ -616,6 +622,8 @@ void FrameGen::UpdateCadence() {
         return;
     }
     const f32 target = CadenceTargetRate();
+    // Shown frames per real frame per share of 60: 2 at a target of 120.
+    const u32 scale = (std::max)(1U, static_cast<u32>(std::lround(target / 60.0f)));
     const auto apply = [this, target](u32 divisor, const char* reason) {
         if (divisor == cadence_divisor) {
             return;
@@ -633,11 +641,11 @@ void FrameGen::UpdateCadence() {
         VideoCore::FrameBudget::SetTargetFps(target / static_cast<f32>(divisor));
     };
     if (setting >= 2) {
-        apply(std::min(setting, CADENCE_MAX_DIVISOR), "fixed");
+        apply(std::min(setting, CADENCE_MAX_DIVISOR) * scale, "fixed");
         return;
     }
     if (cadence_divisor == 0) {
-        apply(3, "start");
+        apply(3 * scale, "start");
         return;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -651,14 +659,14 @@ void FrameGen::UpdateCadence() {
         return;
     }
     const f64 budget_ms = 1000.0 * cadence_divisor / target;
-    const f64 faster_ms = 1000.0 * (cadence_divisor - 1) / target;
+    const f64 faster_ms = 1000.0 * (cadence_divisor - scale) / target;
     cadence_slow_checks = work_ms > budget_ms * 1.03 ? cadence_slow_checks + 1 : 0;
     cadence_fast_checks =
-        cadence_divisor > 1 && work_ms < faster_ms * 0.90 ? cadence_fast_checks + 1 : 0;
-    if (cadence_slow_checks >= 3 && cadence_divisor < CADENCE_MAX_DIVISOR) {
-        apply(cadence_divisor + 1, "the frames take longer");
+        cadence_divisor > scale && work_ms < faster_ms * 0.90 ? cadence_fast_checks + 1 : 0;
+    if (cadence_slow_checks >= 3 && cadence_divisor < CADENCE_MAX_DIVISOR * scale) {
+        apply(cadence_divisor + scale, "the frames take longer");
     } else if (cadence_fast_checks >= 8) {
-        apply(cadence_divisor - 1, "the frames leave room");
+        apply(cadence_divisor - scale, "the frames leave room");
     }
 }
 
@@ -694,6 +702,11 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
                              blend, flow_scale);
     } else if (chain) {
+        if (destination->index >= LSFG_MAX_TARGETS) {
+            // The FLUID presenter's frames past Lossless Scaling's targets (EDEN_NX2_FLUID at over
+            // 75 shown frames a second): left as the real frame's copy.
+            return;
+        }
         chain->SetTarget(device, last_generations, generation, destination->index,
                          *destination->storage_view);
 
