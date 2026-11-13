@@ -215,6 +215,22 @@ jobs:
           Get-Content (Join-Path $res 'emulator.json')
           Get-ChildItem $res | Format-Table Name, Length
 
+      # Windows shows this version in Installed apps, and winget matches upgrades on it: a release's
+      # installer carries the release version (X.Y.Z; a pre-release suffix is dropped for the bundle).
+      - name: Stamp the release version
+        if: steps.plan.outputs.release_tag != '' && steps.plan.outputs.release_tag != 'nightly'
+        working-directory: launcher/src-tauri
+        shell: pwsh
+        env:
+          TAG: ${{ steps.plan.outputs.release_tag }}
+        run: |
+          $version = $env:TAG.TrimStart('v') -replace '-.*$', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "release tag $env:TAG is not vX.Y.Z" }
+          $config = Get-Content tauri.conf.json -Raw | ConvertFrom-Json
+          $config | Add-Member -NotePropertyName version -NotePropertyValue $version -Force
+          $config | ConvertTo-Json -Depth 64 | Set-Content tauri.conf.json -Encoding utf8NoBOM
+          "installer version: $version"
+
       - name: Build the installer
         working-directory: launcher
         run: npx tauri build
