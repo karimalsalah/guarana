@@ -465,10 +465,20 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     };
     const u32 graphics_family{device.GetGraphicsFamily()};
     const u32 present_family{device.GetPresentFamily()};
-    const std::array<u32, 2> queue_indices{graphics_family, present_family};
-    if (graphics_family != present_family) {
+    // The families that touch the images: the renderer's, the presenting one and, with
+    // EDEN_NX2_FLUID_QUEUE, the one that copies to the screen.
+    std::array<u32, 3> queue_indices{graphics_family};
+    u32 queue_index_count = 1;
+    for (const u32 family : {present_family, device.HasFluidQueue() ? device.GetFluidFamily()
+                                                                    : graphics_family}) {
+        if (std::find(queue_indices.begin(), queue_indices.begin() + queue_index_count, family) ==
+            queue_indices.begin() + queue_index_count) {
+            queue_indices[queue_index_count++] = family;
+        }
+    }
+    if (queue_index_count > 1) {
         swapchain_ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        swapchain_ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+        swapchain_ci.queueFamilyIndexCount = queue_index_count;
         swapchain_ci.pQueueFamilyIndices = queue_indices.data();
     }
     // According to Vulkan spec, when using VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR,

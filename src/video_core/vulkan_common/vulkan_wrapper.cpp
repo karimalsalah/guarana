@@ -329,6 +329,7 @@ bool Load(VkInstance instance, InstanceDispatch& dld) noexcept {
     X(vkGetPhysicalDeviceFragmentShadingRatesKHR);
     X(vkGetPhysicalDeviceFormatProperties2);
     X(vkGetPhysicalDeviceProperties2);
+    X(vkGetPhysicalDeviceQueueFamilyProperties2);
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
     X(vkGetPhysicalDeviceSurfaceFormatsKHR);
     X(vkGetPhysicalDeviceSurfacePresentModesKHR);
@@ -1039,6 +1040,37 @@ std::vector<VkQueueFamilyProperties> PhysicalDevice::GetQueueFamilyProperties() 
     std::vector<VkQueueFamilyProperties> properties(num);
     dld->vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &num, properties.data());
     return properties;
+}
+
+std::vector<VkQueueGlobalPriorityKHR> PhysicalDevice::GetQueueFamilyGlobalPriorities(
+    u32 family) const {
+    if (!dld->vkGetPhysicalDeviceQueueFamilyProperties2) {
+        return {};
+    }
+    u32 num = 0;
+    dld->vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &num, nullptr);
+    if (family >= num) {
+        return {};
+    }
+    std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> priorities(
+        num, VkQueueFamilyGlobalPriorityPropertiesKHR{
+                 .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR,
+                 .pNext = nullptr,
+                 .priorityCount = 0,
+                 .priorities = {},
+             });
+    std::vector<VkQueueFamilyProperties2> properties(num);
+    for (u32 i = 0; i < num; ++i) {
+        properties[i] = VkQueueFamilyProperties2{
+            .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2,
+            .pNext = &priorities[i],
+            .queueFamilyProperties = {},
+        };
+    }
+    dld->vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &num, properties.data());
+    const VkQueueFamilyGlobalPriorityPropertiesKHR& found = priorities[family];
+    const u32 count = (std::min)(found.priorityCount, u32{VK_MAX_GLOBAL_PRIORITY_SIZE_KHR});
+    return {found.priorities, found.priorities + count};
 }
 
 std::vector<VkPhysicalDeviceToolProperties> PhysicalDevice::GetPhysicalDeviceToolProperties()

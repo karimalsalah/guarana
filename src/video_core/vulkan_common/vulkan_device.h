@@ -326,6 +326,19 @@ public:
         return present_queue;
     }
 
+    /// EDEN_NX2_FLUID_QUEUE: whether the FLUID presenter's copy has a queue of its own.
+    bool HasFluidQueue() const {
+        return has_fluid_queue;
+    }
+
+    vk::Queue GetFluidQueue() const {
+        return fluid_queue;
+    }
+
+    u32 GetFluidFamily() const {
+        return fluid_family;
+    }
+
     /// Returns main graphics queue family index.
     u32 GetGraphicsFamily() const {
         return graphics_family;
@@ -1388,6 +1401,9 @@ private:
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
+    vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
+    u32 fluid_family{};
+    bool has_fluid_queue{};
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.
