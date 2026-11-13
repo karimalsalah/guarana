@@ -32,8 +32,9 @@ EDEN_NX2_FENCE_BATCH=1
 # --- Guarana defaults (integrated GPUs) ---
 # Global-memory routing: work out buffer bases once per invocation and search only the buffers a
 # native load can come from (1+2), returning zero below them (8). Hyrule Field on an Arc 140T:
-# foliage draw 15.7 -> 5.8 ms, 14.8 -> 22.8 fps. Set to 0 to restore upstream routing.
-EDEN_NX2_GM=11
+# foliage draw 15.7 -> 5.8 ms, 14.8 -> 22.8 fps. On by default for Ocarina of Time only (the one
+# game it is verified in). Uncomment to use it in every game, or set 0 to turn it off for OoT.
+#EDEN_NX2_GM=11
 
 # Frame generation for Ocarina of Time predicts frames forward from the game's motion vectors
 # (no added latency) instead of interpolating. Needs Frame Generation on in Graphics settings.

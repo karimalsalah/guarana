@@ -914,12 +914,19 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     // access (programs that cannot change them), 2 makes a native load search only the loaded
     // pointer buffers its address is built on, 8 (with 2) returns zero below those instead of
     // searching every buffer. (4 is reserved.)
+    // Without the variable: 11 for Ocarina of Time, the one game it is verified in; off elsewhere.
     static const char* const global_memory{std::getenv("EDEN_NX2_GM")};
-    if (global_memory != nullptr) {
+    constexpr u64 OCARINA_OF_TIME = 0x0400486024DEC000ULL;
+    const char* const gm_value =
+        global_memory != nullptr
+            ? global_memory
+            : (Settings::GetCurrentProgramID() == OCARINA_OF_TIME ? "11" : nullptr);
+    if (gm_value != nullptr) {
         using namespace Shader::Backend::SPIRV;
-        profile.global_memory_opt = static_cast<u32>(std::strtoul(global_memory, nullptr, 0)) &
+        profile.global_memory_opt = static_cast<u32>(std::strtoul(gm_value, nullptr, 0)) &
                                     (GM_HOIST | GM_NARROW | GM_NARROW_NO_FALLBACK);
-        LOG_INFO(Render_Vulkan, "EDEN_NX2_GM={}: global memory routing bits {}", global_memory,
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_GM={}{}: global memory routing bits {}", gm_value,
+                 global_memory != nullptr ? "" : " (default for Ocarina of Time)",
                  profile.global_memory_opt);
     }
 

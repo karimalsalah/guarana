@@ -49,15 +49,15 @@ You need Windows x64, a CPU with AVX2, a current GPU driver, and your own keys, 
    each area builds shaders and hitches; later visits load them from the cache.
 5. **Turn on frame generation** for the Ocarina of Time play config behind the
    [numbers below](#measured-results): **Emulation → Configure… → Graphics → Enable Frame Generation**,
-   **Frame Generation Multiplier** 3, **Target Frame Rate** 60. `EDEN_NX2_GM=11` and
-   `EDEN_NX2_EXTRAPOLATE=1` are already on in the shipped `nx2_switches.txt`. To also hand the
+   **Frame Generation Multiplier** 3, **Target Frame Rate** 60. `EDEN_NX2_GM=11` is on by default for Ocarina of Time and
+   `EDEN_NX2_EXTRAPOLATE=1` is on in the shipped `nx2_switches.txt`. To also hand the
    laptop's power budget to the iGPU while a game runs, add `EDEN_NX2_POWER_POLICY=igpu` to
    `%APPDATA%\lichii\nx2_switches.txt` (opt-in: it changes the active Windows power plan for the
    session and restores it on exit).
 
 | Switch | What it does | Scope |
 |---|---|---|
-| `EDEN_NX2_GM=11` (on by default) | Cheaper routing of shader memory accesses: no run-time search through every bound buffer | All games. Measured in Ocarina of Time only: if another game renders wrong, set `EDEN_NX2_GM=0` in `%APPDATA%\lichii\nx2_switches.txt` and [report it](https://github.com/karimalsalah/guarana/issues/new/choose) |
+| `EDEN_NX2_GM=11` (on by default for Ocarina of Time) | Cheaper routing of shader memory accesses: no run-time search through every bound buffer | Ocarina of Time by default; set it in your `nx2_switches.txt` to try it in other games (unverified there). If a game renders wrong with it, set `EDEN_NX2_GM=0` in `%APPDATA%\lichii\nx2_switches.txt` and [report it](https://github.com/karimalsalah/guarana/issues/new/choose) |
 | `EDEN_NX2_EXTRAPOLATE=1` (on by default) | Generated frames are predicted forward from the game's motion vectors, with the HUD held in place | Ocarina of Time; needs **Enable Frame Generation** |
 | `EDEN_NX2_POWER_POLICY=igpu` (opt-in) | For the game session, turns CPU boost off and the minimum processor state down in the active Windows power plan, and puts both back on exit (or at the next start after a crash) | Windows, integrated GPUs |
 
