@@ -162,6 +162,8 @@ add_library(
     random.h
     uuid.cpp
     uuid.h
+    vblank_clock.cpp
+    vblank_clock.h
     vector_math.h
     zbic_compression.cpp
     zbic_compression.h
@@ -189,7 +191,7 @@ if(WIN32)
         windows/crash_handler.h
         windows/timer_resolution.cpp
         windows/timer_resolution.h)
-    target_link_libraries(common PRIVATE cfgmgr32 dxgi ntdll powrprof)
+    target_link_libraries(common PRIVATE cfgmgr32 dwmapi dxgi ntdll powrprof)
 endif()
 
 if(NOT WIN32)
