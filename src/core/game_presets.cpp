@@ -3,6 +3,10 @@
 
 #include "core/game_presets.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -64,7 +68,39 @@ constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
     SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
     SwitchValue{"EDEN_NX2_GPL", "1"},
 };
+// A display at about 120 Hz: a frame every refresh on the vblank clock, the in-between frames
+// interpolated from the last two real frames (optical flow, so Link and everything else moves by its
+// own motion), 20 real frames a second (CADENCE=3 is a share of 60, six slots each at 120), the
+// present thread time-critical in the MMCSS Games task. Arc 140T, Hyrule Field, while Link runs:
+// 1181-1200 of 1200 slots on time per 10 s, 118-120 shown frames a second, p99 9.6-13.6 ms.
+constexpr std::array OCARINA_INTEL_IGPU_120_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_FLUID_INTERP", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_RT", "1"},
+    SwitchValue{"EDEN_NX2_SHOWN_RATE", "120"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_CEILING", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
 constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
+
+#ifdef _WIN32
+/// The primary display's refresh rate in Hz, 0 when Windows does not say.
+[[nodiscard]] u32 PrimaryDisplayRefreshHz() {
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode)) {
+        return 0;
+    }
+    return mode.dmDisplayFrequency > 1 ? static_cast<u32>(mode.dmDisplayFrequency) : 0U;
+}
+#endif
 #endif
 constexpr std::array<std::string_view, 1> OCARINA_SOFTWARE_TENSOR_ADDONS{
     "Max Resolution (built-in)",
@@ -212,6 +248,11 @@ std::span<const SwitchValue> SwitchDefaults([[maybe_unused]] u64 title_id,
 #ifdef _WIN32
     if (title_id == OCARINA_TITLE_ID && gpu.integrated) {
         if (gpu.vendor == GameSettings::GPUVendor::Intel) {
+            // Measured at 120 Hz only: other high refresh rates keep the 60 Hz configuration.
+            const u32 refresh = PrimaryDisplayRefreshHz();
+            if (refresh >= 115 && refresh <= 125) {
+                return OCARINA_INTEL_IGPU_120_SWITCHES;
+            }
             return OCARINA_INTEL_IGPU_SWITCHES;
         }
         if (gpu.vendor == GameSettings::GPUVendor::AMD) {
