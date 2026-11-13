@@ -2744,7 +2744,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
                                                       0x5052455f434f4c52ULL};
     const u64 binary_key{GraphicsRecordKey(key) ^
                          variant_salts[static_cast<size_t>(variant)] ^
-                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL)};
+                         (prepass_invariant ? 0x5052455f494e5652ULL : 0ULL) ^
+                         // Stages emitted with one descriptor set each (libraries)
+                         (library_cache ? 0x4750454c53455453ULL : 0ULL)};
     // A build that captures for EDEN_NX2_PIPELINE_STATS takes no driver pipeline cache, so that
     // its statistics come from a compile (the binary store is not opened then: PipelineCache).
     const VkPipelineCache driver_cache{capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE}
@@ -2943,7 +2945,8 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
         const VkShaderStageFlagBits stage_flag{
             StageFlag(info, MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage)))};
         // Same warp size rule as the monolithic pipeline (MakePipeline).
-        const bool uses_warp_ops = info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
+        const bool uses_warp_ops = info.removed_conditional_barrier || info.uses_subgroup_vote ||
+                                   info.uses_subgroup_invocation_id ||
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask;
         const bool force_warp_size = uses_warp_ops && device.IsExtSubgroupSizeControlSupported() &&
                                      device.IsGuestWarpSizeSupported(stage_flag);
@@ -2969,6 +2972,9 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
     };
     // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
     const auto cache_lock = device.LockPipelineCacheForBuild();
+    const char* const trace_kind = pre_rasterization ? "graphics-library-pre" : "graphics-library-fs";
+    const auto trace_begin = std::chrono::steady_clock::now();
+    TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, false);
     library.pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &library_ci,
@@ -2991,6 +2997,10 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
+    TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, false,
+                       std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - trace_begin)
+                           .count());
     return library;
 }
 
