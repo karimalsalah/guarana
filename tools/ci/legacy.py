@@ -320,7 +320,7 @@ def write_files(root, files):
     changed = []
     for relative, content in files.items():
         path = Path(root) / relative
-        old = path.read_text(encoding="utf-8", newline="") if path.exists() else None
+        old = path.read_bytes().decode("utf-8") if path.exists() else None
         if relative != README_PATH and old is not None:
             old = old.replace("\r\n", "\n")
         if old != content:
@@ -452,7 +452,7 @@ def main(argv=None):
         if args.command == "build":
             doc = build_document(github, args.repo, args.since)
             readme = Path(args.root, README_PATH)
-            files = outputs(doc, readme.read_text(encoding="utf-8", newline="") if readme.exists() else "")
+            files = outputs(doc, readme.read_bytes().decode("utf-8") if readme.exists() else "")
             if dry_run:
                 print(json.dumps({"people": len(doc["people"]), "tools": len(doc["tools"]), "commits": doc["commits"]}))
                 return 0
