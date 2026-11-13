@@ -68,6 +68,9 @@
 - name: ci
   color: "a2eeef"
   description: "Workflows, builds and release packaging"
+- name: dependencies
+  color: "0366d6"
+  description: "Dependency updates, most of them from Dependabot (.github/dependabot.yml)"
 - name: legal
   color: "000000"
   description: "Licensing, trademarks, takedown requests, prohibited content"

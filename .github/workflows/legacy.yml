@@ -10,7 +10,7 @@ name: legacy
 #   request opened with the repository's token starts no workflows by itself: close and reopen it
 #   to run build-check. Needs Settings > Actions > General > Workflow permissions > "Allow GitHub
 #   Actions to create and approve pull requests".
-# test: the tests of tools/ci on pull requests that change them.
+# test: the tests of tools/ci on pull requests that change them or the workflows they check.
 on:
   schedule:
     - cron: "17 4 * * *"
@@ -32,6 +32,11 @@ on:
       - "site/data/legacy.json"
       - ".github/workflows/legacy.yml"
       - ".github/workflows/pages.yml"
+      - ".github/workflows/release-binaries.yml"
+      - ".github/workflows/launcher.yml"
+      - ".github/workflows/nightly.yml"
+      - ".github/CODEOWNERS"
+      - ".github/dependabot.yml"
 
 permissions: {}
 

@@ -26,6 +26,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - Guest writes that find the caches busy no longer block the game thread (upstream [#1602](https://github.com/zortos293/Lichii/pull/1602), +4.4% in Ocarina of Time on the author's PC), and pointer-slot compute rebuilds compile on a worker, which removes 2.5-3.4 s freezes in Hyrule Field (upstream [#995](https://github.com/zortos293/Lichii/pull/995)).
+- Every release file comes with a signed build provenance attestation (`gh attestation verify <file> --repo karimalsalah/guarana`), and the release workflows Authenticode-sign `guarana.exe`, `guarana-cli.exe` and the installer with Azure Artifact Signing once its secrets are set. How to check a download and how to turn signing on: [docs/SIGNING.md](docs/SIGNING.md). Also weekly grouped Dependabot updates, `.github/CODEOWNERS`, installer builds for launcher pull requests, and "Rapid releases" in [docs/LANES.md](docs/LANES.md).
 
 ## [20.2.0] - 2026-11-13
 
