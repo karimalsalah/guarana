@@ -12,6 +12,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Added
 
+- Portable installs (a `user` folder next to `guarana.exe`) read `user\nx2_switches.txt` in place of the per-user copy, the Guarana settings page saves its mode there, and the log says `Portable mode: on` or `off` ([#36](https://github.com/karimalsalah/guarana/issues/36)). See [docs/FAQ.md](docs/FAQ.md).
+
 - Frame pacing experiments, off by default and described in [docs/switches.md](docs/switches.md): `EDEN_NX2_QUEUE_LIMIT` (keeps the GPU queue short so screen copies and read-backs wait less), `EDEN_NX2_FLUID_OFFSET_US` (the screen copy's window before its flip), `EDEN_NX2_FLUID_SPLIT_SUBMIT` (the real frame goes to the GPU before its predictions), `EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT` (a default-priority copy queue that cannot stall rendering) and `EDEN_NX2_BUDGET_HOLD_RES`; and `EDEN_NX2_EXTRAPOLATE_HUD_FILL`, which stops the band of scenery beside the HUD from lagging in predicted frames.
 
 - Device profile: at boot the log gets one `Device profile:` line with the GPU (vendor, model, integrated or discrete, driver, device-local memory, shared memory), the CPU (logical and physical cores, hybrid P, E and LPE cores), installed RAM, AC or battery, the display's refresh rate, whether there is an NPU, and the device class (`IntegratedLowPower`, `Integrated`, `DiscreteEntry`, `DiscreteHigh` or `Unknown`) with a short label. Game presets receive the class; no default changes with it yet. See [docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log).
