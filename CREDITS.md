@@ -16,7 +16,7 @@ Their copyright notices stay in the source files, and the history in git keeps e
 
 ## Intel fixes
 
-[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp) and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), ported to Lichii `nx2` in this fork. The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
+[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp) and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), ported to Lichii `nx2` in this fork, and the experiment EXP56 (a cleared depth target larger than its colour targets follows the clear instead of an upload: `EDEN_NX2_DEPTH_CLEAR_COVERS`). The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
 
 ## Upstream pull requests we carry
 
@@ -41,6 +41,7 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#995](https://github.com/zortos293/Lichii/pull/995) | [VirusEx](https://github.com/VirusEx) | Pointer-slot compute rebuilds compile on a worker; the Hyrule Field grass-culling dispatch keeps its old translation instead of freezing for 2.5-3.4 s |
 | [#1584](https://github.com/zortos293/Lichii/pull/1584) | [rushi806](https://github.com/rushi806) | Packed R16 shadow dispatches may read global memory, so Ocarina of Time's prop shadows render (upstream issue #1343) |
 | [#1483](https://github.com/zortos293/Lichii/pull/1483) | [cerroverb](https://github.com/cerroverb) | The virtual range cache remembers linear spans |
+| [#1099](https://github.com/zortos293/Lichii/pull/1099) | [tibzejoker](https://github.com/tibzejoker) (#874), rebased by [zortos293](https://github.com/zortos293) | Fence-flagged payload releases stay synchronized at low GPU accuracy with default fences (hand port onto our counter reports) |
 | [#1378](https://github.com/zortos293/Lichii/pull/1378) | Krim | Graphics pipelines reuse the translated shaders of an earlier pipeline when their translation inputs and the guest memory they read match (`EDEN_NX2_SHADER_REUSE=1`) |
 | [#1596](https://github.com/zortos293/Lichii/pull/1596) | [sanchodecuba11-del](https://github.com/sanchodecuba11-del) | The selected user index is cast to the launch parameter type (MSVC C4244) |
 | [#1475](https://github.com/zortos293/Lichii/pull/1475) | [RomainROCH](https://github.com/RomainROCH) | Logging no longer calls std::terminate when formatting fails while the host is out of memory |
