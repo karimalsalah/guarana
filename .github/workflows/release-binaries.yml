@@ -922,7 +922,7 @@ jobs:
             echo "| macOS arm64 | $(pair zip "$(asset macos-arm64).zip" dmg "$(asset macos-arm64).dmg") | |"
             echo
             cat <<'EOF'
-          - **Windows**: extract the whole zip into a folder you can write to and run `guarana.exe` (`guarana-cli.exe` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
+          - **Windows**: extract the whole zip into a folder you can write to and run `@WIN_GUI@` (`@WIN_CLI@` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
           - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `guarana/guarana`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
           - **macOS** 15 or newer, Apple Silicon. Not notarized: right-click and choose Open the first time, or run `xattr -dr com.apple.quarantine guarana.app`.
           - **Checksums**: `SHA256SUMS.txt`. Check with `sha256sum -c SHA256SUMS.txt` (Linux), `shasum -a 256 -c SHA256SUMS.txt` (macOS) or `Get-FileHash <file>` (PowerShell).
@@ -930,6 +930,13 @@ jobs:
           No keys, firmware or games are included or provided. Dump your own from hardware you own; see LEGAL.md.
           EOF
           } > release-notes.md
+          # The Windows programs are guarana.exe and guarana-cli.exe, or lichii.exe and eden-cli.exe
+          # in a build from before the rename: name the ones in the zip.
+          win_gui=guarana.exe win_cli=guarana-cli.exe
+          if ! compgen -G "artifacts/guarana-windows-*/guarana.exe" > /dev/null; then
+            win_gui=lichii.exe win_cli=eden-cli.exe
+          fi
+          sed -i -e "s/@WIN_GUI@/$win_gui/g" -e "s/@WIN_CLI@/$win_cli/g" release-notes.md
           cat release-notes.md
 
       - name: Publish

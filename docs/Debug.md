@@ -82,7 +82,7 @@ You can either use RenderDoc UI to launch Eden, or you can make Eden attach it i
 On Windows PowerShell:
 ```powershell
 $env:ENABLE_VULKAN_RENDERDOC_CAPTURE='1'
-.\eden.exe
+.\guarana.exe
 ```
 When RenderDoc is attached, Eden logs the default Windows capture folder:
 ```text
