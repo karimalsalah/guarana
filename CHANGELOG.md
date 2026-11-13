@@ -10,10 +10,6 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
-### Changed
-
-- **Ocarina of Time is smooth out of the box on Windows integrated GPUs.** Frame generation is on (3 frames per real frame toward 60, predicted from the game's motion) and the pacing measured best is the default: the vblank-locked presenter showing each real frame (`EDEN_NX2_FLUID=2`), 20 real frames a second, one per game tick (`EDEN_NX2_CADENCE=3`), early read-backs and, on Intel, pipeline library fast links. In Hyrule Field on the Arc 140T, slots shown on time went from 430 to 536 of 600 and evenly paced frames from 62% to 88% against the earlier presenter setting. Only for settings and switches left at their defaults; `EDEN_NX2_NO_PRESETS=1` or Automatic presets off turns it off. See "Defaults for Ocarina of Time" in [docs/switches.md](docs/switches.md).
-
 ## [20.2.0] - 2026-11-13
 
 ### Added
@@ -37,6 +33,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Changed
 
+- **Ocarina of Time is smooth out of the box on Windows integrated GPUs.** Frame generation is on (3 frames per real frame toward 60, predicted from the game's motion) and the pacing measured best is the default: the vblank-locked presenter showing each real frame (`EDEN_NX2_FLUID=2`), 20 real frames a second, one per game tick (`EDEN_NX2_CADENCE=3`), early read-backs and, on Intel, pipeline library fast links. In Hyrule Field on the Arc 140T, slots shown on time went from 430 to 536 of 600 and evenly paced frames from 62% to 88% against the earlier presenter setting. Only for settings and switches left at their defaults; `EDEN_NX2_NO_PRESETS=1` or Automatic presets off turns it off. See "Defaults for Ocarina of Time" in [docs/switches.md](docs/switches.md).
 - **Guarana rebrand** (player-visible): the programs are `guarana.exe` and `guarana-cli.exe` (`lichii.exe` and `eden-cli.exe` before), the data folder is `%APPDATA%\guarana`, and on first start your settings, saves and caches are copied over from `%APPDATA%\lichii` (copy only: staged, rolled back on failure, the old folder stays; the copied settings name the new folder, so saves, the SD card and mods are read from it). Windows version info, installer, desktop and metainfo files, icons, translations and the About credits say Guarana; the launcher, the release workflow and the docs use the new names and fall back to the old ones for older builds. Internal identifiers do not change. The first boot after the rename recompiles shaders once, because Intel's driver cache is per program name.
 - Integrated GPU measurements in Ocarina of Time (Hyrule Field, Arc 140T) with the frame generation, hitch and boot changes of this release: 24.5 to 25.2 game fps, p99 frame time 47 ms and 0 stutters in 30 s in two clean runs, against p99 135 to 158 ms and 37 to 92 stutters for the v20 desktop setup.
 - Upstream merge: [#1580](https://github.com/zortos293/Lichii/pull/1580) (the zero-page pass reads less and backs off to 5 minutes), [#1582](https://github.com/zortos293/Lichii/pull/1582) (Android docs), [#1585](https://github.com/zortos293/Lichii/pull/1585) (3D state writes sent to the GPU back thread as register blocks), [#1586](https://github.com/zortos293/Lichii/pull/1586) (back-thread micro-cuts and a dirty-memory page-crossing fix), [#1589](https://github.com/zortos293/Lichii/pull/1589) (the DLSS quality setting changes Ocarina of Time's render resolution), [#1590](https://github.com/zortos293/Lichii/pull/1590) (vi2 timestamp recorders), [#1591](https://github.com/zortos293/Lichii/pull/1591) (`GPUDirtyMemoryManager::Collect` takes `size_t`) and [#1592](https://github.com/zortos293/Lichii/pull/1592).
