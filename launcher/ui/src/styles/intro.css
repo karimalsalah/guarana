@@ -1,0 +1,171 @@
+/* Welcome intro: a dark stage with depth layers, bloom, a light beam, embers and film grain.
+   Base styles are the final state; the timeline in welcome.ts animates into it (fill: backwards),
+   so reduced motion or a skip simply shows this. Only transform and opacity move, except the drop's
+   own path and the wordmark's light sweep (small paints). */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #04070d;
+  color: #eef1f6;
+}
+
+.stage { position: absolute; inset: 0; --mx: 0; --my: 0; }
+.stage-dolly { position: absolute; inset: 0; transform-origin: 50% 42%; }
+.layer { position: absolute; inset: -5%; transition: transform 900ms var(--ease-out); will-change: transform; }
+.layer-far { transform: translate3d(calc(var(--mx) * -8px), calc(var(--my) * -6px), 0); }
+.layer-mid { transform: translate3d(calc(var(--mx) * -20px), calc(var(--my) * -14px), 0); }
+.layer-near { inset: 0; transform: translate3d(calc(var(--mx) * -36px), calc(var(--my) * -24px), 0); }
+.layer-beam { inset: 0; overflow: hidden; }
+
+.stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1.4px 1.4px at 8% 18%, rgba(255, 255, 255, 0.9), transparent 60%),
+    radial-gradient(1px 1px at 22% 64%, rgba(255, 255, 255, 0.6), transparent 60%),
+    radial-gradient(1.6px 1.6px at 37% 9%, rgba(255, 228, 176, 0.8), transparent 60%),
+    radial-gradient(1px 1px at 52% 81%, rgba(255, 255, 255, 0.55), transparent 60%),
+    radial-gradient(1.3px 1.3px at 68% 27%, rgba(255, 255, 255, 0.75), transparent 60%),
+    radial-gradient(1px 1px at 81% 72%, rgba(255, 228, 176, 0.65), transparent 60%),
+    radial-gradient(1.5px 1.5px at 93% 11%, rgba(255, 255, 255, 0.7), transparent 60%),
+    radial-gradient(1px 1px at 4% 92%, rgba(255, 255, 255, 0.5), transparent 60%),
+    radial-gradient(1px 1px at 46% 46%, rgba(255, 255, 255, 0.35), transparent 60%);
+  background-size: 560px 320px;
+  animation: twinkle 7s ease-in-out infinite alternate;
+}
+@keyframes twinkle { to { opacity: 0.55; } }
+
+.haze { position: absolute; border-radius: 50%; }
+.haze-a {
+  left: -32vmax;
+  top: -48vmax;
+  width: 96vmax;
+  height: 96vmax;
+  background: radial-gradient(circle, rgba(52, 86, 178, 0.38) 0%, rgba(52, 86, 178, 0.14) 34%, rgba(52, 86, 178, 0) 64%);
+  animation: haze-drift 18s ease-in-out infinite alternate;
+}
+.haze-b {
+  right: -34vmax;
+  bottom: -50vmax;
+  width: 88vmax;
+  height: 88vmax;
+  background: radial-gradient(circle, rgba(242, 133, 26, 0.24) 0%, rgba(242, 133, 26, 0.08) 34%, rgba(242, 133, 26, 0) 64%);
+  animation: haze-drift 22s ease-in-out infinite alternate-reverse;
+}
+@keyframes haze-drift { to { translate: 4vmax 3vmax; } }
+
+.beam {
+  position: absolute;
+  left: 50%;
+  top: -30%;
+  width: 26vw;
+  height: 160%;
+  margin-left: -13vw;
+  opacity: 0;
+  background: linear-gradient(90deg, rgba(255, 214, 150, 0) 0%, rgba(255, 214, 150, 0.08) 38%, rgba(255, 236, 200, 0.2) 50%, rgba(255, 214, 150, 0.08) 62%, rgba(255, 214, 150, 0) 100%);
+}
+
+.ember {
+  position: absolute;
+  left: var(--ox, 44%);
+  top: var(--oy, 38%);
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  opacity: 0;
+  background: radial-gradient(circle, #fff3c4 0%, #ffc94a 38%, rgba(242, 133, 26, 0) 70%);
+}
+
+.grain {
+  position: absolute;
+  inset: -80px;
+  opacity: 0.07;
+  pointer-events: none;
+  background-image: var(--grain, none);
+  background-size: 160px 160px;
+  animation: grain 0.9s steps(6) infinite;
+}
+@keyframes grain {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-22px, 14px); }
+  40% { transform: translate(16px, -28px); }
+  60% { transform: translate(-34px, -10px); }
+  80% { transform: translate(26px, 32px); }
+  100% { transform: translate(0, 0); }
+}
+.vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(125% 95% at 50% 44%, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, 0.7) 100%);
+}
+
+.intro-center {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+.intro-logo { position: relative; width: clamp(150px, 24vmin, 240px); aspect-ratio: 86 / 68; margin-bottom: 6px; }
+.intro-mark { position: relative; width: 100%; height: 100%; overflow: visible; }
+.bloom {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 230%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(255, 201, 74, 0.36) 0%, rgba(242, 133, 26, 0.16) 28%, rgba(242, 133, 26, 0.05) 48%, rgba(242, 133, 26, 0) 66%);
+}
+.bloom-wide { width: 560%; background: radial-gradient(circle, rgba(255, 176, 32, 0.1) 0%, rgba(52, 86, 178, 0.08) 38%, rgba(52, 86, 178, 0) 64%); }
+.intro-drop-wrap { transform-box: view-box; transform-origin: 36px 36px; }
+.intro-leaf { transform-box: view-box; transform-origin: 37.5px 20px; }
+.intro-echo { transform-box: view-box; }
+.intro-sweep { opacity: 0; transform-box: view-box; }
+
+.intro-word {
+  font-family: var(--font-display);
+  font-size: clamp(2.8rem, 8vmin, 4.8rem);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+.intro-word-text {
+  display: inline-block;
+  padding: 0 0.04em 0.06em;
+  color: transparent;
+  background: linear-gradient(100deg, #f4f5f7 0%, #f4f5f7 40%, #ffe7a8 47%, #ffffff 50%, #ffe7a8 53%, #f4f5f7 60%, #f4f5f7 100%);
+  background-size: 260% 100%;
+  background-position: 0% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.intro-tag { max-width: 44ch; color: #c9ced6; font-size: clamp(1rem, 2.4vmin, 1.3rem); text-wrap: balance; }
+.intro-cta { margin-top: 22px; min-width: 210px; }
+.intro-fine { margin-top: 4px; color: #6f788b; font-size: var(--fs-xs); }
+.intro-skip { position: absolute; top: 18px; right: 20px; z-index: 3; color: #9aa3b5; }
+.intro-skip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); color: #eef1f6; }
+.intro-skip[hidden] { display: none; }
+
+/* Leaving the intro: the big logo flies into the top bar's brand mark. */
+html[data-vt="intro-exit"] .intro-mark,
+html[data-vt="intro-exit"] .brand-mark { view-transition-name: brand-mark; }
+html[data-vt="intro-exit"]::view-transition-group(brand-mark) { animation-duration: 900ms; animation-timing-function: var(--ease-emph); }
+html[data-vt="intro-exit"]::view-transition-old(brand-mark),
+html[data-vt="intro-exit"]::view-transition-new(brand-mark) { height: 100%; object-fit: contain; }
+html[data-vt="intro-exit"]::view-transition-group(main) { animation-duration: 0s; }
+html[data-vt="intro-exit"]::view-transition-old(main) { animation: vt-fade-out 420ms var(--ease-out) both; }
+html[data-vt="intro-exit"]::view-transition-new(main) { animation: vt-in-up 640ms var(--ease-spring) 300ms both; }
+html[data-vt="intro-exit"]::view-transition-new(topbar) { animation: vt-fade-in 520ms var(--ease-out) 420ms both; }
+@keyframes vt-in-up { from { opacity: 0; transform: translateY(24px); } }
