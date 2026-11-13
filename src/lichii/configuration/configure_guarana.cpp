@@ -117,9 +117,9 @@ ConfigureGuarana::ConfigureGuarana(bool powered_on, QWidget* parent) : QWidget(p
     card->addWidget(mode_help);
     mode_note = MakeHelp(this);
     card->addWidget(mode_note);
-    constexpr Mode modes[] = {Mode::Smooth, Mode::Quality, Mode::Battery};
+    static constexpr Mode modes[] = {Mode::Smooth, Mode::Quality, Mode::Battery};
     for (int i = 0; i < 3; ++i) {
-        connect(mode_buttons[i], &QPushButton::clicked, this, [this, i, modes](bool checked) {
+        connect(mode_buttons[i], &QPushButton::clicked, this, [this, i](bool checked) {
             SelectMode(checked ? modes[i] : Mode::Custom);
         });
     }
@@ -246,8 +246,9 @@ void ConfigureGuarana::UpdateModeHelp() {
     mode_buttons[2]->setChecked(shown_mode == Mode::Battery);
     switch (shown_mode) {
     case Mode::Smooth:
-        mode_help->setText(tr("Even frames over a high number: Guarana steers frame timing to "
-                              "your display and sets frame pacing to Auto."));
+        mode_help->setText(tr("Even frames over a high number: every frame lands on your "
+                              "display's refresh, extra frames are predicted from the game's "
+                              "motion, and frame pacing is set to Auto."));
         break;
     case Mode::Quality:
         mode_help->setText(tr("Nothing holds the graphics back. Best on power, with a higher "

@@ -130,7 +130,7 @@ GRenderWindow::GRenderWindow(MainWindow* parent,
     : QWidget(parent), input_subsystem{std::move(input_subsystem_)} {
     setWindowTitle(Guarana::UseCleanTitle()
                        ? Guarana::CleanWindowTitle({})
-                       : QStringLiteral("Lichii %1 | %2-%3")
+                       : QStringLiteral("Guarana %1 | %2-%3")
                              .arg(QString::fromUtf8(Common::g_build_name),
                                   QString::fromUtf8(Common::g_scm_branch),
                                   QString::fromUtf8(Common::g_scm_desc)));

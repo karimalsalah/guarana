@@ -50,7 +50,7 @@ QWidget* Item(const QString& icon, const QString& title, const QString& text) {
 
 WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("WhatsNewDialog"));
-    setWindowTitle(tr("What's New in Lichii"));
+    setWindowTitle(tr("What's New in Guarana"));
 
     auto* const root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -84,7 +84,7 @@ WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     header->addLayout(titles, 1);
     body->addLayout(header);
 
-    body->addWidget(Item(QStringLiteral("wand"), tr("Lichii Dark theme"),
+    body->addWidget(Item(QStringLiteral("wand"), tr("Guarana Dark theme"),
                          tr("A darker theme with the Guarana pink accent. The old themes are still "
                             "in Configure > General > UI.")));
     body->addWidget(Item(QStringLiteral("sliders"), tr("Settings that fit your screen"),
