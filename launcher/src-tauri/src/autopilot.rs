@@ -153,6 +153,7 @@ pub struct Shown {
     pub fps: f64,
     pub p50: f64,
     pub p95: f64,
+    pub p99: f64,
     pub within2: f64,
     pub windows: u32,
 }
@@ -170,6 +171,9 @@ pub struct SessionMetrics {
     pub precache_built: Option<u64>,
     pub precache_seconds: Option<f64>,
     pub frame_gen: bool,
+    /// Seconds of gameplay the numbers cover: the fluid presenter's windows with real frames,
+    /// else the stutter summaries' windows, else 10 s per `Shown frames:` window used.
+    pub gameplay_secs: f64,
 }
 
 impl SessionMetrics {
@@ -198,7 +202,7 @@ const SHADER_CAUSES: [&str; 4] = ["gfx_miss", "compute_miss", "pipeline_wait", "
 pub fn parse_log(text: &str) -> SessionMetrics {
     let start = text.rfind("Booting game:").map(|i| text[..i].rfind('\n').map(|n| n + 1).unwrap_or(0)).unwrap_or(0);
     let mut m = SessionMetrics::default();
-    let mut shown: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut shown: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
     let (mut sum_frames, mut sum_window) = (0.0, 0.0);
     let (mut real_frames, mut real_secs) = (0.0, 0.0);
     let (mut boot_start, mut first_frame) = (None, None);
@@ -213,7 +217,7 @@ pub fn parse_log(text: &str) -> SessionMetrics {
                 (num_after(line, "Shown frames: "), num_after(line, " p50 "), num_after(line, " p95 "), num_before(line, "% within"))
             {
                 if fps > 0.0 {
-                    shown.push((fps, p50, p95, w));
+                    shown.push((fps, p50, p95, w, num_after(line, " p99 ").unwrap_or(p95)));
                 }
             }
         } else if line.contains("Nx2StutterSummary ") {
@@ -281,11 +285,18 @@ pub fn parse_log(text: &str) -> SessionMetrics {
         // The first window still holds the boot; leave it out once there are enough.
         let used = if shown.len() >= 3 { &shown[1..] } else { &shown[..] };
         let n = used.len() as f64;
-        let avg = |f: fn(&(f64, f64, f64, f64)) -> f64| used.iter().map(f).sum::<f64>() / n;
-        m.shown = Some(Shown { fps: avg(|s| s.0), p50: avg(|s| s.1), p95: avg(|s| s.2), within2: avg(|s| s.3), windows: used.len() as u32 });
+        let avg = |f: fn(&(f64, f64, f64, f64, f64)) -> f64| used.iter().map(f).sum::<f64>() / n;
+        m.shown = Some(Shown { fps: avg(|s| s.0), p50: avg(|s| s.1), p95: avg(|s| s.2), p99: avg(|s| s.4), within2: avg(|s| s.3), windows: used.len() as u32 });
     }
     // With even frame pacing on, its "(N real frames)" per window is the game's own frame count and
     // needs no stutter trace; else the stutter summary; else the shown rate when nothing is generated.
+    m.gameplay_secs = if real_secs > 0.0 {
+        real_secs
+    } else if sum_window > 0.0 {
+        sum_window
+    } else {
+        m.shown.as_ref().map(|s| s.windows as f64 * 10.0).unwrap_or(0.0)
+    };
     m.game_fps = if real_secs > 0.0 {
         Some(real_frames / real_secs)
     } else if sum_window > 0.0 {
@@ -311,7 +322,7 @@ fn read_tail(path: &Path) -> Option<String> {
 
 /// The newest log that holds a game session and was written within `window_secs`:
 /// (text, session key).
-fn last_session_log(window_secs: u64) -> Option<(String, String)> {
+pub(crate) fn last_session_log(window_secs: u64) -> Option<(String, String)> {
     let dir = paths::emulator_log_dir();
     let mut candidates = vec![
         dir.join("eden_log.txt"),
@@ -774,7 +785,7 @@ FluidLogStats: Fluid presenter (10 s): 91% of shown frames held one slot (0 real
     fn metrics(fps: f64, within: f64) -> SessionMetrics {
         SessionMetrics {
             title_id: Some("0400486024DEC000".into()),
-            shown: Some(Shown { fps, p50: 40.0, p95: 60.0, within2: within, windows: 3 }),
+            shown: Some(Shown { fps, p50: 40.0, p95: 60.0, p99: 80.0, within2: within, windows: 3 }),
             game_fps: Some(fps),
             ..Default::default()
         }

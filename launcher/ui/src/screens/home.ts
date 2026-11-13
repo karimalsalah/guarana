@@ -11,7 +11,7 @@ import { whenIdle } from "../motion";
 import { go, type ScreenContext, type ScreenDef } from "../router";
 import { lastSession } from "../sessions";
 import { launcher, library, profiles, warmStatus } from "../state";
-import type { Game, LauncherState, ModeId, ModeStatus, Profile, UpdateInfo, WarmResult } from "../types";
+import type { Game, LauncherState, ModeId, ModeStatus, Profile, ShareStatus, UpdateInfo, WarmResult } from "../types";
 import { badge, busy, button, card, segmented, skeleton, spinner, switchControl } from "../ui/controls";
 import { controllersCard } from "../ui/controllers-card";
 import { heroArt } from "../ui/hero-art";
@@ -71,7 +71,8 @@ const screen: ScreenDef = {
     const libSection = h("section", { class: "library", "aria-labelledby": "lib-title" }, h("div", { class: "section-head" }, libTitle), libBody);
 
     const modeSlot = h("div", { class: "mode-slot" });
-    const el = h("div", { class: "home" }, heroSlot, modeSlot, h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot), libSection);
+    const shareSlot = shareCard(ctx);
+    const el = h("div", { class: "home" }, heroSlot, shareSlot, modeSlot, h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot), libSection);
 
     const exited = ctx.params.exited as { code: number; seconds: number; title: string } | undefined;
     if (exited) {
@@ -374,6 +375,61 @@ function renderLibrary(section: HTMLElement, body: HTMLElement, games: Game[], s
   ctx.onLeave(() => io.disconnect());
 }
 
+// ---- Share my numbers -----------------------------------------------------------------------------------
+
+/** Opens the prefilled device-report form. Nothing is sent: the user reviews and submits on GitHub. */
+async function shareNow(): Promise<void> {
+  const link = await api.shareOpen();
+  if (link.level !== "full") {
+    // The link could not carry everything: the whole text goes to the clipboard to paste into the form.
+    try {
+      await navigator.clipboard.writeText(link.text);
+      toast(link.level === "short" ? "The link had room for the essentials only. The full text is on your clipboard." : "Too long for a link. The form opens empty and the text is on your clipboard: paste it in.", { tone: "info" });
+    } catch {
+      toast("Couldn't copy the text. Use Report a problem for a zip with the details.", { tone: "warn" });
+    }
+  }
+  try {
+    await api.openUrl(link.url);
+  } catch (e) {
+    // The browser would not open: the text is the fallback, and the card stays for another try.
+    try {
+      await navigator.clipboard.writeText(link.text);
+      toast(`Couldn't open the browser (${errorText(e)}). The text is on your clipboard: paste it into a new device report on GitHub.`, { tone: "warn" });
+    } catch {
+      toast(`Couldn't open the browser: ${errorText(e)}`, { tone: "fail" });
+    }
+    return;
+  }
+  await api.shareDismiss();
+}
+
+function shareCard(ctx: ScreenContext): HTMLElement {
+  const text = h("p", { class: "share-text", role: "status" });
+  const fine = h("p", { class: "fine", text: "Nothing is sent. Your browser opens GitHub's device report with these numbers filled in. You add the scene and a screenshot, read it, and press Submit yourself." });
+  const share = button("Share", { kind: "primary", icon: "sparkle", onClick: (_e, self) => void busy(self, shareNow, "Opening…").catch((e: unknown) => toast(errorText(e), { tone: "fail" })) });
+  const later = button("Not now", { kind: "ghost", onClick: () => void api.shareDismiss().then(show).catch(() => undefined) });
+  const never = h("button", { type: "button", class: "link-btn" }, "Don't ask again");
+  never.addEventListener("click", () => {
+    void api
+      .shareSetPrompt(false)
+      .then((st) => {
+        show(st);
+        toast("Okay. You can turn this back on under Advanced.", { tone: "info" });
+      })
+      .catch(() => undefined);
+  });
+  const el = h("section", { class: "card share-card", hidden: true, "aria-label": "Share my numbers" }, text, fine, h("div", { class: "row" }, share, later, never));
+  function show(st: ShareStatus): void {
+    if (ctx.signal.aborted) return;
+    el.hidden = !st.offer;
+    text.textContent = st.offer?.text ?? "";
+  }
+  void api.getShareStatus().then(show, () => undefined);
+  void events.shareChanged(show, ctx.signal).catch(() => undefined);
+  return el;
+}
+
 // ---- The one switch: Auto, Smooth, Quality, Battery ---------------------------------------------------
 
 const MODES: { value: ModeId; label: string; hint: string }[] = [
@@ -420,6 +476,17 @@ function modeCard(ctx: ScreenContext): HTMLElement {
     label: "Autopilot",
     onChange: (on) => void api.autopilotEnable(on).then(show).catch((e: unknown) => toast(errorText(e), { tone: "fail" })),
   });
+  const shareToggle = switchControl({
+    checked: true,
+    label: "Ask to share my numbers",
+    onChange: (on) =>
+      void api
+        .shareSetPrompt(on)
+        .then((st) => shareToggle.setAttribute("aria-checked", String(st.enabled)))
+        .catch((e: unknown) => toast(errorText(e), { tone: "fail" })),
+  });
+  void api.getShareStatus().then((st) => shareToggle.setAttribute("aria-checked", String(st.enabled)), () => undefined);
+  void events.shareChanged((st) => shareToggle.setAttribute("aria-checked", String(st.enabled)), ctx.signal).catch(() => undefined);
   const historyList = h("ul", { class: "autopilot-history" });
   const communityEl = h("p", { class: "fine" });
   const advanced = h(
@@ -441,6 +508,17 @@ function modeCard(ctx: ScreenContext): HTMLElement {
         h("div", { class: "toggle-control" }, apToggle),
       ),
       historyList,
+      h(
+        "div",
+        { class: "toggle-row" },
+        h(
+          "div",
+          { class: "toggle-text" },
+          h("p", { class: "toggle-label", text: "Ask to share my numbers" }),
+          h("p", { class: "toggle-help", text: "After a game with a minute or more of play, Home offers to open a prefilled device report. Nothing is sent until you submit it on GitHub." }),
+        ),
+        h("div", { class: "toggle-control" }, shareToggle),
+      ),
       communityEl,
       h(
         "div",

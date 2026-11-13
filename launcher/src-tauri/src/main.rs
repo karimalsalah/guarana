@@ -23,6 +23,7 @@ mod modes;
 mod paths;
 mod profiles;
 mod report;
+mod share;
 mod state;
 mod system;
 mod types;
@@ -93,6 +94,10 @@ fn main() {
             commands::autopilot_enable,
             commands::ask_ai,
             commands::get_credits,
+            commands::get_share_status,
+            commands::share_open,
+            commands::share_dismiss,
+            commands::share_set_prompt,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

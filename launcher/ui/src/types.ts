@@ -309,3 +309,39 @@ export interface Credits {
   tools: CreditTool[];
   source: "builtin" | "cache" | "network";
 }
+
+/** "Share my numbers": one finished session, read from the emulator's log. */
+export interface ShareOffer {
+  at: string;
+  title_id: string | null;
+  game: string;
+  game_fps: number;
+  within2: number;
+  shown_fps: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  gameplay_secs: number;
+  fluid: boolean;
+  on_battery: boolean;
+  mode: string;
+  profile: string;
+  build: string;
+  /** "Your session: 25 game fps, 93% of frames on time. Share it with the community?" */
+  text: string;
+}
+
+export interface ShareStatus {
+  /** False after "Don't ask again". */
+  enabled: boolean;
+  offer: ShareOffer | null;
+}
+
+export interface ShareLink {
+  url: string;
+  url_chars: number;
+  /** "full", "short" (essentials only) or "clipboard" (an empty form; paste the text). */
+  level: "full" | "short" | "clipboard";
+  /** Every field as plain text, for the clipboard. */
+  text: string;
+}

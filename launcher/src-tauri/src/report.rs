@@ -16,8 +16,8 @@ use crate::types::{Form, ReportResult, SystemInfo, Vendor};
 use crate::util::{self, CmdResult, Context};
 use crate::{locate, paths, system};
 
-const ISSUES: &str = "https://github.com/karimalsalah/guarana/issues/new";
-const MAX_URL: usize = 7000;
+pub const ISSUES: &str = "https://github.com/karimalsalah/guarana/issues/new";
+pub const MAX_URL: usize = 7000;
 const LOG_HEAD: u64 = 256 << 10;
 const LOG_TAIL: u64 = 16 << 20;
 /// Characters left as they are in query values (RFC 3986 unreserved).
@@ -56,6 +56,18 @@ pub struct Scrubber {
 }
 
 impl Scrubber {
+    /// A scrubber for a fixed user and host name (tests).
+    #[cfg(test)]
+    pub fn for_names(user: &str, host: &str) -> Self {
+        let mut rules = vec![
+            (format!(r"\Users\{user}"), r"\Users\%USERNAME%".to_string(), false),
+            (user.to_string(), "%USERNAME%".to_string(), true),
+            (host.to_string(), "%COMPUTERNAME%".to_string(), true),
+        ];
+        rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        Self { rules }
+    }
+
     pub fn new() -> Self {
         let mut rules: Vec<(String, String, bool)> = Vec::new();
         if let Some(profile) = paths::user_profile() {
@@ -260,7 +272,13 @@ fn summary(sys: &SystemInfo, kind: &str, build: &str, profile: &str, game: Optio
 }
 
 /// `ISSUES?template=..&title=..&field=..`, shortening the longest free-text field until it fits.
-fn issue_url(template: &str, title: &str, mut fields: Vec<(&'static str, String)>, shrinkable: &[&str]) -> String {
+fn issue_url(template: &str, title: &str, fields: Vec<(&'static str, String)>, shrinkable: &[&str]) -> String {
+    issue_url_limit(template, title, fields, shrinkable, MAX_URL)
+}
+
+/// Like `issue_url` with the length limit given. A URL may stay over `limit` when nothing
+/// shrinkable is left: the caller checks.
+pub fn issue_url_limit(template: &str, title: &str, mut fields: Vec<(&'static str, String)>, shrinkable: &[&str], limit: usize) -> String {
     let build = |fields: &[(&'static str, String)]| {
         let mut url = format!("{ISSUES}?template={template}&title={}", utf8_percent_encode(title, QUERY));
         for (k, v) in fields {
@@ -271,7 +289,7 @@ fn issue_url(template: &str, title: &str, mut fields: Vec<(&'static str, String)
         url
     };
     let mut url = build(&fields);
-    while url.len() > MAX_URL {
+    while url.len() > limit {
         let Some(idx) = fields
             .iter()
             .enumerate()

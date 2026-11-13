@@ -4,7 +4,7 @@
 import type {
   AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
-  WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits,
+  WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits, ShareStatus, ShareLink,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -117,6 +117,14 @@ export const api = {
     call<AskAiResult>("ask_ai", { service, issues: issues && issues.length ? issues : undefined, question: question || undefined }),
   /** The hall of fame for the About screen (cached a day, embedded copy offline). */
   getCredits: () => call<Credits>("get_credits"),
+  /** "Share my numbers": the card's data, or none. */
+  getShareStatus: () => call<ShareStatus>("get_share_status"),
+  /** The prefilled device-report link for the offer; the UI opens it. Nothing is sent. */
+  shareOpen: () => call<ShareLink>("share_open"),
+  /** "Not now": drops the offer. */
+  shareDismiss: () => call<ShareStatus>("share_dismiss"),
+  /** The setting to stop (or resume) asking after a game. */
+  shareSetPrompt: (enabled: boolean) => call<ShareStatus>("share_set_prompt", { enabled }),
   appVersion: async () => (await backend()).appVersion(),
 };
 
@@ -128,6 +136,7 @@ export const events = {
   /** Carries the new Controller[]; anything else makes the UI call list_controllers again. */
   controllersChanged: (h: (p: unknown) => void, signal?: AbortSignal) => on<unknown>("controller://changed", h, signal),
   warmProgress: (h: (p: WarmProgress) => void, signal?: AbortSignal) => on<WarmProgress>("warm://progress", h, signal),
+  shareChanged: (h: (p: ShareStatus) => void, signal?: AbortSignal) => on<ShareStatus>("share://changed", h, signal),
   autopilotChanged: (h: (p: ModeStatus) => void, signal?: AbortSignal) => on<ModeStatus>("autopilot://changed", h, signal),
 };
 

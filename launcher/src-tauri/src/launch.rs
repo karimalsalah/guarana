@@ -179,10 +179,9 @@ pub fn launch(
             log::info!("Guarana (pid {pid}) exited with {code} after {seconds:.0} s");
             let _ = app2.emit(EXITED_EVENT, GameExited { code, seconds });
             if had_game {
-                autopilot::after_session(
-                    &app2,
-                    autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery },
-                );
+                let info = autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery };
+                crate::share::after_session(&app2, &info);
+                autopilot::after_session(&app2, info);
             }
             warm::resume_if_interrupted(&app2);
         })

@@ -9,8 +9,8 @@ Hard rules (legal and trust):
   launcher only **finds files the user already has on their own disk**, with consent, and copies them
   into the emulator's user folder when the user clicks Import.
 - Nothing leaves the machine except: GitHub API/release downloads of Guarana itself, and the
-  user-initiated "Report a problem" flow, which opens a browser with a prefilled issue the user
-  reviews before submitting. No telemetry by default.
+  user-initiated "Report a problem" and "Share my numbers" flows, which open a browser with a prefilled
+  issue the user reviews before submitting. No telemetry by default.
 - Every path or file name that could identify the user is scrubbed from reports
   (`C:\Users\<name>` → `%USERPROFILE%`, host name removed).
 
@@ -47,6 +47,10 @@ Hard rules (legal and trust):
 | `autopilot_enable` | `{ enabled: boolean }` | `ModeStatus` |
 | `ask_ai` | `{ service: "claude" \| "chatgpt", issues?: string[], question?: string }` | `AskAi`. Builds a scrubbed summary (same scrubbing as reports) and opens `https://claude.ai/new?q=` or `https://chatgpt.com/?q=` in the default browser; the whole URL is at most 1950 characters and the prompt names `https://karimalsalah.github.io/guarana/llms-full.txt` |
 | `get_credits` | – | `Credits` `{ as_of, commits, people: { login: string \| null, name: string \| null, commits, coauthored }[], tools: { name, commits }[], source: "builtin" \| "cache" \| "network" }`. The hall of fame (`https://karimalsalah.github.io/guarana/data/legacy.json`, made by `tools/ci/legacy.py`), cached with its ETag in `%LOCALAPPDATA%\Guarana\cache` for 24 h, schema-checked (names stripped of control characters and angle brackets), 6 s at most, then the cache or the copy embedded at build time from `site/data/legacy.json` (`build.rs`; empty when built outside the repository). Shown on the Credits screen (footer), people first and tools apart |
+| `get_share_status` | – | `ShareStatus` `{ enabled, offer: ShareOffer \| null }`. After a game session with a clean exit and at least 60 s of gameplay data (`SessionMetrics.gameplay_secs`: the fluid presenter's windows with real frames, else the stutter summaries', else 10 s per `Shown frames` window) the backend keeps one offer (`share.rs`): game fps, shown fps, p50/p95/p99, the share of frames within 2 ms, game, mode, profile, build. `offer.text` is "Your session: 25 game fps, 93% of frames on time. Share it with the community?". `enabled: false` after the setting is off |
+| `share_open` | – | `ShareLink` `{ url, url_chars, level: "full" \| "short" \| "clipboard", text }`. The `device-report.yml` form prefilled by field id, text fields only (`device`, `cpu`, `driver`, `ram`, `os`, `power_mode`, `build`, `settings`, `results`, `notes`); the scene, the screenshot and the choices are left to the user. At most 7000 characters (`full`); else the essentials in at most 2000 (`short`); else an empty form (`clipboard`). The UI copies `text` to the clipboard for `short` and `clipboard`, then opens `url`. User name, profile folder and host name are scrubbed like reports. Nothing is sent |
+| `share_dismiss` | – | `ShareStatus` ("Not now", and after Share): drops the offer |
+| `share_set_prompt` | `{ enabled: boolean }` | `ShareStatus`. The setting to stop asking (Home → Advanced); off also drops the offer |
 
 Argument keys are snake_case exactly as written (`invoke("apply_profile", { profile_id, overrides })`):
 the commands are declared with `rename_all = "snake_case"`. Errors reject the promise with a
@@ -141,7 +145,7 @@ Events: `install://progress` (stages `resolve`, `download`, `verify`, `extract`,
 `download`, files for `extract`), `locate://progress` (`scan` with done/total = roots, then `done`),
 `doctor://progress` (stage = the check id being run, then `done`), `game://exited`
 (`{ code, seconds }`), `controller://changed` (`Controller[]`), `warm://progress` (`WarmProgress`), `autopilot://changed`
-(`ModeStatus`, after a game's log was read).
+(`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed).
 
 ## Modes, community data and the autopilot
 

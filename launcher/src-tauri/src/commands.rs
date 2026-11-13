@@ -15,7 +15,7 @@ use crate::types::{
 };
 use crate::util::CmdResult;
 use crate::warm::WarmResult;
-use crate::{autopilot, community, credits, doctor, install, keys, launch, locate, modes, profiles, report, util, warm};
+use crate::{autopilot, community, credits, doctor, install, keys, launch, locate, modes, profiles, report, share, util, warm};
 
 const LOCATE_EVENT: &str = "locate://progress";
 
@@ -296,4 +296,28 @@ pub async fn ask_ai(app: AppHandle, service: String, issues: Option<Vec<String>>
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_credits() -> CmdResult<credits::Credits> {
     Ok(tokio::time::timeout(Duration::from_secs(6), credits::load(false)).await.unwrap_or_else(|_| credits::builtin()))
+}
+
+/// "Share my numbers": whether the card may show and the session on offer, if any.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_share_status(app: AppHandle) -> CmdResult<share::ShareStatus> {
+    blocking(&app, |app| share::status(app)).await
+}
+
+/// The prefilled device-report link for the offer. Nothing is sent; the UI opens it in the browser.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn share_open(app: AppHandle) -> CmdResult<share::ShareLink> {
+    blocking(&app, |app| share::open_link(app)).await?
+}
+
+/// "Not now" (and after Share): drops the offer.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn share_dismiss(app: AppHandle) -> CmdResult<share::ShareStatus> {
+    blocking(&app, |app| share::dismiss(app)).await?
+}
+
+/// The setting to stop (or resume) asking after a game.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn share_set_prompt(app: AppHandle, enabled: bool) -> CmdResult<share::ShareStatus> {
+    blocking(&app, move |app| share::set_prompt(app, enabled)).await?
 }

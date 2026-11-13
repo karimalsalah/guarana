@@ -34,6 +34,15 @@ pub struct Persisted {
     pub mode: Option<String>,
     #[serde(default)]
     pub autopilot: crate::autopilot::AutopilotState,
+    /// "Share my numbers": the session Home offers to share (until Share or Not now).
+    #[serde(default)]
+    pub share_offer: Option<crate::share::ShareOffer>,
+    /// True after "Don't ask again" / the setting turned off.
+    #[serde(default)]
+    pub share_prompt_off: bool,
+    /// `mtime:len` of the last log session looked at, so one session is offered once.
+    #[serde(default)]
+    pub share_session_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

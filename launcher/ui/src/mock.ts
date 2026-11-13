@@ -13,7 +13,7 @@ import type { Backend, Unlisten } from "./api";
 import type {
   AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
-  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult,
+  Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink,
 } from "./types";
 
 type PadMode = ControllerKind | "none" | "late";
@@ -245,6 +245,16 @@ export function createMockBackend(): Backend {
   // Modes and the autopilot (the backend's modes.rs and autopilot.rs, in short).
   let mode: ModeStatus["mode"] = "auto";
   let autopilotOn = true;
+  // "Share my numbers": the mock offers one session until Share or Not now.
+  let shareOn = true;
+  let sharePrompt = true;
+  const shareStatus = (): ShareStatus => ({
+    enabled: sharePrompt,
+    offer:
+      shareOn && sharePrompt
+        ? { at: new Date().toISOString(), title_id: "0400486024DEC000", game: "The Legend of Zelda: Ocarina of Time", game_fps: 25.2, within2: 93.4, shown_fps: 49.6, p50: 16.7, p95: 33.4, p99: 100.1, gameplay_secs: 75, fluid: true, on_battery: false, mode: "auto", profile: "intel-arc-igpu", build: "20.1.0 (stable)", text: "Your session: 25 game fps, 93% of frames on time. Share it with the community?" }
+        : null,
+  });
   const history: AutopilotChange[] = [];
   const MODE_TEXT: Record<string, string> = {
     auto: "Auto chose Intel Arc integrated for your Intel Arc 140T (plugged in), and set global-memory routing like the 6 validated reports for Intel Arc iGPU.",
@@ -647,6 +657,22 @@ export function createMockBackend(): Backend {
       await sleep(150);
       autopilotOn = a.enabled === true;
       return modeStatus();
+    },
+    async get_share_status() {
+      return shareStatus();
+    },
+    async share_open() {
+      const text = ["device: ASUS Zenbook S 14", "results: Average 25.2 fps (game fps), 93% of shown frames within 2 ms of the median"].join(String.fromCharCode(10));
+      return { url: "https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml&title=%5BDevice%5D%20mock", url_chars: 90, level: "full", text } satisfies ShareLink;
+    },
+    async share_dismiss() {
+      shareOn = false;
+      return shareStatus();
+    },
+    async share_set_prompt(a) {
+      sharePrompt = a.enabled === true;
+      shareOn = shareOn && sharePrompt;
+      return shareStatus();
     },
     async ask_ai(a) {
       await sleep(300);

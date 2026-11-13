@@ -624,3 +624,8 @@ html[data-pad="generic"] .glyph > .g-generic { display: inline-flex; }
   min-width: 240px; padding: var(--sp-3); background: var(--surface-2); border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
   border-radius: var(--r-md);
 }
+
+/* Share my numbers (Home) */
+.share-card { display: grid; gap: var(--sp-3); }
+.share-card[hidden] { display: none; }
+.share-text { font-weight: 600; margin: 0; }
