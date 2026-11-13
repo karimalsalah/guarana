@@ -26,6 +26,12 @@ public:
         u32 max_cooldown_ticks = 240; ///< The cool-down doubles up to this while misses come back
         u32 max_blind_lowers = 8;     ///< Lowers in a row that leave the frame time alone, 0: any
         double effect_ratio = 1.08;   ///< A lower showed once frames are this much slower
+        /// Missed ticks in a row (raises, or holds at the upper limit after one) that leave the
+        /// frame time alone before the scale stops: the game does not follow it. 0: never
+        /// (EDEN_NX2_BUDGET_UNANSWERED=1 sets 8)
+        u32 max_unanswered = 0;
+        /// A raise showed once three ticks in a row are this much faster than the run's start
+        double answer_ratio = 0.88;
     };
 
     struct Input {
@@ -45,6 +51,7 @@ public:
         Cooldown,  ///< Headroom, but the next lower scale missed a while ago
         NoEffect,  ///< Headroom, but lowers stopped showing in the frame time
         Waiting,   ///< Headroom, but hold_lower is set
+        Unanswered, ///< A miss, but raises stopped showing in the frame time: the scale is held
     };
     enum class Action : u8 { Hold, Raise, Lower };
     struct Decision {
@@ -52,6 +59,9 @@ public:
         State state = State::Off;
         double scale{};  ///< The scale after the action, inside the limits
         bool at_limit{}; ///< That scale is the upper limit
+        /// The scale has nothing left to give: a miss at the upper limit, or raises that went
+        /// unanswered and nothing since let them be tried again. The next lever may act.
+        bool scale_spent{};
     };
 
     FrameBudgetController() = default;
@@ -82,8 +92,26 @@ public:
     [[nodiscard]] u32 BlindLowers() const {
         return lower_run;
     }
+    /// Raises went unanswered and the scale is held until a tick without a miss, while nothing
+    /// else holds quality back, lets them be tried again; under hold_lower on every tick
+    /// (EDEN_NX2_BUDGET_HOLD_RES) it stays held until the target changes.
+    [[nodiscard]] bool Unanswered() const {
+        return unanswered;
+    }
+    /// The scale at the start of the unanswered run, or at its last answer; 0 when none was found.
+    [[nodiscard]] double UnansweredFrom() const {
+        return unanswered ? answer_scale : 0.0;
+    }
+    /// Missed ticks of the run being checked for an answer, the first one included.
+    [[nodiscard]] u32 UnansweredTicks() const {
+        return answer_ticks;
+    }
 
 private:
+    Decision Decide(const Input& input, double current_scale);
+    /// Counts one missed tick of a run; true once the run has gone unanswered.
+    bool CountUnanswered(double frame_ms, double scale);
+
     Config config;
     u32 fast_streak{};
     bool missing{};        ///< The last decided tick was a miss
@@ -93,6 +121,11 @@ private:
     u32 cooldown_len{};
     u32 lower_run{};
     double lower_ref_ms{}; ///< The fastest frame time of the run of lowers
+    bool unanswered{};
+    u32 answer_ticks{};    ///< Missed ticks since the run began or last answered
+    u32 answer_fast{};     ///< Ticks in a row under answer_ref_ms * answer_ratio
+    double answer_ref_ms{}; ///< The fastest of the run's first three missed ticks
+    double answer_scale{}; ///< The scale at the run's first missed tick, or at its last answer
 };
 
 [[nodiscard]] const char* FrameBudgetStateName(FrameBudgetController::State state);

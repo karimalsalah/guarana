@@ -22,6 +22,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - **Ocarina of Time's frames reach the screen on time.** On Windows integrated GPUs the screen copy now runs on a queue of its own (`EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1`) and the frame budget no longer raises the resolution into the cadence's headroom (`EDEN_NX2_BUDGET_HOLD_RES=1`), by default. In Hyrule Field on the Arc 140T, frames that reached the screen after their refresh went from about 200 per 10 s to 0, and slots shown on time from 475-491 to up to 599 of 600 with 99.5% of frames evenly paced (two paired rounds).
 
 - A borderless fullscreen Vulkan window covers the screen exactly, so it can get independent flip: no desktop composition, up to a refresh less latency. OpenGL keeps the extra row.
+- `EDEN_NX2_BUDGET_UNANSWERED=1` (experimental, off by default): the frame budget notices when the game does not follow its GPU time scale (for example Ocarina of Time with the Max Resolution add-on): after nine missed ticks (about 4.5 s) that leave the frame time alone it holds the scale, shows state `unanswered` on the debug server and says so once in the log; with `EDEN_NX2_VRS` and `EDEN_NX2_VRS_AUTO` (and a device with per-draw shading rates) the shading-rate governor may coarsen from there. Not measured; see [docs/autopilot.md](docs/autopilot.md#when-the-scale-does-not-answer).
 
 ### Fixed
 
