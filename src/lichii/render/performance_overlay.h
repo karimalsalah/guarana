@@ -8,6 +8,8 @@
 #include <vector>
 #include <QWidget>
 
+class QTimer;
+
 #include "common/dkb_cpu_trace.h"
 #include "core/perf_stats.h"
 
@@ -25,6 +27,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
     void mousePressEvent(QMouseEvent* event) override;
@@ -36,11 +39,25 @@ private:
     void updateStats(const Core::PerfStatsResults& results, const VideoCore::ShaderNotify& shaders);
     void paintGraph(QPainter& painter, const QRectF& area);
     void paintCompact(QPainter& painter);
+    void paintMeters(QPainter& painter, const QRectF& area);
+    void paintSheen(QPainter& painter);
     void applyLayout();
+    void advanceMotion();
 
     bool m_compact = false;
     double m_generatedFps = 0.0;
     bool m_frameGenOn = false;
+    /// 0–1 loop that drives the sheen and the trace head. Stats still arrive on their own clock.
+    qreal m_phase = 0;
+    bool m_smooth = false;
+    double m_smoothFps = 0;
+    double m_smoothMs = 0;
+    double m_smoothCpu = 0;
+    double m_smoothGpu = 0;
+    double m_speed = 0;
+    int m_shadersBuilding = 0;
+    bool m_hitch = false;
+    QTimer* m_motion = nullptr;
 
     MainWindow* m_mainWindow = nullptr;
 

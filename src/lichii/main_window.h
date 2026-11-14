@@ -194,6 +194,11 @@ public:
         return frame_gen_fps;
     }
 
+    /// Shaders the compiler was building at the last status update, including ones that just finished.
+    [[nodiscard]] int ShadersBuilding() const {
+        return shaders_building;
+    }
+
     /// What NVIDIA DLSS ran as since the last status bar update, empty when it didn't run
     [[nodiscard]] const QString& DlssStatusText() const {
         return dlss_status_text;
@@ -621,6 +626,7 @@ private:
     QString dlss_status_text;
     bool frame_gen_generating = false;
     double frame_gen_fps = 0.0;
+    int shaders_building = 0;
     QElapsedTimer frame_gen_fps_timer;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
