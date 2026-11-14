@@ -29,6 +29,10 @@ namespace {
 using Common::Guarana::Mode;
 
 std::filesystem::path UserSwitchFile() {
+    // LoadNx2Switches reads the portable user folder instead of the per-user one, so write there.
+    if (Common::FS::IsPortableMode()) {
+        return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "nx2_switches.txt";
+    }
 #ifdef _WIN32
     const auto base = Common::FS::GetAppDataRoamingDirectory();
 #else
