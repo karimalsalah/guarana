@@ -9,10 +9,13 @@
 #include <cmath>
 #include <QFontMetricsF>
 #include <QGuiApplication>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPolygonF>
+#include <QShowEvent>
 #include <QStringList>
+#include <QTimer>
 #include <QWindow>
 
 #include "common/settings.h"
@@ -29,7 +32,7 @@ using Common::DkbCpuTrace::Role;
 
 // Layout of the "6 · 3 + big number" design at 100% scale; Qt scales it with the DPI.
 constexpr int OverlayWidth = 300;
-constexpr int OverlayHeight = 158;
+constexpr int OverlayHeight = 176;
 constexpr qreal PaddingX = 10;
 constexpr qreal PaddingTop = 6;
 constexpr qreal ContentWidth = 280;
@@ -40,7 +43,9 @@ constexpr qreal PlotWidth = 236;
 constexpr qreal AxisX = 240;
 constexpr qreal LabelX = 247;
 constexpr qreal LabelHeight = 14;
-constexpr qreal FooterTop = GraphTop + GraphHeight + 10;
+constexpr qreal MeterTop = GraphTop + GraphHeight + 6;
+constexpr qreal MeterHeight = 7;
+constexpr qreal FooterTop = MeterTop + MeterHeight + 8;
 
 constexpr auto HistoryWindow = std::chrono::seconds{5};
 constexpr auto StatsWindow = std::chrono::milliseconds{500};
@@ -103,6 +108,10 @@ qreal Width(const std::vector<Run>& runs) {
     return width;
 }
 
+double Approach(double shown, double target) {
+    return shown + (target - shown) * 0.28;
+}
+
 void DrawRuns(QPainter& painter, qreal x, qreal baseline, const std::vector<Run>& runs) {
     for (const Run& run : runs) {
         painter.setFont(run.font);
@@ -124,6 +133,11 @@ PerformanceOverlay::PerformanceOverlay(MainWindow* parent) : QWidget(parent), m_
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
     applyLayout();
     raise();
+
+    m_motion = new QTimer(this);
+    m_motion->setInterval(33);
+    connect(m_motion, &QTimer::timeout, this, &PerformanceOverlay::advanceMotion);
+    m_motion->start();
 
     // pos/stats
     resetPosition(m_mainWindow->pos());
@@ -230,6 +244,25 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
     m_tags = tags.join(QStringLiteral("  "));
     m_generatedFps = m_mainWindow->FrameGenFps();
     m_frameGenOn = Settings::values.frame_gen.GetValue();
+    m_speed = std::isfinite(results.emulation_speed) ? results.emulation_speed : 0.0;
+    m_shadersBuilding = m_mainWindow->ShadersBuilding();
+    if (m_fps && !m_smooth) {
+        m_smoothFps = *m_fps;
+        m_smoothMs = m_frameMs.value_or(*m_fps > 0 ? 1000.0 / *m_fps : 0);
+        m_smoothCpu = m_cpuPercent.value_or(0);
+        m_smoothGpu = m_gpuPercent.value_or(0);
+        m_smooth = true;
+    }
+    if (!m_frames.empty()) {
+        std::vector<float> ms;
+        ms.reserve(m_frames.size());
+        for (const auto& frame : m_frames) {
+            ms.push_back(frame.ms);
+        }
+        if (const auto summary = Core::Summarize(ms)) {
+            m_hitch = m_frames.back().ms > summary->median_ms * SpikeRatio;
+        }
+    }
     if (m_compact != UISettings::values.guarana_overlay_compact.GetValue()) {
         applyLayout();
     }
@@ -237,14 +270,87 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
     update();
 }
 
+void PerformanceOverlay::advanceMotion() {
+    if (!isVisible()) {
+        return;
+    }
+    m_phase += 0.018;
+    if (m_phase >= 1.0) {
+        m_phase -= 1.0;
+    }
+    if (m_smooth) {
+        if (m_fps) {
+            m_smoothFps = Approach(m_smoothFps, *m_fps);
+        }
+        if (m_frameMs) {
+            m_smoothMs = Approach(m_smoothMs, *m_frameMs);
+        }
+        if (m_cpuPercent) {
+            m_smoothCpu = Approach(m_smoothCpu, *m_cpuPercent);
+        }
+        if (m_gpuPercent) {
+            m_smoothGpu = Approach(m_smoothGpu, *m_gpuPercent);
+        }
+    }
+    update();
+}
+
+void PerformanceOverlay::paintSheen(QPainter& painter) {
+    const qreal band = 0.16;
+    const qreal lead = std::clamp(m_phase - band, 0.0, 1.0);
+    const qreal mid = std::clamp(static_cast<qreal>(m_phase), 0.0, 1.0);
+    const qreal tail = std::clamp(m_phase + band, 0.0, 1.0);
+    QLinearGradient sheen(0, 0, width(), 0);
+    sheen.setColorAt(0, QColor{255, 255, 255, 0});
+    sheen.setColorAt(lead, QColor{255, 255, 255, 0});
+    sheen.setColorAt(mid, QColor{251, 191, 36, m_hitch ? 46 : 22});
+    sheen.setColorAt(tail, QColor{255, 255, 255, 0});
+    sheen.setColorAt(1, QColor{255, 255, 255, 0});
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(sheen);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 8.0, 8.0);
+}
+
+void PerformanceOverlay::paintMeters(QPainter& painter, const QRectF& area) {
+    const auto bar = [&](const QRectF& slot, double percent, const QColor& ink, const QString& name) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor{255, 255, 255, 18});
+        painter.drawRoundedRect(slot, 2.0, 2.0);
+        const qreal fill = slot.width() * std::clamp(percent, 0.0, 100.0) / 100.0;
+        if (fill > 0.5) {
+            QLinearGradient glow(slot.topLeft(), slot.topRight());
+            glow.setColorAt(0, ink);
+            QColor hot = ink;
+            hot.setAlpha(180);
+            glow.setColorAt(1, hot);
+            painter.setBrush(glow);
+            painter.drawRoundedRect(QRectF{slot.left(), slot.top(), fill, slot.height()}, 2.0, 2.0);
+        }
+        const QFont font = MonoFont(10, QFont::DemiBold);
+        painter.setFont(font);
+        painter.setPen(QColor::fromRgb(TextColor));
+        painter.drawText(QRectF{slot.left(), slot.top() - 12, slot.width(), 11},
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         name + QStringLiteral(" ") +
+                             QString::number(std::round(percent), 'f', 0) + QStringLiteral("%"));
+    };
+    const qreal gap = 8;
+    const qreal half = (area.width() - gap) / 2;
+    bar(QRectF{area.left(), area.bottom() - MeterHeight, half, MeterHeight}, m_smoothCpu,
+        QColor::fromRgb(AccentColor), QStringLiteral("CPU"));
+    bar(QRectF{area.left() + half + gap, area.bottom() - MeterHeight, half, MeterHeight},
+        m_smoothGpu, QColor::fromRgb(m_hitch ? SpikeColor : 0x7DD3FC), QStringLiteral("GPU"));
+}
+
 void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
 
-    painter.setPen(QPen{QColor::fromRgba(BorderColor), 1.0});
+    painter.setPen(QPen{QColor::fromRgba(m_hitch ? qRgba(0xFF, 0x5D, 0x52, 160) : BorderColor), 1.0});
     painter.setBrush(QColor::fromRgba(BackgroundColor));
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
+    paintSheen(painter);
     if (m_compact) {
         paintCompact(painter);
         return;
@@ -260,8 +366,10 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
 
     // Header: the big fps number on the left, frame time and CPU/GPU % on the right.
     const qreal fps_baseline = Baseline(fps_font, PaddingTop, HeaderHeight);
+    const QColor fps_color = m_hitch ? QColor::fromRgb(SpikeColor) : text;
     const std::vector<Run> fps_runs{
-        {m_fps ? QString::number(std::round(*m_fps), 'f', 0) : QStringLiteral("—"), fps_font, text},
+        {m_fps ? QString::number(std::round(m_smoothFps), 'f', 0) : QStringLiteral("—"), fps_font,
+         fps_color},
     };
     DrawRuns(painter, PaddingX, fps_baseline, fps_runs);
     DrawRuns(painter, PaddingX + Width(fps_runs) + 6, fps_baseline,
@@ -270,7 +378,7 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
     const qreal right = PaddingX + ContentWidth;
     const qreal right_top = PaddingTop + (HeaderHeight - 34) / 2;
     const std::vector<Run> ms_runs{
-        {m_frameMs ? QString::number(*m_frameMs, 'f', 1) : QStringLiteral("—"), small_bold_font,
+        {m_frameMs ? QString::number(m_smoothMs, 'f', 1) : QStringLiteral("—"), small_bold_font,
          text},
         {QStringLiteral(" ms"), small_font, muted},
     };
@@ -291,6 +399,7 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
              load_runs);
 
     paintGraph(painter, QRectF{PaddingX, GraphTop, ContentWidth, GraphHeight});
+    paintMeters(painter, QRectF{PaddingX, MeterTop - 12, ContentWidth, 12 + MeterHeight});
 
     // Footer: fps min/median/max over the last 5 s, and the features that are on.
     QString fps_range = QStringLiteral("— — —");
@@ -306,11 +415,22 @@ void PerformanceOverlay::paintEvent(QPaintEvent* event) {
         {fps_range, footer_font, muted},
         {QStringLiteral(" fps"), footer_font, QColor::fromRgb(DimColor)},
     };
+    QString live = m_speed > 0 ? QStringLiteral("%1×").arg(m_speed, 0, 'f', 2) : QString{};
+    if (m_shadersBuilding > 0) {
+        live += (live.isEmpty() ? QString{} : QStringLiteral("  ")) +
+                tr("%n shader(s)", "", m_shadersBuilding);
+    } else if (m_hitch) {
+        live += (live.isEmpty() ? QString{} : QStringLiteral("  ")) + tr("hitch");
+    }
     DrawRuns(painter, PaddingX, footer_baseline, range_runs);
 
+    QString status = live;
+    if (!m_tags.isEmpty()) {
+        status += (status.isEmpty() ? QString{} : QStringLiteral("  ")) + m_tags;
+    }
     const qreal tags_width = ContentWidth - Width(range_runs) - 12;
     const QString tags =
-        QFontMetricsF{footer_font}.elidedText(m_tags, Qt::ElideRight, tags_width);
+        QFontMetricsF{footer_font}.elidedText(status, Qt::ElideRight, tags_width);
     DrawRuns(painter, right - QFontMetricsF{footer_font}.horizontalAdvance(tags), footer_baseline,
              {{tags, footer_font, muted}});
 }
@@ -329,13 +449,14 @@ void PerformanceOverlay::paintCompact(QPainter& painter) {
     const qreal head_top = 6;
     const qreal head_height = 40;
     const std::vector<Run> fps_runs{
-        {m_fps ? QString::number(std::round(*m_fps), 'f', 0) : QStringLiteral("-"), fps_font, text},
+        {m_fps ? QString::number(std::round(m_smoothFps), 'f', 0) : QStringLiteral("-"), fps_font,
+         m_hitch ? QColor::fromRgb(SpikeColor) : text},
     };
     const qreal baseline = Baseline(fps_font, head_top, head_height);
     DrawRuns(painter, Pad, baseline, fps_runs);
     DrawRuns(painter, Pad + Width(fps_runs) + 5, baseline, {{tr("game"), small_font, muted}});
 
-    const double shown = (m_fps ? *m_fps : 0.0) + (m_generatedFps >= 0.5 ? m_generatedFps : 0.0);
+    const double shown = m_smoothFps + (m_generatedFps >= 0.5 ? m_generatedFps : 0.0);
     const std::vector<Run> shown_runs{
         {m_fps ? QString::number(std::round(shown), 'f', 0) : QStringLiteral("-"), small_bold_font,
          m_generatedFps >= 0.5 ? accent : text},
@@ -390,12 +511,18 @@ void PerformanceOverlay::paintCompact(QPainter& painter) {
                 painter.drawLine(line[i - 1], line[i]);
             }
         }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor::fromRgb(m_hitch ? SpikeColor : AccentColor));
+        painter.drawEllipse(line.back(), 2.2, 2.2);
     }
 
     // Frame generation state and the frame time.
     QString generation;
     QColor generation_color = muted;
-    if (!m_frameGenOn) {
+    if (m_shadersBuilding > 0) {
+        generation = tr("%n shader(s)", "", m_shadersBuilding);
+        generation_color = accent;
+    } else if (!m_frameGenOn) {
         generation = tr("FG off");
     } else if (m_generatedFps >= 0.5) {
         generation = tr("FG on +%1").arg(std::round(m_generatedFps), 0, 'f', 0);
@@ -405,7 +532,7 @@ void PerformanceOverlay::paintCompact(QPainter& painter) {
     }
     const qreal footer = Baseline(small_font, 94, 18);
     const QString ms_text =
-        m_frameMs ? QStringLiteral("%1 ms").arg(*m_frameMs, 0, 'f', 1) : QStringLiteral("-");
+        m_frameMs ? QStringLiteral("%1 ms").arg(m_smoothMs, 0, 'f', 1) : QStringLiteral("-");
     const qreal ms_width = QFontMetricsF{small_font}.horizontalAdvance(ms_text);
     const QString elided =
         QFontMetricsF{small_font}.elidedText(generation, Qt::ElideRight, inner - ms_width - 10);
@@ -451,6 +578,15 @@ void PerformanceOverlay::paintGraph(QPainter& painter, const QRectF& area) {
         line << QPointF{area.left() + PlotWidth * (1.0 - age_s / window_s), y_of(frame.ms)};
     }
 
+    QPolygonF fill = line;
+    fill << QPointF{line.back().x(), plot_bottom} << QPointF{line.front().x(), plot_bottom};
+    QLinearGradient under(area.left(), plot_top, area.left(), plot_bottom);
+    under.setColorAt(0, QColor{0xFB, 0xBF, 0x24, m_hitch ? 90 : 48});
+    under.setColorAt(1, QColor{0xFB, 0xBF, 0x24, 0});
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(under);
+    painter.drawPolygon(fill);
+
     painter.setBrush(Qt::NoBrush);
     QPen median_pen{QColor::fromRgba(MedianLineColor), 0.75};
     median_pen.setDashPattern({2.0 / 0.75, 3.0 / 0.75});
@@ -473,6 +609,14 @@ void PerformanceOverlay::paintGraph(QPainter& painter, const QRectF& area) {
             painter.drawLine(line[i - 1], line[i]);
         }
     }
+
+    const QPointF head = line.back();
+    const int pulse = 36 + static_cast<int>(40 * (0.5 + 0.5 * std::sin(m_phase * 6.283185)));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor{0xFB, 0xBF, 0x24, pulse});
+    painter.drawEllipse(head, 5.0, 5.0);
+    painter.setBrush(QColor::fromRgb(m_hitch ? SpikeColor : AccentColor));
+    painter.drawEllipse(head, 2.1, 2.1);
 
     // Min, median and max as ticks on the axis at their real heights, labelled beside them.
     struct Tick {
@@ -508,8 +652,20 @@ void PerformanceOverlay::paintGraph(QPainter& painter, const QRectF& area) {
     }
 }
 
+void PerformanceOverlay::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (m_motion && !m_motion->isActive()) {
+        m_motion->start();
+    }
+}
+
 void PerformanceOverlay::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
+    if (m_motion) {
+        m_motion->stop();
+    }
+    m_smooth = false;
+    m_hitch = false;
     if (QtCommon::system && QtCommon::system->IsPoweredOn()) {
         QtCommon::system->GetPerfStats().SetFrameTimeHistoryEnabled(false);
     }

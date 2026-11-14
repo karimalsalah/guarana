@@ -1,0 +1,1 @@
+- The performance overlay eases the fps, frame time, and CPU/GPU readouts toward the measured values, draws CPU and GPU meters, fills the frame-time trace, and marks a hitch when the newest frame is slower than 1.2× the median. The footer shows guest-to-wall speed and how many shaders are building. The motion timer stops while the overlay is hidden.
