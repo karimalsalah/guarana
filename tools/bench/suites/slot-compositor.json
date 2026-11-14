@@ -1,0 +1,27 @@
+{
+  "name": "slot-compositor",
+  "description": "The slot compositor (EDEN_NX2_FLUID_COMPOSE) and the default-off switches that build on it, fullscreen and with the presenter's pacing counters. The first run compares it with the baseline and with its own diagnostic control (EDEN_NX2_FLUID_COMPOSE_NATIVE: the compute store without the smaller frames), which separates what the pass costs from what the smaller frames save. The second run holds the compositor on in every variant and adds one switch at a time, each compared with compose-control. The scene is Link's house in Kokiri Forest because a tester can make that save in ten minutes; pass --scene tools/bench/scenes/oot-hyrule-field.json to run it in the heavier scene. Where the gates in its row of docs/switches.md are not met the compositor stays off and its rows equal the baseline. Everything given on the command line (base ini, mods, power policy) applies to every variant.",
+  "scene": "../scenes/oot-kokiri-forest.json",
+  "options": {},
+  "base": {"fullscreen": true, "pacing": true},
+  "baseline": "baseline",
+  "runs": [
+    {
+      "variants": [
+        {"name": "baseline"},
+        {"name": "fluid-compose", "env": {"EDEN_NX2_FLUID_COMPOSE": "1"}},
+        {"name": "fluid-compose-native", "env": {"EDEN_NX2_FLUID_COMPOSE": "1", "EDEN_NX2_FLUID_COMPOSE_NATIVE": "1"}}
+      ]
+    },
+    {
+      "baseline": "compose-control",
+      "variants": [
+        {"name": "compose-control", "env": {"EDEN_NX2_FLUID_COMPOSE": "1"}},
+        {"name": "compose-pingpong", "env": {"EDEN_NX2_FLUID_COMPOSE": "1", "EDEN_NX2_FG_PINGPONG": "1"}},
+        {"name": "compose-median-once", "env": {"EDEN_NX2_FLUID_COMPOSE": "1", "EDEN_NX2_FG_MEDIAN_ONCE": "1"}},
+        {"name": "compose-governor", "env": {"EDEN_NX2_FLUID_COMPOSE": "1", "EDEN_NX2_SHOWN_GOVERNOR": "1"}},
+        {"name": "compose-render-scale-75", "env": {"EDEN_NX2_FLUID_COMPOSE": "1", "EDEN_NX2_OOT_RENDER_SCALE": "75"}}
+      ]
+    }
+  ]
+}

@@ -1673,6 +1673,12 @@ class SuiteTest(RunCase):
         vrs = {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}
         self.assertEqual(env, {
             "baseline": {}, "baseline-trace": trace,
+            "gm11": {"EDEN_NX2_GM": "11"},
+            "gm11-trace": {"EDEN_NX2_GM": "11", **trace},
+            "gm-off": {"EDEN_NX2_GM": "0"},
+            "gm-off-trace": {"EDEN_NX2_GM": "0", **trace},
+            "gm3": {"EDEN_NX2_GM": "3"},
+            "gm3-trace": {"EDEN_NX2_GM": "3", **trace},
             "vrs-2x2": vrs, "vrs-2x2-trace": {**vrs, **trace},
             "spin-scale-0.25": {"EDEN_NX2_SPIN_SCALE": "0.25"},
             "eco-background": {"EDEN_NX2_ECO_BACKGROUND": "1"},
@@ -1712,6 +1718,44 @@ class SuiteTest(RunCase):
         with open(os.path.join(HERE, "..", "..", "docs", "switches.md"), encoding="utf-8") as file:
             documented = file.read()
         for switches in env.values():
+            for name in switches:
+                self.assertIn(f"`{name}`", documented)
+
+    def test_shipped_slot_compositor_suite(self):
+        args, defaults = self.suite_args(os.path.join(HERE, "suites", "slot-compositor.json"))
+        plans, compare_to = bench.load_suite(args.suite, args, defaults)
+        self.assertEqual(len(plans), 2)
+        self.assertTrue(all((plan.suite, plan.scene["name"]) == ("slot-compositor", "oot-kokiri-forest")
+                            for plan in plans))
+        compose = {"EDEN_NX2_FLUID_COMPOSE": "1"}
+        against_baseline = {variant["name"]: variant.get("env") or {} for variant in plans[0].variants}
+        self.assertEqual(against_baseline, {
+            "baseline": {},
+            "fluid-compose": compose,
+            "fluid-compose-native": {**compose, "EDEN_NX2_FLUID_COMPOSE_NATIVE": "1"}})
+        self.assertEqual(list(against_baseline)[0], "baseline")
+        on_compose = {variant["name"]: variant.get("env") or {} for variant in plans[1].variants}
+        self.assertEqual(on_compose, {
+            "compose-control": compose,
+            "compose-pingpong": {**compose, "EDEN_NX2_FG_PINGPONG": "1"},
+            "compose-median-once": {**compose, "EDEN_NX2_FG_MEDIAN_ONCE": "1"},
+            "compose-governor": {**compose, "EDEN_NX2_SHOWN_GOVERNOR": "1"},
+            "compose-render-scale-75": {**compose, "EDEN_NX2_OOT_RENDER_SCALE": "75"}})
+        self.assertEqual(list(on_compose)[0], "compose-control")
+        # No variant name repeats: a row's name alone says which run and which control it belongs to.
+        self.assertFalse(set(against_baseline) & set(on_compose))
+        self.assertTrue(all(variant["fullscreen"] and variant["pacing"]
+                            for plan in plans for variant in plan.variants))
+        self.assertTrue(all(compare_to[("oot-kokiri-forest", name)] == "baseline" for name in against_baseline))
+        self.assertTrue(all(compare_to[("oot-kokiri-forest", name)] == "compose-control" for name in on_compose))
+        # Every variant of the second run differs from its control by exactly one switch.
+        for name, switches in on_compose.items():
+            if name != "compose-control":
+                self.assertEqual(len(set(switches) - set(compose)), 1, name)
+        # Every switch the suite turns on is a documented one.
+        with open(os.path.join(HERE, "..", "..", "docs", "switches.md"), encoding="utf-8") as file:
+            documented = file.read()
+        for switches in list(against_baseline.values()) + list(on_compose.values()):
             for name in switches:
                 self.assertIn(f"`{name}`", documented)
 

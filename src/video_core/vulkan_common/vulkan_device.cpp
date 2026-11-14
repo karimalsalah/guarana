@@ -2466,8 +2466,7 @@ void Device::RemoveUnsuitableExtensions() {
                  properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
                  properties.pipeline_binary.pipelineBinaryCompressedData != VK_FALSE);
     }
-    if (pipeline_binaries_decision.reason != PipelineBinariesReason::NotOffered ||
-        pipeline_binaries_requested != PipelineBinariesOverride::Unset) {
+    if (ShouldLogPipelineBinariesDecision(pipeline_binaries_decision.reason, pipeline_binaries_env)) {
         const bool value_ignored = pipeline_binaries_env != nullptr && *pipeline_binaries_env &&
                                    pipeline_binaries_requested == PipelineBinariesOverride::Unset;
         LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary store: {} ({}){}",
