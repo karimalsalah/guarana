@@ -58,6 +58,9 @@ REMOVED_SECTION = "Removed experiments"
 RUNTIME_PREFIXES = {
     # Filters the lines of nx2_switches.txt by prefix before they are put in the environment.
     ("src/lichii/nx2_switches.h", "EDEN_NX2_"),
+    # The doctor filters switch-file lines and environment variables by prefix to report them;
+    # it reads no switch of its own.
+    ("launcher/src-tauri/src/hygiene.rs", "EDEN_NX2_"),
 }
 
 # Calls that put a switch in an environment rather than read one; the name still needs its row.

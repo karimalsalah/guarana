@@ -65,6 +65,9 @@ struct Runtime {
     bool CanReportMemoryUsage() const {
         return false;
     }
+    bool MergesListPageRuns() const {
+        return false;
+    }
     u64 GetBufferAllocationTail() const {
         return 0;
     }

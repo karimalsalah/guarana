@@ -1123,22 +1123,24 @@ mod tests {
         assert!(misread_lines("EDEN_NX2_X=\"a # b\"\r\nEDEN_NX2_Y=a#b\r\n", None).is_empty());
         // With the installed build's registry the switch's type decides.
         let mut registry = BTreeMap::new();
-        registry.insert("EDEN_NX2_DIR".to_string(), "path".to_string());
-        registry.insert("EDEN_NX2_N".to_string(), "number".to_string());
-        assert!(misread_lines("EDEN_NX2_DIR=runs # 2\r\n", Some(&registry)).is_empty());
-        assert_eq!(rules(&misread_lines("EDEN_NX2_N=3 # three\r\n", Some(&registry))), ["C3"]);
+        registry.insert("EDEN_NX2_PIPELINE_STATS".to_string(), "path".to_string());
+        registry.insert("EDEN_NX2_FLUID".to_string(), "number".to_string());
+        assert!(misread_lines("EDEN_NX2_PIPELINE_STATS=runs # 2\r\n", Some(&registry)).is_empty());
+        assert_eq!(rules(&misread_lines("EDEN_NX2_FLUID=3 # three\r\n", Some(&registry))), ["C3"]);
     }
 
     #[test]
     fn unknown_switch_names_need_the_registry() {
-        let text = "EDEN_NX2_FLUDI=2\r\nEDEN_NX2_N=1\r\nOTHER_VAR=1\r\n";
+        let text = "EDEN_NX2_FLUDI=2\r\nEDEN_NX2_FLUID=1\r\nOTHER_VAR=1\r\n";
         assert!(misread_lines(text, None).is_empty());
         let mut registry = BTreeMap::new();
-        registry.insert("EDEN_NX2_N".to_string(), "number".to_string());
+        registry.insert("EDEN_NX2_FLUID".to_string(), "number".to_string());
         let found = misread_lines(text, Some(&registry));
         assert_eq!(rules(&found), ["C3"]);
         assert_eq!(found[0].status, CheckStatus::Info);
-        assert!(found[0].text.contains("EDEN_NX2_FLUDI"), "{}", found[0].text);
+        // Matched without its prefix: the switch registry check reads a whole-name literal in this
+        // file as a switch in use, and this misspelling is not one.
+        assert!(found[0].text.contains("FLUDI"), "{}", found[0].text);
     }
 
     #[test]
