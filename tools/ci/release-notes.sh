@@ -40,6 +40,11 @@ commits() { git log --no-merges --pretty='- %s (`%h`)' "$@" 2>/dev/null | head -
       printf 'Automatic daily build of `nx2` at `%s`.\n\n## Changes since the previous daily build\n\n' "$short"
       if [[ -n "${PREV_TAG:-}" ]]; then commits "$PREV_TAG..$sha"; else commits -n 30 "$sha"; fi
       printf '\n'
+      # The changelog entries not yet in a release: [Unreleased] with the changelog.d fragments folded in.
+      entries=$(python3 -I tools/ci/changelog_fragments.py collect) || entries=
+      if [[ -n "$(tr -d '[:space:]' <<< "$entries")" ]]; then
+        printf '## Changelog entries not yet in a release\n%s\n\n' "$entries"
+      fi
       ;;
     branch)
       printf 'Test build of branch `%s` at `%s`.\n\n**This is not a release.** It is for testing, and the next push to the branch replaces it.\n\n## Commits on top of nx2\n\n' "${BRANCH:-?}" "$short"

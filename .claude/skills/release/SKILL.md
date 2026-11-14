@@ -13,15 +13,17 @@ a branch or a tag, opening or merging a pull request, running a workflow, editin
 
 - `git fetch origin --tags` and a clean `git status`.
 - `main` is green: `gh run list --workflow build-check.yml --branch main --limit 3`.
-- What goes in: `git log --oneline <previous tag>..origin/main`. Every user-visible change has a line
-  under `## [Unreleased]` in `CHANGELOG.md`; its header has the format rules (links inline, `###`
+- What goes in: `git log --oneline <previous tag>..origin/main`. Every user-visible change has a fragment
+  in `changelog.d/` or a line under `## [Unreleased]` in `CHANGELOG.md`; its header has the format rules (links inline, `###`
   groups, no other `## ` line inside a version).
 
 ## 2. Branch and notes
 
 - A new X.Y: `git switch -c release/vX.Y origin/main`. A patch: `git switch release/vX.Y`, which
   takes only fixes, cherry-picked from `main` (`git cherry-pick -x`) or merged from `hotfix/*`.
-- On the release branch, move the `[Unreleased]` entries into `## [X.Y.Z] - YYYY-MM-DD`. A
+- On the release branch, run `python3 -I tools/ci/changelog_fragments.py release` (folds the `changelog.d/`
+  fragments into `[Unreleased]` and deletes them), then move the `[Unreleased]` entries into
+  `## [X.Y.Z] - YYYY-MM-DD`. A
   pre-release uses a `## [X.Y.Z-rcN]` section if there is one, else `## [X.Y.Z]`.
 - `bash tools/ci/changelog-section.sh X.Y.Z` must print the notes: an empty section fails the
   release workflow in its first minute, before anything is built.

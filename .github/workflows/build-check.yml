@@ -49,6 +49,24 @@ jobs:
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
+  # Code needs a changelog entry: a file in changelog.d/ (changelog.d/README.md) or a line under
+  # [Unreleased]. Documentation-only pull requests and the bots' branches need none
+  # (tools/ci/changelog_fragments.py). HEAD^1 of the merge commit is the tip of the base branch.
+  changelog:
+    name: Check the changelog entry
+    if: github.event_name == 'pull_request' && github.head_ref != 'upstream' && !startsWith(github.head_ref, 'bot/') && !startsWith(github.head_ref, 'merge/upstream')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the merge commit and its base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Check for a changelog entry
+        run: python3 -I tools/ci/changelog_fragments.py check --base HEAD^1
+
   linux-gcc:
     name: Linux GCC 13 production build and tests
     needs: changes

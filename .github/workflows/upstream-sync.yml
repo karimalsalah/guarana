@@ -87,7 +87,7 @@ jobs:
             echo "- [ ] No conflicts, or they were resolved on a \`merge/upstream-<date>\` branch from \`main\` with its own pull request, keeping both sides; that pull request lists each resolution."
             echo "- [ ] The switches in \`docs/switches.md\` still do what their rows say. Rerun the verified scene with \`tools/bench\` if upstream touched frame pacing, the shader recompiler or the Vulkan backend."
             echo "- [ ] Optional housekeeping: if upstream added switches, regenerate \`tools/ci/switch-registry-upstream.txt\` (its header has the command) in a pull request after this merge; switch-registry already takes the upstream branch's switches as upstream's."
-            echo "- [ ] \`CHANGELOG.md\` \`[Unreleased]\` names the upstream range."
+            echo "- [ ] A changelog entry (a \`changelog.d/\` fragment, or a line under \`[Unreleased]\` in \`CHANGELOG.md\`) names the upstream range."
             echo "- [ ] Merge with a merge commit, never squash or rebase, so later syncs share history with upstream."
             echo
             echo "## Upstream commits"

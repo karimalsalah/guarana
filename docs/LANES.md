@@ -32,7 +32,7 @@ After each merge, update the next pull request and ask again once its checks hav
 Versions are `vX.Y.Z`; release candidates and other pre-releases are `vX.Y.Z-rcN`.
 
 1. Cut the branch from `main`: `git switch -c release/vX.Y main` and push it. From then on only fixes go in: cherry-picked from `main` (`git cherry-pick -x`), or merged from `hotfix/*`.
-2. Write the notes: on the release branch, move the entries under `## [Unreleased]` in `CHANGELOG.md` to a new `## [X.Y.Z] - YYYY-MM-DD` section. `bash tools/ci/changelog-section.sh X.Y.Z` prints what the release will use. A `vX.Y.Z-rcN` tag uses a `## [X.Y.Z-rcN]` section if there is one, else `## [X.Y.Z]`.
+2. Write the notes: on the release branch, run `python3 -I tools/ci/changelog_fragments.py release` (it folds the fragments in `changelog.d/` into `## [Unreleased]` and deletes them), then move the entries under `## [Unreleased]` in `CHANGELOG.md` to a new `## [X.Y.Z] - YYYY-MM-DD` section. `bash tools/ci/changelog-section.sh X.Y.Z` prints what the release will use. A `vX.Y.Z-rcN` tag uses a `## [X.Y.Z-rcN]` section if there is one, else `## [X.Y.Z]`.
 3. A maintainer tags the commit and pushes the tag:
 
    ```sh
@@ -55,7 +55,7 @@ The release builds run with the update checker off: it asks zortos293/Lichii for
 - **A patch straight from `main`**, on a branch from it:
 
   ```sh
-  bash tools/ci/bump-version.sh patch        # VERSION 20.2.0 -> 20.2.1-rc1; [Unreleased] moves under ## [20.2.1]
+  bash tools/ci/bump-version.sh patch        # VERSION 20.2.0 -> 20.2.1-rc1; the changelog.d fragments fold into [Unreleased], which moves under ## [20.2.1]
   bash tools/ci/bump-version.sh release      # VERSION 20.2.1; that heading gets today's date
   bash tools/ci/changelog-section.sh 20.2.1  # the notes the release will use; an empty section fails it
   ```

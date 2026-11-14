@@ -118,7 +118,7 @@ The full rules are in [docs/BENCHMARKING.md](docs/BENCHMARKING.md) and
    [docs/agents/README.md](docs/agents/README.md)). Never start a build, a benchmark or the
    emulator on the owner's machine unless asked.
 5. **Open a draft pull request** with the template filled in, an `Assisted-by:` trailer on each
-   commit, a `CHANGELOG.md` line, and your lane's row here updated.
+   commit, a changelog fragment (`changelog.d/`), and your lane's row here updated.
 
 ## Not confirmed when this was written
 

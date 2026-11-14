@@ -3,8 +3,9 @@
 All notable changes to Guarana. The release notes of a version are its `## [X.Y.Z]` section, as
 `tools/ci/release-notes.sh` extracts it: keep links inline (link definitions at the bottom of this
 file do not travel with a section), group entries under `###` headings, and never put another
-`## ` line inside a version. New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh`
-moves them into a version section and dates it at release.
+`## ` line inside a version. New entries are files in `changelog.d/` (see its README), so pull requests do not conflict here; a
+line under `## [Unreleased]` is still accepted until the next release. `tools/ci/bump-version.sh`
+folds the fragments in, moves the entries into a version section and dates it at release.
 
 Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lichii).
 

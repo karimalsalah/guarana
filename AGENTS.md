@@ -106,7 +106,7 @@ The synthetic containers in `src/tests/core/nx_fixtures/` are generated test dat
 
 - Subject: `area: change`, imperative, at most 72 characters, for example `vulkan: keep vertex input dynamic state on Intel 101.x drivers`. The area is the subsystem: `vulkan`, `shader_recompiler`, `texture_cache`, `buffer_cache`, `core`, `kernel`, `frontend`, `bench`, `ci`, `docs`.
 - Body: what changed and why. For performance: the scene, device, driver and power mode, before and after (fps, p50 and p99 frame time, or the draw's GPU ms), and how many paired runs. Name every switch added and its default.
-- One topic per pull request, with its tests, its `docs/switches.md` rows and a `CHANGELOG.md` line under `[Unreleased]`. Fill in the template.
+- One topic per pull request, with its tests, its `docs/switches.md` rows and a changelog entry: a fragment `changelog.d/<slug>.<section>.md` (see [changelog.d/README.md](changelog.d/README.md); a line under `[Unreleased]` in `CHANGELOG.md` is still accepted until the next release, but it conflicts with other pull requests, so use a fragment). Fill in the template.
 
 ### Upstream first
 
