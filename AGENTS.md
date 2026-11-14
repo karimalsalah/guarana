@@ -35,7 +35,7 @@ This section is the fork's. Everything under "Upstream Lichii guidance" is upstr
 | `tools/shader-sweep` | The offline shader compiler the sweep drives; builds on its own |
 | `scripts` | One-command build and test scripts for Windows and Linux (see "Build") |
 | `tools/windows`, `tools/ci` | CI toolchain installers; CI helper scripts such as `changelog-section.sh` |
-| `docs` | `switches.md`, `LANES.md`, `nx2/debug-mcp.md`, `Build.md`, `Coding.md`. `CI.md` describes Eglantine's pipeline, not ours; its PGO retraining steps still apply |
+| `docs` | `switches.md`, `lifecycle.md` (what is stored and when it is flushed), `LANES.md`, `nx2/debug-mcp.md`, `Build.md`, `Coding.md`. `CI.md` describes Eglantine's pipeline, not ours; its PGO retraining steps still apply |
 | `dist` | `nx2_switches.txt` (shipped next to the executable), icons, desktop files |
 | `.github` | Workflows, issue forms, `labels.yml` |
 | `*.profdata` | PGO profiles: `lichii-windows.profdata` (clang-cl), `eglantine.profdata` (Linux clang) |
