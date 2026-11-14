@@ -364,9 +364,10 @@ TOOLS = [
                        "frame_ms (median present interval of the last half second), work_ms (the "
                        "frame without the pacing wait, 80th percentile: what the controller "
                        "compares), scale and its limits, state (off, frozen, on_target, slow, "
-                       "saturated, fast, cooldown, no_effect, waiting), the scale that last "
-                       "missed and the cool-down left, and whether the shading-rate governor may "
-                       "act.",
+                       "saturated, fast, cooldown, no_effect, waiting, unanswered), the scale that "
+                       "last missed and the cool-down left, whether the shading-rate governor may "
+                       "act, and the scale raises went unanswered from (unanswered_from, with "
+                       "EDEN_NX2_BUDGET_UNANSWERED).",
         "inputSchema": {
             "type": "object",
             "properties": {

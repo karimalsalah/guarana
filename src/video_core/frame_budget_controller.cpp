@@ -15,6 +15,39 @@ constexpr double Slack = 0.999;
 
 FrameBudgetController::Decision FrameBudgetController::Update(const Input& input,
                                                               double current_scale) {
+    Decision decision = Decide(input, current_scale);
+    decision.scale_spent = decision.state == State::Saturated || unanswered;
+    return decision;
+}
+
+bool FrameBudgetController::CountUnanswered(double frame_ms, double scale) {
+    if (config.max_unanswered == 0) {
+        return false;
+    }
+    ++answer_ticks;
+    if (answer_ticks <= 3) {
+        // The fastest of the first three: a noisy frame time has to fall below the run's best
+        // start, not a worse one.
+        answer_ref_ms = (std::min)(answer_ref_ms, frame_ms);
+        answer_fast = 0;
+        return false;
+    }
+    if (frame_ms < answer_ref_ms * (std::clamp)(config.answer_ratio, 0.5, 0.99)) {
+        if (++answer_fast >= 3) {
+            // The frame time follows the scale: the count starts over from here.
+            answer_ticks = 1;
+            answer_fast = 0;
+            answer_ref_ms = frame_ms;
+            answer_scale = scale;
+        }
+        return false;
+    }
+    answer_fast = 0;
+    return answer_ticks > config.max_unanswered;
+}
+
+FrameBudgetController::Decision FrameBudgetController::Decide(const Input& input,
+                                                              double current_scale) {
     if (input.target_ms <= 0.0) {
         Reset();
         return {Action::Hold, State::Off, current_scale, false};
@@ -50,8 +83,23 @@ FrameBudgetController::Decision FrameBudgetController::Update(const Input& input
             miss_scale = scale;
             missing = true;
             probed = false;
+            if (!unanswered) {
+                answer_ticks = 0;
+                answer_fast = 0;
+                answer_ref_ms = input.frame_ms;
+                answer_scale = scale;
+            }
         }
         since_miss = 0;
+        // Only raises are judged: a run that began at the upper limit never tried one.
+        if (!unanswered && answer_scale < high * Slack && CountUnanswered(input.frame_ms, scale)) {
+            unanswered = true;
+        }
+        if (unanswered) {
+            // The game does not follow the scale (a patch fixes its resolution, or the frame is
+            // not bound by it): a higher one changes nothing but what the game is told.
+            return {Action::Hold, State::Unanswered, scale, at_limit};
+        }
         if (at_limit) {
             return {Action::Hold, State::Saturated, scale, true};
         }
@@ -59,6 +107,11 @@ FrameBudgetController::Decision FrameBudgetController::Update(const Input& input
         return {Action::Raise, State::Slow, next, next >= high * Slack};
     }
     missing = false;
+    if (unanswered && !input.hold_lower) {
+        // No miss, and nothing else holds quality back: the next run of misses tries the scale
+        // again. While another lever holds coarse rates the scale stays out of its way.
+        unanswered = false;
+    }
     // The scale that missed is forgotten after two cool-downs without another miss.
     if (miss_scale > 0.0 && ++since_miss >= cooldown_len * 2) {
         miss_scale = 0.0;
@@ -113,6 +166,11 @@ void FrameBudgetController::Reset() {
     cooldown_len = 0;
     lower_run = 0;
     lower_ref_ms = 0.0;
+    unanswered = false;
+    answer_ticks = 0;
+    answer_fast = 0;
+    answer_ref_ms = 0.0;
+    answer_scale = 0.0;
 }
 
 const char* FrameBudgetStateName(FrameBudgetController::State state) {
@@ -133,6 +191,8 @@ const char* FrameBudgetStateName(FrameBudgetController::State state) {
         return "no_effect";
     case FrameBudgetController::State::Waiting:
         return "waiting";
+    case FrameBudgetController::State::Unanswered:
+        return "unanswered";
     case FrameBudgetController::State::Off:
         break;
     }
