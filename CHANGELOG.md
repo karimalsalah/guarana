@@ -14,6 +14,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 - `EDEN_NX2_GPL_OPTIMIZE_CACHED=1` (experiment, off by default): with `EDEN_NX2_GPL=1`, pipelines loaded from the shader cache get the optimized link in the background at their first draw, as pipelines built during play do, instead of drawing fast-linked until they are evicted and rebuilt (issue #103). The `Nx2Perf gpl` line now counts fast-linked draws with no optimized link coming and the links queued at a first draw. Not measured; plan in [docs/switches.md](docs/switches.md).
 
+### Fixed
+
+- The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+
 ## [20.3.0] - 2026-11-14
 
 ### Changed
