@@ -451,6 +451,7 @@ struct System::Impl {
             return result;
         }
         host1x_core.emplace(system);
+        Common::BootTiming::Mark("core: host1x ready, creating the GPU and renderer");
         VideoCore::CreateGPU(gpu_core, emu_window, system);
         if (!gpu_core) {
             return SystemResultStatus::ErrorVideoCore;

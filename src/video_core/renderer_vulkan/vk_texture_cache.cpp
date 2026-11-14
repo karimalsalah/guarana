@@ -2574,31 +2574,6 @@ VkFormat TextureCacheRuntime::GetSupportedFormat(VkFormat requested_format,
     return requested_format;
 }
 
-// Helper functions for format compatibility checks
-bool TextureCacheRuntime::IsFormatDitherable(PixelFormat format) {
-    switch (format) {
-    case PixelFormat::B8G8R8A8_UNORM:
-    case PixelFormat::A8B8G8R8_UNORM:
-    case PixelFormat::B8G8R8A8_SRGB:
-    case PixelFormat::A8B8G8R8_SRGB:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool TextureCacheRuntime::IsFormatScalable(PixelFormat format) {
-    switch (format) {
-    case PixelFormat::B8G8R8A8_UNORM:
-    case PixelFormat::A8B8G8R8_UNORM:
-    case PixelFormat::R16G16B16A16_FLOAT:
-    case PixelFormat::R32G32B32A32_FLOAT:
-        return true;
-    default:
-        return false;
-    }
-}
-
 void TextureCacheRuntime::CopyImage(Image& dst, Image& src,
                                     std::span<const VideoCommon::ImageCopy> copies) {
     boost::container::small_vector<VideoCommon::ImageCopy, 16> host_copies;
@@ -4588,17 +4563,6 @@ VkImageView ImageView::StencilView() {
     const auto& info = MaxwellToVK::SurfaceFormat(*device, FormatType::Optimal, true, format);
     stencil_view = MakeView(info.format, VK_IMAGE_ASPECT_STENCIL_BIT);
     return *stencil_view;
-}
-
-VkImageView ImageView::ColorView() {
-    if (!image_handle) {
-        return VK_NULL_HANDLE;
-    }
-    if (color_view) {
-        return *color_view;
-    }
-    color_view = MakeView(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
-    return *color_view;
 }
 
 VkImageView ImageView::StorageView(Shader::TextureType texture_type,

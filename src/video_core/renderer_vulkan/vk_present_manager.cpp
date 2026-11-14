@@ -80,7 +80,36 @@ static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
 
 // Sleeps until the deadline, without spinning: it may pass by up to a timer tick (about 0.5 ms
 // on Windows), well within a refresh, and the next deadline counts from the actual present.
+//
+// EDEN_NX2_PRESENT_SPIN=1: sleep in ticks until the deadline is within 2 ms, then spin the last
+// stretch (YieldProcessor) so the wake lands on the deadline instead of up to a tick past it.
+// At 120 Hz a missed slot costs 8.33 ms, far more than the spin's CPU; this is the Ryujinx
+// frame-pacing fix. Default off keeps the tick loop, byte for byte the original behaviour.
+[[nodiscard]] bool PresentSpinEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PRESENT_SPIN");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 void SleepUntil(std::chrono::steady_clock::time_point deadline) {
+#ifdef _WIN32
+    if (PresentSpinEnabled()) {
+        constexpr auto spin_threshold = std::chrono::milliseconds{2};
+        while (true) {
+            const auto left = deadline - std::chrono::steady_clock::now();
+            if (left <= std::chrono::steady_clock::duration::zero()) {
+                return;
+            }
+            if (left > spin_threshold) {
+                Common::Windows::SleepForOneTick();
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+#endif
     while (true) {
         const auto left = deadline - std::chrono::steady_clock::now();
         if (left <= std::chrono::steady_clock::duration::zero()) {
@@ -201,6 +230,7 @@ void ResetFrame(Frame* frame) {
     frame->fluid_final = false;
     frame->fluid_recorded = {};
     frame->gpu_tick = 0;
+    frame->shown_kind = VideoCore::Nx2ShownFrames::Kind::Real;
 #ifdef EGLANTINE_STREAMLINE
     frame->frame_gen = false;
 #endif
@@ -320,6 +350,7 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     , use_present_thread{Settings::values.async_presentation.GetValue() ||
                          Settings::values.frame_gen.GetValue()}
     , fluid_presenter{FluidMode() != 0}
+    , shown_capture{device_, memory_allocator_, scheduler_}
 {
     SetImageCount();
 
@@ -530,6 +561,9 @@ void PresentManager::Present(Frame* frame) {
             scheduler.WaitWorker();
         }
         CopyToSwapchain(frame);
+        if (VideoCore::Nx2ShownFrames::Armed()) {
+            NoteShownCapture(frame, 0, "renderer_thread");
+        }
         VideoCore::AutopilotFeed::NoteShown();
         free_queue.push_back(frame);
     }
@@ -570,6 +604,31 @@ void PresentManager::NoteShownFrame() {
              100.0 * static_cast<f64>(even) / static_cast<f64>(sorted.size()));
     shown_intervals.clear();
     shown_window = now;
+}
+
+void PresentManager::NoteShownCapture(const Frame* frame, u64 slot, std::string_view presenter) {
+    const auto ns = [](std::chrono::steady_clock::time_point point) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(point.time_since_epoch()).count();
+    };
+    const auto presented = std::chrono::steady_clock::now();
+    s64 scheduled = 0;
+    if (slot != 0) {
+        const FluidClock clock = GetFluidClock();
+        scheduled = clock.Valid() ? ns(clock.SlotTime(slot)) : 0;
+    }
+    shown_capture.Note(*frame, {
+        .kind = frame->shown_kind,
+        .slot = slot,
+        .batch = frame->fluid_batch,
+        .scheduled_ns = scheduled,
+        .presented_ns = ns(presented),
+        .recorded_ns = frame->fluid_recorded != std::chrono::steady_clock::time_point{}
+                           ? ns(frame->fluid_recorded)
+                           : 0,
+        .presenter = presenter,
+        .deferred = fluid_ahead_pending && fluid_ahead_frame == frame,
+        .picture = -1,
+    });
 }
 
 size_t PresentManager::MaxExtraFrames() const {
@@ -760,6 +819,9 @@ void PresentManager::PresentThread(std::stop_token token) {
                 LogPacing(frame, presented - ready, presented);
             }
             NoteShownFrame();
+            if (VideoCore::Nx2ShownFrames::Armed()) {
+                NoteShownCapture(frame, 0, "present_thread");
+            }
 
             // Free the frame for reuse
             std::scoped_lock fl{free_mutex};
@@ -1263,6 +1325,9 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     }
     fluid.last_shown_vblank = shown_vblank;
     NoteShownFrame();
+    if (VideoCore::Nx2ShownFrames::Armed()) {
+        NoteShownCapture(frame, frame->fluid_slot != 0 ? shown_vblank : 0, "fluid");
+    }
 }
 
 void PresentManager::FluidPresentAhead() {
@@ -1700,7 +1765,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkImage image{swapchain.CurrentImage()};
     const VkExtent2D extent = swapchain.GetExtent();
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
-    if (UseFluidQueue(frame, extent)) {
+    // The debug server's shown_frames needs a blit for its pictures, which the dedicated queue's
+    // family cannot do: while it captures them the copy runs on the graphics queue.
+    if (UseFluidQueue(frame, extent) && !VideoCore::Nx2ShownFrames::PicturesArmed()) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
         bool streamline_frame = false;
 #ifdef EGLANTINE_STREAMLINE
@@ -1824,6 +1891,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             cmdbuf.CopyImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
+        }
+        if (VideoCore::Nx2ShownFrames::Armed()) {
+            shown_capture.Record(cmdbuf, *frame);
         }
 
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, {},

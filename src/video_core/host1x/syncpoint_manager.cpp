@@ -12,13 +12,13 @@ namespace Host1x {
 
 SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
     std::atomic<u32>& syncpoint, std::list<RegisteredAction>& action_storage, u32 expected_value,
-    std::function<void()>&& action) {
+    std::function<void()>&& action, std::mutex& bank_guard) {
     if (syncpoint.load(std::memory_order_acquire) >= expected_value) {
         action();
         return {};
     }
 
-    std::scoped_lock lk(guard);
+    std::scoped_lock lk(bank_guard);
     if (syncpoint.load(std::memory_order_relaxed) >= expected_value) {
         action();
         return {};
@@ -30,15 +30,18 @@ SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
         }
         ++it;
     }
-    return action_storage.emplace(it, expected_value, ++last_action_id, std::move(action))->id;
+    return action_storage
+        .emplace(it, expected_value, last_action_id.fetch_add(1, std::memory_order_relaxed) + 1,
+                 std::move(action))
+        ->id;
 }
 
 void SyncpointManager::DeregisterAction(std::list<RegisteredAction>& action_storage,
-                                        const ActionHandle& handle) {
+                                        const ActionHandle& handle, std::mutex& bank_guard) {
     if (handle == 0) {
         return;
     }
-    std::scoped_lock lk(guard);
+    std::scoped_lock lk(bank_guard);
 
     for (auto it = action_storage.begin(); it != action_storage.end(); it++) {
         if (it->id == handle) {
@@ -49,11 +52,11 @@ void SyncpointManager::DeregisterAction(std::list<RegisteredAction>& action_stor
 }
 
 void SyncpointManager::DeregisterGuestAction(u32 syncpoint_id, const ActionHandle& handle) {
-    DeregisterAction(guest_action_storage[syncpoint_id], handle);
+    DeregisterAction(guest_action_storage[syncpoint_id], handle, guard);
 }
 
 void SyncpointManager::DeregisterHostAction(u32 syncpoint_id, const ActionHandle& handle) {
-    DeregisterAction(host_action_storage[syncpoint_id], handle);
+    DeregisterAction(host_action_storage[syncpoint_id], handle, HostMutex());
 }
 
 void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
@@ -62,7 +65,7 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
         return;
     }
     Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id],
-              syncpoint_id);
+              guard, syncpoint_id);
 }
 
 void SyncpointManager::SetGuestMirror(GuestMirror mirror) {
@@ -74,21 +77,22 @@ void SyncpointManager::IncrementHost(u32 syncpoint_id) {
     if (syncpoint_id >= NUM_MAX_SYNCPOINTS) {
         return;
     }
-    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id]);
+    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id],
+              HostMutex());
 }
 
 void SyncpointManager::WaitGuest(u32 syncpoint_id, u32 expected_value) {
-    Wait(syncpoints_guest[syncpoint_id], wait_guest_cv, expected_value);
+    Wait(syncpoints_guest[syncpoint_id], wait_guest_cv, expected_value, guard);
 }
 
 void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
-    Wait(syncpoints_host[syncpoint_id], wait_host_cv, expected_value);
+    Wait(syncpoints_host[syncpoint_id], wait_host_cv, expected_value, HostMutex());
 }
 
 void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
                                  std::list<RegisteredAction>& action_storage,
-                                 std::optional<u32> mirrored_id) {
-    std::scoped_lock lk(guard);
+                                 std::mutex& bank_guard, std::optional<u32> mirrored_id) {
+    std::scoped_lock lk(bank_guard);
     if (mirrored_id && guest_mirror) {
         // Before the value is published: the lock-free ready checks in RegisterAction and Wait
         // must not see it ahead of the page.
@@ -107,13 +111,13 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
 }
 
 void SyncpointManager::Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
-                            u32 expected_value) {
+                            u32 expected_value, std::mutex& bank_guard) {
     const auto pred = [&]() { return syncpoint.load(std::memory_order_acquire) >= expected_value; };
     if (pred()) {
         return;
     }
 
-    std::unique_lock lk(guard);
+    std::unique_lock lk(bank_guard);
     wait_cv.wait(lk, pred);
 }
 
