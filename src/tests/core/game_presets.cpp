@@ -3,6 +3,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -12,12 +13,27 @@
 namespace {
 
 using namespace Core::GamePresets;
+using Common::DeviceClass;
+using Common::GpuFamily;
 using Core::GameSettings::GPUVendor;
 
 constexpr u64 OcarinaTitleId = 0x0400486024DEC000;
 constexpr GpuInfo Arc140T{.vendor = GPUVendor::Intel,
                           .integrated = true,
                           .software_tensor_math = true};
+
+constexpr std::array AllClasses{DeviceClass::Unknown, DeviceClass::IntegratedLowPower,
+                                DeviceClass::Integrated, DeviceClass::DiscreteEntry,
+                                DeviceClass::DiscreteHigh};
+
+// Every family, None included, from the enum itself.
+std::vector<GpuFamily> AllFamilies() {
+    std::vector<GpuFamily> families;
+    for (u32 i = 0; i < static_cast<u32>(GpuFamily::Count); ++i) {
+        families.push_back(static_cast<GpuFamily>(i));
+    }
+    return families;
+}
 
 // Puts back the settings the Ocarina preset touches.
 struct SettingsScope {
@@ -70,6 +86,47 @@ TEST_CASE("Game presets match on GPU capabilities", "[core][game_presets]") {
     // An empty match takes any GPU.
     REQUIRE(Matches({}, {}));
     REQUIRE(Matches({}, Arc140T));
+}
+
+TEST_CASE("Game presets match on the device class and the GPU family", "[core][game_presets]") {
+    GpuInfo panther_lake = Arc140T;
+    panther_lake.device_class = DeviceClass::Integrated;
+    panther_lake.gpu_family = GpuFamily::IntelGraphicsPantherLake;
+    GpuInfo arc_b390 = panther_lake;
+    arc_b390.gpu_family = GpuFamily::IntelArcB390;
+
+    const GpuMatch by_family{.gpu_family = GpuFamily::IntelGraphicsPantherLake};
+    REQUIRE(Matches(by_family, panther_lake));
+    REQUIRE_FALSE(Matches(by_family, arc_b390));
+    REQUIRE_FALSE(Matches(by_family, Arc140T));
+    REQUIRE_FALSE(Matches(by_family, {}));
+
+    const GpuMatch by_class{.device_class = DeviceClass::Integrated};
+    REQUIRE(Matches(by_class, panther_lake));
+    REQUIRE(Matches(by_class, arc_b390));
+    REQUIRE_FALSE(Matches(by_class, Arc140T));
+    GpuInfo on_battery = panther_lake;
+    on_battery.device_class = DeviceClass::IntegratedLowPower;
+    REQUIRE_FALSE(Matches(by_class, on_battery));
+
+    // A class or a family goes with the other conditions.
+    const GpuMatch all{.vendor = GPUVendor::Intel,
+                       .integrated = true,
+                       .software_tensor_math = true,
+                       .device_class = DeviceClass::Integrated,
+                       .gpu_family = GpuFamily::IntelGraphicsPantherLake};
+    REQUIRE(Matches(all, panther_lake));
+    REQUIRE_FALSE(Matches(all, on_battery));
+    GpuInfo hardware_tensor_math = panther_lake;
+    hardware_tensor_math.software_tensor_math = false;
+    REQUIRE_FALSE(Matches(all, hardware_tensor_math));
+
+    // An empty match takes any class and any family.
+    for (const DeviceClass any_class : AllClasses) {
+        for (const GpuFamily any_family : AllFamilies()) {
+            REQUIRE(Matches({}, {.device_class = any_class, .gpu_family = any_family}));
+        }
+    }
 }
 
 TEST_CASE("Game presets are found by title and GPU", "[core][game_presets]") {
@@ -288,12 +345,9 @@ TEST_CASE("The pacing sets hold the switches measured", "[core][game_presets]") 
 }
 
 TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {
-    using Common::DeviceClass;
     const Preset* const preset = Find(Presets(), OcarinaTitleId, Arc140T);
     const std::span<const SwitchValue> switches = SwitchDefaults(OcarinaTitleId, Arc140T);
-    for (const DeviceClass device_class :
-         {DeviceClass::Unknown, DeviceClass::IntegratedLowPower, DeviceClass::Integrated,
-          DeviceClass::DiscreteEntry, DeviceClass::DiscreteHigh}) {
+    for (const DeviceClass device_class : AllClasses) {
         GpuInfo gpu = Arc140T;
         gpu.device_class = device_class;
         CHECK(Find(Presets(), OcarinaTitleId, gpu) == preset);
@@ -301,6 +355,30 @@ TEST_CASE("The device class changes no preset or switch default yet", "[core][ga
         CHECK(with_class.data() == switches.data());
         CHECK(with_class.size() == switches.size());
         CHECK(ReportsFirstBoot(OcarinaTitleId, gpu));
+    }
+}
+
+TEST_CASE("The GPU family changes no preset or switch default yet", "[core][game_presets]") {
+    // No preset asks for a class or a family: each needs measured rows on that device first.
+    for (const Preset& listed : Presets()) {
+        CHECK(listed.gpu.device_class == DeviceClass::Unknown);
+        CHECK(listed.gpu.gpu_family == GpuFamily::None);
+    }
+    const GpuInfo amd{.vendor = GPUVendor::AMD, .integrated = true};
+    const GpuInfo nvidia{.vendor = GPUVendor::Nvidia};
+    for (const GpuInfo& base : {Arc140T, amd, nvidia}) {
+        const Preset* const preset = Find(Presets(), OcarinaTitleId, base);
+        const std::span<const SwitchValue> switches = SwitchDefaults(OcarinaTitleId, base);
+        const bool reports = ReportsFirstBoot(OcarinaTitleId, base);
+        for (const GpuFamily gpu_family : AllFamilies()) {
+            GpuInfo gpu = base;
+            gpu.gpu_family = gpu_family;
+            CHECK(Find(Presets(), OcarinaTitleId, gpu) == preset);
+            const std::span<const SwitchValue> with_family = SwitchDefaults(OcarinaTitleId, gpu);
+            CHECK(with_family.data() == switches.data());
+            CHECK(with_family.size() == switches.size());
+            CHECK(ReportsFirstBoot(OcarinaTitleId, gpu) == reports);
+        }
     }
 }
 
