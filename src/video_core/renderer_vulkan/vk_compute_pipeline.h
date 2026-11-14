@@ -125,6 +125,14 @@ public:
         return !jobs || job.Ready();
     }
 
+    /// Waits for any queued worker build of this pipeline to finish.
+    void WaitForBuild() const {
+        if (jobs && !job.Ready()) {
+            jobs->Promote(job, VideoCommon::ShaderJobPriority::NeedNow);
+            job.Wait();
+        }
+    }
+
     /// Builds it on this thread, for a pipeline made with PipelineBuildQueue::owner_builds
     void Build() {
         RunBuild();

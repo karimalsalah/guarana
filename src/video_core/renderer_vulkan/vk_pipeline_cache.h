@@ -46,6 +46,7 @@
 #include "video_core/shader_cache_v2/cache.h"
 #include "video_core/shader_jobs.h"
 #include "video_core/shader_stage_translation.h"
+#include "video_core/vulkan_common/driver_pipeline_cache_gate.h"
 
 namespace Core {
 class System;
@@ -329,6 +330,17 @@ private:
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
 
+    /// Drops or waits for background GPL optimization builds once primary builds have finished
+    void FinishBackgroundBuilds();
+
+    /// Waits for background GPL optimization builds that a worker has already started, leaving
+    /// unstarted ones queued
+    void WaitForRunningBackgroundBuilds();
+
+    /// Waits for queued translations, primary pipeline builds, and running (or all) background
+    /// GPL builds across a serialized driver-cache reload
+    void WaitForActivePipelineBuilds(bool drop_unstarted_background);
+
     /// Writes the driver pipeline cache to its file and returns the size of its data. Where its
     /// reads are serialized against builds (Device::SerializesPipelineCacheReads), a cache that
     /// holds what the file does is not written again: nothing was built since the file was read
@@ -489,8 +501,7 @@ private:
     /// its file holds: the cache's size as the driver gave it and Device::PipelineCacheBuilds
     /// when the file was read or written
     std::mutex vulkan_cache_save_mutex;
-    size_t saved_cache_size{};
-    u64 saved_cache_builds{};
+    DriverPipelineCacheSaveTracker driver_cache_save_tracker;
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};

@@ -23,6 +23,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/fsr4_support.h"
+#include "video_core/vulkan_common/driver_pipeline_cache_gate.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 #include <vulkan/vulkan_beta.h>
@@ -444,27 +445,25 @@ public:
     }
 
     /// Where it can't (IGCIT #1614), reads of a pipeline cache wait for the builds into it, and
-    /// hold back new ones, so that the cache can be saved during play as well.
-    /// Opt-in, EDEN_NX2_CACHE_SAFE=1 (its boot deadlock is not fixed): without it such a driver's
-    /// cache is read only when nothing is expected to build, as before.
+    /// hold back new ones, so that the cache can be saved before the prebuild and periodically
+    /// during play as well. Opt-in until its boot deadlock is fixed (not reproduced or fixed by
+    /// this change), EDEN_NX2_CACHE_SAFE=1: without it such a driver's cache is read only when
+    /// nothing is expected to build, as before.
     bool SerializesPipelineCacheReads() const {
-        static const bool disabled = [] {
-            const char* value = std::getenv("EDEN_NX2_CACHE_SAFE");
-            return value == nullptr || value[0] != '1'; // opt-in (EDEN_NX2_CACHE_SAFE=1) until its boot deadlock is fixed
-        }();
-        return !disabled && !CanReadPipelineCacheDuringBuilds();
+        static const bool requested =
+            PipelineCacheSafeRequested(std::getenv("EDEN_NX2_CACHE_SAFE"));
+        return ShouldSerializeDriverPipelineCacheReads(CanReadPipelineCacheDuringBuilds(),
+                                                       requested);
+    }
+
+    const DriverPipelineCacheGate& PipelineCacheGate() const noexcept {
+        return pipeline_cache_gate;
     }
 
     /// Held by each pipeline build into a VkPipelineCache: shared where reads are serialized
     /// (SerializesPipelineCacheReads), nothing elsewhere. Never taken twice by one thread.
     [[nodiscard]] std::shared_lock<std::shared_timed_mutex> LockPipelineCacheForBuild() const {
-        std::shared_lock<std::shared_timed_mutex> lock;
-        if (SerializesPipelineCacheReads()) {
-            lock = std::shared_lock{pipeline_cache_mutex};
-        }
-        // Counted once the lock is held: a read sees every build counted before it
-        pipeline_cache_builds.fetch_add(1, std::memory_order_relaxed);
-        return lock;
+        return pipeline_cache_gate.LockForBuild(SerializesPipelineCacheReads());
     }
 
     /// Held by each read of a VkPipelineCache (vkGetPipelineCacheData): exclusive where reads are
@@ -472,22 +471,14 @@ public:
     /// `max_wait` it gives up after that long, owning nothing.
     [[nodiscard]] std::unique_lock<std::shared_timed_mutex> LockPipelineCacheForRead(
         std::optional<std::chrono::milliseconds> max_wait = std::nullopt) const {
-        if (!SerializesPipelineCacheReads()) {
-            return {};
-        }
-        if (!max_wait) {
-            return std::unique_lock{pipeline_cache_mutex};
-        }
-        std::unique_lock lock{pipeline_cache_mutex, std::defer_lock};
-        static_cast<void>(lock.try_lock_for(*max_wait));
-        return lock;
+        return pipeline_cache_gate.LockForRead(SerializesPipelineCacheReads(), max_wait);
     }
 
     /// Pipeline builds into a VkPipelineCache so far (LockPipelineCacheForBuild). Read under
     /// LockPipelineCacheForRead where reads are serialized, it counts exactly the builds that
     /// ended before the read.
     u64 PipelineCacheBuilds() const {
-        return pipeline_cache_builds.load(std::memory_order_relaxed);
+        return pipeline_cache_gate.Builds();
     }
 
     /// Whether pipelines linked from graphics pipeline libraries without link time optimization
@@ -1502,8 +1493,7 @@ private:
     VmaAllocator allocator{};    ///< VMA allocator.
     mutable std::mutex separate_pools_mutex;
     mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
-    mutable std::shared_timed_mutex pipeline_cache_mutex; ///< LockPipelineCacheForBuild/ForRead
-    mutable std::atomic<u64> pipeline_cache_builds{}; ///< PipelineCacheBuilds
+    DriverPipelineCacheGate pipeline_cache_gate; ///< LockPipelineCacheForBuild/ForRead & count
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.

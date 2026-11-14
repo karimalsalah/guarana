@@ -401,6 +401,27 @@ public:
         return IsBuilt() && optimized_build && optimized_build->Running();
     }
 
+    /// Waits for the primary build job to finish without running deferred emission here.
+    void WaitForBuild() const {
+        if (build) {
+            build->Wait();
+        }
+    }
+
+    /// Waits if a background build (optimized GPL link or EDEN_NX2_UNOPT_FIRST replacement) has
+    /// already been claimed by a worker, leaving unstarted ones queued.
+    void WaitForRunningBackgroundBuild() const {
+        if (optimized_build && optimized_build->Running()) {
+            optimized_build->Wait();
+        }
+    }
+
+    /// Drops an unstarted background build (optimized GPL link or EDEN_NX2_UNOPT_FIRST
+    /// replacement) or waits for a running one. Call only once the primary build has finished.
+    void FinishBackgroundBuild() {
+        optimized_build.reset();
+    }
+
     /// Fast draw (nx2_fast_draw.h): whether draws can keep the image views and samplers the last
     /// captured Configure resolved. Handles computed at draw time are evaluated again for each
     /// delta draw (ComputedHandlesChanged).
