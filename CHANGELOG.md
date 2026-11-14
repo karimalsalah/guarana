@@ -33,6 +33,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- CI is green on `main` again after the upstream sync and the doctor checks: the buffer cache tests' fake runtime answers `MergesListPageRuns` (upstream #1736 made `Nx2CopyListPages` ask for it), and the doctor's hygiene tests name documented switches, with its prefix filter listed in the switch registry check.
 - Windows clang-cl builds no longer hang on the resource step: the `.rc` files are compiled
   with the SDK `rc.exe` directly instead of CMake's `cmake_llvm_rc` wrapper, whose clang
   line-marker conversion left SDK-header markers unconverted, flooding `rc.exe` with RC2019
