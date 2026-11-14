@@ -126,6 +126,15 @@ Forest. `--scene tools/bench/scenes/oot-hyrule-field.json` runs the same variant
 scene. Most of these switches have no measured result in `docs/switches.md` yet; rows from this
 suite are how they get one.
 
+`slot-compositor.json` measures the slot compositor (`EDEN_NX2_FLUID_COMPOSE`) in two runs,
+fullscreen and with the pacing counters, in the same scene. The first compares it with the baseline
+and with its diagnostic control (`EDEN_NX2_FLUID_COMPOSE_NATIVE`), which separates what the compute
+pass costs from what the smaller frames save. The second keeps the compositor on in every variant
+and adds one switch at a time (`EDEN_NX2_FG_PINGPONG`, `EDEN_NX2_FG_MEDIAN_ONCE`,
+`EDEN_NX2_SHOWN_GOVERNOR`, `EDEN_NX2_OOT_RENDER_SCALE=75`), each compared with `compose-control`.
+Where the compositor's gates are not met (see its row in `docs/switches.md`) it stays off and its
+rows equal the baseline.
+
 ### Power
 
 `--power-policy NAME=VALUE` (repeatable) and a variant's `power_policy` set processor power

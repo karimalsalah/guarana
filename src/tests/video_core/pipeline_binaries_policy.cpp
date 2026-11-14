@@ -136,6 +136,24 @@ TEST_CASE("EDEN_NX2_PIPELINE_BINARIES=1 never enables what the driver lacks",
     CHECK(DecidePipelineBinaries(in).reason == PipelineBinariesReason::NoMaintenance5);
 }
 
+TEST_CASE("An ignored pipeline binary override is logged even without the extension",
+          "[video_core][pipeline_binaries]") {
+    PipelineBinariesInputs in = Offered();
+    in.extension = false;
+    in.requested = ParsePipelineBinariesOverride("garbage");
+    REQUIRE(in.requested == PipelineBinariesOverride::Unset);
+    const auto decision = DecidePipelineBinaries(in);
+    CHECK_FALSE(decision.enabled);
+    REQUIRE(decision.reason == PipelineBinariesReason::NotOffered);
+    CHECK(Vulkan::ShouldLogPipelineBinariesDecision(decision.reason, "garbage"));
+    CHECK(Vulkan::ShouldLogPipelineBinariesDecision(decision.reason, ""));
+    CHECK(Vulkan::ShouldLogPipelineBinariesDecision(decision.reason, "0"));
+    CHECK(Vulkan::ShouldLogPipelineBinariesDecision(decision.reason, "1"));
+    CHECK_FALSE(Vulkan::ShouldLogPipelineBinariesDecision(decision.reason, nullptr));
+    CHECK(Vulkan::ShouldLogPipelineBinariesDecision(PipelineBinariesReason::DriverKeepsCache,
+                                                  nullptr));
+}
+
 TEST_CASE("Every reason has a log text", "[video_core][pipeline_binaries]") {
     for (const PipelineBinariesReason reason :
          {PipelineBinariesReason::NotOffered, PipelineBinariesReason::FeatureAbsent,

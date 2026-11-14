@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -280,17 +279,16 @@ fn run_once(
     stop: &Arc<AtomicBool>,
 ) -> CmdResult<WarmResult> {
     let started = Instant::now();
-    let mut child = Command::new(exe)
-        .arg("--warm-pipelines")
+    let mut command = Command::new(exe);
+    command.arg("--warm-pipelines")
         .arg(tid.to_ascii_uppercase())
         .arg("-c")
         .arg(config)
         .current_dir(exe.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-        .spawn()
+        .stderr(Stdio::piped());
+    let mut child = crate::process::spawn(&mut command, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
         .ctx("Could not start guarana-cli")?;
     let final_line: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let last_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

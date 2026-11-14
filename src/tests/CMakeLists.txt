@@ -5,6 +5,7 @@
 
 add_executable(tests
     common/addon_config.cpp
+    common/event_ring.cpp
     common/thread_worker.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/buffer_cache_ports.cpp
@@ -100,6 +101,7 @@ add_executable(tests
     video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp
     video_core/fluid_present_mode.cpp
+    video_core/present_error_policy.cpp
     video_core/fluid_slot_math.cpp
     video_core/present_sync.cpp
     video_core/shown_governor.cpp

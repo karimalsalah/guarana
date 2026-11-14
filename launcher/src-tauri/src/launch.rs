@@ -231,7 +231,7 @@ pub fn launch(
         timeline.mark("Game Booster prepared");
     }
 
-    let mut child = match cmd.spawn() {
+    let mut child = match crate::process::spawn(&mut cmd, 0) {
         Ok(child) => child,
         Err(e) => {
             if booster_prep.is_some() {

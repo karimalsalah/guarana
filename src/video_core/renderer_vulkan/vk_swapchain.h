@@ -12,7 +12,9 @@
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/present_trace.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/renderer_vulkan/present_error_policy.h"
 
 namespace Layout {
 struct FramebufferLayout;
@@ -50,11 +52,11 @@ public:
         VkFormat requested_format = VK_FORMAT_B8G8R8A8_UNORM,
         VkColorSpaceKHR requested_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
 
-    /// Acquires the next image in the swapchain, waits as needed. Returns true when no image was
-    /// acquired (out of date) and the swapchain has to be recreated first.
+    /// Acquires the next image, returning Ready, Recreate or Drop; fatal results throw.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
     /// `pace`: false skips the wait for the image's last GPU tick and the frame pacing sleep.
-    bool AcquireNextImage(bool may_flush = true, bool pace = true);
+    PresentPolicy::Acquire AcquireNextImage(bool may_flush = true, bool pace = true,
+                                            PresentTrace* trace = nullptr);
 
     /// Presents the rendered image to the swapchain.
     void Present(VkSemaphore render_semaphore);
@@ -161,7 +163,7 @@ public:
     }
 
 private:
-    void CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities);
+    bool CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities);
     void CreateSemaphores();
     void CreateImageViews();
 

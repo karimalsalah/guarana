@@ -1,0 +1,1 @@
+- Vulkan: report an ignored pipeline-binary override even when the driver does not offer the extension (#20).

@@ -38,6 +38,8 @@ public:
 
     StagingBufferRef Request(size_t size, MemoryUsage usage, bool deferred = false);
     void FreeDeferred(StagingBufferRef& ref);
+    /// Extend an existing input's lifetime through the commands recorded at the current tick.
+    void RetainUntilCurrentTick(const StagingBufferRef& ref);
 
     [[nodiscard]] VkBuffer StreamBuf() const noexcept {
         return *stream_buffer;

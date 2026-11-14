@@ -126,9 +126,9 @@ jobs:
         working-directory: launcher
         run: npm run icons
 
-      - name: Unit tests
+      - name: Unit tests (including Windows worker containment)
         working-directory: launcher/src-tauri
-        run: cargo test --locked
+        run: cargo test --locked -- --test-threads=1
 
       - name: Bundle the emulator build
         shell: pwsh
