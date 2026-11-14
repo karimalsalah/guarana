@@ -12,8 +12,8 @@
 /// to its interval (the nx2:vi2 present pacer), and twice a second a FrameBudgetController moves
 /// the GPU time scale so that the game's own dynamic resolution fits the frame into the interval.
 /// The shading-rate governor (AutoShadingRate) takes the same target and may coarsen only while
-/// the scale is at its upper limit. Without a target only the scale exists: one atomic load a
-/// present.
+/// the scale has nothing left to give: at its upper limit, or held because raises went unanswered.
+/// Without a target only the scale exists: one atomic load a present.
 namespace VideoCore::FrameBudget {
 
 using TimePoint = std::chrono::steady_clock::time_point;
@@ -64,8 +64,10 @@ struct Status {
     u32 cooldown_ticks{};  ///< For this many more ticks
     u32 fast_streak{};
     u32 blind_lowers{};
-    bool shading_allowed{}; ///< The shading-rate governor may coarsen (the scale is at its limit)
+    bool shading_allowed{}; ///< The shading-rate governor may coarsen (the scale is spent)
     std::string last_change; ///< The last raise or lower
+    /// State "unanswered": the scale at the start of the run, or at its last answer; 0 otherwise
+    double unanswered_from{};
 };
 [[nodiscard]] Status GetStatus();
 

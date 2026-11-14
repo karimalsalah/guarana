@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -28,6 +31,7 @@
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
+#include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -77,7 +81,36 @@ static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
 
 // Sleeps until the deadline, without spinning: it may pass by up to a timer tick (about 0.5 ms
 // on Windows), well within a refresh, and the next deadline counts from the actual present.
+//
+// EDEN_NX2_PRESENT_SPIN=1: sleep in ticks until the deadline is within 2 ms, then spin the last
+// stretch (YieldProcessor) so the wake lands on the deadline instead of up to a tick past it.
+// At 120 Hz a missed slot costs 8.33 ms, far more than the spin's CPU; this is the Ryujinx
+// frame-pacing fix. Default off keeps the tick loop, byte for byte the original behaviour.
+[[nodiscard]] bool PresentSpinEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PRESENT_SPIN");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 void SleepUntil(std::chrono::steady_clock::time_point deadline) {
+#ifdef _WIN32
+    if (PresentSpinEnabled()) {
+        constexpr auto spin_threshold = std::chrono::milliseconds{2};
+        while (true) {
+            const auto left = deadline - std::chrono::steady_clock::now();
+            if (left <= std::chrono::steady_clock::duration::zero()) {
+                return;
+            }
+            if (left > spin_threshold) {
+                Common::Windows::SleepForOneTick();
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+#endif
     while (true) {
         const auto left = deadline - std::chrono::steady_clock::now();
         if (left <= std::chrono::steady_clock::duration::zero()) {
@@ -133,7 +166,8 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
 
 /// EDEN_NX2_FLUID_HOST_WAIT_US=<us> (500 to 16000): how long that wait lasts at most, by default
 /// 12000 at 60 shown frames a second and 4000 above 75 (at 120 a slot is 8.3 ms: a longer wait makes
-/// the present thread sleep through the next slot).
+/// the present thread sleep through the next slot). FluidSlots::CopyWaitNs cuts it to end before
+/// the next slot's wake at other refresh rates too.
 [[nodiscard]] u64 FluidHostWaitNs(f64 shown_rate) {
     static const u64 limit = [] {
         const char* value = std::getenv("EDEN_NX2_FLUID_HOST_WAIT_US");
@@ -198,6 +232,7 @@ void ResetFrame(Frame* frame) {
     frame->fluid_final = false;
     frame->fluid_recorded = {};
     frame->gpu_tick = 0;
+    frame->shown_kind = VideoCore::Nx2ShownFrames::Kind::Real;
 #ifdef EGLANTINE_STREAMLINE
     frame->frame_gen = false;
 #endif
@@ -317,6 +352,7 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     , use_present_thread{Settings::values.async_presentation.GetValue() ||
                          Settings::values.frame_gen.GetValue()}
     , fluid_presenter{FluidMode() != 0}
+    , shown_capture{device_, memory_allocator_, scheduler_}
 {
     SetImageCount();
 
@@ -491,6 +527,77 @@ PresentManager::FluidClock PresentManager::GetFluidClock() const {
     return fluid_clock;
 }
 
+PresentManager::PresentStats PresentManager::GetPresentStats() const {
+    PresentStats stats{};
+    stats.fluid = Fluid();
+    stats.fallback = fluid_fallback.load(std::memory_order_relaxed);
+    stats.shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    {
+        // fluid_stats belongs to the present thread. The show-path counters (hits, held, age,
+        // latency, late, ...) are written under swapchain_mutex, so taking it here serializes
+        // against those; the arrival counters (received, dropped, no_frame, ...) are written
+        // outside it, so this is a best-effort snapshot of monotonic counters, each a single
+        // aligned word. Good enough for a debug read; it never blocks the show path for long.
+        std::scoped_lock lock{swapchain_mutex};
+        const auto& s = fluid_stats;
+        stats.slots = s.slots;
+        stats.hits = s.hits;
+        stats.no_frame = s.no_frame;
+        stats.not_done = s.not_done;
+        stats.uncovered = s.uncovered;
+        stats.rolled = s.rolled;
+        stats.spare = s.spare;
+        stats.stale = s.stale;
+        stats.queued = s.queued;
+        stats.overslept = s.overslept;
+        stats.in_order = s.in_order;
+        stats.late = s.late;
+        stats.dropped = s.dropped;
+        stats.received = s.received;
+        stats.held = s.held;
+        stats.age_ms = s.age_ms;
+        stats.latency_ms = s.latency_ms;
+        stats.latency_samples = s.latency_samples;
+        stats.presents = s.presents;
+        stats.acquire_ms = s.acquire_ms;
+        stats.acquire_max_ms = s.acquire_max_ms;
+        stats.copy_waits = s.copy_waits;
+        stats.copy_wait_timeouts = s.copy_wait_timeouts;
+        stats.copy_wait_ms = s.copy_wait_ms;
+        stats.copy_wait_max_ms = s.copy_wait_max_ms;
+        stats.lock_ms = s.lock_ms;
+        stats.lock_max_ms = s.lock_max_ms;
+        stats.call_ms = s.call_ms;
+        stats.call_max_ms = s.call_max_ms;
+        stats.margin_ms = s.margin_ms;
+        stats.margin_min_ms = s.margin_min_ms;
+        stats.margin_samples = s.margin_samples;
+        stats.after_vblank = s.after_vblank;
+        stats.copy_gpu_samples = s.copy_gpu_samples;
+        stats.copy_gpu_ms = s.copy_gpu_ms;
+        stats.copy_gpu_max_ms = s.copy_gpu_max_ms;
+    }
+    const FluidClock clock = GetFluidClock();
+    if (clock.Valid()) {
+        stats.refresh_hz = 1.0e9 / static_cast<double>(clock.refresh.count());
+    }
+    stats.vblank_index = clock.vblank_index;
+    stats.divisor = clock.divisor;
+    stats.lead_ms = std::chrono::duration<double, std::milli>(clock.lead).count();
+    stats.clock_latency_ms = std::chrono::duration<double, std::milli>(clock.latency).count();
+    {
+        std::scoped_lock lock{queue_mutex};
+        stats.queued_frames = present_queue.size();
+    }
+    {
+        std::scoped_lock lock{free_mutex};
+        stats.free_frames = free_queue.size();
+    }
+    stats.frame_count = frames.size();
+    stats.swapchain_images = swapchain_image_count.load(std::memory_order_relaxed);
+    return stats;
+}
+
 std::chrono::steady_clock::time_point PresentManager::FluidClock::SlotTime(u64 slot) const {
     return vblank + refresh * (static_cast<s64>(slot) - static_cast<s64>(vblank_index));
 }
@@ -527,6 +634,9 @@ void PresentManager::Present(Frame* frame) {
             scheduler.WaitWorker();
         }
         CopyToSwapchain(frame);
+        if (VideoCore::Nx2ShownFrames::Armed()) {
+            NoteShownCapture(frame, 0, "renderer_thread");
+        }
         VideoCore::AutopilotFeed::NoteShown();
         free_queue.push_back(frame);
     }
@@ -567,6 +677,31 @@ void PresentManager::NoteShownFrame() {
              100.0 * static_cast<f64>(even) / static_cast<f64>(sorted.size()));
     shown_intervals.clear();
     shown_window = now;
+}
+
+void PresentManager::NoteShownCapture(const Frame* frame, u64 slot, std::string_view presenter) {
+    const auto ns = [](std::chrono::steady_clock::time_point point) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(point.time_since_epoch()).count();
+    };
+    const auto presented = std::chrono::steady_clock::now();
+    s64 scheduled = 0;
+    if (slot != 0) {
+        const FluidClock clock = GetFluidClock();
+        scheduled = clock.Valid() ? ns(clock.SlotTime(slot)) : 0;
+    }
+    shown_capture.Note(*frame, {
+        .kind = frame->shown_kind,
+        .slot = slot,
+        .batch = frame->fluid_batch,
+        .scheduled_ns = scheduled,
+        .presented_ns = ns(presented),
+        .recorded_ns = frame->fluid_recorded != std::chrono::steady_clock::time_point{}
+                           ? ns(frame->fluid_recorded)
+                           : 0,
+        .presenter = presenter,
+        .deferred = fluid_ahead_pending && fluid_ahead_frame == frame,
+        .picture = -1,
+    });
 }
 
 size_t PresentManager::MaxExtraFrames() const {
@@ -757,6 +892,9 @@ void PresentManager::PresentThread(std::stop_token token) {
                 LogPacing(frame, presented - ready, presented);
             }
             NoteShownFrame();
+            if (VideoCore::Nx2ShownFrames::Armed()) {
+                NoteShownCapture(frame, 0, "present_thread");
+            }
 
             // Free the frame for reuse
             std::scoped_lock fl{free_mutex};
@@ -767,6 +905,35 @@ void PresentManager::PresentThread(std::stop_token token) {
 }
 
 bool PresentManager::FluidPresentThread(std::stop_token token) {
+#ifdef _WIN32
+    // EDEN_NX2_FLUID_RT=1: the vblank clock's thread wakes on time under a busy CPU: time-critical
+    // priority and the MMCSS "Games" task at high priority (avrt.dll, loaded at run time). Its
+    // work at each wake is short; it sleeps in between.
+    if (const char* rt = std::getenv("EDEN_NX2_FLUID_RT");
+        rt != nullptr && std::strtoul(rt, nullptr, 10) != 0) {
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+        bool mmcss = false;
+        if (const HMODULE avrt = LoadLibraryW(L"avrt.dll")) {
+            using SetCharacteristics = HANDLE(WINAPI*)(LPCWSTR, LPDWORD);
+            using SetPriority = BOOL(WINAPI*)(HANDLE, int);
+            const auto set_characteristics = reinterpret_cast<SetCharacteristics>(
+                reinterpret_cast<void*>(GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW")));
+            const auto set_priority = reinterpret_cast<SetPriority>(
+                reinterpret_cast<void*>(GetProcAddress(avrt, "AvSetMmThreadPriority")));
+            DWORD task_index = 0;
+            if (set_characteristics != nullptr) {
+                if (const HANDLE task = set_characteristics(L"Games", &task_index)) {
+                    mmcss = true;
+                    if (set_priority != nullptr) {
+                        set_priority(task, 1); // AVRT_PRIORITY_HIGH
+                    }
+                }
+            }
+        }
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_RT: present thread at time-critical priority{}",
+                 mmcss ? ", MMCSS Games task" : "");
+    }
+#endif
     Common::VblankClock vblank{render_window.GetWindowInfo().render_surface};
     auto source = vblank.CurrentSource();
     LOG_INFO(Render_Vulkan,
@@ -785,6 +952,8 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
         VideoCore::AutopilotFeed::SetRefreshPeriod(period);
         const auto offset = (std::min)(FluidPresentOffsetFor(), period * 42 / 100);
+        // A screen copy wait from this wake ends in time for the next slot's wake.
+        fluid.copy_wait_due = wake + FluidSlots::CopyWaitDue(period, fluid.vblank, fluid.divisor);
         {
             std::scoped_lock lock{fluid_clock_mutex};
             fluid_clock = FluidClock{
@@ -1228,9 +1397,14 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     if (fluid.last_shown_vblank != 0 && shown_vblank > fluid.last_shown_vblank) {
         const u64 held = (std::min<u64>)(shown_vblank - fluid.last_shown_vblank, 4);
         ++fluid_stats.held[static_cast<size_t>(held - 1)];
+        fluid_stats.one_slot +=
+            FluidSlots::HeldOneSlot(shown_vblank, fluid.last_shown_vblank, fluid.divisor) ? 1 : 0;
     }
     fluid.last_shown_vblank = shown_vblank;
     NoteShownFrame();
+    if (VideoCore::Nx2ShownFrames::Armed()) {
+        NoteShownCapture(frame, frame->fluid_slot != 0 ? shown_vblank : 0, "fluid");
+    }
 }
 
 void PresentManager::FluidPresentAhead() {
@@ -1242,8 +1416,10 @@ void PresentManager::FluidPresentAhead() {
     if (fluid.showing != nullptr && fluid.showing == fluid_ahead_frame) {
         // Its copy had a slot; a copy still running is late anyway.
         const auto wait_start = std::chrono::steady_clock::now();
-        const bool copied = fluid_ahead_frame->present_done.Wait(
-                                FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+        const bool copied =
+            fluid_ahead_frame->present_done.Wait(FluidSlots::CopyWaitNs(
+                FluidHostWaitNs(FluidShownRate()),
+                fluid.copy_wait_due - std::chrono::steady_clock::now())) == VK_SUCCESS;
         if (shown_stats) {
             const f64 waited = std::chrono::duration<f64, std::milli>(
                                    std::chrono::steady_clock::now() - wait_start)
@@ -1321,7 +1497,6 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
         return;
     }
     const u64 held = stats.held[0] + stats.held[1] + stats.held[2] + stats.held[3];
-    const u64 one_slot = fluid.divisor <= stats.held.size() ? stats.held[fluid.divisor - 1] : 0;
     const auto share = [](u64 part, u64 whole) {
         return whole != 0 ? 100.0 * static_cast<f64>(part) / static_cast<f64>(whole) : 0.0;
     };
@@ -1340,9 +1515,10 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              "Fluid presenter (10 s): {:.0f}% of shown frames held one slot, held 1/2/3/4+ "
              "refreshes {}/{}/{}/{}; real frame age at display {:.1f} ms; GPU work done {:.1f} ms "
              "after recording ({} real frames); {} frames received, {} dropped unshown",
-             share(one_slot, held), stats.held[0], stats.held[1], stats.held[2], stats.held[3],
-             mean(stats.age_ms, stats.hits), mean(stats.latency_ms, stats.latency_samples),
-             stats.latency_samples, stats.received, stats.dropped);
+             share(stats.one_slot, held), stats.held[0], stats.held[1], stats.held[2],
+             stats.held[3], mean(stats.age_ms, stats.hits),
+             mean(stats.latency_ms, stats.latency_samples), stats.latency_samples, stats.received,
+             stats.dropped);
     LOG_INFO(Render_Vulkan,
              "Fluid presenter (10 s): {} late or blocked frames shown a slot later instead of "
              "dropped, {} shown frames predicted from an older real frame than the newest, {} "
@@ -1668,7 +1844,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkImage image{swapchain.CurrentImage()};
     const VkExtent2D extent = swapchain.GetExtent();
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
-    if (UseFluidQueue(frame, extent)) {
+    // The debug server's shown_frames needs a blit for its pictures, which the dedicated queue's
+    // family cannot do: while it captures them the copy runs on the graphics queue.
+    if (UseFluidQueue(frame, extent) && !VideoCore::Nx2ShownFrames::PicturesArmed()) {
         SubmitFluidCopy(frame, image, extent, render_semaphore);
         bool streamline_frame = false;
 #ifdef EGLANTINE_STREAMLINE
@@ -1685,7 +1863,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             // A copy still running after this long is late anyway: present and move on.
             const auto wait_start = std::chrono::steady_clock::now();
             const bool copied =
-                frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+                frame->present_done.Wait(FluidSlots::CopyWaitNs(
+                    FluidHostWaitNs(FluidShownRate()), fluid.copy_wait_due - wait_start)) ==
+                VK_SUCCESS;
             if (timed) {
                 const f64 waited = ms_since(wait_start);
                 ++fluid_stats.copy_waits;
@@ -1792,6 +1972,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             cmdbuf.CopyImage(*frame->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              MakeImageCopy(frame->width, frame->height, extent.width, extent.height));
+        }
+        if (VideoCore::Nx2ShownFrames::Armed()) {
+            shown_capture.Record(cmdbuf, *frame);
         }
 
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, {},

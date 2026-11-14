@@ -251,6 +251,8 @@ void Init(QWidget* root) {
 
     // info logging
     LOG_INFO(Frontend, "Guarana Version: {}", lichii_build_version);
+    // Bug reports need to know where settings came from; the folder path itself is not logged.
+    LOG_INFO(Frontend, "Portable mode: {}", Common::FS::IsPortableMode() ? "on" : "off");
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;
@@ -273,6 +275,13 @@ void Init(QWidget* root) {
 #endif
     LOG_INFO(Frontend, "Host CPU Threads: {}", processor_count);
     LOG_INFO(Frontend, "Host OS: {}", PrettyProductName().toStdString());
+#ifdef __unix__
+    LOG_INFO(Frontend, "Qt platform: {} | Session type: {}",
+             QGuiApplication::platformName().toStdString(),
+             qEnvironmentVariable("XDG_SESSION_TYPE", QStringLiteral("unknown")).toStdString());
+#else
+    LOG_INFO(Frontend, "Qt platform: {}", QGuiApplication::platformName().toStdString());
+#endif
     LOG_INFO(Frontend, "Host RAM: {:.2f} GiB",
              Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
     LOG_INFO(Frontend, "Host Swap: {:.2f} GiB", Common::GetMemInfo().TotalSwapMemory / f64{1_GiB});

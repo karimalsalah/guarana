@@ -48,6 +48,11 @@ on:
       - "tools/nx2/debug_mcp.py"
       - "docs/agents/**"
       - "HANDOVER.md"
+      # The report entry that tools/ci/tests/test_report_destination.py checks.
+      - "src/lichii/main_window.cpp"
+      - "src/lichii/game/game_list.cpp"
+      - "src/lichii/problem_report.cpp"
+      - ".github/ISSUE_TEMPLATE/game_bug.yml"
       # The contributor flow that tools/ci/tests/test_contributor_flow.py checks.
       - ".github/workflows/welcome.yml"
       - "CONTRIBUTING.md"
@@ -65,7 +70,7 @@ jobs:
       contents: read
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -86,7 +91,7 @@ jobs:
     steps:
       # The default branch's code only; the token stays in the checkout for the push.
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Test the builder
         run: python3 -I tools/ci/tests/test_legacy.py

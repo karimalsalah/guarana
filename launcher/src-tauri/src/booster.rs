@@ -668,7 +668,6 @@ mod sys {
     use windows::core::{HRESULT, GUID, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, FILETIME, HANDLE, HLOCAL};
     use windows::Win32::System::Power::{PowerEnumerate, PowerGetActiveScheme, PowerSetActiveScheme, ACCESS_SCHEME};
-    use windows::Win32::System::Registry::HKEY;
     use windows::Win32::System::Services::{
         CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceStatus, StartServiceW, SC_HANDLE,
         SC_MANAGER_CONNECT, SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS,
@@ -822,10 +821,9 @@ mod sys {
         loop {
             let mut buf = [0u8; std::mem::size_of::<GUID>()];
             let mut size = buf.len() as u32;
-            // SAFETY: ACCESS_SCHEME writes one scheme GUID into `buf`; `size` holds its length.
-            let r = unsafe {
-                PowerEnumerate(HKEY::default(), None, None, ACCESS_SCHEME, index, Some(buf.as_mut_ptr()), &mut size)
-            };
+            // SAFETY: ACCESS_SCHEME writes one scheme GUID into `buf`; `size` holds its length. The root
+            // key is reserved and must be null, which windows 0.62 spells None.
+            let r = unsafe { PowerEnumerate(None, None, None, ACCESS_SCHEME, index, Some(buf.as_mut_ptr()), &mut size) };
             if r.0 != 0 {
                 break; // ERROR_NO_MORE_ITEMS past the last scheme
             }
@@ -843,11 +841,11 @@ mod sys {
         // SAFETY: PowerGetActiveScheme allocates a GUID we free with LocalFree.
         unsafe {
             let mut ptr: *mut GUID = std::ptr::null_mut();
-            if PowerGetActiveScheme(HKEY::default(), &mut ptr).0 != 0 || ptr.is_null() {
+            if PowerGetActiveScheme(None, &mut ptr).0 != 0 || ptr.is_null() {
                 return None;
             }
             let guid = *ptr;
-            let _ = windows::Win32::Foundation::LocalFree(HLOCAL(ptr as *mut c_void));
+            let _ = windows::Win32::Foundation::LocalFree(Some(HLOCAL(ptr as *mut c_void)));
             Some(guid_text(&guid))
         }
     }
@@ -859,7 +857,7 @@ mod sys {
             return Err(format!("power plan {guid} is not installed"));
         }
         // SAFETY: `parsed` outlives the call; switching the active scheme is a per-user operation.
-        let r = unsafe { PowerSetActiveScheme(HKEY::default(), Some(&parsed as *const GUID)) };
+        let r = unsafe { PowerSetActiveScheme(None, Some(&parsed as *const GUID)) };
         if r.0 == 0 {
             Ok(())
         } else {

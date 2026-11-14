@@ -15,6 +15,7 @@
 
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
+#include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -74,6 +75,8 @@ struct Frame {
     std::chrono::steady_clock::time_point fluid_recorded{};
     /// The scheduler tick whose completion finishes the frame's GPU work.
     u64 gpu_tick{};
+    /// A real frame, a prediction or an interpolated frame (the debug server's shown_frames).
+    VideoCore::Nx2ShownFrames::Kind shown_kind{};
 #ifdef EGLANTINE_STREAMLINE
     // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
     bool frame_gen{};
@@ -172,6 +175,55 @@ public:
     [[nodiscard]] std::size_t SwapchainImageCount() const { return swapchain_image_count; }
     [[nodiscard]] VkFormat SwapchainImageFormat() const { return swapchain_image_format; }
 
+    /// The FLUID presenter's counters for the debug server's present_stats tool: a copy of
+    /// fluid_stats (EDEN_NX2_SHOWN_STATS fills it; zero without it) plus the vblank clock and
+    /// the present queue's depth. Any thread.
+    struct PresentStats {
+        bool fluid{};          ///< The present thread shows frames on the vblank clock
+        bool fallback{};       ///< Its watchdog fell back to arrival order
+        bool shown_stats{};    ///< EDEN_NX2_SHOWN_STATS: the counters below fill
+        u64 slots{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 not_done{};
+        u64 uncovered{};
+        u64 rolled{};
+        u64 spare{};
+        u64 stale{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{}; ///< Frames shown for 1, 2, 3 and 4+ refreshes
+        double age_ms{};           ///< Sum of real-frame ages at display (divide by hits)
+        double latency_ms{};       ///< Sum of record-to-GPU-done times (divide by samples)
+        u64 latency_samples{};
+        u64 presents{};
+        double acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        double copy_wait_ms{}, copy_wait_max_ms{};
+        double lock_ms{}, lock_max_ms{};
+        double call_ms{}, call_max_ms{};
+        double margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        u64 copy_gpu_samples{};
+        double copy_gpu_ms{}, copy_gpu_max_ms{};
+        /// The vblank clock as of the present thread's last wake (zero until it counted one).
+        double refresh_hz{};
+        u64 vblank_index{};
+        u64 divisor{};
+        double lead_ms{};
+        double clock_latency_ms{};
+        /// Frames handed to the present thread and not shown yet.
+        std::size_t queued_frames{};
+        std::size_t free_frames{};
+        std::size_t frame_count{};
+        std::size_t swapchain_images{};
+    };
+    [[nodiscard]] PresentStats GetPresentStats() const;
+
 private:
     enum class TransferMode { Unsupported, Copy, Blit };
 
@@ -231,6 +283,10 @@ private:
 
     void NoteShownFrame();
 
+    /// The debug server's shown_frames: notes the frame just presented (`slot` 0 when shown in
+    /// arrival order). Called only while VideoCore::Nx2ShownFrames::Armed().
+    void NoteShownCapture(const Frame* frame, u64 slot, std::string_view presenter);
+
     void CopyToSwapchain(Frame* frame);
 
     void CopyToSwapchainImpl(Frame* frame);
@@ -283,9 +339,9 @@ private:
     boost::container::deque<Frame*> free_queue;
     std::condition_variable_any frame_cv;
     std::condition_variable free_cv;
-    std::mutex swapchain_mutex;
-    std::mutex queue_mutex;
-    std::mutex free_mutex;
+    mutable std::mutex swapchain_mutex;
+    mutable std::mutex queue_mutex;
+    mutable std::mutex free_mutex;
     std::jthread present_thread;
     VkFormat transfer_source_format{VK_FORMAT_UNDEFINED};
     TransferMode transfer_mode{TransferMode::Unsupported};
@@ -335,6 +391,8 @@ private:
         u64 vblank{}; ///< vblanks counted, the last one woken for
         u64 divisor{1};
         std::chrono::steady_clock::time_point last_wake{};
+        /// A screen copy wait ends by then, so the next slot's wake is not slept through.
+        std::chrono::steady_clock::time_point copy_wait_due{};
         std::array<s64, 15> intervals{}; ///< between the last wakes, in ns
         size_t interval_count{};
         size_t interval_next{};
@@ -369,6 +427,7 @@ private:
         u64 dropped{};
         u64 received{};
         std::array<u64, 4> held{}; ///< frames shown for 1, 2, 3 and 4+ refreshes
+        u64 one_slot{};            ///< of those, frames shown for exactly one slot's refreshes
         f64 age_ms{};
         f64 latency_ms{};
         u64 latency_samples{};
@@ -393,6 +452,8 @@ private:
     bool fluid_ahead_pending{};
     Frame* fluid_ahead_frame{};
     VkSemaphore fluid_ahead_semaphore{};
+    /// The debug server's shown_frames: pictures and timing of the frames shown.
+    ShownCapture shown_capture;
 };
 
 } // namespace Vulkan

@@ -75,6 +75,7 @@ HybridPlan PlanHybridCores(std::span<const LogicalProcessor> processors, bool pi
     if (cores.size() < MinHybridPerformanceCores) {
         return plan;
     }
+    plan.four_p = cores.size() < SixPHybridPerformanceCores;
     std::ranges::sort(caches);
     for (const LogicalProcessor& processor : processors) {
         if (processor.efficiency_class == fastest) {
@@ -86,8 +87,28 @@ HybridPlan PlanHybridCores(std::span<const LogicalProcessor> processors, bool pi
             plan.efficiency.push_back(processor.id);
         }
     }
+    // Four-P: when no efficiency core shares the performance cores' cache (Lunar Lake's four sit
+    // on an island), the island is not a low-power add-on to keep clear of but the CPU's only
+    // efficiency cores.
+    if (plan.four_p && plan.efficiency.empty()) {
+        plan.efficiency = std::move(plan.low_power);
+        plan.low_power.clear();
+    }
     plan.responsive = plan.performance;
     plan.responsive.insert(plan.responsive.end(), plan.efficiency.begin(), plan.efficiency.end());
+    if (plan.four_p) {
+        // Four P cores cannot hold the six guest cores, the GPU front and back, the Vulkan worker
+        // and the helpers. The three threads each frame waits on in turn keep the P cores; the
+        // guest cores and the latency threads, which mostly sleep and need a prompt wake-up more
+        // than a fast core, may also use the efficiency cores, with high QoS so Windows still
+        // prefers a free P core. No core is dedicated: that needs MinCoresForGpuThreadPinning.
+        plan.render = plan.performance;
+        plan.front = plan.performance;
+        plan.back = plan.performance;
+        plan.latency = plan.responsive;
+        plan.active = true;
+        return plan;
+    }
     GpuThreadPinning pinning = PlanGpuThreadPinning(processors);
     if (pin_gpu_threads && !pinning.front.empty()) {
         plan.front = std::move(pinning.front);
@@ -98,6 +119,7 @@ HybridPlan PlanHybridCores(std::span<const LogicalProcessor> processors, bool pi
         plan.back = plan.performance;
         plan.latency = plan.performance;
     }
+    plan.render = plan.latency;
     plan.active = true;
     return plan;
 }

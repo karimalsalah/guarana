@@ -30,6 +30,7 @@
 
 #include "common/cityhash.h"
 #include "common/fs/file_lock.h"
+#include "common/fs/mapped_file.h"
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
 #include "shader_recompiler/program_header.h"
 #include "video_core/native_lowering.h"
@@ -526,6 +527,38 @@ TEST_CASE("Shader cache v2: compaction keeps the live records and only them",
     REQUIRE(compacted.parsed.live.size() == expected.size());
 }
 
+TEST_CASE("Shader cache v2: a record reads again at its offset until a compaction moves it",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const auto file = temp.path / "cache.bin";
+    {
+        V2::CacheWriter writer{file};
+        for (u64 i = 0; i < 20; ++i) {
+            writer.Append(RecordKind::Graphics, i, TestPayload(i));
+        }
+        writer.Append(RecordKind::Tombstone, 3, V2::TombstonePayload(RecordKind::Graphics));
+        REQUIRE(writer.Drain(5s));
+    }
+    const V2::LogFile log = V2::ReadLogFile(file);
+    REQUIRE(log.parsed.live.size() == 19);
+    for (const V2::LogRecord& record : log.parsed.live) {
+        const auto payload = V2::ReadRecordPayload(file, record.kind, record.key, record.offset,
+                                                   record.payload.size());
+        REQUIRE(payload);
+        REQUIRE(std::ranges::equal(*payload, record.payload));
+    }
+    const V2::LogRecord& last = log.parsed.live.back();
+    const u64 size = last.payload.size();
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, RecordKind::Compute, last.key, last.offset, size));
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, last.kind, last.key + 1, last.offset, size));
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, last.kind, last.key, last.offset, size - 1));
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, last.kind, last.key, last.offset + 8, size));
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, last.kind, last.key, log.bytes.size(), size));
+
+    REQUIRE(V2::CompactLog(file) == V2::WriteResult::Written);
+    REQUIRE_FALSE(V2::ReadRecordPayload(file, last.kind, last.key, last.offset, size));
+}
+
 TEST_CASE("Shader cache v2: two writers on one file lose no record",
           "[video_core][shader_cache_v2]") {
     TempDir temp;
@@ -610,6 +643,56 @@ TEST_CASE("Shader cache v2: appends follow a record cut off by a crash",
     WriteAll(other_file, other);
     REQUIRE(V2::AppendToLog(other_file, records) == V2::WriteResult::OtherVersion);
     REQUIRE(ReadAll(other_file) == std::vector<u8>(other.begin(), other.end()));
+}
+
+TEST_CASE("Shader cache v2: a log is built record by record", "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const auto file = temp.path / "cache.bin";
+    const std::array written{Written{RecordKind::Graphics, 0x11, TestPayload(1)},
+                             Written{RecordKind::Used, 0x22, TestPayload(2)}};
+
+    V2::LogBuilder builder;
+    REQUIRE(builder.Start(file) == V2::WriteResult::Written);
+    for (const Written& record : written) {
+        REQUIRE(builder.Append(record.kind, record.key, record.payload));
+    }
+    // Nothing is there before the commit: a reader never sees half a log
+    REQUIRE_FALSE(std::filesystem::exists(file));
+    REQUIRE(builder.Commit() == V2::WriteResult::Written);
+    REQUIRE(Live(V2::ReadLogFile(file).parsed) ==
+            std::vector<Written>(written.begin(), written.end()));
+    REQUIRE_FALSE(std::filesystem::exists(temp.path / "cache.bin.migrating"));
+
+    // A log that is there is never written over
+    const auto bytes = ReadAll(file);
+    V2::LogBuilder second;
+    REQUIRE(second.Start(file) == V2::WriteResult::Exists);
+    REQUIRE(ReadAll(file) == bytes);
+
+    // One that is given up on leaves the log as it was
+    const auto other = temp.path / "other.bin";
+    V2::LogBuilder discarded;
+    REQUIRE(discarded.Start(other) == V2::WriteResult::Written);
+    REQUIRE(discarded.Append(RecordKind::Used, 0x33, TestPayload(3)));
+    discarded.Discard();
+    REQUIRE_FALSE(std::filesystem::exists(other));
+    REQUIRE_FALSE(std::filesystem::exists(temp.path / "other.bin.migrating"));
+
+    // Enough records that the buffer is written out more than once: the whole point of the
+    // builder, since a source of this size used to be held in memory before it was written
+    const auto large_file = temp.path / "large.bin";
+    V2::LogBuilder large;
+    REQUIRE(large.Start(large_file) == V2::WriteResult::Written);
+    std::vector<Written> many;
+    for (u64 i = 0; i < 40; ++i) {
+        std::vector<u8> payload(256 * 1024, static_cast<u8>(i));
+        REQUIRE(large.Append(RecordKind::Used, 0x100 + i, payload));
+        many.push_back({RecordKind::Used, 0x100 + i, std::move(payload)});
+    }
+    REQUIRE(large.Commit() == V2::WriteResult::Written);
+    const V2::LogFile large_log = V2::ReadLogFile(large_file);
+    REQUIRE(Live(large_log.parsed) == many);
+    REQUIRE(large_log.parsed.stats.dead_bytes == 0);
 }
 
 #ifndef _WIN32
@@ -784,6 +867,180 @@ TEST_CASE("Shader cache v2: a log parsed in parallel reads as one parsed in orde
                          a.bad_payloads, a.skipped_bytes, a.torn_tail_bytes, a.dead_bytes) ==
                 std::tie(b.file_size, b.records, b.live, b.superseded, b.tombstones, b.bad_headers,
                          b.bad_payloads, b.skipped_bytes, b.torn_tail_bytes, b.dead_bytes));
+    }
+}
+
+TEST_CASE("Shader cache v2: a log read through a memory map reads as one copied into memory",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    TestLog log = MakeLog(400);
+    log.bytes[log.ranges[10].second - 9] ^= 0x40;  // A payload byte
+    log.bytes[log.ranges[200].first + 13] ^= 0x01; // A header's key
+    V2::EncodeRecord(log.bytes, RecordKind::Compute, 0x1000 + 1, TestPayload(7));
+    V2::EncodeRecord(log.bytes, RecordKind::Tombstone, 0x1000 + 4,
+                     V2::TombstonePayload(RecordKind::Compute));
+    std::vector<u8> torn;
+    V2::EncodeRecord(torn, RecordKind::Graphics, 0x9999, TestPayload(3));
+    log.bytes.insert(log.bytes.end(), torn.begin(), torn.begin() + torn.size() / 2);
+    const auto damaged = temp.path / "damaged.bin";
+    WriteAll(damaged, log.bytes);
+    const auto intact = temp.path / "intact.bin";
+    WriteAll(intact, std::span{log.bytes}.first(log.ranges[5].second));
+    const auto header_cut = temp.path / "header-cut.bin";
+    WriteAll(header_cut, std::span{log.bytes}.first(V2::FileHeaderSize / 2));
+    const auto empty = temp.path / "empty.bin";
+    WriteAll(empty, std::span<const u8>{});
+    const auto missing = temp.path / "missing.bin";
+
+    VideoCommon::ShaderJobScheduler jobs{{.cpu_threads = 4, .driver_threads = 1}};
+    const V2::ForEach parallel = [&](size_t count, const std::function<void(size_t)>& task) {
+        VideoCommon::ParallelFor(jobs, count, task);
+    };
+    {
+        const V2::LogFile copied = V2::ReadLogFile(damaged);
+        REQUIRE(copied.parsed.stats.bad_payloads == 1);
+        REQUIRE(copied.parsed.stats.bad_headers >= 1);
+        REQUIRE(copied.parsed.stats.superseded >= 2);
+        REQUIRE(copied.parsed.stats.torn_tail_bytes != 0);
+    }
+    for (const auto& file : {damaged, intact, header_cut, empty, missing}) {
+        INFO(file.filename().string());
+        const V2::LogFile copied = V2::ReadLogFile(file);
+        for (const V2::ForEach& for_each : {V2::ForEach{}, parallel}) {
+            const V2::LogFile mapped = V2::MapLogFile(file, for_each);
+            // Missing and empty files are read as before
+            REQUIRE(mapped.mapping.IsMapped() == (file != empty && file != missing));
+            const std::span<const u8> view = mapped.mapping.Bytes();
+            REQUIRE(mapped.parsed.header == copied.parsed.header);
+            REQUIRE(mapped.parsed.created_unix == copied.parsed.created_unix);
+            REQUIRE(Live(mapped.parsed) == Live(copied.parsed));
+            REQUIRE(mapped.parsed.live.size() == copied.parsed.live.size());
+            for (size_t i = 0; i < mapped.parsed.live.size(); ++i) {
+                const V2::LogRecord& record = mapped.parsed.live[i];
+                REQUIRE(record.offset == copied.parsed.live[i].offset);
+                REQUIRE(record.flags == copied.parsed.live[i].flags);
+                // Read where the file is mapped, not copied
+                REQUIRE(record.payload.data() >= view.data());
+                REQUIRE(record.payload.data() + record.payload.size() <=
+                        view.data() + view.size());
+            }
+            const auto& a = mapped.parsed.stats;
+            const auto& b = copied.parsed.stats;
+            REQUIRE(std::tie(a.file_size, a.records, a.live, a.superseded, a.tombstones,
+                             a.bad_headers, a.bad_payloads, a.skipped_bytes, a.torn_tail_bytes,
+                             a.dead_bytes) == std::tie(b.file_size, b.records, b.live,
+                                                       b.superseded, b.tombstones, b.bad_headers,
+                                                       b.bad_payloads, b.skipped_bytes,
+                                                       b.torn_tail_bytes, b.dead_bytes));
+        }
+    }
+
+    // Bytes appended after the file was mapped are not part of the mapping.
+    const Common::FS::MappedFile mapping{intact};
+    REQUIRE(mapping.IsMapped());
+    const std::vector<u8> before(mapping.Bytes().begin(), mapping.Bytes().end());
+    REQUIRE(before.size() == log.ranges[5].second);
+    {
+        std::ofstream stream(intact, std::ios::binary | std::ios::app);
+        stream.write(reinterpret_cast<const char*>(log.bytes.data() + log.ranges[5].second),
+                     static_cast<std::streamsize>(log.ranges[6].second - log.ranges[5].second));
+    }
+    REQUIRE(V2::ReadLogFile(intact).parsed.live.size() == 7);
+    REQUIRE(mapping.Bytes().size() == before.size());
+    REQUIRE(std::ranges::equal(mapping.Bytes(), before));
+    REQUIRE(V2::ParseLog(mapping.Bytes()).live.size() == 6);
+}
+
+TEST_CASE("Shader cache v2: programs loaded in parallel are the ones loaded in order",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const V2::ProgramRecord base = LowerTestProgram(PlainProgram, false, 0);
+    enum class Expect { Hit, Stale, Miss };
+    std::vector<V2::ProgramRecord> programs;
+    std::vector<Expect> expected;
+    const auto header = V2::EncodeFileHeader(1234);
+    std::vector<u8> bytes(header.begin(), header.end());
+    for (u32 i = 0; i < 300; ++i) {
+        // Another native program, under a key of its own, with code that tells it apart
+        V2::ProgramRecord program = base;
+        program.native.push_back(Instruction{{0x00007918, i, 0, 0}});
+        program.lowered_code.push_back(0x5000 + u64{i});
+        program.texture_bound = i % 7;
+        program.source_size += i;
+        u64 key = V2::ProgramKey(program);
+        std::vector<u8> payload = V2::EncodeProgram(program);
+        Expect expect = Expect::Hit;
+        if (i % 10 == 3) {
+            // Of another build's lowering
+            program.lowering_stamp ^= 1;
+            payload = V2::EncodeProgram(program);
+            expect = Expect::Stale;
+        } else if (i % 25 == 7) {
+            // Under another key than its inputs make
+            key ^= 1;
+            expect = Expect::Miss;
+        } else if (i % 31 == 5) {
+            // Its stamp is there, the rest doesn't decode
+            payload.resize(60);
+            expect = Expect::Miss;
+        }
+        V2::EncodeRecord(bytes, RecordKind::Program, key, payload);
+        if (i % 50 == 0) {
+            V2::EncodeRecord(bytes, RecordKind::Graphics, 0x7000 + i, TestPayload(i));
+        }
+        programs.push_back(std::move(program));
+        expected.push_back(expect);
+    }
+    const V2::ParsedLog parsed = V2::ParseLog(bytes);
+    REQUIRE(parsed.live.size() == programs.size() + 6);
+
+    VideoCommon::ShaderJobScheduler jobs{{.cpu_threads = 4, .driver_threads = 1}};
+    std::atomic<size_t> tasks{};
+    V2::Cache in_order{temp.path / "in-order.bin"};
+    in_order.LoadPrograms(parsed.live);
+    V2::Cache parallel{temp.path / "parallel.bin"};
+    parallel.LoadPrograms(parsed.live, [&](size_t count, const std::function<void(size_t)>& task) {
+        tasks += count;
+        VideoCommon::ParallelFor(jobs, count, task);
+    });
+    // A task left out is made by LoadPrograms itself.
+    V2::Cache partial{temp.path / "partial.bin"};
+    partial.LoadPrograms(parsed.live, [](size_t count, const std::function<void(size_t)>& task) {
+        for (size_t index = 0; index < count; index += 2) {
+            task(index);
+        }
+    });
+    REQUIRE(tasks > 1);
+
+    for (size_t i = 0; i < programs.size(); ++i) {
+        INFO("program " << i);
+        const V2::ProgramKeyInputs inputs = V2::ProgramKeyInputsOf(programs[i]);
+        const V2::FoundProgram reference = in_order.FindProgram(inputs);
+        switch (expected[i]) {
+        case Expect::Hit:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Hit);
+            REQUIRE(reference.code != nullptr);
+            REQUIRE(reference.code->code == programs[i].lowered_code);
+            break;
+        case Expect::Stale:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Stale);
+            break;
+        case Expect::Miss:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Miss);
+            break;
+        }
+        for (V2::Cache* cache : {&parallel, &partial}) {
+            const V2::FoundProgram found = cache->FindProgram(inputs);
+            REQUIRE(found.lookup == reference.lookup);
+            REQUIRE((found.code == nullptr) == (reference.code == nullptr));
+            if (found.code != nullptr) {
+                REQUIRE(found.code->native_program_key == reference.code->native_program_key);
+                REQUIRE(found.code->code == reference.code->code);
+                REQUIRE(found.code->source_size == reference.code->source_size);
+                REQUIRE(found.code->texture_bound == reference.code->texture_bound);
+                REQUIRE(found.code->trap_prefix.size() == reference.code->trap_prefix.size());
+            }
+        }
     }
 }
 

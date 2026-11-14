@@ -29,7 +29,7 @@ jobs:
       # pull request, with two limits: GitHub refuses it a push of commits that change
       # .github/workflows, and a pull request it opens starts no workflows (docs/LANES.md).
       - name: Check out main
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -85,6 +85,7 @@ jobs:
             echo "- [ ] CI ran on the merge. A pull request opened by this workflow starts no workflows by itself (unless UPSTREAM_SYNC_TOKEN is set): close and reopen it to run build-check."
             echo "- [ ] No conflicts, or they were resolved on a \`merge/upstream-<date>\` branch from \`main\` with its own pull request, keeping both sides; that pull request lists each resolution."
             echo "- [ ] The switches in \`docs/switches.md\` still do what their rows say. Rerun the verified scene with \`tools/bench\` if upstream touched frame pacing, the shader recompiler or the Vulkan backend."
+            echo "- [ ] Optional housekeeping: if upstream added switches, regenerate \`tools/ci/switch-registry-upstream.txt\` (its header has the command) in a pull request after this merge; switch-registry already takes the upstream branch's switches as upstream's."
             echo "- [ ] \`CHANGELOG.md\` \`[Unreleased]\` names the upstream range."
             echo "- [ ] Merge with a merge commit, never squash or rebase, so later syncs share history with upstream."
             echo

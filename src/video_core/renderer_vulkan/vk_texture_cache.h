@@ -110,6 +110,8 @@ public:
 
     u64 GetDeviceMemoryBudget() const;
 
+    u64 GetDeviceHeapMemoryBudget() const;
+
     u64 GetDeviceMemorySlack() const;
 
     bool CanReportMemoryUsage() const;
@@ -121,6 +123,11 @@ public:
 
     u32 FailedImages() const noexcept {
         return memory_allocator.FailedImages();
+    }
+
+    /// Device-local bytes placed in host memory since the last call (see MemoryAllocator).
+    u64 TakeSpilledBytes() const noexcept {
+        return memory_allocator.TakeSpilledBytes();
     }
 
     void LogMemoryStatistics() const;
@@ -164,8 +171,8 @@ public:
 
     /// Records a health check of a game's DLSS network output against its input (both sampled in
     /// the GENERAL layout) and returns an earlier check's result once the GPU has finished it.
-    [[nodiscard]] std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(ImageView& input,
-                                                                              ImageView& output);
+    [[nodiscard]] std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(
+        ImageView& input, ImageView& output, std::optional<std::array<u32, 2>> input_region);
 
     void CopyImage(Image& dst, Image& src, std::span<const VideoCommon::ImageCopy> copies);
 
@@ -183,10 +190,6 @@ public:
                                         const ByteAddressedShadow& shadow, bool unpack);
 
     void ConvertImage(Framebuffer* dst, ImageView& dst_view, ImageView& src_view);
-
-    bool CanAccelerateImageUpload(Image&) const noexcept {
-        return false;
-    }
 
     bool CanUploadMSAA() const noexcept {
         return true;
@@ -246,9 +249,6 @@ public:
     }
 
     void BarrierFeedbackLoop();
-
-    bool IsFormatDitherable(VideoCore::Surface::PixelFormat format);
-    bool IsFormatScalable(VideoCore::Surface::PixelFormat format);
 
     VkFormat GetSupportedFormat(VkFormat requested_format, VkFormatFeatureFlags required_features) const;
 
@@ -739,8 +739,6 @@ public:
 
     [[nodiscard]] VkImageView StencilView();
 
-    [[nodiscard]] VkImageView ColorView();
-
     [[nodiscard]] VkImageView StorageView(Shader::TextureType texture_type,
                                           Shader::ImageFormat image_format, bool is_byte_addressed);
 
@@ -811,7 +809,6 @@ private:
     vk::ImageView typeless_storage_view;
     vk::ImageView depth_view;
     vk::ImageView stencil_view;
-    vk::ImageView color_view;
     vk::Image null_image;
     VkImage image_handle = VK_NULL_HANDLE;
     VkImageView render_target = VK_NULL_HANDLE;

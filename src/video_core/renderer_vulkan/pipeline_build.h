@@ -202,6 +202,11 @@ public:
         return IsBuilt() && state->failed;
     }
 
+    /// A worker has started the task and not finished it: destroying the build now waits for it.
+    bool Running() const {
+        return state->claimed.load(std::memory_order_acquire) && !IsBuilt();
+    }
+
     /// Builds it on this thread (owner_builds)
     void Build() const {
         state->Run();

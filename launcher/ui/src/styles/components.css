@@ -632,8 +632,28 @@ html[data-pad="generic"] .glyph > .g-generic { display: inline-flex; }
 
 /* Game Booster (Home) */
 .booster-slot:empty { display: none; }
-.booster-card { display: grid; gap: var(--sp-3); }
-.booster-card > .fine { margin: 0; }
+.booster-card .fine { margin: 0; }
+
+/* Disclosure card: a <details> whose summary is one quiet row (title, current value, chevron). */
+.disclosure { padding: 0; }
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 56px;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: inherit;
+  list-style: none;
+  cursor: pointer;
+}
+.disclosure-head::-webkit-details-marker { display: none; }
+.disclosure-head:hover .disclosure-chevron { color: var(--text); }
+.disclosure-value { margin-left: auto; color: var(--muted); font-size: var(--fs-sm); font-weight: 650; }
+.disclosure-chevron { display: grid; place-items: center; color: var(--muted); transition: transform var(--dur-3) var(--ease-spring), color var(--dur-2) var(--ease-out); }
+.disclosure-chevron .icon { width: 18px; height: 18px; }
+.disclosure[open] .disclosure-chevron { transform: rotate(180deg); }
+.disclosure-body { display: grid; gap: var(--sp-3); padding: 0 var(--sp-5) var(--sp-5); }
+.disclosure[open] .disclosure-body { animation: card-reveal var(--dur-screen) var(--ease-spring) both; }
 .booster-levels { display: grid; gap: var(--sp-2); }
 .booster-level {
   display: grid; gap: 2px; text-align: left; width: 100%; padding: var(--sp-2) var(--sp-3);

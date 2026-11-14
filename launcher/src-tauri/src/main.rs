@@ -9,6 +9,7 @@ compile_error!("Guarana Launcher is a Windows application");
 
 mod args;
 mod autopilot;
+mod boot;
 mod booster;
 mod commands;
 mod community;

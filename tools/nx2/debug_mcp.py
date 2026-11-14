@@ -67,6 +67,30 @@ TOOLS = [
         },
     },
     {
+        "name": "shown_frames",
+        "description": "What the player sees between real frames: the next 'count' frames the "
+                       "presenter actually shows (default 12), generated ones included. Per frame: "
+                       "kind (real, predicted, interpolated), slot, scheduled_us and presented_us "
+                       "(relative to the first present), late_us, interval_us, age_us of the real "
+                       "frame it derives from, and its tile in the contact sheet, returned as one "
+                       "image (strip above each tile: green real, orange predicted, blue "
+                       "interpolated, grey tile: no picture). Scheduled times exist only on the "
+                       "EDEN_NX2_FLUID vblank clock. Taking pictures moves the screen copy to the "
+                       "graphics queue; pictures: false keeps timing exactly as played.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 12},
+                "height": {"type": "integer", "minimum": 144, "maximum": 540, "default": 270,
+                           "description": "Lines of each picture."},
+                "pictures": {"type": "boolean", "default": True},
+                "save": {"type": "boolean", "description": "Also write the sheet into the dump "
+                                                           "directory."},
+                "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10},
+            },
+        },
+    },
+    {
         "name": "log_tail",
         "description": "Log lines kept in memory since the game booted. Without 'after', the newest "
                        "'limit' lines; with 'after' (the 'next' of an earlier call), the lines "
@@ -119,6 +143,23 @@ TOOLS = [
             "type": "object",
             "properties": {"directory": {"type": "string"}, "name": {"type": "string"}},
             "required": ["directory", "name"],
+        },
+    },
+    {
+        "name": "capture_bundle",
+        "description": "The bug-report bundle the Report a bug hotkey writes (docs/nx2/bug-bundle.md): "
+                       "logs, system and settings, screenshot, frame times, and the next frame's "
+                       "capture with its shaders and pipelines, zipped under size_limit_mib into "
+                       "the log folder's bug-reports. Returns the path, bytes, dropped parts and "
+                       "the manifest. 'index' unpacks it with bundle_index.py and builds index.html.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string"},
+                "size_limit_mib": {"type": "integer", "minimum": 1, "maximum": 100},
+                "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600},
+                "index": {"type": "boolean"},
+            },
         },
     },
     {
@@ -192,6 +233,13 @@ TOOLS = [
                 "max_chars": {"type": "integer", "minimum": 0},
             },
         },
+    },
+    {
+        "name": "speed_limit",
+        "description": "Lifts (on=false) or restores (on=true) the speed limit live, so a test "
+                       "script can boot through the logos and menus unlimited. Returns the "
+                       "previous and current 'on' state; without 'on' it only reports it.",
+        "inputSchema": {"type": "object", "properties": {"on": {"type": "boolean"}}},
     },
     {
         "name": "read_memory",
@@ -338,6 +386,25 @@ TOOLS = [
         },
     },
     {
+        "name": "gpu_perf",
+        "description": "Hardware GPU counters (VK_KHR_performance_query, EDEN_NX2_GPU_PERF=1 at "
+                       "launch): GpuBusy, XveStall, XveThreadOccupancy, SamplerBottleneck, "
+                       "AvgGpuCoreFrequencyMHz, RenderBusy and ComputeEngine0Busy, averaged over "
+                       "a window of submissions. 'enable' starts sampling 'frames' submissions "
+                       "(default 30) or stops it (false); the exclusive profiling lock is held "
+                       "only for the window. Returns supported, sampling, frames_sampled, "
+                       "counters [{name, value, unit}] and the shortcuts gpu_busy_pct, "
+                       "stall_pct, occupancy_pct, freq_mhz (null until a result is read), or "
+                       "{supported: false, reason} without the switch, extension or lock.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "enable": {"type": "boolean"},
+                "frames": {"type": "integer", "minimum": 1, "maximum": 600, "default": 30},
+            },
+        },
+    },
+    {
         "name": "frame_budget",
         "description": "The frame budget controller (EDEN_NX2_TARGET_FPS): holds guest presents to "
                        "the target's interval and moves the GPU time scale a Switch 2 title sees "
@@ -347,9 +414,10 @@ TOOLS = [
                        "frame_ms (median present interval of the last half second), work_ms (the "
                        "frame without the pacing wait, 80th percentile: what the controller "
                        "compares), scale and its limits, state (off, frozen, on_target, slow, "
-                       "saturated, fast, cooldown, no_effect, waiting), the scale that last "
-                       "missed and the cool-down left, and whether the shading-rate governor may "
-                       "act.",
+                       "saturated, fast, cooldown, no_effect, waiting, unanswered), the scale that "
+                       "last missed and the cool-down left, whether the shading-rate governor may "
+                       "act, and the scale raises went unanswered from (unanswered_from, with "
+                       "EDEN_NX2_BUDGET_UNANSWERED).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -357,6 +425,16 @@ TOOLS = [
                 "scale": {"type": "number", "exclusiveMinimum": 0},
             },
         },
+    },
+    {
+        "name": "autopilot",
+        "description": "The autopilot (EDEN_NX2_AUTOPILOT=1, docs/autopilot.md) from its last 2 s "
+                       "window, answered at once (also under status.autopilot): running, windows, "
+                       "changes, real_fps, shown frame p50/p95 and even share, refresh_hz and its "
+                       "source, gpu_busy, power source, frame generation, the GPU time scale and "
+                       "its base, whether resolution and power policy are available, and "
+                       "last_change. Without the switch 'running' is false.",
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "memory",
@@ -367,6 +445,89 @@ TOOLS = [
                        "pipelines, kept SPIR-V). Says whether low memory mode is on.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "trace_record",
+        "description": "Records a GPU trace (docs/nx2/gpu-trace.md): from the next GPU command "
+                       "boundary, a snapshot then every submit, CPU memory write, map and present "
+                       "for the given seconds (60 presents a second) or presents. Writes to path, "
+                       "else the dump directory. Poll trace_status for the file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "seconds": {"type": "number", "minimum": 0.1, "maximum": 60},
+                "presents": {"type": "integer", "minimum": 1, "maximum": 3600},
+                "path": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "trace_stop",
+        "description": "Ends the GPU trace recording at the next GPU command (keeps what it has).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "trace_status",
+        "description": "GPU trace recorder state: requested, recording, presents so far and "
+                       "wanted, the path, the last trace written and the last error.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "thread_stats",
+        "description": "Guest threads' CPU time and waits (needs EDEN_NX2_GUEST_THREAD_STATS at "
+                       "launch): per thread, time on a core split into game code, counter "
+                       "polling, hint spins, GPU-cached memory and read-backs, kernel time, "
+                       "time ready without a core, and waits by kind (IPC, sync objects, "
+                       "arbiter, condvar, lock, sleep) with counts. Totals since boot, busiest "
+                       "first; 'top' limits the rows. 'enabled' false means the counters are "
+                       "off.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"top": {"type": "integer", "minimum": 1, "maximum": 128}},
+        },
+    },
+    {
+        "name": "present_stats",
+        "description": "The present thread's counters: the FLUID presenter's slots, hits, "
+                       "missed (no_frame, not_done, uncovered, queued, overslept), rolled, "
+                       "spare, stale, in_order, late, dropped, frames held 1/2/3/4+ refreshes, "
+                       "real-frame age at display and record-to-GPU-done latency, and the "
+                       "present thread's acquire/copy-wait/submit-lock/present-call times "
+                       "(needs EDEN_NX2_SHOWN_STATS at launch for the counters). The vblank "
+                       "clock (refresh_hz, divisor, lead) and the present queue depth are live "
+                       "regardless. Vulkan only.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cache_stats",
+        "description": "Texture and buffer cache hit/miss/eviction counters since boot: lookups "
+                       "that found a live image/buffer vs made a new one, hit rates, images "
+                       "and buffers created, deleted and evicted by the collector (texture "
+                       "evictions that downloaded first), with the device memory in use "
+                       "against the texture cache thresholds and the buffer cache's bytes.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "readbacks",
+        "description": "Async read-back counters since boot (VideoCore::AsyncReadback): guest CPU "
+                       "reads of GPU-written memory (GPU::OnCPURead) that forced a GPU flush "
+                       "(reads_async) vs found a download on its way (reads_inflight), their "
+                       "total time (read_ns_total), the GPU thread's flush time (flush_us), "
+                       "reader fence waits (reader_waits, reader_wait_us, reader_max_wait_us), "
+                       "GPU-side write waits (gpu_side_waits, gpu_side_wait_us), macro DMA reads "
+                       "(dma_reads, dma_waited, dma_drained, dma_wait_us), ClearDownload landings "
+                       "(clear_landings, clear_waits), sync operations (sync_ops, sync_us, "
+                       "sync_max_us) and early downloads (early_recorded, early_bytes, "
+                       "early_flushes, early_refused). EDEN_NX2_GPU_PROFILE also logs them per "
+                       "second.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "boot_timing",
+        "description": "The boot phases recorded since the process started (BootTiming Mark "
+                       "and Span), oldest first: each phase's name, when it happened (ms since "
+                       "process start) and how long it took, plus now_ms.",
+        "inputSchema": {"type": "object", "properties": {}},
+    }
 ]
 
 TOOL_NAMES = {tool["name"] for tool in TOOLS}
@@ -432,6 +593,10 @@ def default_timeout(name, params):
     """The emulator's own timeout_s default, so the adapter waits at least as long."""
     if name == "capture_frame":
         return 120
+    if name == "shown_frames":
+        return 10
+    if name == "capture_bundle":
+        return 90
     if name == "frame_times":
         return math.ceil(params.get("seconds", 5)) + 1
     if name == "power":
@@ -466,10 +631,19 @@ class Adapter:
         if name == "screenshot":
             png = result.pop("png_base64", None)
             return result, base64.b64decode(png) if png else None
+        if name == "shown_frames":
+            # One image for the whole sequence; each frame names its tile in it. Pictures of
+            # single frames ("each", socket only) would only repeat the sheet here.
+            for frame in result.get("frames", []):
+                frame.pop("png_base64", None)
+            png = result.pop("sheet_png_base64", None)
+            return result, base64.b64decode(png) if png else None
         if name == "capture_frame":
             self.captures.add(os.path.realpath(result["directory"]))
             if index:
                 result["index"] = self.build_index(result["directory"])
+        if name == "capture_bundle" and index:
+            result["index"] = self.build_bundle_index(result["path"])
         return result, None
 
     def call_tool(self, name, arguments):
@@ -487,6 +661,14 @@ class Adapter:
         if done.returncode != 0:
             return f"frame_dump_index.py failed: {done.stderr.strip()[-2000:]}"
         return os.path.join(directory, "index.html")
+
+    def build_bundle_index(self, path):
+        script = os.path.join(HERE, "bundle_index.py")
+        done = subprocess.run([sys.executable, "-I", script, path], capture_output=True, text=True,
+                              timeout=600)
+        if done.returncode != 0:
+            return f"bundle_index.py failed: {done.stderr.strip()[-2000:]}"
+        return done.stdout.strip().splitlines()[-1]
 
     def capture_image(self, arguments):
         directory = os.path.realpath(arguments["directory"])

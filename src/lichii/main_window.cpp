@@ -50,6 +50,7 @@
 #include "lichii/shader_warm_dialog.h"
 #include "lichii/guarana_ui.h"
 #include "lichii/whats_new_dialog.h"
+#include "lichii/bug_report_dialog.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #ifdef LICHII_NX_TOOLS
 #include "core/file_sys/registered_cache.h"
@@ -116,6 +117,7 @@
 
 #include "qt_common/util/content.h"
 #include "qt_common/util/fs.h"
+#include "qt_common/util/game.h"
 #include "qt_common/util/meta.h"
 #include "qt_common/util/mod.h"
 #include "qt_common/util/path.h"
@@ -468,7 +470,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     render_window->setWindowIcon(Guarana::AppIcon());
     UpdateWindowTitle();
 
-    show();
+    // A launcher session (--launcher-session, parsed with the other options below) shows the
+    // window only when the game goes fullscreen, so its desktop form never appears.
+    launcher_session = QApplication::arguments().contains(QStringLiteral("--launcher-session"));
+    if (!launcher_session) {
+        show();
+    }
+    // The launcher follows the boot on stdout until the game is on screen (Hidden, below).
+    Common::BootTiming::SetSessionOutput(launcher_session);
     Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
@@ -510,7 +519,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    // A launcher session never shows the game list, so it does not scan for it.
+    if (!launcher_session) {
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
     Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
 
     if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
@@ -600,12 +612,29 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
+    // A launcher session needs a game; without one the desktop window opens after all.
+    if (launcher_session &&
+        (!launch_params || !launch_params->launcher_session || launch_params->filepath.empty())) {
+        launcher_session = false;
+        Common::BootTiming::SetSessionOutput(false);
+        show();
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+
     if (launch_params) {
         auto const& lp = *launch_params;
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
-            ui->action_Fullscreen->setChecked(lp.fullscreen);
+            ui->action_Fullscreen->setChecked(lp.fullscreen || launcher_session);
+        }
+
+        // The launcher session plays in the main window, where the loading screen is, until the
+        // window closes. Separate windows would leave the loading screen in a hidden window.
+        if (launcher_session && !ui->action_Single_Window_Mode->isChecked()) {
+            launcher_session_separate_window = true;
+            ui->action_Single_Window_Mode->setChecked(true);
+            ToggleWindowMode();
         }
 
         if (!lp.filepath.empty()) {
@@ -1021,6 +1050,11 @@ void MainWindow::InitializeWidgets() {
         if (emulation_running) {
             render_window->show();
             render_window->setFocus();
+            Common::BootTiming::Mark("frontend: loading screen hidden, game shown");
+            // A launcher session's output ends here: the launcher has handed over to the game.
+            if (launcher_session) {
+                Common::BootTiming::SetSessionOutput(false);
+            }
         }
     });
 
@@ -1092,6 +1126,7 @@ void MainWindow::InitializeWidgets() {
 
     volume_button = new VolumeButton();
     volume_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    volume_button->setProperty("chip", QStringLiteral("volume"));
     volume_button->setFocusPolicy(Qt::NoFocus);
     volume_button->setCheckable(true);
     UpdateVolumeUI();
@@ -1133,6 +1168,7 @@ void MainWindow::InitializeWidgets() {
 
     frame_gen_status_button = new QPushButton();
     frame_gen_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    frame_gen_status_button->setProperty("chip", QStringLiteral("fg"));
     frame_gen_status_button->setFocusPolicy(Qt::NoFocus);
     frame_gen_status_button->setCheckable(true);
     connect(frame_gen_status_button, &QPushButton::clicked, this, [this] {
@@ -1166,6 +1202,7 @@ void MainWindow::InitializeWidgets() {
 #ifdef HAS_RESHADE
     post_shader_status_button = new QPushButton();
     post_shader_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    post_shader_status_button->setProperty("chip", QStringLiteral("fx"));
     post_shader_status_button->setFocusPolicy(Qt::NoFocus);
     post_shader_status_button->setCheckable(true);
     connect(post_shader_status_button, &QPushButton::clicked, this, [this] {
@@ -1201,6 +1238,7 @@ void MainWindow::InitializeWidgets() {
     // setup AA button
     aa_status_button = new QPushButton();
     aa_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    aa_status_button->setProperty("chip", QStringLiteral("aa"));
     aa_status_button->setFocusPolicy(Qt::NoFocus);
     connect(aa_status_button, &QPushButton::clicked, [&] {
         auto aa_mode = Settings::values.anti_aliasing.GetValue();
@@ -1234,6 +1272,7 @@ void MainWindow::InitializeWidgets() {
     // Setup Filter button
     filter_status_button = new QPushButton();
     filter_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    filter_status_button->setProperty("chip", QStringLiteral("filter"));
     filter_status_button->setFocusPolicy(Qt::NoFocus);
     connect(filter_status_button, &QPushButton::clicked, this, &MainWindow::OnToggleAdaptingFilter);
     UpdateFilterText();
@@ -1259,6 +1298,7 @@ void MainWindow::InitializeWidgets() {
     // Setup Dock button
     dock_status_button = new QPushButton();
     dock_status_button->setObjectName(QStringLiteral("DockingStatusBarButton"));
+    dock_status_button->setProperty("chip", QStringLiteral("dock"));
     dock_status_button->setFocusPolicy(Qt::NoFocus);
     connect(dock_status_button, &QPushButton::clicked, this, &MainWindow::OnToggleDockedMode);
     dock_status_button->setCheckable(true);
@@ -1285,6 +1325,7 @@ void MainWindow::InitializeWidgets() {
     // Setup GPU Accuracy button
     gpu_accuracy_button = new QPushButton();
     gpu_accuracy_button->setObjectName(QStringLiteral("GPUStatusBarButton"));
+    gpu_accuracy_button->setProperty("chip", QStringLiteral("gpu"));
     gpu_accuracy_button->setCheckable(true);
     gpu_accuracy_button->setFocusPolicy(Qt::NoFocus);
     connect(gpu_accuracy_button, &QPushButton::clicked, this, &MainWindow::OnToggleGpuAccuracy);
@@ -1420,6 +1461,7 @@ void MainWindow::InitializeHotkeys() {
                        QStringLiteral("Toggle Performance Overlay"));
     LinkActionShortcut(ui->action_Fullscreen, QStringLiteral("Fullscreen"));
     LinkActionShortcut(ui->action_Capture_Screenshot, QStringLiteral("Capture Screenshot"));
+    LinkActionShortcut(ui->action_Report_Bug, QStringLiteral("Report a Bug"));
     LinkActionShortcut(ui->action_TAS_Start, QStringLiteral("TAS Start/Stop"), true);
     LinkActionShortcut(ui->action_TAS_Record, QStringLiteral("TAS Record"), true);
     LinkActionShortcut(ui->action_TAS_Reset, QStringLiteral("TAS Reset"), true);
@@ -1445,6 +1487,14 @@ void MainWindow::InitializeHotkeys() {
     };
 
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
+        // A launcher session has no desktop window to leave to: the key stops the game (with the
+        // usual confirmation) and the launcher comes back.
+        if (launcher_session) {
+            if (emulation_running) {
+                OnStopGame();
+            }
+            return;
+        }
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
             ui->action_Fullscreen->setChecked(false);
             ToggleFullscreen();
@@ -1458,16 +1508,28 @@ void MainWindow::InitializeHotkeys() {
     connect_shortcut(QStringLiteral("Audio Volume Up"), &MainWindow::OnIncreaseVolume);
 
     connect_shortcut(QStringLiteral("Toggle Framerate Limit"), [this] {
+        if (!emulation_running) {
+            return;
+        }
+        RememberSpeedLimitBeforeHotkey();
         Settings::ToggleStandardMode();
         SetFPSSuffix();
     });
 
     connect_shortcut(QStringLiteral("Toggle Turbo Speed"), [this] {
+        if (!emulation_running) {
+            return;
+        }
+        RememberSpeedLimitBeforeHotkey();
         Settings::ToggleTurboMode();
         SetFPSSuffix();
     });
 
     connect_shortcut(QStringLiteral("Toggle Slow Speed"), [this] {
+        if (!emulation_running) {
+            return;
+        }
+        RememberSpeedLimitBeforeHotkey();
         Settings::ToggleSlowMode();
         SetFPSSuffix();
     });
@@ -1567,13 +1629,14 @@ void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
 }
 
 void MainWindow::ConnectWidgetEvents() {
+    // Guarana's reports go to its own GitHub forms through Help > Report a problem, with this
+    // game's session, not to upstream's compatibility site (CompatibilityReporting::Site).
     connect(game_list, &GameList::ReportCompatibilityRequested, this, [this](u64 program_id) {
         if (!report_session || report_session->program_id != program_id || emulation_running ||
             boot_in_progress || close_pending) {
             return;
         }
-        CompatibilityReporting::Dialog dialog(*report_session, this);
-        dialog.exec();
+        OnReportProblem();
     });
     connect(game_list, &GameList::BootGame, this, &MainWindow::BootGameFromList);
     connect(game_list, &GameList::GameChosen, this, &MainWindow::OnGameListLoadFile);
@@ -1771,6 +1834,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Desktop, &MainWindow::OnCreateHomeMenuDesktopShortcut);
     connect_menu(ui->action_Application_Menu, &MainWindow::OnCreateHomeMenuApplicationMenuShortcut);
     connect_menu(ui->action_Capture_Screenshot, &MainWindow::OnCaptureScreenshot);
+    connect_menu(ui->action_Report_Bug, &MainWindow::OnReportBug);
 
     // TAS
     connect_menu(ui->action_TAS_Start, &MainWindow::OnTasStartStop);
@@ -1893,6 +1957,7 @@ void MainWindow::UpdateMenuState() {
     }
 
     ui->action_Capture_Screenshot->setEnabled(emulation_running && !is_paused);
+    ui->action_Report_Bug->setEnabled(emulation_running && !is_paused);
 
     if (emulation_running && is_paused) {
         ui->action_Pause->setText(tr("&Continue"));
@@ -2198,9 +2263,16 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
         Common::BootTiming::Mark("boot: launch finished, the loading screen waits for the game");
-        if (!emulation_running && !close_pending) {
+        if (!emulation_running && !close_pending && !launcher_session) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
+        }
+        if (launcher_session && !emulation_running) {
+            // The game did not start (an error, or a dialog cancelled): back to the launcher.
+            launcher_session_failed = true;
+            if (!close_pending) {
+                QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
+            }
         }
         if (close_pending) {
             QTimer::singleShot(0, this, &QWidget::close);
@@ -2258,6 +2330,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     }
 
     PrepareShaderPrecache(title_id, std::filesystem::path{filename.toStdU16String()});
+    speed_limit_before_hotkeys.reset();
     Settings::LogSettings();
 
     if (UISettings::values.select_user_on_boot && !user_flag_cmd_line) {
@@ -2422,6 +2495,15 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     connect(QtCommon::emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
             &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+    if (launcher_session) {
+        // The launcher shows the shader counts too: one line per stage and whole percent.
+        connect(
+            QtCommon::emu_thread.get(), &EmuThread::LoadProgress, this,
+            [](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+                Common::BootTiming::SessionProgress(static_cast<int>(stage), value, total);
+            },
+            Qt::QueuedConnection);
+    }
 
     connect(
         QtCommon::emu_thread.get(), &EmuThread::ShaderCacheReloadStarted, this,
@@ -2485,6 +2567,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
             std::filesystem::path{Common::U16StringFromBuffer(filename.utf16(), filename.size())}
                 .filename());
     }
+    // The name the user gave the game in Properties wins, as in the library.
+    if (auto custom_title = QtCommon::Game::ReadCustomTitle(title_id); !custom_title.empty()) {
+        title_name = std::move(custom_title);
+    }
     const bool is_64bit = QtCommon::system->Kernel().ApplicationProcess()->Is64Bit();
     const auto instruction_set_suffix = is_64bit ? tr("(64-bit)") : tr("(32-bit)");
     title_name = tr("%1 %2", "%1 is the title name. %2 indicates if the title is 64-bit or 32-bit")
@@ -2515,12 +2601,36 @@ void MainWindow::BootGameFromList(const QString& filename, StartGameType with_co
     BootGame(filename, ApplicationAppletParameters(), with_config);
 }
 
+void MainWindow::RememberSpeedLimitBeforeHotkey() {
+    if (!speed_limit_before_hotkeys) {
+        speed_limit_before_hotkeys = SessionSpeedLimit{
+            .value = Settings::values.use_speed_limit.GetValue(),
+            .using_global = Settings::values.use_speed_limit.UsingGlobal(),
+        };
+    }
+}
+
+void MainWindow::UndoSessionSpeedChanges() {
+    // Undo the session's frame rate limit hotkey and turbo/slow modes. Only what the hotkeys
+    // changed is put back, in the scope (global or per-game) it was changed in: forcing the
+    // limit on here saved "Limit Speed Percent" as checked after every game, whatever the user
+    // had chosen.
+    // A configuration applied in a dialog that is still open replaces the hotkeys' change too.
+    if (speed_limit_before_hotkeys && !UISettings::values.configuration_applied &&
+        Settings::values.use_speed_limit.UsingGlobal() == speed_limit_before_hotkeys->using_global) {
+        Settings::values.use_speed_limit.SetValue(speed_limit_before_hotkeys->value);
+    }
+    speed_limit_before_hotkeys.reset();
+    Settings::values.current_speed_mode = Settings::SpeedMode::Standard;
+}
+
 bool MainWindow::OnShutdownBegin() {
     if (!emulation_running) {
         return false;
     }
 
-    if (ui->action_Fullscreen->isChecked()) {
+    // A launcher session stays fullscreen until its window closes: no desktop window in between.
+    if (ui->action_Fullscreen->isChecked() && !launcher_session) {
         HideFullscreen();
     }
     if (guarana_toast != nullptr) {
@@ -2529,9 +2639,7 @@ bool MainWindow::OnShutdownBegin() {
 
     AllowOSSleep();
 
-    // Disable unlimited frame rate and turbo/slow modes
-    Settings::values.use_speed_limit.SetValue(true);
-    Settings::values.current_speed_mode = Settings::SpeedMode::Standard;
+    UndoSessionSpeedChanges();
 
     if (QtCommon::system->IsShuttingDown()) {
         status_bar_update_timer.stop();
@@ -2640,6 +2748,10 @@ void MainWindow::OnEmulationStopped() {
     if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
         return;
     }
+    if (bug_report_dialog) {
+        bug_report_dialog->StopCapture();
+    }
+    UndoSessionSpeedChanges();
     shutdown_timer.stop();
     emu_terminate_timer.stop();
     if (QtCommon::emu_thread) {
@@ -2669,12 +2781,15 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
-        game_list_placeholder->show();
-    } else {
-        game_list->show();
+    // A launcher session closes instead (below), so its window stays black.
+    if (!launcher_session) {
+        if (game_list->IsEmpty()) {
+            game_list_placeholder->show();
+        } else {
+            game_list->show();
+        }
+        game_list->SetFilterFocus();
     }
-    game_list->SetFilterFocus();
     tas_label->clear();
     input_subsystem->GetTas()->Stop();
     OnTasStateChanged();
@@ -2718,7 +2833,10 @@ void MainWindow::OnEmulationStopped() {
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
     LOG_INFO(Frontend, "Emulation cleanup completed");
-    if (close_pending) {
+    if (launcher_session) {
+        // Back to the launcher rather than the game list, unless a restart boots again.
+        QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
+    } else if (close_pending) {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
         game_list->SetScanEnabled(true);
@@ -2731,6 +2849,9 @@ void MainWindow::ShutdownGame() {
         return;
     }
 
+    if (bug_report_dialog) {
+        bug_report_dialog->StopCapture();
+    }
     // TODO(crueter): make this common as well (frontend_common?)
     play_time_manager->Stop();
     OnShutdownBegin();
@@ -3568,6 +3689,11 @@ void MainWindow::OnRestartGame() {
     if (ConfirmShutdownGame()) {
         // Make a copy since ShutdownGame edits game_path
         const auto current_game = QString(current_game_path);
+        // ShutdownGame runs a nested event loop: the session must not end in it before the reboot.
+        launcher_session_rebooting = true;
+        SCOPE_EXIT {
+            launcher_session_rebooting = false;
+        };
         ShutdownGame();
         BootGame(current_game, ApplicationAppletParameters());
     }
@@ -3644,6 +3770,11 @@ void MainWindow::OnExecuteProgram(std::size_t program_index) {
     LOG_INFO(Frontend, "ExecuteProgram requested, program_index={} previous_program_id={:016X}",
              program_index, previous_program_id);
 
+    // As in OnRestartGame: a launcher session survives the nested event loop of ShutdownGame.
+    launcher_session_rebooting = true;
+    SCOPE_EXIT {
+        launcher_session_rebooting = false;
+    };
     ShutdownGame();
 
     auto params = ApplicationAppletParameters();
@@ -3760,6 +3891,11 @@ void MainWindow::ToggleFullscreen() {
     if (!emulation_running) {
         return;
     }
+    if (launcher_session && !ui->action_Fullscreen->isChecked()) {
+        // A launcher session has no desktop window to go back to: it stays fullscreen.
+        ui->action_Fullscreen->setChecked(true);
+        return;
+    }
     if (ui->action_Fullscreen->isChecked()) {
         ShowFullscreen();
     } else {
@@ -3805,12 +3941,21 @@ void MainWindow::ShowFullscreen() {
     };
 
     if (ui->action_Single_Window_Mode->isChecked()) {
-        UISettings::values.geometry = saveGeometry();
+        // A launcher session never has the desktop geometry: the one restored at start stays.
+        if (!launcher_session) {
+            UISettings::values.geometry = saveGeometry();
+        }
 
         ui->menubar->hide();
         statusBar()->hide();
 
         show_fullscreen(this);
+        if (launcher_session) {
+            // First shown seconds after the launcher started this process: ask for the foreground
+            // (the launcher allows it) so the game does not open behind the launcher.
+            raise();
+            activateWindow();
+        }
         ShowMenuHintToast();
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
@@ -3828,7 +3973,9 @@ void MainWindow::ShowMenuHintToast() {
     // After the window has settled into fullscreen
     QTimer::singleShot(600, this, [this] {
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
-            guarana_toast->ShowMessage(Guarana::MenuHintText());
+            // A launcher session has no menu: its hint names the way back to the launcher.
+            guarana_toast->ShowMessage(launcher_session ? Guarana::LauncherSessionHintText()
+                                                        : Guarana::MenuHintText());
         }
     });
 }
@@ -4050,7 +4197,10 @@ void MainWindow::OnConfigure() {
         // Runs if the user hit Cancel or closed the window, and did not ever press the Apply button
         // or `Reset to Defaults` button
         return;
-    } else if (result == QDialog::Accepted) {
+    }
+    // Applied settings (OK, Apply or Reset to Defaults) replace the speed limit the hotkeys changed.
+    speed_limit_before_hotkeys.reset();
+    if (result == QDialog::Accepted) {
         // Only apply new changes if user hit Okay
         // This is here to avoid applying changes if the user hit Apply, made some changes, then hit
         // Cancel
@@ -4332,10 +4482,27 @@ void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_
 
     const auto result = dialog.exec();
 
+    // A rename only changes the shown name: no rescan of the library.
+    if (const auto renamed = dialog.RenamedTitle()) {
+        game_list->SetGameTitle(title_id, *renamed);
+    }
+    // The running game shows the new name in the window title too, also when the custom name was
+    // removed from a game that has no name of its own to show in the library.
+    if (dialog.TitleChanged() && emulation_running && title_id != 0 &&
+        title_id == QtCommon::system->GetApplicationProcessProgramID()) {
+        OnApplicationChanged(title_id);
+    }
+
     if (result != QDialog::Accepted && !UISettings::values.configuration_applied) {
+        // Artwork saved before a failed save of the rest stays saved after Cancel: show it.
+        if (UISettings::values.is_game_list_reload_pending.exchange(false)) {
+            OnGameListRefresh();
+        }
         Settings::RestoreGlobalState(QtCommon::system->IsPoweredOn());
         return;
-    } else if (result == QDialog::Accepted) {
+    }
+    speed_limit_before_hotkeys.reset();
+    if (result == QDialog::Accepted) {
         dialog.ApplyConfiguration();
     }
 
@@ -4549,7 +4716,8 @@ void MainWindow::OnToggleFilterBar() {
 }
 
 void MainWindow::OnToggleStatusBar() {
-    statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
+    // A launcher session never shows the status bar; the setting is kept for the desktop window.
+    statusBar()->setVisible(!launcher_session && ui->action_Show_Status_Bar->isChecked());
 }
 
 void MainWindow::OnTogglePerfOverlay() {
@@ -4821,10 +4989,10 @@ void MainWindow::PrepareShaderPrecache(u64 title_id, const std::filesystem::path
         QMessageBox box(QMessageBox::Question, tr("Precache Shaders"),
                         tr("The shaders of this game are not precached yet. Precache them now?\n\n"
                            "The game starts when they are done. The first time, the game files "
-                           "are read and their shaders are built on every CPU thread, with the "
-                           "shaders earlier play sessions saved, which takes a few minutes. Later "
-                           "launches only build what is new, until the GPU driver changes. The "
-                           "loading screen has a Skip button.\n\n"
+                           "are read and their compute shaders are built on every CPU thread, "
+                           "which takes a few minutes. Later launches only build what is new, "
+                           "until the GPU driver changes. The loading screen has a Skip "
+                           "button.\n\n"
                            "You can change this in Configure, Graphics, Advanced."),
                         QMessageBox::NoButton, this);
         QPushButton* const precache = box.addButton(tr("Precache now"), QMessageBox::AcceptRole);
@@ -5206,6 +5374,16 @@ void MainWindow::OnCaptureScreenshot() {
     render_window->CaptureScreenshot(filename);
 }
 
+void MainWindow::OnReportBug() {
+    if (bug_report_dialog || QtCommon::emu_thread == nullptr || !QtCommon::emu_thread->IsRunning()) {
+        return;
+    }
+    BugReportDialog dialog(*QtCommon::system, this);
+    bug_report_dialog = &dialog;
+    dialog.exec();
+    bug_report_dialog = nullptr;
+}
+
 void MainWindow::KeepNextendoSessionAlive() {
     if (!Common::Nextendo::OnlinePlayActive() || nextendo_session_watcher.isRunning()) {
         return;
@@ -5270,11 +5448,22 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
     std::string title_name;
     std::string title_version;
 
+    // The loader's name stays when the game has no control metadata (a NUP without an installed
+    // control record), as on boot.
+    if (QtCommon::system->GetGameName(title_name) != Loader::ResultStatus::Success) {
+        title_name.clear();
+    }
+
     const FileSys::PatchManager pm(program_id, QtCommon::system->GetFileSystemController(),
                                    QtCommon::system->GetContentProvider());
     if (const auto metadata = pm.GetControlMetadata(); metadata.first != nullptr) {
         title_version = metadata.first->GetVersionString();
-        title_name = metadata.first->GetApplicationName();
+        if (auto metadata_name = metadata.first->GetApplicationName(); !metadata_name.empty()) {
+            title_name = std::move(metadata_name);
+        }
+    }
+    if (auto custom_title = QtCommon::Game::ReadCustomTitle(program_id); !custom_title.empty()) {
+        title_name = std::move(custom_title);
     }
     if (title_name.empty()) {
         title_name = fmt::format("{:016X}", program_id);
@@ -5606,8 +5795,8 @@ void MainWindow::UpdateFrameGenButton() {
         unavailable = tr("This build was compiled without frame generation.");
         break;
     case VideoCore::FrameGenState::UnsupportedGpu:
-        unavailable = tr("This GPU lacks Vulkan features LSFG needs (Vulkan memory model, null "
-                         "descriptors and 16-bit floats). The Optical Flow type may still work.");
+        unavailable = tr("This GPU lacks Vulkan features LSFG needs (Vulkan memory model and null "
+                         "descriptors). The Optical Flow type may still work.");
         break;
     case VideoCore::FrameGenState::UnsupportedSurface:
         unavailable = tr("This GPU can't write to the window's swapchain format from a shader, so "
@@ -5941,6 +6130,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     LOG_INFO(Frontend, "Closing frontend after emulation cleanup");
 
+    if (launcher_session_separate_window) {
+        // The launcher session borrowed single window mode: save the player's own.
+        ui->action_Single_Window_Mode->setChecked(false);
+    }
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
     UISettings::SaveWindowState();
@@ -5959,7 +6152,30 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     QtCommon::system->HIDCore().UnloadInputDevices();
     Network::Shutdown();
 
+    if (launcher_session) {
+        // Hand back to the launcher, which waits for this process. The loop is ended here because
+        // the window may never have been shown (a game that did not start), so closing it would
+        // not end the application on its own.
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        LOG_INFO(Frontend, "Launcher session over, exiting with {}", *launcher_session_exit);
+        QCoreApplication::exit(*launcher_session_exit);
+    }
+
     QWidget::closeEvent(event);
+}
+
+void MainWindow::EndLauncherSession() {
+    // A restart or a sub-program stops the emulation and boots again; wait for that to settle.
+    if (launcher_session_exit || launcher_session_rebooting || emulation_running ||
+        boot_in_progress) {
+        return;
+    }
+    // closeEvent ends the application. A window Qt closes without that event (one it never
+    // created natively) must not leave a process the launcher waits on.
+    if (close() && !launcher_session_exit) {
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        QCoreApplication::exit(*launcher_session_exit);
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {

@@ -32,7 +32,7 @@ Hard rules (legal and trust):
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
-| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number }`; emits `game://exited` `{ code, seconds }` |
+| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `<current>\guarana.exe --launcher-session -f -g <file>`, or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
@@ -77,7 +77,8 @@ When the backend says no (the promise rejects with a sentence to show):
 ```ts
 type Vendor = "intel" | "amd" | "nvidia" | "other";
 interface Gpu { name: string; vendor: Vendor; driver_version: string; is_integrated: boolean;
-  dedicated_mb: number; shared_mb: number; vulkan: boolean; arch_hint?: string; }
+  dedicated_mb: number; shared_mb: number; vulkan: boolean; arch_hint?: string;
+  family: string | null; }   // Intel iGPU family matched by PCI id, e.g. "Panther Lake Intel Graphics"
 interface SystemInfo {
   os: { name: string; build: number; display_version: string };            // e.g. 26100, "24H2"
   cpu: { name: string; cores: number; threads: number; avx2: boolean; avx512: boolean; hybrid: boolean };
@@ -161,11 +162,106 @@ Progress events carry `{ stage: string, done: number, total: number, message?: s
 
 Events: `install://progress` (stages `resolve`, `download`, `verify`, `extract`, `done`; bytes for
 `download`, files for `extract`), `locate://progress` (`scan` with done/total = roots, then `done`),
-`doctor://progress` (stage = the check id being run, then `done`), `game://exited`
+`doctor://progress` (stage = the check id being run, then `done`), `game://boot` (`BootProgress`,
+see "Boot progress and the hand-over"), `game://exited`
 (`{ code, seconds }`), `controller://changed` (`Controller[]`), `warm://progress` (`WarmProgress`), `autopilot://changed`
 (`ModeStatus`, after a game's log was read), `share://changed` (`ShareStatus`, after a session was looked at or the setting changed),
 `launch://request` (no payload: a `LaunchRequest` waits for `take_launch_request`),
 `booster://changed` (`BoosterStatus`, after the booster applies for a session, restores it, or the level changes).
+
+## Launcher session
+
+`launch_game` starts the emulator with `--launcher-session` before `-f -g <file>` (`launch.rs`,
+`src/core/launch_params.cpp`). The emulator then:
+
+- never shows its desktop window (menu bar, status bar, game list): the window first appears as the
+  fullscreen loading screen, black, once the game file has been read, and the game follows on the
+  same surface. Until then the launcher's own screen stays up, with the boot's progress (see "Boot
+  progress and the hand-over" below). The emulator asks for the foreground when its window appears; the launcher
+  allows that with `AllowSetForegroundWindow`. It uses the fullscreen mode set in the emulator
+  (borderless or exclusive), and plays in the main window even when the player chose separate
+  windows there (that setting is saved unchanged). The "leave fullscreen" hotkey (Esc by default)
+  stops the game instead, with the usual stop confirmation; the fullscreen toggle does nothing. The
+  hint toast, where enabled, names that key and the controller's stop combo instead of the menu;
+- exits when the emulation stops, for any reason (the stop or exit hotkey, closing the window, the
+  game ending itself), instead of going back to its game list: exit code **0**. A game that did not
+  start (a load error, a missing firmware or key, a cancelled user or low-RAM dialog) exits with
+  **1** once its error dialog is closed. A crash ends the process with the crash code, as before. A
+  restart or a game that starts its own sub-program boots again and does not end the session;
+- shows its dialogs (load errors, confirmations, applets such as the software keyboard) as before,
+  above the fullscreen window or, before the window appears, on their own.
+
+### Boot progress and the hand-over
+
+While the game boots, the emulator writes its boot to the standard output the launcher gives it
+(a pipe, only with `--launcher-session`), one line each, unbuffered: every `Boot timing:` mark with
+the same text as in its log (`src/common/boot_timing.cpp`, `SetSessionOutput`), and
+`Boot progress: <stage> <done> <total>` for the counts its loading screen shows (stage `prepare`,
+`build`, `warm` or `complete`; one line per stage and whole percent,
+`Common::BootTiming::SessionProgress`). It stops writing once the game is on screen, but the pipe
+stays open until it exits. The log
+file is not used for this: it is written in 4 KiB blocks unless per-line flushing is on, and the log
+filter can leave the marks out. The launcher reads the pipe to its end, so the emulator's writes,
+which block on a full pipe, never wait on it; if the launcher is gone, the first failed write ends
+the output.
+
+`boot.rs` turns the lines into `game://boot` events:
+
+    BootProgress { phase: "starting" | "loading" | "shaders" | "precache" | "launching"
+                          | "first-frame" | "shown" | "window"; done: number; total: number }
+
+| Phase | From | Words on the launch stage |
+|---|---|---|
+| `starting` | `frontend:`, `startup:` and `vulkan:` marks | Starting Guarana… |
+| `loading` | `boot:`, `core:`, `nup:`, `romfs:` marks | Loading the game… |
+| `shaders` | `shaders:` marks, `Boot progress: prepare` and `build` (done of total pipelines) | Loading shaders…, with the count after it |
+| `precache` | `Boot progress: warm` (done of total; the emulator's loading screen can skip it) | Preparing shaders ahead…, with the count after it |
+| `launching` | `Boot progress: complete`, `guest:` marks | Starting the game… |
+| `first-frame` | the mark `frontend: first guest frame presented` (`GRenderWindow::OnFrameDisplayed`, after the first composite of a guest frame; the loading screen still covers it and fades out over 0.5 s) | |
+| `shown` | the mark `frontend: loading screen hidden, game shown` (the loading screen's fade is over and the render window is shown; also in the log of every session) | |
+| `window` | not from the pipe: a window of the emulator's process has the foreground (`GetForegroundWindow`, polled every 200 ms for up to 15 minutes, for every version) | |
+
+Phases only move forward (a late `vulkan:` mark does not take `loading` back), `shaders` and
+`precache` can follow each other on progress lines only (a `shaders:` mark after the precache keeps
+`precache`), and an event is emitted only when the phase moves or the counts
+change. `done` and `total` are 0 outside `shaders` and `precache`; the count is never shown without a
+real one.
+
+The launch stage holds (`screens/launch.ts`) until the game is on screen, then shows the title "is running":
+
+- at `shown` at once, and 1 s after `first-frame` if `shown` does not come;
+- at `window` it pauses its animations (the emulator's window covers it, and they would take GPU
+  time from the shader build) and goes on following the boot; with no boot lines at all (a version
+  before this output), it hands over 1 s after `window` (before this change: 1 s after the start);
+- without news it hands over anyway: 20 s with nothing at all (45 s when `launch_game` returned
+  `follows_boot`, as the first line comes after the emulator's own start-up), 60 s after the last
+  line once the emulator's window has the foreground. Before this change the stage dimmed to black
+  and read "Playing" about a second after the start, whatever the emulator did. Once the
+  emulator's window has had the foreground the dimming is skipped, as nobody would see it.
+
+The emulator's own window still appears when the game file is read (its fullscreen loading
+screen), so the launcher's stage is what the player sees from Play until then, and what they find
+on Alt+Tab while the shaders load. Keeping the launcher's stage in front of the emulator until the
+first frame (a topmost launcher, or the emulator cloaking its window) is not done: a topmost
+launcher would hide the emulator's dialogs (load errors, user selection, the software keyboard)
+behind it, and the cloaked window needs a check on a device first.
+
+`game://exited` brings the launcher back as soon as the process is gone: it is restored if
+minimized and shown, and brought to the front (`set_focus`) only when the foreground window at the
+exit belongs to the emulator, the launcher or nobody: a player who moved to another app keeps it.
+`code` is that exit code.
+A code of 1 can arrive late (the player may leave the load error open for minutes), so `seconds`
+alone does not tell a failed start from a session; the autopilot ignores a code-1 session that
+showed no frame (`autopilot::decide`).
+
+Only versions that understand the flag get it: a stable version of 20.3.0 or later
+(`LAUNCHER_SESSION_SINCE` in `launch.rs`, compared with `current.json`). The flag was added when the
+repository's `VERSION` read 20.2.0; the assumption is that the next release is 20.3.0 or later. A
+nightly, a pre-release or any other label gets `-f -g <file>` only, as do older versions the
+launcher installs or rolls back to: they show the emulator's window around the game and go back to
+its game list when the game stops, until the player closes it. An older build that receives it
+ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the gate is
+about behaviour, not safety.
 
 ## Opening games from Windows
 
@@ -282,11 +378,19 @@ shows the picker and, for each level, exactly what it changes and whether it nee
 
 ## Profiles (first set)
 
-`intel-arc-igpu` (Arc 130T/140T/140V, Meteor/Panther Lake Arc), `amd-igpu-handheld` (Radeon 780M/880M/890M, Z1/Z2),
+`intel-arc-igpu` (Arc 130T/140T/140V, Meteor/Panther Lake Arc, Arrow Lake-H Intel Graphics by PCI id), `amd-igpu-handheld` (Radeon 780M/880M/890M, Z1/Z2),
 `low-power-handheld` (any iGPU on battery: 30 fps cap, lower resolution), `desktop-dgpu`, `safe-defaults`.
 Toggles map to `%APPDATA%\guarana\nx2_switches.txt` lines and `qt-config.ini` keys, e.g.
 `frame_generation` → `[Renderer] frame_gen=true, frame_gen_multiplier=3, frame_gen_target_rate=60`,
-`ocarina_extrapolation` → `EDEN_NX2_EXTRAPOLATE=1`, `gm_routing` → `EDEN_NX2_GM=11`,
+`ocarina_extrapolation` → `EDEN_NX2_EXTRAPOLATE=1` (off: `=0`, since the shipped file sets 1; on, with any
+Intel integrated GPU in `gpus`, primary or not, the line is left out at every refresh rate so the emulator
+decides at each start: its locked 120 and 144 Hz sets for Ocarina of Time interpolate the in-between
+frames at 115-125 and 140-148 Hz, and its 60 Hz Intel set and the shipped file predict elsewhere;
+`list_profiles` then appends a sentence saying so to the toggle's `help`, and `apply_profile`'s `changed`
+says "removed, left to the emulator on an Intel integrated GPU" when it removes the line;
+`profiles::extrapolate_switch`, issue #119. In custom mode `launch_game` rewrites only this block of
+`nx2_switches.txt` from the saved profile and overrides at every start, so a line an older launcher wrote
+goes; `qt-config.ini` stays as the player left it), `gm_routing` → `EDEN_NX2_GM=11`,
 `igpu_power_policy` (experimental) → `EDEN_NX2_POWER_POLICY=igpu`, `async_shaders`, `vram_mode`.
 Also: `fluid_presenter` → `EDEN_NX2_FLUID=1` (on for `intel-arc-igpu` and `amd-igpu-handheld`;
 experimental except on `intel-arc-igpu`), `hdr_auto` → `[Renderer] hdr_mode=2, hdr_swapchain=0`
@@ -304,18 +408,33 @@ never changed silently), stale shader-cache temp files (fix: delete `*.tmp`), ke
 firmware present, game folder present, Ocarina of Time found, emulator version up to date,
 controller connected (`controller`, info when none), Windows HDR (`windows_hdr`, info only: whether
 the primary display can do HDR and whether Windows HDR is on; fix "How to turn on HDR" opens
-Microsoft's HDR help page, never toggles it).
+Microsoft's HDR help page, never toggles it), memory free right now (`memory_now`: free RAM and
+the commit against its limit at check time; warns below 3 GB of free RAM and says what to close;
+below 6 GB of commit left it warns, with a fix that opens System > About for the page file, only
+when the page file is capped or absent, and with a system-managed page file is info only),
+display refresh rate (`refresh_rate`: when the game's GPU is integrated, where the Ocarina of
+Time preset paces frames to 60, warns when the main display's rate is not a multiple of 60 and the
+display offers one, naming the nearest; fix opens Advanced display; on a dedicated GPU it is info
+only), displays on the integrated GPU (`displays`: warns when the game's GPU is integrated and
+drives two or more active displays; fix opens Display settings).
+`Gpu.family` names the Intel integrated GPU family whose PCI ids match the Intel rows of
+`FamilyRows` in #78's `src/common/device_profile.cpp` (Meteor Lake 7D55, Arrow Lake-H 7D51/7DD1,
+Lunar Lake 64A0/64B0, Panther Lake B080-B087, B090, B0A0). Auto (`recommend`, the community class)
+treats a match like a GPU named "Arc", except Panther Lake's "Intel Graphics" (B090, B0A0), which
+stays on the low-power profile until a paired benchmark shows the Arc profile suits it.
 Fixes that change the system only ever open the official Windows/vendor page; file fixes act only
 inside Guarana's own folders.
 
 Check ids, in the order `run_doctor` returns them: `emulator_version`, `gpu_driver`, `vulkan`,
-`vc_redist`, `avx2`, `memory`, `disk`, `power`, `hags`, `intel_shared_memory`, `windows_hdr`,
-`defender`, `shader_tmp`, `keys`, `firmware`, `game_folder`, `ocarina`, `controller`.
+`vc_redist`, `avx2`, `memory`, `memory_now`, `disk`, `power`, `hags`, `intel_shared_memory`,
+`windows_hdr`, `refresh_rate`, `displays`, `defender`, `shader_tmp`, `keys`, `firmware`,
+`game_folder`, `ocarina`, `controller`.
 Fix ids: `install_update`, `open_driver_page`, `open_vulkan_driver_page`, `open_vc_redist`,
 `install_vc_redist` (runs the `vc_redist.x64.exe` shipped in the installed Guarana folder with
 `/install /quiet /norestart` after the click; Windows' own permission prompt appears, nothing is
 elevated silently; the check offers it only when the file is found, else `open_vc_redist`),
-`open_memory_settings`, `open_storage_settings`, `open_power_settings`, `open_graphics_settings`,
-`open_intel_graphics`, `open_hdr_help`, `open_windows_security`, `delete_shader_tmp`,
+`open_memory_settings`, `open_about_settings`, `open_storage_settings`, `open_power_settings`,
+`open_graphics_settings`, `open_intel_graphics`, `open_hdr_help`, `open_display_refresh`,
+`open_display_settings`, `open_windows_security`, `delete_shader_tmp`,
 `open_bluetooth_settings`. `apply_fix` returns the check run again; `install_update` streams
 `install://progress` like `install_version`.

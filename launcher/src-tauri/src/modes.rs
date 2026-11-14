@@ -250,7 +250,7 @@ pub fn apply_current(app: &AppHandle) -> CmdResult<Plan> {
     if plan.mode == CUSTOM {
         return Ok(plan);
     }
-    profiles::apply(&plan.profile_id, &plan.overrides)?;
+    profiles::apply(&plan.profile_id, &plan.overrides, &st.system())?;
     let (id, ov) = (plan.profile_id.clone(), plan.overrides.clone());
     st.update(move |s| {
         s.profile_id = Some(id);
@@ -358,6 +358,7 @@ mod tests {
                 shared_mb: 0,
                 vulkan: true,
                 arch_hint: None,
+                family: None,
                 vendor_id: 0,
                 device_id: 0,
                 driver_date: None,
@@ -396,6 +397,30 @@ mod tests {
         assert_eq!(plan("auto", &batt, &community::builtin(), &BTreeMap::new()).profile_id, "low-power-handheld");
         let nv = sys(Vendor::Nvidia, "NVIDIA GeForce RTX 4070", false, Some(true));
         assert_eq!(plan("auto", &nv, &community::builtin(), &BTreeMap::new()).profile_id, "desktop-dgpu");
+    }
+
+    #[test]
+    fn auto_knows_intel_graphics_by_pci_id() {
+        // Arrow Lake-H's 7D51 reports only "Intel(R) Graphics".
+        let mut arl = sys(Vendor::Intel, "Intel(R) Graphics", true, Some(true));
+        arl.gpus[0].vendor_id = 0x8086;
+        arl.gpus[0].device_id = 0x7d51;
+        arl.gpus[0].family = crate::system::intel_igpu_family(0x8086, 0x7d51, "Intel(R) Graphics").map(str::to_string);
+        let p = plan("auto", &arl, &community::builtin(), &BTreeMap::new());
+        assert_eq!(p.profile_id, "intel-arc-igpu");
+        assert_eq!(p.community_class, "intel-arc-igpu");
+        // On battery the low-power profile still wins.
+        let mut bat = arl.clone();
+        bat.power.on_ac = Some(false);
+        assert_eq!(plan("auto", &bat, &community::builtin(), &BTreeMap::new()).profile_id, "low-power-handheld");
+        // Panther Lake's 4-core Xe3 part (8086:B0A0) keeps the low-power profile until it is measured.
+        let mut ptl = arl.clone();
+        ptl.gpus[0].device_id = 0xb0a0;
+        ptl.gpus[0].family = crate::system::intel_igpu_family(0x8086, 0xb0a0, "Intel(R) Graphics").map(str::to_string);
+        assert_eq!(plan("auto", &ptl, &community::builtin(), &BTreeMap::new()).profile_id, "low-power-handheld");
+        // An "Intel Graphics" part in no family keeps the low-power profile.
+        let mtl = sys(Vendor::Intel, "Intel(R) Graphics", true, Some(true));
+        assert_eq!(plan("auto", &mtl, &community::builtin(), &BTreeMap::new()).profile_id, "low-power-handheld");
     }
 
     #[test]

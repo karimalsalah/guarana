@@ -41,6 +41,9 @@ struct LaunchParams {
     bool fullscreen = false;
     bool force_null_render = false;
     bool force_single_core = false;
+    // --launcher-session: the Guarana launcher started the game. The Qt frontend shows only the
+    // fullscreen game, never its desktop window, and exits when the emulation stops.
+    bool launcher_session = false;
     // print
     bool print_version = false;
     bool print_help = false;

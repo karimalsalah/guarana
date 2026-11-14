@@ -21,6 +21,7 @@
 #include "video_core/renderer_vulkan/pipeline_build_failure.h"
 #include "video_core/renderer_vulkan/pipeline_build_trace.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
+#include "video_core/renderer_vulkan/unoptimized_first.h"
 
 #include "common/bit_field.h"
 #include "common/cityhash.h"
@@ -41,6 +42,7 @@
 #include "video_core/shader_handle_program.h"
 #include "video_core/shader_notify.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "common/settings.h"
@@ -809,6 +811,7 @@ GraphicsPipeline::GraphicsPipeline(
             const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
             Validate();
             if (library_cache) {
+                library_render_pass = render_pass;
                 MakeLibraryBuild(render_pass);
             } else {
                 MakePipeline(render_pass);
@@ -838,7 +841,11 @@ GraphicsPipeline::GraphicsPipeline(
         // Its SPIR-V is kept compressed (about a tenth of it), so that an evicted pipeline is
         // built again without translating its shaders.
         for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
-            spv_modules[stage].reset();
+            // EDEN_NX2_UNOPT_FIRST: the optimized libraries' job still builds from the modules
+            // of the unoptimized parts and releases them itself (BuildOptimizedReplacement).
+            if (!KeepsModuleForReplacement(stage)) {
+                spv_modules[stage].reset();
+            }
             if (!spirv[stage].empty()) {
                 kept_spirv[stage] = Common::Compression::CompressDataZSTD(
                     reinterpret_cast<const u8*>(spirv[stage].data()),
@@ -1220,6 +1227,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                      Spec::has_images);
         if (memo_hit && verify_memo) {
             texture_cache.LogPrepares(nullptr, false);
+            // The dry memo pass skipped PrepareImage, and guest memory can change while the
+            // full resolve runs: drop the memo hit when preparing deleted images or the inputs
+            // moved since ResolveMemoizedTextures.
+            if (!texture_cache.TextureMemoStillHolds(
+                    texture_memo, std::span(handle_addresses.data(), handle_addresses.size()))) {
+                texture_memo.valid = false;
+                memo_hit = false;
+            }
         }
     }
     if (use_memo) {
@@ -1777,6 +1792,9 @@ void GraphicsPipeline::KeepImageDescriptors(size_t stage, size_t first_entry) {
                               entries + end_entry);
 }
 
+/// Writes the descriptors the stages queued and the push constants, then records the draw's state
+/// and bindings. Returns false, and the draw is skipped, when the queued descriptor count does not
+/// match the pipeline or no descriptor memory can be reserved.
 bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                                      const RenderAreaPushConstant& render_area) {
     if (guest_descriptor_queue.UpdateCount() != num_descriptor_entries) {
@@ -1921,7 +1939,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 .payload_words = mesh_emulation->payload_stride,
                 .capacity_words = capacity,
                 .block_words = mesh_emulation->block_words,
-                .vertices_per_group = mesh_emulation->max_primitives * 3,
+                .vertices_per_group = MeshEmulationVerticesPerGroup(),
                 .max_groups = device.GetMaxComputeWorkGroupCount()[0],
             };
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *distribution_pipeline);
@@ -1950,18 +1968,68 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }
+    if (library_cache && library_cache->UnoptimizedFirst() &&
+        first_draw == std::chrono::steady_clock::time_point{}) {
+        // EDEN_NX2_UNOPT_FIRST: the swap's log line counts from here.
+        first_draw = std::chrono::steady_clock::now();
+    }
     // Only once the first build is done: until then its thread may still read `pipeline`.
     if (IsBuilt() && optimized_ready.load(std::memory_order_acquire) && !optimized_bound) {
         // The optimized pipeline is in. Swap on the scheduler thread, in order with the draws
         // recorded so far, and bind again; the first one stays alive for the command buffers
         // that bound it.
         optimized_bound = true;
+        if (unoptimized_first) {
+            library_cache->RecordUnoptimizedSwap(key.Hash(),
+                                                 std::chrono::steady_clock::now() - first_draw);
+        }
         scheduler.ForgetGraphicsPipeline(this);
         scheduler.Record([this](vk::CommandBuffer) {
-            retired_pipeline = std::move(pipeline);
-            pipeline = std::move(optimized_pipeline);
-            library_cache->RecordReplacement();
+            if (SwapInReplacement(pipeline, optimized_pipeline, retired_pipeline)) {
+                library_cache->RecordReplacement();
+            }
         });
+    }
+    if (library_cache && !optimized_bound) {
+        // A pipeline loaded from the shader cache was built by its owner, without shader jobs,
+        // so its build queued no optimized link (MakeLibraryBuild). Read what the build wrote only
+        // once it is done.
+        const bool built = IsBuilt();
+        const bool is_linked = built && linked.load(std::memory_order_relaxed);
+        const bool fast_link = device.CanFastLinkGraphicsLibraries();
+        const bool optimize = GplOptimizeEnabled();
+        const bool has_optimized_build = built && optimized_build.has_value();
+        const bool optimize_cached = GplOptimizeCachedEnabled();
+        const OptimizedLinkAtDraw link_at_draw = DecideOptimizedLinkAtDraw({
+            .built = built,
+            .linked = is_linked,
+            .fast_link = fast_link,
+            .optimize = optimize,
+            .has_optimized_build = has_optimized_build,
+            .optimize_cached = optimize_cached,
+            // Asked only when it would queue: the first call starts the pool and logs its size.
+            .has_pool = optimize_cached && is_linked && fast_link && optimize &&
+                        !has_optimized_build && GplOptimizeWorkers() != nullptr,
+        });
+        if (link_at_draw == OptimizedLinkAtDraw::Queue) {
+            // EDEN_NX2_GPL_OPTIMIZE_CACHED: the optimized link a build with jobs queues, on the
+            // same low-priority pool, swapped in at a later draw (above). Only pipelines that
+            // are drawn queue one, so unused prebuilt ones do not flood the pool.
+            auto link = [this, render_pass = library_render_pass] {
+                try {
+                    optimized_pipeline = LinkLibraries(render_pass, true, shader_libraries);
+                } catch (const vk::Exception& exception) {
+                    LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: optimized link of {:016x} failed: {}",
+                              key.Hash(), exception.what());
+                    return;
+                }
+                optimized_ready.store(true, std::memory_order_release);
+            };
+            optimized_build.emplace(GplOptimizeWorkers(), std::move(link), true);
+            library_cache->RecordOptimizedLinkAtDraw();
+        } else if (link_at_draw == OptimizedLinkAtDraw::StaysFast) {
+            library_cache->RecordUnoptimizedDraw();
+        }
     }
     if (library_cache && !optimized_bound && (!IsBuilt() || linked.load(std::memory_order_relaxed))) {
         library_cache->RecordFastDraw();
@@ -2665,7 +2733,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
             .pSpecializationInfo = nullptr,
         });
     }
-    // Mesh emulation draws a plain triangle list without vertex attributes.
+    // Mesh emulation draws a plain point, line or triangle list without vertex attributes.
     const VkPipelineVertexInputStateCreateInfo emulation_vertex_input{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .pNext = nullptr,
@@ -2675,11 +2743,14 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         .vertexAttributeDescriptionCount = 0,
         .pVertexAttributeDescriptions = nullptr,
     };
+    const u32 emulation_corners{mesh_emulation ? mesh_emulation->primitive_vertices : 3U};
     const VkPipelineInputAssemblyStateCreateInfo emulation_input_assembly{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .topology = emulation_corners == 1   ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+                    : emulation_corners == 2 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+                                             : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         .primitiveRestartEnable = VK_FALSE,
     };
     VkPipelineCreateFlags flags{};
@@ -2807,17 +2878,23 @@ VkPipelineCreateFlags LibraryFlags(const Device& device) {
     }
     return flags;
 }
+
+/// Create flags of a shader library: LibraryFlags, with optimization disabled for an
+/// EDEN_NX2_UNOPT_FIRST build.
+VkPipelineCreateFlags ShaderLibraryFlags(const Device& device, bool unoptimized) {
+    return ShaderLibraryCreateFlags(LibraryFlags(device), unoptimized);
+}
 } // Anonymous namespace
 
 /// Cache key of the `part` library: everything it is built from (stages, SPIR-V hashes, set
 /// layouts, render pass and the fixed state that part takes), so equal keys give the same library.
 std::string GraphicsPipeline::ShaderLibraryKey(GplPart part, const PipelineStates& s,
-                                               VkRenderPass render_pass) const {
+                                               VkRenderPass render_pass, bool unoptimized) const {
     GplKeyWriter key_writer;
     key_writer.Add(static_cast<u32>(part));
     // Same render pass handle = same formats and samples (the render pass cache keeps them).
     key_writer.Add(render_pass);
-    key_writer.Add(static_cast<u32>(LibraryFlags(device)));
+    key_writer.Add(static_cast<u32>(ShaderLibraryFlags(device, unoptimized)));
     const VkPushConstantRange push_range{DescriptorLayoutBuilder{device}.PushConstantRange()};
     key_writer.Add(push_range.stageFlags);
     key_writer.Add(push_range.offset);
@@ -2914,7 +2991,7 @@ std::string GraphicsPipeline::ShaderLibraryKey(GplPart part, const PipelineState
 
 /// Builds the `part` shader library with its own per-stage set layouts and pipeline layout.
 GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineStates& s,
-                                               VkRenderPass render_pass) const {
+                                               VkRenderPass render_pass, bool unoptimized) const {
     GplLibrary library;
     // The library's own set layouts, identically defined to the linked pipeline's (same
     // signature in the key), so the library outlives the pipeline that built it.
@@ -2971,11 +3048,11 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
     const auto cache_lock = device.LockPipelineCacheForBuild();
     const char* const trace_kind = pre_rasterization ? "graphics-library-pre" : "graphics-library-fs";
     const auto trace_begin = std::chrono::steady_clock::now();
-    TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, false);
+    TracePipelineBuild("BEGIN", trace_kind, key.Hash(), key.unique_hashes, unoptimized);
     library.pipeline = device.GetLogical().CreateGraphicsPipeline({
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &library_ci,
-        .flags = LibraryFlags(device),
+        .flags = ShaderLibraryFlags(device, unoptimized),
         .stageCount = static_cast<u32>(shader_stages.size()),
         .pStages = shader_stages.empty() ? nullptr : shader_stages.data(),
         .pVertexInputState = nullptr,
@@ -2994,20 +3071,22 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
     }, *pipeline_cache);
-    TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, false,
+    TracePipelineBuild("END", trace_kind, key.Hash(), key.unique_hashes, unoptimized,
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
     return library;
 }
 
-/// Links the vertex input, both shader libraries and the fragment output library into a pipeline,
-/// with link time optimization when `optimized` is set.
-vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool optimized) {
+/// Links the vertex input, both shader libraries (`shaders`) and the fragment output library into
+/// a pipeline, with link time optimization when `optimized` is set.
+vk::Pipeline GraphicsPipeline::LinkLibraries(
+    VkRenderPass render_pass, bool optimized,
+    const std::array<std::shared_ptr<const GplLibrary>, 2>& shaders) {
     const std::array<VkPipeline, 4> libraries{
         *vertex_input_library,
-        *shader_libraries[0]->pipeline,
-        *shader_libraries[1]->pipeline,
+        *shaders[0]->pipeline,
+        *shaders[1]->pipeline,
         *fragment_output_library,
     };
     const VkPipelineLibraryCreateInfoKHR link_ci{
@@ -3052,7 +3131,14 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
 }
 
 bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
-    PipelineStates states;
+    // EDEN_NX2_UNOPT_FIRST: the states are kept for the optimized libraries' job. Their create
+    // infos point into them, so they are made in place and never copied.
+    std::shared_ptr<PipelineStates> kept_states;
+    if (library_cache->UnoptimizedFirst()) {
+        kept_states = std::make_shared<PipelineStates>();
+    }
+    PipelineStates local_states;
+    PipelineStates& states = kept_states ? *kept_states : local_states;
     FillStates(states, PipelineVariant::Main);
     // Values of states the draw sets (those in the dynamic list) are zeroed in the libraries'
     // create info, and so in their keys: pipelines that differ only in them share one shader
@@ -3106,12 +3192,24 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         // The log names a library after its vertex (or fragment) program.
         const u64 name = part == GplPart::PreRasterization ? key.unique_hashes[1]
                                                            : key.unique_hashes[5];
+        std::string library_key = ShaderLibraryKey(part, states, render_pass, false);
+        // EDEN_NX2_UNOPT_FIRST: unoptimized when no pipeline has built the optimized library yet
+        // and its optimized build can follow in the background.
+        const bool unoptimized =
+            library_cache->UnoptimizedFirst() &&
+            BuildsLibraryUnoptimizedFirst(build_jobs != nullptr,
+                                          library_cache->HasBuilt(library_key));
+        if (unoptimized) {
+            library_key = ShaderLibraryKey(part, states, render_pass, true);
+        }
         shader_libraries[index] = library_cache->GetOrCreate(
-            part, ShaderLibraryKey(part, states, render_pass),
-            [&] { return MakeShaderLibrary(part, states, render_pass); }, name);
+            part, library_key,
+            [&] { return MakeShaderLibrary(part, states, render_pass, unoptimized); }, name,
+            unoptimized);
         if (!shader_libraries[index]) {
             return false;
         }
+        unoptimized_libraries[index] = unoptimized;
     }
     const VkGraphicsPipelineLibraryCreateInfoEXT vertex_input_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
@@ -3171,9 +3269,71 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         .basePipelineIndex = 0,
     }, *pipeline_cache);
     }
-    pipeline = LinkLibraries(render_pass, !device.CanFastLinkGraphicsLibraries());
+    pipeline = LinkLibraries(render_pass, !device.CanFastLinkGraphicsLibraries(), shader_libraries);
     linked = true;
+    if (unoptimized_libraries[0] || unoptimized_libraries[1]) {
+        unoptimized_first = true;
+        replacement_states = std::move(kept_states);
+        library_cache->RecordUnoptimizedStart();
+    }
     return true;
+}
+
+bool GraphicsPipeline::KeepsModuleForReplacement(size_t stage) const {
+    return unoptimized_first &&
+           unoptimized_libraries[InPart(GplPart::PreRasterization, stage) ? 0 : 1];
+}
+
+void GraphicsPipeline::BuildOptimizedReplacement(VkRenderPass render_pass,
+                                                 const PipelineStates& states) {
+    const auto begin = std::chrono::steady_clock::now();
+    // A library the first build found optimized is kept; the others are built here, unless
+    // another pipeline has built or is building the same one.
+    std::array<std::shared_ptr<const GplLibrary>, 2> libraries = shader_libraries;
+    static constexpr std::array parts{GplPart::PreRasterization, GplPart::Fragment};
+    bool built_all = true;
+    for (size_t index = 0; index < parts.size() && built_all; ++index) {
+        if (!unoptimized_libraries[index]) {
+            continue;
+        }
+        const GplPart part = parts[index];
+        const u64 name = part == GplPart::PreRasterization ? key.unique_hashes[1]
+                                                           : key.unique_hashes[5];
+        libraries[index] = library_cache->GetOrCreate(
+            part, ShaderLibraryKey(part, states, render_pass, false),
+            [&] { return MakeShaderLibrary(part, states, render_pass, false); }, name, false,
+            true);
+        built_all = libraries[index] != nullptr;
+    }
+    // Nothing reads the shader modules after this. The build released the others itself, maybe
+    // at the same time, so only the kept ones are touched here.
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        if (KeepsModuleForReplacement(stage)) {
+            spv_modules[stage].reset();
+        }
+    }
+    vk::Pipeline linked_pipeline;
+    if (built_all) {
+        try {
+            // Linked as the first link would have been, or with link time optimization when
+            // EDEN_NX2_GPL_OPTIMIZE is on: this job takes the place of its optimized link.
+            linked_pipeline = LinkLibraries(
+                render_pass, GplOptimizeEnabled() || !device.CanFastLinkGraphicsLibraries(),
+                libraries);
+        } catch (const vk::Exception& exception) {
+            LOG_ERROR(Render_Vulkan, "Nx2Perf unopt_first: optimized link of {:016x} failed: {}",
+                      key.Hash(), exception.what());
+        }
+    }
+    library_cache->RecordReplacementBuild(static_cast<bool>(linked_pipeline),
+                                          std::chrono::steady_clock::now() - begin);
+    if (!linked_pipeline) {
+        // The pipeline stays on its unoptimized libraries.
+        return;
+    }
+    optimized_libraries = std::move(libraries);
+    optimized_pipeline = std::move(linked_pipeline);
+    optimized_ready.store(true, std::memory_order_release);
 }
 
 void GraphicsPipeline::FallBackToMonolithic(VkRenderPass render_pass) {
@@ -3212,13 +3372,35 @@ void GraphicsPipeline::MakeLibraryBuild(VkRenderPass render_pass) {
         FallBackToMonolithic(render_pass);
         return;
     }
-    if (GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries() && build_jobs) {
+    if (unoptimized_first) {
+        // EDEN_NX2_UNOPT_FIRST: the optimized libraries and their link, in place of the
+        // optimized link below and where it would run: on its low-priority pool, so that these
+        // whole library builds do not take driver workers from the builds draws wait for
+        // (EDEN_NX2_GPL_OPTIMIZE_THREADS sets how many run at once), or as a Background job
+        // counted as one driver compile in the scheduler's memory budget (PipelineCache's
+        // DriverCompileBytes). Swapped in at a later draw (ConfigureDraw); dropped if the
+        // pipeline goes before the build started.
+        auto replace = [this, render_pass, states = std::move(replacement_states)] {
+            BuildOptimizedReplacement(render_pass, *states);
+        };
+        if (Common::ThreadWorker* const pool = GplOptimizeWorkers()) {
+            optimized_build.emplace(pool, std::move(replace), true);
+        } else {
+            optimized_build.emplace(
+                PipelineBuildQueue{
+                    .jobs = build_jobs,
+                    .driver_bytes = u64{96} << 20, // = DriverCompileBytes (vk_pipeline_cache.cpp)
+                    .priority = VideoCommon::ShaderJobPriority::Background,
+                },
+                std::move(replace));
+        }
+    } else if (GplOptimizeEnabled() && device.CanFastLinkGraphicsLibraries() && build_jobs) {
         // Optimized link on its own low-priority pool, swapped in at a later draw
         // (ConfigureDraw). Dropped if the pipeline goes away before the link started
         // (drop_unstarted, or a cancelled Background job when EDEN_NX2_GPL_OPTIMIZE_THREADS=0).
         auto link = [this, render_pass] {
             try {
-                optimized_pipeline = LinkLibraries(render_pass, true);
+                optimized_pipeline = LinkLibraries(render_pass, true, shader_libraries);
             } catch (const vk::Exception& exception) {
                 LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: optimized link of {:016x} failed: {}",
                           key.Hash(), exception.what());

@@ -6,11 +6,15 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -32,6 +36,12 @@ struct RendererDeviceInfo {
     std::string driver;
     std::string api;
     bool integrated{}; ///< An integrated GPU: it shares the package power budget with the CPU
+    /// Vulkan only, for bug reports: the API version, device-local memory, the device's
+    /// extensions and the features Lichii checks.
+    std::string api_version;
+    u64 device_local_memory{};
+    std::vector<std::string> extensions;
+    std::vector<std::pair<std::string, bool>> features;
 };
 
 enum class FrameGenState : u8 {
@@ -117,6 +127,84 @@ public:
     /// none was sampled
     [[nodiscard]] virtual GpuCostSnapshot GetGpuCosts() const {
         return {};
+    }
+
+    /// EDEN_NX2_GPU_PERF: one hardware performance counter of a gpu_perf sample,
+    /// normalized to percentages/MHz where the counter's unit allows it.
+    struct GpuPerfSample {
+        std::string name;
+        double value{};
+        std::string unit;
+    };
+    /// Whether the gpu_perf counter sampler can run on this renderer/device.
+    [[nodiscard]] virtual bool IsGpuPerfSupported() const {
+        return false;
+    }
+    /// Why gpu_perf cannot sample (unsupported renderer, extension, lock, ...).
+    [[nodiscard]] virtual std::string GpuPerfReason() const {
+        return "not the Vulkan renderer";
+    }
+    /// Samples the next `frames` submissions (0 stops); false when unsupported or the
+    /// profiling lock could not be acquired.
+    virtual bool RequestGpuPerfSampling([[maybe_unused]] u32 frames) {
+        return false;
+    }
+    [[nodiscard]] virtual bool IsGpuPerfSampling() const {
+        return false;
+    }
+    /// Counters averaged over the submissions collected so far; empty until then.
+    [[nodiscard]] virtual std::vector<GpuPerfSample> ReadGpuPerf() {
+        return {};
+    }
+    [[nodiscard]] virtual u64 GpuPerfFramesSampled() const {
+        return 0;
+    }
+
+    /// The Vulkan present thread's counters (present_stats); null on other renderers.
+    struct PresentStatsView {
+        bool fluid{};
+        bool fallback{};
+        bool shown_stats{};
+        u64 slot_count{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 not_done{};
+        u64 uncovered{};
+        u64 rolled{};
+        u64 spare{};
+        u64 stale{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{};
+        double age_ms{};
+        double latency_ms{};
+        u64 latency_samples{};
+        u64 presents{};
+        double acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        double copy_wait_ms{}, copy_wait_max_ms{};
+        double lock_ms{}, lock_max_ms{};
+        double call_ms{}, call_max_ms{};
+        double margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        u64 copy_gpu_samples{};
+        double copy_gpu_ms{}, copy_gpu_max_ms{};
+        double refresh_hz{};
+        u64 vblank_index{};
+        u64 divisor{};
+        double lead_ms{};
+        double clock_latency_ms{};
+        std::size_t queued_frames{};
+        std::size_t free_frames{};
+        std::size_t frame_count{};
+        std::size_t swapchain_images{};
+    };
+    [[nodiscard]] virtual std::optional<PresentStatsView> GetPresentStats() const {
+        return std::nullopt;
     }
 
     [[nodiscard]] const RendererDeviceInfo& GetDeviceInfo() const {

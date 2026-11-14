@@ -258,6 +258,13 @@ class FakeEmulator:
                     stream.flush()
 
     def close(self):
+        # On Linux close() alone does not wake the accept() in serve(), and the port answers one
+        # more connection: shut the socket down first. Windows refuses that for a listener, and
+        # its close() does wake accept().
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.listener.close()
 
 
@@ -814,7 +821,10 @@ class RunTest(RunCase):
         self.addCleanup(setattr, bench, "measure_window", original)
         code, rows = self.run_bench()
         self.assertEqual(code, 2)
-        self.assertEqual((rows[0]["scene_ok"], rows[0]["invalid_reasons"], rows[0]["fps"]), (False, ["wrong_scene"], 55.0))
+        # The picture turned black: also refused without a reference by the picture check.
+        self.assertEqual((rows[0]["scene_ok"], rows[0]["invalid_reasons"], rows[0]["fps"]),
+                         (False, ["wrong_scene", "black_picture"], 55.0))
+        self.assertEqual([shot["dark_pct"] for shot in rows[0]["picture"]["shots"]], [0.0, 100.0])
         self.assertEqual(bench.validate_row(rows[0]), [])
 
     def test_missing_reference_and_recording_one(self):
@@ -1002,7 +1012,135 @@ class TableTest(unittest.TestCase):
         self.assertIn("| oot-hyrule-field | extra | - | 66.0 | - |", text)
 
 
+def run_main(*argv):
+    """(exit code, stdout and stderr) of bench.main(argv)."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        code = bench.main(list(argv))
+    return code, out.getvalue()
+
+
+class ContributedRowsTest(unittest.TestCase):
+    """The checks .github/workflows/bench-rows.yml runs on a results pull request, on a copy of the folder."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.results = os.path.join(folder.name, "results")
+        os.mkdir(self.results)
+        self.page = os.path.join(folder.name, "RESULTS.md")
+        self.rows = os.path.join(self.results, f"2026-11-11-{bench.machine_id(HARDWARE)}.jsonl")
+        self.write([good_row(), dict(good_row(), variant="mesh")])
+
+    def write(self, rows, regenerate=True):
+        """Writes the contributor's rows file and, as CONTRIBUTING-bench.md asks, regenerates the page."""
+        with open(self.rows, "w", encoding="utf-8", newline="\n") as file:
+            file.writelines(json.dumps(row) + "\n" for row in rows)
+        if regenerate:
+            self.assertEqual(run_main("table", self.results, "--out", self.page), (0, ""))
+
+    def validate(self):
+        return run_main("validate", self.results)
+
+    def check_page(self):
+        return run_main("table", self.results, "--check", self.page)
+
+    def test_valid_rows_and_their_page_pass(self):
+        code, log = self.validate()
+        self.assertEqual(code, 0, log)
+        self.assertIn("2 row(s) ok", log)
+        code, log = self.check_page()
+        self.assertEqual(code, 0, log)
+        self.assertIn("matches the rows", log)
+
+    def test_edited_median_fails(self):
+        self.write([good_row(), dict(good_row(), fps=60.0)])  # windows 50, 60, 55: the median is 55
+        code, log = self.validate()
+        self.assertEqual(code, 1)
+        self.assertIn(":2: fps is not the median of windows_fps", log)
+        self.assertEqual(self.check_page()[0], 0)
+
+    def test_home_directory_path_fails(self):
+        for exe in ("C:\\Users\\somebody\\guarana\\guarana.exe", "/home/somebody/guarana/guarana"):
+            self.write([dict(good_row(), emulator={"exe": exe})])
+            code, log = self.validate()
+            self.assertEqual(code, 1, exe)
+            self.assertIn(":1: row.emulator.exe: looks like a home directory path", log)
+
+    def test_stale_page_fails(self):
+        self.write([good_row(), dict(good_row(), variant="mesh"), dict(good_row(), variant="extra")],
+                   regenerate=False)
+        self.assertEqual(self.validate()[0], 0)
+        code, log = self.check_page()
+        self.assertEqual(code, 1)
+        self.assertIn("RESULTS.md is stale", log)
+        self.assertIn(bench.TABLE_COMMAND, log)
+        self.assertIn("+| oot-hyrule-field | extra | 55.0 |", log)
+
+    def test_hand_edited_page_fails(self):
+        with open(self.page, "a", encoding="utf-8") as file:
+            file.write("| oot-hyrule-field | baseline | 99.0 |\n")
+        code, log = self.check_page()
+        self.assertEqual(code, 1)
+        self.assertIn("-| oot-hyrule-field | baseline | 99.0 |", log)
+
+    def test_missing_page_and_empty_folder(self):
+        os.remove(self.page)
+        self.assertEqual(self.check_page()[0], 1)
+        os.remove(self.rows)
+        self.assertEqual(self.validate(), (0, f"no result files in {self.results}\n"))
+        self.assertEqual(run_main("table", self.results, "--out", self.page)[0], 0)
+        self.assertEqual(self.check_page()[0], 0)
+
+    def test_check_and_out_exclude_each_other(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            bench.main(["table", self.results, "--out", self.page, "--check", self.page])
+
+
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
+
+class WorkflowTest(unittest.TestCase):
+    """What CI runs for the benchmark tool; the workflows themselves are proven by a run on GitHub."""
+
+    def read(self, name):
+        path = os.path.join(ROOT, ".github", "workflows", name)
+        if not os.path.isfile(path):
+            self.skipTest(f"no {name} next to this copy of the tool")
+        with open(path, encoding="utf-8") as file:
+            return file.read()
+
+    def test_rows_workflow_runs_the_checks_read_only(self):
+        text = self.read("bench-rows.yml")
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read$")
+        self.assertNotRegex(text, r":\s*write\b")
+        self.assertNotIn("pull_request_target", text)
+        self.assertNotIn("secrets.", text)
+        self.assertNotIn("github.token", text)
+        self.assertIn('      - "tools/bench/**"', text)
+        for command in ("python3 -I tools/bench/bench.py validate tools/bench/results",
+                        "python3 -I tools/bench/bench.py table tools/bench/results --check tools/bench/RESULTS.md",
+                        "python3 -I tools/bench/test_bench.py"):
+            self.assertIn(command, text)
+
+    def test_results_only_pull_requests_skip_the_builds(self):
+        text = self.read("build-check.yml")
+        skipped = re.compile(re.search(r"grep -qvE '([^']+)'", text).group(1))
+        for name in ("tools/bench/results/2026-11-11-0123456789.jsonl", "tools/bench/RESULTS.md"):
+            self.assertTrue(skipped.fullmatch(name), name)
+        for name in ("tools/bench/bench.py", "tools/bench/test_bench.py", "src/core/core.cpp"):
+            self.assertFalse(skipped.fullmatch(name), name)
+        self.assertIn("python3 -I tools/bench/test_bench.py", text)
+
+
 class ShippedFilesTest(unittest.TestCase):
+    def test_committed_rows_and_page_pass_the_ci_checks(self):
+        results = os.path.join(HERE, "results")
+        code, log = run_main("validate", results)
+        self.assertEqual(code, 0, log)
+        code, log = run_main("table", results, "--check", os.path.join(HERE, "RESULTS.md"))
+        self.assertEqual(code, 0, log)
+
     def test_scene_and_variants_load(self):
         for name in os.listdir(os.path.join(HERE, "variants")):
             variant = bench.load_json(os.path.join(HERE, "variants", name), "variant")
@@ -1552,6 +1690,31 @@ class SuiteTest(RunCase):
         self.assertIn("variant vrs-2x2-trace:", output.getvalue())
         self.assertEqual((self.launches, self.host.commands), ([], []))
 
+    def test_shipped_presenter_and_locks_suite(self):
+        args, defaults = self.suite_args(os.path.join(HERE, "suites", "presenter-and-locks.json"))
+        plans, compare_to = bench.load_suite(args.suite, args, defaults)
+        self.assertEqual(len(plans), 1)
+        plan = plans[0]
+        self.assertEqual((plan.suite, plan.scene["name"]), ("presenter-and-locks", "oot-kokiri-forest"))
+        env = {variant["name"]: variant.get("env") or {} for variant in plan.variants}
+        self.assertEqual(env, {
+            "baseline": {},
+            "present-spin": {"EDEN_NX2_PRESENT_SPIN": "1"},
+            "gpl-optimize-cached": {"EDEN_NX2_GPL_OPTIMIZE_CACHED": "1"},
+            "sched-pause": {"EDEN_NX2_SCHED_PAUSE": "1"},
+            "syncpoint-split": {"EDEN_NX2_SYNCPOINT_SPLIT": "1"},
+            "hybrid": {"EDEN_NX2_HYBRID": "1"},
+            "idle-spin-0": {"EDEN_NX2_IDLE_SPIN_US": "0"}})
+        self.assertEqual(list(env)[0], "baseline")
+        self.assertTrue(all(variant["fullscreen"] and variant["pacing"] for variant in plan.variants))
+        self.assertTrue(all(compare_to[("oot-kokiri-forest", name)] == "baseline" for name in env))
+        # Every switch the suite turns on is a documented one.
+        with open(os.path.join(HERE, "..", "..", "docs", "switches.md"), encoding="utf-8") as file:
+            documented = file.read()
+        for switches in env.values():
+            for name in switches:
+                self.assertIn(f"`{name}`", documented)
+
     def write_suite(self, **fields):
         path = os.path.join(self.folder, "suites", "mine.json")
         self.write(os.path.join(self.folder, "extra.json"), json.dumps(
@@ -1826,6 +1989,389 @@ class PlayTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(play.main(["--exe", self.exe, "--game", self.game, "--state-dir", self.state]), 1)
         self.assertIn("game not found", errors.getvalue())
+
+
+# The presenter's lines as the emulator logs them with EDEN_NX2_SHOWN_STATS=1 (formats from
+# vk_present_manager.cpp FluidLogStats and NoteShownFrame, vk_swapchain.cpp Swapchain::Create).
+# Two reports: the row takes the last one.
+LOG_HEAD = "] Render.Vulkan <Info> video_core/renderer_vulkan/"
+PRESENTER_LOG = "".join(f"[{seconds:4d}.000000{LOG_HEAD}{line}\n" for seconds, line in (
+    (2, "vk_swapchain.cpp:597:Create: Swapchain: VK_PRESENT_MODE_FIFO_KHR, 3 images (3 asked, surface min 2 max 8), "
+        "1280x720 VK_FORMAT_B8G8R8A8_UNORM VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; surface present modes: "
+        "VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR; vsync setting Fifo, frame generation off"),
+    (4, "vk_swapchain.cpp:597:Create: Swapchain: VK_PRESENT_MODE_FIFO_KHR, 5 images (5 asked, surface min 2 max 8), "
+        "2880x1800 VK_FORMAT_B8G8R8A8_UNORM VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; surface present modes: "
+        "VK_PRESENT_MODE_FIFO_KHR; vsync setting Fifo, frame generation on"),
+    (40, "vk_present_manager.cpp:1364:FluidLogStats: Fluid presenter (10 s, DXGI WaitForVBlank at 120.00 Hz, a slot "
+         "every 1 refreshes): 1200 slots, 790 shown on their slot, 410 missed (300 with no frame ready: 200 scheduled "
+         "but their GPU work not done, 100 with nothing scheduled; 100 with the last copy still queued, 10 slept "
+         "through), 0 shown in arrival order, 500 copies done after their vblank"),
+    (40, "vk_present_manager.cpp:1372:FluidLogStats: Fluid presenter (10 s): 61% of shown frames held one slot, held "
+         "1/2/3/4+ refreshes 700/300/100/90; real frame age at display 30.2 ms; GPU work done 12.5 ms after recording "
+         "(201 real frames); 205 frames received, 4 dropped unshown"),
+    (40, "vk_present_manager.cpp:1379:FluidLogStats: Fluid presenter (10 s): 3 late or blocked frames shown a slot "
+         "later instead of dropped, 0 shown frames predicted from an older real frame than the newest, 0 frames "
+         "dropped as older than a real frame no prediction follows; real frames: 201 recorded, 0 not predictable, 0 "
+         "with fewer predictions than slots for lack of a free frame, 0 ended by the prediction limit"),
+    (41, "vk_present_manager.cpp:565:NoteShownFrame: Shown frames: 98.0 per second, interval p5 7.9 p50 8.3 p95 16.7 "
+         "p99 25.0 max 41.6 ms, 24% within 2 ms of the median"),
+    (50, "vk_present_manager.cpp:1364:FluidLogStats: Fluid presenter (10 s, DXGI WaitForVBlank at 119.88 Hz, a slot "
+         "every 1 refreshes): 1199 slots, 1136 shown on their slot, 63 missed (40 with no frame ready: 30 scheduled "
+         "but their GPU work not done, 10 with nothing scheduled; 20 with the last copy still queued, 3 slept "
+         "through), 0 shown in arrival order, 0 copies done after their vblank"),
+    (50, "vk_present_manager.cpp:1372:FluidLogStats: Fluid presenter (10 s): 88% of shown frames held one slot, held "
+         "1/2/3/4+ refreshes 1000/120/10/2; real frame age at display 21.4 ms; GPU work done 9.8 ms after recording "
+         "(230 real frames); 231 frames received, 1 dropped unshown"),
+    (51, "vk_present_manager.cpp:565:NoteShownFrame: Shown frames: 112.4 per second, interval p5 7.9 p50 8.3 p95 9.1 "
+         "p99 16.6 max 25.0 ms, 82% within 2 ms of the median"),
+))
+PACING = {"clock": "DXGI WaitForVBlank", "display_hz": 119.88, "slot_refreshes": 1, "slots": 1199, "on_slot": 1136,
+          "missed": 63, "real_received": 231, "dropped_unshown": 1, "shown_fps": 112.4, "interval_p5_ms": 7.9,
+          "interval_p50_ms": 8.3, "interval_p95_ms": 9.1, "interval_p99_ms": 16.6, "interval_max_ms": 25.0,
+          "within_2ms_pct": 82, "head_at_s": 50.0, "shown_at_s": 51.0}
+
+
+def hud_over(background, width=64, height=36):
+    """A picture of one colour with a HUD: hearts at the top left, a map at the bottom right."""
+    def pixel(x, y):
+        if (x < 8 and y < 4) or (x >= 54 and y >= 28):
+            return (230, 210, 120)
+        return background(x, y) if callable(background) else background
+    return make_png(width, height, pixel)
+
+
+class PresenterLogTest(unittest.TestCase):
+    def test_last_report_and_swapchain(self):
+        pacing, swapchain = bench.parse_presenter(PRESENTER_LOG.splitlines())
+        self.assertEqual(pacing, PACING)
+        self.assertEqual(swapchain, {"present_mode": "VK_PRESENT_MODE_FIFO_KHR", "images": 5, "size": "2880x1800"})
+        self.assertEqual(bench.private_strings(pacing), [])
+
+    def test_partial_and_missing_lines(self):
+        self.assertEqual(bench.parse_presenter(["nothing here", "Fluid presenter (10 s): no head"]), (None, None))
+        # Without FLUID only the shown frames are logged.
+        shown_only = [line for line in PRESENTER_LOG.splitlines() if "Shown frames" in line]
+        self.assertEqual(set(bench.parse_presenter(shown_only)[0]),
+                         {key for key in PACING if key.startswith(("shown", "interval", "within"))})
+        # Without the log prefix the report is still read, only its time is left out.
+        self.assertNotIn("shown_at_s", bench.parse_presenter([line.split("] ", 1)[1] for line in shown_only])[0])
+        # A report cut off after its first line does not borrow the previous report's received count.
+        lines = PRESENTER_LOG.splitlines()
+        cut = lines[:-2]
+        pacing = bench.parse_presenter(cut)[0]
+        self.assertEqual((pacing["slots"], pacing["shown_fps"]), (1199, 98.0))
+        self.assertNotIn("real_received", pacing)
+
+    def test_read_presenter(self):
+        self.assertEqual(bench.read_presenter(None), (None, None))
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "row.log.txt")
+            with open(path, "wb") as file:
+                file.write(PRESENTER_LOG.encode() + b"\xff odd byte\n")
+            self.assertEqual(bench.read_presenter(path)[0], PACING)
+
+    def test_swapchain_of_the_last_report(self):
+        # The window shrinks while the emulator shuts down: a swapchain made after the last report
+        # is not the one that was measured.
+        later = PRESENTER_LOG.splitlines() + [PRESENTER_LOG.splitlines()[0].replace("[   2.", "[  60.")]
+        self.assertEqual(bench.parse_presenter(later)[1]["size"], "2880x1800")
+        # With no report the last swapchain is all there is.
+        swapchains = [line for line in later if "Swapchain: " in line]
+        self.assertEqual(bench.parse_presenter(swapchains)[1]["size"], "1280x720")
+
+
+class PictureTest(unittest.TestCase):
+    LIMITS = bench.picture_limits(30)
+
+    def stats(self, png):
+        return bench.picture_stats(png, self.LIMITS)
+
+    def test_limits_follow_the_scene_threshold(self):
+        self.assertEqual(self.LIMITS, {"dark_level": 15.0, "dark_pct": 85, "mean": 30})
+        self.assertEqual(bench.picture_limits(40, 90), {"dark_level": 20.0, "dark_pct": 90, "mean": 40})
+
+    def test_hud_over_black_is_black(self):
+        stats = self.stats(hud_over((0, 0, 0)))
+        self.assertTrue(stats["black"])
+        self.assertGreater(stats["dark_pct"], 90)
+        self.assertLess(stats["mean"], 30)
+        self.assertGreater(stats["spread"], 30)  # the HUD alone gives the picture its spread
+        self.assertTrue(self.stats(solid(0))["black"])
+        self.assertTrue(self.stats(hud_over((6, 8, 12)))["black"])  # a clear colour just above black
+
+    def test_lit_and_night_pictures_are_not(self):
+        self.assertEqual(self.stats(solid(100)), {"mean": 100.0, "spread": 0.0, "dark_pct": 0.0, "center_dark_pct": 0.0,
+                                                  "center_mean": 100.0, "black": False})
+        self.assertFalse(self.stats(make_png(64, 36, gradient))["black"])
+        # Night: a dark blue sky over dark green ground. Darker than the scene threshold on average,
+        # but each cell has a channel at 15 or more, so it is not near black.
+        night = hud_over(lambda x, y: (8, 16, 40) if y < 18 else (6, 17, 9))
+        stats = self.stats(night)
+        self.assertLess(stats["mean"], 30)
+        self.assertLess(stats["dark_pct"], 10)
+        self.assertFalse(stats["black"])
+        # A dim room with a bright window covering a fifth of the picture: mostly dark, not black.
+        window = make_png(64, 36, lambda x, y: (200, 190, 170) if 20 <= x < 40 and y < 24 else (4, 4, 4))
+        self.assertFalse(self.stats(window)["black"])
+
+    def test_full_size_hud_over_black_is_black(self):
+        # A HUD the size of the game's at 960x540 (hearts, rupees, the button cluster, the map) lights
+        # a fifth of the whole 32x18 grid, enough to defeat a whole-picture 85% rule, but none of its centre.
+        def big_hud(background):
+            boxes = ((20, 15, 190, 45), (20, 480, 120, 525), (700, 5, 950, 115), (780, 375, 950, 530))
+            def pixel(x, y):
+                if any(left <= x < right and top <= y < bottom for left, top, right, bottom in boxes):
+                    return (230, 210, 120)
+                return background(x, y) if callable(background) else background
+            return make_png(960, 540, pixel)
+        black = self.stats(big_hud((0, 0, 0)))
+        self.assertLess(black["dark_pct"], self.LIMITS["dark_pct"])
+        self.assertEqual(black["center_dark_pct"], 100.0)
+        self.assertTrue(black["black"])
+        # Night: a dark blue sky over ground just above black, under the same HUD, is not black.
+        night = self.stats(big_hud(lambda x, y: (8, 10, 30) if y < 270 else (12, 14, 10)))
+        self.assertEqual(night["center_dark_pct"], 50.0)
+        self.assertFalse(night["black"])
+        # A broken frame cleared to dark grey is not near black: only the scene check against a
+        # reference catches it.
+        self.assertFalse(self.stats(big_hud((20, 20, 20)))["black"])
+
+
+class PacingRunTest(RunCase):
+    """Fullscreen runs, the pacing lines of the log and the picture check in a whole run."""
+
+    def variant_file(self, **fields):
+        path = os.path.join(self.folder, f"{fields['name']}.json")
+        self.write(path, json.dumps(fields).encode())
+        return path
+
+    def test_windowed_is_the_default(self):
+        code, rows = self.run_bench()
+        self.assertEqual(code, 0, self.log)
+        row = rows[0]
+        self.assertIn(b"fullscreen=false", self.launches[0]["ini"])
+        # Without --pacing the presenter path is the one rows had before: no EDEN_NX2_SHOWN_STATS.
+        self.assertNotIn(bench.SHOWN_STATS_ENV, self.launches[0]["env"])
+        self.assertEqual((row["fullscreen"], row["fullscreen_requested"], row["shown_stats"], row["output"],
+                          row["pacing"]), (False, False, False, {"size": "1280x761", "size_from": "window"}, None))
+        self.assertEqual(row["picture"], {"limits": {"dark_level": 15.0, "dark_pct": 85.0, "mean": 30.0},
+                                          "shots": [{"mean": 100.0, "spread": 0.0, "dark_pct": 0.0,
+                                                     "center_dark_pct": 0.0, "center_mean": 100.0}] * 2,
+                                          "black": False})
+        self.assertEqual(bench.validate_row(row), [])
+        self.assert_left_clean()
+
+    def test_fullscreen_run_reads_the_log(self):
+        self.log_text = PRESENTER_LOG
+        code, rows = self.run_bench("--fullscreen", "--pacing", "--variant", self.variant)
+        self.assertEqual(code, 0, self.log)
+        row = rows[0]
+        self.assertIn(b"fullscreen\\default=false\r\nfullscreen=true\r\n", self.launches[0]["ini"])
+        self.assertNotIn(b"fullscreen=false", self.launches[0]["ini"])
+        self.assertEqual(self.launches[0]["env"][bench.SHOWN_STATS_ENV], "1")
+        self.assertNotIn(bench.SHOWN_STATS_ENV, row["variant_env"])
+        self.assertTrue(row["fullscreen"] and row["shown_stats"])
+        self.assertEqual(row["output"], {"size": "2880x1800", "size_from": "swapchain",
+                                         "fullscreen_mode": "borderless" if bench.IS_WINDOWS else "exclusive",
+                                         "fullscreen_mode_from": "default",
+                                         "present_mode": "VK_PRESENT_MODE_FIFO_KHR", "images": 5})
+        self.assertEqual(row["pacing"], PACING)
+        # The fake's window is 1280x761: a fullscreen swapchain of another size is worth a warning.
+        self.assertEqual(row["window"], "1280x761")
+        self.assertIn("output_size_not_window_size", row["warnings"])
+        self.assertTrue(row["valid"])
+        self.assertEqual(bench.validate_row(row), [])
+        self.assert_left_clean()
+
+    def test_variant_field_wins_over_the_command_line(self):
+        windowed = self.variant_file(name="windowed", fullscreen=False)
+        exclusive = self.variant_file(name="exclusive", settings={"Renderer": {"fullscreen_mode": 1}})
+        code, rows = self.run_bench("--fullscreen", "--variant", windowed, "--variant", exclusive)
+        self.assertEqual(code, 0, self.log)
+        self.assertEqual([row["fullscreen"] for row in rows], [False, True])
+        self.assertEqual(rows[1]["output"], {"size": "1280x761", "size_from": "window", "fullscreen_mode": "exclusive",
+                                             "fullscreen_mode_from": "settings"})
+        with self.assertRaisesRegex(bench.BenchError, "fullscreen is true or false"):
+            self.run_bench("--variant", self.variant_file(name="bad", fullscreen="yes"))
+        self.assert_left_clean()
+
+    def test_fullscreen_off_in_the_settings_is_a_windowed_row(self):
+        variant = self.variant_file(name="asked", fullscreen=True, settings={"UI": {"fullscreen": False}})
+        code, rows = self.run_bench("--variant", variant)
+        self.assertEqual((code, rows[0]["fullscreen"], rows[0]["warnings"]),
+                         (0, False, ["fullscreen_off_in_settings"]))
+        self.assertTrue(any("the run is windowed" in line for line in self.log))
+
+    def test_fullscreen_row_without_an_output_size_is_invalid(self):
+        self.deps.window_size = staticmethod(lambda pid: None)
+        code, rows = self.run_bench("--fullscreen")
+        self.assertEqual((code, rows[0]["invalid_reasons"], rows[0]["output"]["size"]),
+                         (2, ["output_size_unknown"], None))
+        self.assertEqual(bench.validate_row(rows[0]), [])
+
+    def test_black_picture_is_refused_without_a_reference(self):
+        os.remove(self.reference)
+        self.emulator_options = {"shot": hud_over((0, 0, 0))}
+        code, rows = self.run_bench()
+        row = rows[0]
+        self.assertEqual((code, row["invalid_reasons"], row["fps"]), (2, ["black_picture", "error"], None))
+        self.assertIn("black picture", row["error"])
+        self.assertIn("as a HUD would be", row["error"])
+        self.assertTrue(row["picture"]["black"])
+        self.assertTrue(os.path.isfile(os.path.join(self.out, row["screenshot"])))
+        self.assertNotIn("frame_times", [request["method"] for request in self.launches[0]["emulator"].requests])
+        self.assertEqual(bench.validate_row(row), [])
+        self.assert_left_clean()
+
+    def test_black_picture_is_never_recorded_as_the_reference(self):
+        os.remove(self.reference)
+        self.emulator_options = {"shot": solid(0)}
+        code, rows = self.run_bench("--record-reference")
+        self.assertEqual((code, rows[0]["invalid_reasons"]), (2, ["black_picture", "error"]))
+        self.assertIn("nothing is drawn: not measured, no reference written", rows[0]["error"])
+        self.assertFalse(os.path.exists(self.reference))
+
+    def test_dry_run(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.run_bench("--dry-run", "--fullscreen")
+        text = output.getvalue()
+        self.assertNotIn(bench.SHOWN_STATS_ENV, text)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.run_bench("--dry-run", "--fullscreen", "--pacing")
+        text = output.getvalue()
+        for expected in ("start the emulator fullscreen ([UI] fullscreen on unless",
+                         f"{bench.SHOWN_STATS_ENV}=1",
+                         "refuse a black picture (85% of its centre under 15 and a centre mean under 30)",
+                         "read its pacing and swapchain lines"):
+            self.assertIn(expected, text)
+        self.assertNotIn("fullscreen=false", text)
+
+    def test_suite_base_sets_fullscreen(self):
+        path = os.path.join(self.folder, "suites", "full.json")
+        self.write(path, json.dumps({"name": "full", "scene": "../scene.json", "base": {"fullscreen": True},
+                                     "runs": [{"variants": [{"name": "baseline"},
+                                                            {"name": "windowed", "fullscreen": False}]}]}).encode())
+        parser = bench.build_parser()
+        args = parser.parse_args(["suite", path, "--exe", self.exe, "--game", self.game, "--user-dir", self.user])
+        plans, _ = bench.load_suite(args.suite, args, parser.suite_defaults)
+        self.assertEqual([variant["fullscreen"] for variant in plans[0].variants], [True, False])
+
+
+class PacingSchemaTest(unittest.TestCase):
+    def problems(self, **fields):
+        return bench.validate_row(dict(good_row(), **fields))
+
+    def test_new_fields_are_optional_and_typed(self):
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(self.problems(fullscreen=False, output=None, pacing=PACING, picture={
+            "limits": bench.picture_limits(30), "shots": [], "black": False}), [])
+        self.assertIn("pacing: shown_fps has type str", self.problems(pacing=dict(PACING, shown_fps="fast")))
+        self.assertIn("output: size is WxH", self.problems(output={"size": "big", "size_from": "window"}))
+        self.assertIn("output: size_from is swapchain or window", self.problems(output={"size": "1x1", "size_from": "x"}))
+
+    def test_fullscreen_rows_say_their_size(self):
+        self.assertIn("a valid fullscreen row needs output.size", self.problems(fullscreen=True))
+        self.assertEqual(self.problems(fullscreen=True, output={"size": "2880x1800", "size_from": "swapchain"}), [])
+
+    def test_black_picture_needs_its_reason(self):
+        picture = {"limits": bench.picture_limits(30), "shots": [], "black": True}
+        self.assertIn("a black picture requires the black_picture reason", self.problems(picture=picture))
+        self.assertEqual(self.problems(picture=picture, valid=False, invalid_reasons=["black_picture"]), [])
+
+
+class DisplayTableTest(unittest.TestCase):
+    setUp = TableTest.setUp
+    write = TableTest.write
+
+    def fullscreen(self, **fields):
+        return dict(good_row(), fullscreen=True, output={"size": "2880x1800", "size_from": "swapchain"}, **fields)
+
+    def test_header_is_the_old_one_without_new_fields(self):
+        self.assertEqual(bench.table_header(), bench.TABLE_HEADER)
+
+    def test_rows_from_before_render_as_before(self):
+        # Rows in the shape written before fullscreen, output, pacing and picture existed. The
+        # expected page is what bench.py rendered for them before that change.
+        rows = [good_row(), dict(good_row(), variant="fsr", valid=False, invalid_reasons=["wrong_scene"],
+                                 scene_ok=False, fps=40.0, timestamp_utc="2026-11-12T12:00:00Z")]
+        self.assertEqual([bench.validate_row(row) for row in rows], [[], []])
+        self.write("2026-11-11-x.jsonl", rows)
+        self.assertEqual(bench.render_table(self.folder), (
+            "# Guarana benchmark results\n\n"
+            f"Generated by `{bench.TABLE_COMMAND}`; do not edit by hand.\n"
+            "fps is the median of three windows. Rows marked INVALID (wrong scene, busy machine, error) are not "
+            "comparable.\n\n"
+            f"## Machine `{bench.machine_id(HARDWARE)}`\n\n"
+            "Example CPU 9; Example GPU (driver 1.2.3); 31.4 GB RAM; Example OS 11 build 26340; display "
+            "2880x1800@120; AC\n\n"
+            "| scene | variant | fps | p50 ms | p99 ms | sustained min / avg fps | watts | scene_ok | valid | date |\n"
+            "|---|---|---:|---:|---:|---:|---:|---|---|---|\n"
+            "| oot-hyrule-field | baseline | 55.0 | 18.2 | 27.3 | - | - | yes | yes | 2026-11-11 |\n"
+            "| oot-hyrule-field | fsr | 40.0 | 18.2 | 27.3 | - | - | NO | INVALID: wrong_scene | 2026-11-12 |\n"))
+
+    def test_failed_fullscreen_attempt_is_not_listed_as_windowed(self):
+        failed = dict(good_row(), fullscreen=None, fullscreen_requested=True, valid=False, invalid_reasons=["error"])
+        self.assertEqual(bench.display_mode(failed), "fullscreen")
+        self.assertEqual(bench.display_mode(dict(good_row(), fullscreen=False, fullscreen_requested=True)), "windowed")
+
+    def test_notes_are_paragraphs_of_their_own(self):
+        self.write("2026-11-11-x.jsonl", [good_row(), self.fullscreen(fps=48.0, pacing=PACING)])
+        text = bench.render_table(self.folder)
+        self.assertIn("are not comparable.\n\n" + bench.MIXED_NOTE + "\n\nThe shown-frame columns", text)
+        self.assertIn("ran with `--pacing`.\n\n## Machine", text)
+
+    def test_windowed_and_fullscreen_rows_are_listed_apart(self):
+        self.write("2026-11-11-x.jsonl", [good_row(), self.fullscreen(fps=48.0, pacing=PACING)])
+        text = bench.render_table(self.folder)
+        self.assertIn(bench.MIXED_NOTE, text)
+        self.assertIn("| scene | variant | display | fps | p50 ms | p99 ms | sustained min / avg fps | watts | shown fps "
+                      "| shown interval p50 / p99 ms | within 2 ms of p50 | on their slot | scene_ok | valid | date |",
+                      text)
+        self.assertIn("| oot-hyrule-field | baseline | fullscreen 2880x1800 | 48.0 | 18.2 | 27.3 | - | - | 112.4 | "
+                      "8.3 / 16.6 | 82% | 1136 / 1199 | yes | yes | 2026-11-11 |", text)
+        self.assertIn("| oot-hyrule-field | baseline | windowed | 55.0 | 18.2 | 27.3 | - | - | - | - / - | - | - | yes "
+                      "| yes |", text)
+
+    def test_pacing_columns_without_fullscreen_rows(self):
+        self.write("2026-11-11-x.jsonl", [dict(good_row(), pacing=PACING)])
+        text = bench.render_table(self.folder)
+        self.assertNotIn("| display |", text)
+        self.assertNotIn(bench.MIXED_NOTE, text)
+        self.assertIn("| 112.4 | 8.3 / 16.6 | 82% | 1136 / 1199 |", text)
+
+    def test_compare_never_crosses_display_modes(self):
+        text = bench.render_compare(self.write("a.jsonl", [good_row()]),
+                                    self.write("b.jsonl", [self.fullscreen(fps=66.0)]))
+        self.assertIn("| oot-hyrule-field | baseline | fullscreen | - | 66.0 | - |", text)
+        self.assertIn("| oot-hyrule-field | baseline | windowed | 55.0 | - | - |", text)
+        self.assertIn(bench.MIXED_NOTE, text)
+
+    def test_suite_says_when_it_does_not_compare(self):
+        rows = [good_row(), self.fullscreen(variant="full", fps=60.0, pacing=PACING)]
+        compare_to = {("oot-hyrule-field", "baseline"): "baseline", ("oot-hyrule-field", "full"): "baseline"}
+        text = bench.render_suite(rows, compare_to)
+        self.assertIn("| oot-hyrule-field | full | fullscreen 2880x1800 | 60.0 | not compared: baseline ran windowed | "
+                      "18.2 | 27.3 | 112.4 | 82% |", text)
+        self.assertIn(bench.MIXED_NOTE, text)
+
+
+class KokiriSceneTest(unittest.TestCase):
+    def test_scene_for_a_fresh_save(self):
+        path = os.path.join(HERE, "scenes", "oot-kokiri-forest.json")
+        scene = bench.load_json(path, "scene")
+        self.assertEqual((scene["name"], scene["title_id"], scene["reference"]),
+                         ("oot-kokiri-forest", "0400486024DEC000", "reference/oot-kokiri-forest.png"))
+        self.assertEqual(scene["input"], [{"wait_s": 25, "buttons": ["A"], "frames": 6}])
+        self.assertEqual((scene["settle_s"], scene["window_s"], scene["scene_threshold"]), (50, 15, 30))
+        self.assertTrue(any("ten minutes" in note for note in scene["notes"]))
+        self.assertEqual(bench.private_strings(scene), [])
+        emulator = FakeEmulator()
+        self.addCleanup(emulator.close)
+        slept = []
+        bench.play_input_script(bench.DebugClient(port=emulator.port), scene["input"], slept.append)
+        self.assertEqual((slept, [request["params"]["buttons"] for request in emulator.requests]), ([25], [["A"]]))
 
 
 if __name__ == "__main__":

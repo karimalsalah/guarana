@@ -15,11 +15,48 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use crate::ini::IniDoc;
-use crate::types::{AppliedProfile, Profile, SystemInfo, Toggle, ToggleKind, ToggleValue, Vendor, Form};
+use crate::types::{AppliedProfile, Gpu, Profile, SystemInfo, Toggle, ToggleKind, ToggleValue, Vendor, Form};
 use crate::{paths, util};
 
 pub const BLOCK_BEGIN: &str = "# >>> Guarana launcher";
 pub const BLOCK_END: &str = "# <<< Guarana launcher";
+
+const EXTRAPOLATE: &str = "EDEN_NX2_EXTRAPOLATE";
+
+/// Whether any GPU in the machine is an Intel one the launcher calls integrated (by PCI id,
+/// `system::is_integrated`). On such a GPU the emulator gives Ocarina of Time a locked pacing set
+/// when the primary display runs at 115-125 or 140-148 Hz (`ChoosePacingSet`,
+/// `src/core/game_presets.cpp`). Any GPU, not only the launcher's primary one: the launcher picks
+/// the first discrete adapter as primary, while the emulator may render on the integrated one.
+fn has_intel_igpu(gpus: &[Gpu]) -> bool {
+    gpus.iter().any(|g| g.vendor == Vendor::Intel && g.is_integrated)
+}
+
+/// The `EDEN_NX2_EXTRAPOLATE` value the launcher's block carries; None leaves the line out.
+/// `predict` is the `ocarina_extrapolation` toggle; the switch does something only in Ocarina of
+/// Time (its motion vectors are the only source the presenter predicts from).
+///
+/// Off writes 0 (the shipped `nx2_switches.txt` sets 1). On writes 1, except with an Intel
+/// integrated GPU in the machine: there the line is left out at every refresh rate, because the
+/// player's own file wins over the emulator's defaults, and a 1 there would turn off the
+/// interpolation of the emulator's locked 120 and 144 Hz sets for Ocarina of Time (issue #119).
+/// Left out, nothing is lost where no locked set applies: the emulator's 60 Hz Intel set names
+/// `EDEN_NX2_EXTRAPOLATE=1`, and so does the shipped file. Not reading the refresh rate keeps the
+/// block right when the display changes rate after it was written.
+/// The frame generation toggle does not enter into it: the emulator's Ocarina of Time preset turns
+/// frame generation on whatever the launcher's default says, and chooses the set either way.
+fn extrapolate_switch(predict: bool, gpus: &[Gpu]) -> Option<&'static str> {
+    if !predict {
+        Some("0")
+    } else if has_intel_igpu(gpus) {
+        None
+    } else {
+        Some("1")
+    }
+}
+
+/// Appended to the `ocarina_extrapolation` help on a machine with an Intel integrated GPU.
+const INTEL_IGPU_HELP: &str = " With an Intel integrated GPU the launcher leaves EDEN_NX2_EXTRAPOLATE to the emulator when this is on: Ocarina of Time still predicts at most refresh rates, but at 115-125 or 140-148 Hz the emulator's 120 or 144 Hz set shows a frame for every refresh, the in-between ones interpolated, and a 1 in your nx2_switches.txt would turn that off. Older emulator builds predict there too (the shipped nx2_switches.txt sets 1).";
 
 const RENDERER: &str = "Renderer";
 
@@ -57,7 +94,7 @@ const PROFILES: [ProfileDef; 5] = [
     ProfileDef {
         id: "intel-arc-igpu",
         name: "Intel Arc integrated",
-        description: "Arc 130T/140T/140V and Meteor Lake or Panther Lake Arc graphics: asynchronous shaders, aggressive VRAM use, frame generation off (Ocarina of Time's own preset handles it).",
+        description: "Arc 130T/140T/140V, Meteor Lake and Panther Lake Arc graphics, and Arrow Lake-H Intel Graphics (by PCI id): asynchronous shaders, aggressive VRAM use, frame generation off (Ocarina of Time's own preset handles it).",
         defaults: Defaults {
             frame_generation: false,
             ocarina_extrapolation: true,
@@ -256,6 +293,8 @@ pub fn recommend(sys: &SystemInfo) -> &'static str {
     let integrated = gpu.map(|g| g.is_integrated).unwrap_or(false);
     let vendor = gpu.map(|g| g.vendor).unwrap_or(Vendor::Other);
     let name = gpu.map(|g| g.name.to_ascii_lowercase()).unwrap_or_default();
+    // Arc-class iGPUs named only "Intel(R) Graphics" are known by their PCI ids.
+    let arc_class = gpu.is_some_and(|g| crate::system::intel_igpu_arc_class(g.vendor_id, g.device_id, &g.name));
     if integrated && sys.power.on_ac == Some(false) {
         return "low-power-handheld";
     }
@@ -265,7 +304,7 @@ pub fn recommend(sys: &SystemInfo) -> &'static str {
         }
     }
     match (vendor, integrated) {
-        (Vendor::Intel, true) if name.contains("arc") => "intel-arc-igpu",
+        (Vendor::Intel, true) if name.contains("arc") || arc_class => "intel-arc-igpu",
         (Vendor::Intel, true) => "low-power-handheld",
         (Vendor::Amd, true) => "amd-igpu-handheld",
         (_, false) if gpu.is_some() => "desktop-dgpu",
@@ -277,10 +316,16 @@ pub fn recommend(sys: &SystemInfo) -> &'static str {
 /// Every profile with `recommended` set; the applied profile shows the user's saved overrides.
 pub fn list(sys: &SystemInfo, applied: Option<&str>, overrides: &BTreeMap<String, ToggleValue>) -> Vec<Profile> {
     let recommended = recommend(sys);
+    let intel_igpu = has_intel_igpu(&sys.gpus);
     PROFILES
         .iter()
         .map(|p| {
             let mut ts = toggles(&p.defaults);
+            if intel_igpu {
+                if let Some(t) = ts.iter_mut().find(|t| t.id == "ocarina_extrapolation") {
+                    t.help.push_str(INTEL_IGPU_HELP);
+                }
+            }
             if applied == Some(p.id) {
                 for t in &mut ts {
                     if let Some(v) = overrides.get(&t.id) {
@@ -360,17 +405,16 @@ struct Outputs {
     ini: Vec<IniWrite>,
 }
 
-fn outputs(values: &BTreeMap<String, ToggleValue>) -> Outputs {
+/// `gpus`: every GPU in the machine, for `extrapolate_switch`.
+fn outputs(values: &BTreeMap<String, ToggleValue>, gpus: &[Gpu]) -> Outputs {
     let flag = |id: &str| values.get(id).and_then(|v| v.as_bool()).unwrap_or(false);
     let text = |id: &str| values.get(id).map(|v| v.as_text()).unwrap_or_default();
     let mut switches = Vec::new();
     let mut ini = Vec::new();
 
-    // Shipped nx2_switches.txt sets EXTRAPOLATE=1, so "off" has to say 0.
-    switches.push((
-        "EDEN_NX2_EXTRAPOLATE".to_string(),
-        if flag("ocarina_extrapolation") { "1" } else { "0" }.to_string(),
-    ));
+    if let Some(v) = extrapolate_switch(flag("ocarina_extrapolation"), gpus) {
+        switches.push((EXTRAPOLATE.to_string(), v.to_string()));
+    }
     // Unset keeps the per-title default (Ocarina of Time on); 11 is every game.
     if flag("gm_routing") {
         switches.push(("EDEN_NX2_GM".to_string(), "11".to_string()));
@@ -482,14 +526,8 @@ fn block_values(text: &str) -> BTreeMap<String, String> {
     out
 }
 
-pub fn apply(profile_id: &str, overrides: &BTreeMap<String, ToggleValue>) -> util::CmdResult<AppliedProfile> {
-    let def = find(profile_id).ok_or_else(|| format!("Unknown profile {profile_id}"))?;
-    if util::emulator_running() {
-        return Err("Close Guarana first: it saves its own settings when it exits, which would undo these.".into());
-    }
-    if util::warm_up_running() {
-        return Err("Shaders are being prepared, and that saves the settings when it ends: apply the profile once it finishes.".into());
-    }
+/// The profile's toggle values with these overrides, each override checked.
+fn profile_values(def: &ProfileDef, overrides: &BTreeMap<String, ToggleValue>) -> util::CmdResult<BTreeMap<String, ToggleValue>> {
     let mut values: BTreeMap<String, ToggleValue> = BTreeMap::new();
     let ts = toggles(&def.defaults);
     for t in &ts {
@@ -499,37 +537,82 @@ pub fn apply(profile_id: &str, overrides: &BTreeMap<String, ToggleValue>) -> uti
         let t = ts.iter().find(|t| &t.id == id).ok_or_else(|| format!("Unknown setting {id}"))?;
         values.insert(id.clone(), validate(t, v)?);
     }
-    let out = outputs(&values);
-    let mut changed = Vec::new();
+    Ok(values)
+}
 
-    // nx2_switches.txt
-    let switches_path = paths::user_switches();
-    let old_text = fs::read(&switches_path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+/// `old_text` (the player's `nx2_switches.txt`, empty when there is none) with the launcher's block
+/// replaced by these switches, and what changed in the block. Equal text means nothing to write.
+fn rewrite_block(old_text: &str, profile_id: &str, switches: &[(String, String)]) -> (String, Vec<String>) {
     let mut block = vec![format!("{BLOCK_BEGIN} (profile {profile_id}; this block is rewritten by the launcher, edit lines outside it)")];
-    block.extend(out.switches.iter().map(|(k, v)| format!("{k}={v}")));
+    block.extend(switches.iter().map(|(k, v)| format!("{k}={v}")));
     block.push(BLOCK_END.to_string());
     let base = if old_text.is_empty() {
-        "# Your own switches for Guarana (NAME=VALUE, one per line). Lines outside the launcher's\r\n# block are yours: the launcher never changes them.\r\n".to_string()
+        "# Your own switches for Guarana (NAME=VALUE, one per line). Lines outside the launcher's\r\n# block are yours: the launcher never changes them.\r\n"
     } else {
-        old_text.clone()
+        old_text
     };
-    let new_text = replace_block(&base, &block);
+    let new_text = replace_block(base, &block);
+    let mut changed = Vec::new();
     if new_text != old_text {
-        let before = block_values(&old_text);
-        for (k, v) in &out.switches {
+        let before = block_values(old_text);
+        for (k, v) in switches {
             if before.get(k) != Some(v) {
                 changed.push(format!("nx2_switches.txt: {k}={v}"));
             }
         }
         for k in before.keys() {
-            if !out.switches.iter().any(|(name, _)| name == k) {
-                changed.push(format!("nx2_switches.txt: {k} removed"));
+            if !switches.iter().any(|(name, _)| name == k) {
+                changed.push(if k == EXTRAPOLATE {
+                    format!("nx2_switches.txt: {k} removed, left to the emulator on an Intel integrated GPU")
+                } else {
+                    format!("nx2_switches.txt: {k} removed")
+                });
             }
         }
+    }
+    (new_text, changed)
+}
+
+/// Writes the launcher's block into the player's `nx2_switches.txt` when it differs (backing the
+/// file up first). Returns the file's path and what changed.
+fn write_block(profile_id: &str, switches: &[(String, String)]) -> util::CmdResult<(std::path::PathBuf, Vec<String>)> {
+    let switches_path = paths::user_switches();
+    let old_text = fs::read(&switches_path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let (new_text, changed) = rewrite_block(&old_text, profile_id, switches);
+    if new_text != old_text {
         util::backup_file(&switches_path).map_err(|e| format!("Could not back up nx2_switches.txt: {e}"))?;
         util::write_atomic(&switches_path, new_text.as_bytes())
             .map_err(|e| format!("Could not write nx2_switches.txt: {e}"))?;
     }
+    if switches.iter().all(|(k, _)| k != EXTRAPOLATE) {
+        log::info!("{EXTRAPOLATE} left to the emulator in nx2_switches.txt (Intel integrated GPU, issue #119)");
+    }
+    Ok((switches_path, changed))
+}
+
+/// Rewrites only the launcher's block in `nx2_switches.txt` from this profile and these overrides,
+/// leaving `qt-config.ini` alone. Custom mode calls it at every start (`launch.rs`), as the other
+/// modes re-apply theirs, so the block follows this launcher's rules even when it was written by an
+/// older one (an `EDEN_NX2_EXTRAPOLATE=1` that would defeat the emulator's locked sets, issue #119)
+/// or on another machine; a hand-edited `qt-config.ini` stays as it is. The emulator does not write
+/// this file, so unlike `apply` this does not wait for it to close.
+pub fn write_switches(profile_id: &str, overrides: &BTreeMap<String, ToggleValue>, sys: &SystemInfo) -> util::CmdResult<Vec<String>> {
+    let def = find(profile_id).ok_or_else(|| format!("Unknown profile {profile_id}"))?;
+    let out = outputs(&profile_values(def, overrides)?, &sys.gpus);
+    write_block(profile_id, &out.switches).map(|(_, changed)| changed)
+}
+
+/// `sys` gives the machine's GPUs (`extrapolate_switch`).
+pub fn apply(profile_id: &str, overrides: &BTreeMap<String, ToggleValue>, sys: &SystemInfo) -> util::CmdResult<AppliedProfile> {
+    let def = find(profile_id).ok_or_else(|| format!("Unknown profile {profile_id}"))?;
+    if util::emulator_running() {
+        return Err("Close Guarana first: it saves its own settings when it exits, which would undo these.".into());
+    }
+    if util::warm_up_running() {
+        return Err("Shaders are being prepared, and that saves the settings when it ends: apply the profile once it finishes.".into());
+    }
+    let out = outputs(&profile_values(def, overrides)?, &sys.gpus);
+    let (switches_path, mut changed) = write_block(profile_id, &out.switches)?;
 
     // qt-config.ini
     let config_path = paths::qt_config();
@@ -614,7 +697,7 @@ mod tests {
         values.insert("igpu_power_policy".to_string(), ToggleValue::Bool(true));
         values.insert("fluid_presenter".to_string(), ToggleValue::Bool(true));
         values.insert("hdr_auto".to_string(), ToggleValue::Bool(true));
-        let out = outputs(&values);
+        let out = outputs(&values, &[]);
         let keys: Vec<(&str, &str)> = out.ini.iter().map(|w| (w.key, w.value.as_str())).collect();
         assert!(keys.contains(&("hdr_mode", "2")));
         assert!(keys.contains(&("hdr_swapchain", "0")));
@@ -636,5 +719,148 @@ mod tests {
         let res = ts.iter().find(|t| t.id == "resolution").unwrap();
         assert_eq!(validate(res, &ToggleValue::Str("0.75X".into())), Ok(ToggleValue::Str("0.75x".into())));
         assert!(validate(res, &ToggleValue::Str("3x".into())).is_err());
+    }
+
+    fn gpu(vendor: Vendor, integrated: bool, name: &str, vendor_id: u32, device_id: u32) -> Gpu {
+        Gpu {
+            name: name.into(),
+            vendor,
+            driver_version: "1".into(),
+            is_integrated: integrated,
+            dedicated_mb: if integrated { 128 } else { 12000 },
+            shared_mb: 16000,
+            vulkan: true,
+            arch_hint: None,
+            family: None,
+            vendor_id,
+            device_id,
+            driver_date: None,
+        }
+    }
+
+    // Panther Lake's 4-core "Intel(R) Graphics", the laptop of issue #119.
+    fn ptl() -> Gpu {
+        gpu(Vendor::Intel, true, "Intel(R) Graphics", 0x8086, 0xb0a0)
+    }
+
+    fn rtx() -> Gpu {
+        gpu(Vendor::Nvidia, false, "NVIDIA GeForce RTX 4070 Laptop GPU", 0x10de, 0x2820)
+    }
+
+    #[test]
+    fn extrapolation_is_left_to_the_emulator_with_an_intel_igpu() {
+        let arc = gpu(Vendor::Intel, true, "Intel(R) Arc(TM) 140T GPU (16GB)", 0x8086, 0x7d51);
+        assert_eq!(extrapolate_switch(true, &[ptl()]), None);
+        assert_eq!(extrapolate_switch(true, &[arc]), None);
+        // A hybrid laptop: the launcher's primary GPU is the discrete one, but the emulator may
+        // render on the integrated one and choose a locked set there.
+        assert_eq!(extrapolate_switch(true, &[rtx(), ptl()]), None);
+        assert_eq!(extrapolate_switch(true, &[ptl(), rtx()]), None);
+    }
+
+    #[test]
+    fn extrapolation_stays_without_an_intel_igpu() {
+        // No locked set anywhere: AMD gets the 60 Hz set, other vendors and discrete Intel none.
+        let amd = gpu(Vendor::Amd, true, "AMD Radeon(TM) 780M", 0x1002, 0x15bf);
+        let b580 = gpu(Vendor::Intel, false, "Intel(R) Arc(TM) B580 Graphics", 0x8086, 0xe20b);
+        assert_eq!(extrapolate_switch(true, &[amd.clone()]), Some("1"));
+        assert_eq!(extrapolate_switch(true, &[rtx()]), Some("1"));
+        assert_eq!(extrapolate_switch(true, &[b580]), Some("1"));
+        assert_eq!(extrapolate_switch(true, &[amd, rtx()]), Some("1"));
+        // No GPU found.
+        assert_eq!(extrapolate_switch(true, &[]), Some("1"));
+    }
+
+    #[test]
+    fn prediction_off_still_writes_zero() {
+        // The shipped nx2_switches.txt sets 1, so off has to say 0, with an Intel iGPU too (the
+        // emulator's locked sets name 0 themselves, so it agrees with them).
+        assert_eq!(extrapolate_switch(false, &[ptl()]), Some("0"));
+        assert_eq!(extrapolate_switch(false, &[rtx(), ptl()]), Some("0"));
+        assert_eq!(extrapolate_switch(false, &[rtx()]), Some("0"));
+        assert_eq!(extrapolate_switch(false, &[]), Some("0"));
+    }
+
+    #[test]
+    fn the_block_leaves_extrapolate_out_with_frame_generation_on_or_off() {
+        for frame_gen in [true, false] {
+            let mut values = defaults_of("low-power-handheld").unwrap();
+            values.insert("ocarina_extrapolation".to_string(), ToggleValue::Bool(true));
+            values.insert("frame_generation".to_string(), ToggleValue::Bool(frame_gen));
+            let intel = outputs(&values, &[ptl()]);
+            assert!(intel.switches.iter().all(|(k, _)| k != EXTRAPOLATE), "{:?}", intel.switches);
+            let keys: Vec<(&str, &str)> = intel.ini.iter().map(|w| (w.key, w.value.as_str())).collect();
+            assert!(keys.contains(&("frame_gen", if frame_gen { "true" } else { "false" })));
+            // The same values without an Intel iGPU write 1, as before.
+            let other = outputs(&values, &[rtx()]);
+            assert!(other.switches.contains(&(EXTRAPOLATE.to_string(), "1".to_string())));
+        }
+    }
+
+    #[test]
+    fn an_old_block_with_extrapolate_is_rewritten_without_it() {
+        // What an older launcher wrote (or this one at 60 Hz before the rule stopped reading the
+        // rate): the line that defeats the emulator's 144 Hz set. Custom mode rewrites the block
+        // at every start (`write_switches`), so on the 144 Hz Panther Lake laptop it goes.
+        let old = "# mine\r\nEDEN_NX2_SPLIT=2\r\n\r\n# >>> Guarana launcher (profile low-power-handheld; this block is rewritten by the launcher, edit lines outside it)\r\nEDEN_NX2_EXTRAPOLATE=1\r\n# <<< Guarana launcher\r\nMY_LINE=1\r\n";
+        let mut values = defaults_of("low-power-handheld").unwrap();
+        values.insert("ocarina_extrapolation".to_string(), ToggleValue::Bool(true));
+        let out = outputs(&values, &[ptl()]);
+        let (new_text, changed) = rewrite_block(old, "low-power-handheld", &out.switches);
+        assert!(!block_values(&new_text).contains_key(EXTRAPOLATE), "{new_text}");
+        assert!(!new_text.contains("EDEN_NX2_EXTRAPOLATE"), "{new_text}");
+        // The player's own lines stay where they were.
+        assert!(new_text.starts_with("# mine\r\nEDEN_NX2_SPLIT=2\r\n"), "{new_text}");
+        assert!(new_text.ends_with("# <<< Guarana launcher\r\nMY_LINE=1\r\n"), "{new_text}");
+        assert!(
+            changed.contains(&"nx2_switches.txt: EDEN_NX2_EXTRAPOLATE removed, left to the emulator on an Intel integrated GPU".to_string()),
+            "{changed:?}"
+        );
+        // The next start finds nothing to write.
+        let (again, changed_again) = rewrite_block(&new_text, "low-power-handheld", &out.switches);
+        assert_eq!(again, new_text);
+        assert!(changed_again.is_empty(), "{changed_again:?}");
+        // Without an Intel iGPU the same block keeps its 1 and nothing changes.
+        let other = outputs(&values, &[rtx()]);
+        let (kept, kept_changed) = rewrite_block(old, "low-power-handheld", &other.switches);
+        assert_eq!(block_values(&kept).get(EXTRAPOLATE).map(String::as_str), Some("1"));
+        assert!(kept_changed.iter().all(|c| !c.contains("EXTRAPOLATE")), "{kept_changed:?}");
+    }
+
+    #[test]
+    fn the_prediction_toggle_says_what_happens_with_an_intel_igpu() {
+        use crate::types::{CpuInfo, DeviceInfo, DisplayInfo, OsInfo, PowerInfo};
+        let help = |gpus: Vec<Gpu>| {
+            let sys = SystemInfo {
+                os: OsInfo { name: "Windows 11".into(), build: 26100, display_version: "24H2".into() },
+                cpu: CpuInfo { name: "cpu".into(), cores: 8, threads: 16, avx2: true, avx512: false, hybrid: false },
+                ram_gb: 32.0,
+                pagefile_gb: 8.0,
+                gpus,
+                primary_gpu: 0,
+                display: DisplayInfo { width: 2880, height: 1800, refresh_hz: 144, vrr: None, hdr: None },
+                power: PowerInfo { on_ac: Some(true), battery_percent: None, plan: None },
+                hags: None,
+                device: DeviceInfo { manufacturer: "x".into(), model: "y".into(), form: Form::Laptop, profile_hint: None },
+                vc_redist: true,
+                webview2: None,
+                free_disk_gb: 100.0,
+            };
+            list(&sys, None, &BTreeMap::new())[0]
+                .toggles
+                .iter()
+                .find(|t| t.id == "ocarina_extrapolation")
+                .unwrap()
+                .help
+                .clone()
+        };
+        let intel = help(vec![ptl()]);
+        assert!(intel.starts_with("With frame generation on,"), "{intel}");
+        assert!(intel.ends_with(INTEL_IGPU_HELP), "{intel}");
+        assert!(help(vec![rtx(), ptl()]).ends_with(INTEL_IGPU_HELP));
+        let amd = gpu(Vendor::Amd, true, "AMD Radeon(TM) 780M", 0x1002, 0x15bf);
+        for gpus in [vec![rtx()], vec![amd], vec![]] {
+            assert!(!help(gpus).contains("Intel integrated GPU"));
+        }
     }
 }

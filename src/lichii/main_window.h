@@ -52,6 +52,7 @@ class GImageInfo;
 class GRenderWindow;
 class LoadingScreen;
 class OverlayDialog;
+class BugReportDialog;
 class ControllerDialog;
 class QLabel;
 class MultiplayerState;
@@ -196,6 +197,17 @@ public:
     /// What NVIDIA DLSS ran as since the last status bar update, empty when it didn't run
     [[nodiscard]] const QString& DlssStatusText() const {
         return dlss_status_text;
+    }
+
+    /// Started with --launcher-session and a game: the window is never shown in its desktop form.
+    [[nodiscard]] bool IsLauncherSession() const {
+        return launcher_session;
+    }
+
+    /// The exit code a launcher session ended with, once its window has closed: 0 after a stop,
+    /// 1 when the game did not start.
+    [[nodiscard]] std::optional<int> LauncherSessionExitCode() const {
+        return launcher_session_exit;
     }
 
 signals:
@@ -456,6 +468,7 @@ private slots:
     void OnCreateHomeMenuDesktopShortcut();
     void OnCreateHomeMenuApplicationMenuShortcut();
     void OnCaptureScreenshot();
+    void OnReportBug();
     /// Checks for decryption keys; `prompt` asks to install them when they are missing.
     void OnCheckFirmwareDecryption(bool prompt = true);
 #ifdef __unix__
@@ -502,6 +515,9 @@ private:
     void UpdateInputDrivers();
     void HideMouseCursor();
     void ShowMenuHintToast();
+    /// Closes the window of a launcher session once its emulation has stopped and no restart or
+    /// sub-program boots again; closeEvent then ends the process.
+    void EndLauncherSession();
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
@@ -545,6 +561,16 @@ private:
 #endif
 
     MultiplayerState* multiplayer_state = nullptr;
+    void RememberSpeedLimitBeforeHotkey();
+    void UndoSessionSpeedChanges();
+    /// The speed limit before the session's first Toggle Framerate Limit / turbo / slow hotkey,
+    /// and whether it was the global or the per-game value. Undone when the game stops, so the
+    /// hotkeys only last for the session; a change made in the configuration dialogs is kept.
+    struct SessionSpeedLimit {
+        bool value;
+        bool using_global;
+    };
+    std::optional<SessionSpeedLimit> speed_limit_before_hotkeys;
 
     GRenderWindow* render_window = nullptr;
     GameList* game_list = nullptr;
@@ -556,6 +582,7 @@ private:
     QTimer nextendo_session_timer;
     QFutureWatcher<bool> nextendo_session_watcher;
     OverlayDialog* shutdown_dialog{};
+    BugReportDialog* bug_report_dialog{};
     PerformanceOverlay* perf_overlay = nullptr;
 #ifdef HAS_RESHADE
     ConfigurePostProcessing* post_processing_dialog = nullptr;
@@ -611,6 +638,18 @@ private:
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
     bool user_flag_cmd_line = false;
+
+    // --launcher-session with a game: the window opens as the fullscreen loading screen and game,
+    // and the process exits when the emulation stops instead of showing the game list.
+    bool launcher_session = false;
+    // The launcher session's game did not start: the process exits with 1.
+    bool launcher_session_failed = false;
+    // The player uses separate windows; the launcher session plays in the main window and puts
+    // the setting back before it is saved.
+    bool launcher_session_separate_window = false;
+    // A restart or a sub-program is between ShutdownGame and BootGame: the session goes on.
+    bool launcher_session_rebooting = false;
+    std::optional<int> launcher_session_exit;
 
     bool auto_paused = false;
     bool auto_muted = false;

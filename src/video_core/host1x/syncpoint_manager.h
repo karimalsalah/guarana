@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <functional>
 #include <list>
 #include <mutex>
@@ -12,11 +13,17 @@
 
 #include "common/common_types.h"
 
+namespace VideoCommon::GpuTrace {
+struct StateAccess;
+}
+
 namespace Tegra {
 
 namespace Host1x {
 
 class SyncpointManager {
+    friend struct ::VideoCommon::GpuTrace::StateAccess;
+
 public:
     static constexpr size_t NUM_MAX_SYNCPOINTS = 192;
 
@@ -40,13 +47,13 @@ public:
     template <typename Func>
     ActionHandle RegisterGuestAction(u32 syncpoint_id, u32 expected_value, Func&& action) {
         return RegisterAction(syncpoints_guest[syncpoint_id], guest_action_storage[syncpoint_id],
-                              expected_value, std::move(action));
+                              expected_value, std::move(action), guard);
     }
 
     template <typename Func>
     ActionHandle RegisterHostAction(u32 syncpoint_id, u32 expected_value, Func&& action) {
         return RegisterAction(syncpoints_host[syncpoint_id], host_action_storage[syncpoint_id],
-                              expected_value, std::move(action));
+                              expected_value, std::move(action), HostMutex());
     }
 
     void DeregisterGuestAction(u32 syncpoint_id, const ActionHandle& handle);
@@ -86,16 +93,34 @@ public:
 
 private:
     void Increment(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
-                   std::list<RegisteredAction>& action_storage,
+                   std::list<RegisteredAction>& action_storage, std::mutex& bank_guard,
                    std::optional<u32> mirrored_id = std::nullopt);
 
     ActionHandle RegisterAction(std::atomic<u32>& syncpoint,
                                 std::list<RegisteredAction>& action_storage, u32 expected_value,
-                                std::function<void()>&& action);
+                                std::function<void()>&& action, std::mutex& bank_guard);
 
-    void DeregisterAction(std::list<RegisteredAction>& action_storage, const ActionHandle& handle);
+    void DeregisterAction(std::list<RegisteredAction>& action_storage, const ActionHandle& handle,
+                          std::mutex& bank_guard);
 
-    void Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv, u32 expected_value);
+    void Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv, u32 expected_value,
+              std::mutex& bank_guard);
+
+    /// EDEN_NX2_SYNCPOINT_SPLIT=1: give the host bank its own lock. The guest bank (incremented on
+    /// the GPU thread) and the host bank (incremented on the fencing thread) share no state but the
+    /// action-id counter, yet one mutex serialized the two threads — each running callbacks that
+    /// take the global scheduler lock — thousands of times a second. Default off keeps the single
+    /// lock, byte for byte the original behaviour.
+    static bool SplitBankLocks() {
+        static const bool split = [] {
+            const char* value = std::getenv("EDEN_NX2_SYNCPOINT_SPLIT");
+            return value != nullptr && value[0] == '1';
+        }();
+        return split;
+    }
+    std::mutex& HostMutex() {
+        return SplitBankLocks() ? host_guard : guard;
+    }
 
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_guest{};
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_host{};
@@ -103,8 +128,11 @@ private:
     std::array<std::list<RegisteredAction>, NUM_MAX_SYNCPOINTS> guest_action_storage;
     std::array<std::list<RegisteredAction>, NUM_MAX_SYNCPOINTS> host_action_storage;
 
-    std::mutex guard;
-    u64 last_action_id{};
+    std::mutex guard;      ///< Guest bank (and, unless split, the host bank too).
+    std::mutex host_guard; ///< Host bank only, when EDEN_NX2_SYNCPOINT_SPLIT=1.
+    /// Atomic so the two bank locks can mint ids concurrently when split; under the single lock
+    /// the sequence is unchanged.
+    std::atomic<u64> last_action_id{};
     GuestMirror guest_mirror; ///< Guarded by `guard`.
     std::condition_variable wait_guest_cv;
     std::condition_variable wait_host_cv;

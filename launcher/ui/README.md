@@ -30,7 +30,8 @@ Add query parameters to the URL, for example `http://localhost:5173/?mock=ready&
 | `pad` | `playstation`, `xbox`, `switch`, `generic`, `none`, `late` (connects after 3.5 s) | `playstation` |
 | `crash` | `1`: the game exits with 0xC0000005 right after it starts | off |
 | `warm` | `1`: an automatic shader warm-up (as after a GPU driver change) runs 2.5 s after start | off |
-| `session` | seconds until `game://exited` | `7` |
+| `session` | seconds the game runs once it is on screen, then `game://exited` | `7` |
+| `boot` | the `game://boot` events a launch plays: `session` (a 20.3+ emulator: phases, shader counts, its window taking the foreground, then the game shown after about 5 s), `old` (only its window taking the foreground), `none` (nothing: the stage hands over after 20 s) | `session` |
 | `speed` | multiplies every mock delay (`0.25` is fast, `20` lets you watch each stage) | `1` |
 | `screen` | `welcome`, `scan`, `profile`, `home`, `updates`, `doctor`, `report` | from `get_state` |
 | `motion` | `reduce`: the reduced-motion version | system setting |
@@ -71,10 +72,21 @@ src/
 | Scan | `detect_system`, `list_profiles`, `locate_files {scope:"quick"}` (or `"deep"`), `run_doctor`, `import_keys`, `add_game_folder`, `pick_folder`, `set_mode` (setup ends with Auto, no profile step), `apply_fix`, `open_path`, `list_controllers`; preloads Home and Profile | `locate://progress`, `doctor://progress`, `controller://changed` |
 | Profile (under Advanced) | `list_profiles`, `apply_profile {profile_id, overrides}` (only values that differ from `Toggle.default`; sets the mode to custom) | |
 | Home | `get_mode`, `set_mode` (the Auto / Smooth / Quality / Battery switch), `autopilot_undo`, `autopilot_enable`, `get_booster`, `set_booster_level`, `booster_undo_all` (the Game Booster card), `stop_warm_shaders`, `get_state`, `list_games`, `list_profiles`, `prefetch_caches {title_id}` once per session on idle, `warm_shaders {title_id}` ("Prepare shaders"), `check_updates` once per session | `autopilot://changed`, `booster://changed`, `warm://progress` (Play waits while the title's shaders build, also for the automatic run after a driver change) |
-| Launch | `launch_game {title_id, profile_id}` | `game://exited` (registered before launching) |
+| Launch | `launch_game {title_id, profile_id}` | `game://exited` and `game://boot` (both registered before launching; the stage shows the boot phase and the real shader count, and holds until the game is on screen, see CONTRACT.md "Boot progress and the hand-over") |
 | Updates | `check_updates {channel}`, `install_version`, `set_current_version` | `install://progress` |
 | Doctor | `run_doctor`, `apply_fix`, `ask_ai` (the `install_update` fix shows its `install://progress` on the button) | `doctor://progress`, `install://progress` |
 | Report | `ask_ai`, `collect_report {kind, note}`, `open_path`, `open_url` | |
+
+Home has one ember button, Play. Below the hero come the mode card (when keys are imported), the
+library, then "This PC": the Game Booster as a folded card that shows its current level, and the
+controllers and setup cards. The share prompt, when offered, sits under the hero with a secondary
+Share button. First run is Scan and then Home in Auto mode, so the top bar says "Set up" without a
+step count; Scan's Continue unlocks once the device and the files are known, and Health finishes in
+the background. The launch stage shows the title and one status line with a spinner: the boot phase
+from `game://boot` in words, with the real shader count after it while shaders load (no bar). It
+holds until the game is on screen, then shows the game's title followed by "is running" on black;
+when it hands over after a hold time without news, the launcher knows only that the process
+started, not that the game has drawn a frame.
 
 Every listener is registered before the command that streams, and removed when its screen goes.
 Links never navigate the webview: `https://` links go through `open_url`, nothing else opens.
@@ -114,17 +126,20 @@ The night stages (Welcome, the game hero, Launch) stay dark in both themes.
 
 ## Motion and performance rules
 
-- Everything that loops or covers a large area animates `transform` and `opacity` only: the intro's layers, beam, embers and grain, the key art's echo arcs and glow, screen transitions, skeleton shimmer. Small one-off transitions also touch other properties (the focus halo's size, the segmented thumb's width, the progress ring's stroke, button shadows and colours), and the intro paints three small things once (the drop's path, the streak masks, the wordmark's light sweep). Bloom and grain are pre-made textures; nothing uses a live `filter: blur` or `backdrop-filter`.
+- Everything that loops or covers a large area animates `transform` and `opacity` only: the intro's layers, beam, embers and grain, the key art's echo arcs and glow, screen transitions, skeleton shimmer.
+- Nothing decorative loops while the player is only looking. The intro's stars, haze and grain run a few cycles and come to rest on their base frame while Set up waits. The hero's echo arcs pulse three times when Home opens, then rest. The launch stage's art holds still, so the spinner next to the status line is the only thing that moves while a game starts. Spinners, skeletons and progress bars run only while something is loading. Small one-off transitions also touch other properties (the focus halo's size, the segmented thumb's width, the progress ring's stroke, button shadows and colours), and the intro paints three small things once (the drop's path, the streak masks, the wordmark's light sweep). Bloom and grain are pre-made textures; nothing uses a live `filter: blur` or `backdrop-filter`.
 - One pause switch: while a game runs or the window is hidden, `html[data-paused]` stops every CSS animation and the pad loop stops; while the window is unfocused, ambient loops (`.ambient`) and pad polling stop.
 - Gamepad polling runs only with a pad connected and the window focused, and is suspended from `launch_game` until `game://exited`, so in-game presses never reach the launcher.
 - Screens are separate chunks loaded with `import()`; Home is preloaded while Scan runs; the library list and the Markdown renderer load when needed; the mock is its own chunk.
-- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title morph into the full-window launch stage, then the stage dims to black over one second as the game window takes over. The intro's logo flies into the top bar's mark when you press Set up.
+- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title (or only the pressed library row's title) morph into the full-window launch stage, which follows the boot until the game is on screen; it dims to black over one second only when it hands over without the emulator's window having taken the foreground (otherwise the dimming would play unseen behind the game), and its animations pause as soon as that window is in front. The intro's logo flies into the top bar's mark when you press Set up.
 - Reduced motion (the system setting or `?motion=reduce`): the intro shows its final frame, transitions are instant, nothing loops.
 
 ## Controllers and keyboard
 
 Keyboard and pads feed one intent layer (`src/input.ts`); focus moves by geometry, and a single halo
-follows it. The halo shows for keyboard and pad use, never for the mouse.
+follows it. The halo shows for keyboard and pad use, never for the mouse. A folded card's heading
+(a `<details>` summary, such as Game Booster or Advanced) is in the focus order, and Select opens or
+closes it.
 
 | Intent | Keyboard | Xbox | PlayStation | Switch Pro | Generic |
 |---|---|---|---|---|---|

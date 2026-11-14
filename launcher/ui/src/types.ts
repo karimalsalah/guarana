@@ -12,6 +12,8 @@ export interface Gpu {
   shared_mb: number;
   vulkan: boolean;
   arch_hint?: string;
+  /** The Intel integrated GPU family its PCI ids matched, e.g. "Panther Lake Intel Graphics"; null when none did. */
+  family: string | null;
 }
 
 export interface SystemInfo {
@@ -184,6 +186,15 @@ export interface LaunchArgs {
 export interface GameExited {
   code: number;
   seconds: number;
+}
+
+/** Payload of game://boot: where the game's boot is (launcher/CONTRACT.md, "Boot progress and the hand-over"). */
+export interface BootProgress {
+  /** In boot order, then `window`: a window of the emulator has the foreground (any version). */
+  phase: "starting" | "loading" | "shaders" | "precache" | "launching" | "first-frame" | "shown" | "window";
+  /** Shader counts for `shaders` and `precache`; 0 of 0 otherwise. */
+  done: number;
+  total: number;
 }
 
 /** take_launch_request: a game file Explorer opened with Guarana, or a guarana:// link. */

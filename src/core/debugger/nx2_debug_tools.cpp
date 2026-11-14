@@ -14,9 +14,12 @@
 #include <future>
 #include <iterator>
 #include <numeric>
+#include <optional>
 #include <thread>
 
 #include "common/fs/path_util.h"
+#include "common/boot_timing.h"
+#include "common/cpu_features.h"
 #include "common/host_memory.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
@@ -30,11 +33,13 @@
 #include "common/stb.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/debugger/nx2_bug_bundle.h"
 #include "core/debugger/nx2_debug_server.h"
 #include "core/debugger/nx2_debug_tools.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/nx2_thread_stats.h"
 #include "core/memory.h"
 #include "core/nx2_autopilot_session.h"
 #include "core/nx2_power_session.h"
@@ -42,8 +47,12 @@
 #include "video_core/auto_shading_rate.h"
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_trace/recorder.h"
+#include "video_core/nx2_async_readback.h"
+#include "video_core/nx2_cache_stats.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_frame_predictor.h"
+#include "video_core/nx2_shown_frames.h"
 #include "video_core/renderer_base.h"
 
 namespace Core::Nx2Debug {
@@ -88,7 +97,9 @@ struct ToolState {
     std::string log_filter{Settings::values.log_filter.GetValue()};
     u64 captures{};
     u64 screenshots{};
+    u64 shown_captures{};
     u64 samples{};
+    u64 traces{};
     u64 gpu_reads{};
     /// Process CPU time and when it was read, at the previous power call.
     double power_cpu_seconds{};
@@ -176,11 +187,11 @@ bool IsVulkan() {
 
 /// Waits for a future in short slices so a stopping server does not wait out the timeout.
 template <typename T>
-bool WaitReady(const ToolState& state, std::future<T>& future, std::chrono::milliseconds timeout) {
+bool WaitReady(const std::atomic<bool>& stop, std::future<T>& future,
+               std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (future.wait_for(50ms) != std::future_status::ready) {
-        if (state.stopping.load(std::memory_order_relaxed) ||
-            std::chrono::steady_clock::now() >= deadline) {
+        if (stop.load(std::memory_order_relaxed) || std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
     }
@@ -288,7 +299,8 @@ json FrameTimes(ToolState& state, const json& params) {
 
 } // Anonymous namespace
 
-json ReadFrameTimes(u64 before, u64 after, u64 begin_ns, u64 end_ns, double refresh_hz) {
+json ReadFrameTimes(u64 before, u64 after, u64 begin_ns, u64 end_ns, double refresh_hz,
+                    size_t recent_limit) {
     const u64 capacity = g_nx2_present_times_ns.size();
     bool truncated = after < before || after - before > capacity;
     const u64 first = (std::max)(before + 1, after > capacity ? after - capacity + 1 : u64{1});
@@ -313,7 +325,8 @@ json ReadFrameTimes(u64 before, u64 after, u64 begin_ns, u64 end_ns, double refr
 
     std::ranges::reverse(intervals);
     json recent = json::array();
-    for (size_t i = intervals.size() > 120 ? intervals.size() - 120 : 0; i < intervals.size(); ++i) {
+    for (size_t i = intervals.size() > recent_limit ? intervals.size() - recent_limit : 0;
+         i < intervals.size(); ++i) {
         recent.push_back(std::round(intervals[i] * 10.0) / 10.0);
     }
     std::ranges::sort(intervals);
@@ -351,28 +364,30 @@ json ReadFrameTimes(u64 before, u64 after, u64 begin_ns, u64 end_ns, double refr
             {"min_ms", frames == 0 ? 0.0 : intervals.front()},
             {"vsync_buckets", {{"1", share(0)}, {"2", share(1)}, {"3", share(2)}, {"4+", share(3)}}},
             {"stutters", stutters},
+            {"longest_ms", json(std::vector<double>(intervals.rbegin(),
+                                                    intervals.rbegin() +
+                                                        static_cast<std::ptrdiff_t>(
+                                                            (std::min<size_t>)(frames, 10))))},
             {"intervals_ms", std::move(recent)},
             {"truncated", truncated}};
 }
 
-namespace {
 
-json Screenshot(ToolState& state, const json& params) {
-    auto& renderer = state.system.GPU().Renderer();
+Png CaptureScreenshot(System& system, u32 height, std::chrono::seconds timeout,
+                      const std::atomic<bool>& stop) {
+    auto& renderer = system.GPU().Renderer();
     if (renderer.IsScreenshotPending()) {
         throw std::runtime_error{"a screenshot is already pending: no frame was presented since"};
     }
-    const u32 height = Param<u32>(params, "height", 720, 144, 2160);
     const auto layout = Layout::DefaultFrameLayout(height * 16 / 9, height);
     const auto pixels = std::make_shared<std::vector<u8>>(size_t{layout.width} * layout.height * 4);
     const auto done = std::make_shared<std::promise<bool>>();
     auto future = done->get_future();
     renderer.RequestScreenshot(
         pixels->data(), [pixels, done](bool invert_y) { done->set_value(invert_y); }, layout);
-    const int timeout = Param<int>(params, "timeout_s", 5, 1, 30);
-    if (!WaitReady(state, future, std::chrono::seconds{timeout})) {
-        throw std::runtime_error{
-            fmt::format("no frame was presented within {} s (paused or loading?)", timeout)};
+    if (!WaitReady(stop, future, timeout)) {
+        throw std::runtime_error{fmt::format(
+            "no frame was presented within {} s (paused or loading?)", timeout.count())};
     }
     const bool invert_y = future.get();
     std::vector<u8> rgb(size_t{layout.width} * layout.height * 3);
@@ -385,13 +400,23 @@ json Screenshot(ToolState& state, const json& params) {
             target[2] = source[0];
         }
     }
-    std::vector<u8> png;
-    if (!stbi_write_png_to_func(AppendPng, &png, static_cast<int>(layout.width),
+    Png png{.bytes = {}, .width = layout.width, .height = layout.height};
+    if (!stbi_write_png_to_func(AppendPng, &png.bytes, static_cast<int>(layout.width),
                                 static_cast<int>(layout.height), 3, rgb.data(),
                                 static_cast<int>(layout.width * 3))) {
         throw std::runtime_error{"PNG encoding failed"};
     }
-    json result = {{"width", layout.width}, {"height", layout.height}};
+    return png;
+}
+
+namespace {
+
+json Screenshot(ToolState& state, const json& params) {
+    const Png shot = CaptureScreenshot(
+        state.system, Param<u32>(params, "height", 720, 144, 2160),
+        std::chrono::seconds{Param<int>(params, "timeout_s", 5, 1, 30)}, state.stopping);
+    const std::vector<u8>& png = shot.bytes;
+    json result = {{"width", shot.width}, {"height", shot.height}};
     if (params.value("save", false)) {
         std::filesystem::create_directories(state.dump_directory);
         const auto path =
@@ -407,6 +432,152 @@ json Screenshot(ToolState& state, const json& params) {
         result["png_base64"] = Base64(png);
     }
     return result;
+}
+
+std::vector<u8> EncodePng(const std::vector<u8>& rgb, u32 width, u32 height) {
+    std::vector<u8> png;
+    if (!stbi_write_png_to_func(AppendPng, &png, static_cast<int>(width), static_cast<int>(height),
+                                3, rgb.data(), static_cast<int>(width * 3))) {
+        throw std::runtime_error{"PNG encoding failed"};
+    }
+    return png;
+}
+
+/// The next frames the presenter shows, generated ones included, with their timing and a contact
+/// sheet of their pictures (video_core/nx2_shown_frames.h, docs/nx2/debug-mcp.md).
+json ShownFrames(ToolState& state, const json& params) {
+    namespace Shown = VideoCore::Nx2ShownFrames;
+    if (!IsVulkan()) {
+        throw std::runtime_error{"shown_frames needs the Vulkan renderer"};
+    }
+    const u32 count = Param<u32>(params, "count", 12, 1, 32);
+    const bool pictures = params.value("pictures", true);
+    const u32 height = pictures ? Param<u32>(params, "height", 270, 144, 540) : 0;
+    const int timeout = Param<int>(params, "timeout_s", 10, 1, 60);
+    const u64 id = ++state.shown_captures;
+    if (!Shown::RequestCapture({.id = id, .count = count, .height = height})) {
+        throw std::runtime_error{"another shown_frames capture is still running"};
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{timeout};
+    std::optional<Shown::Result> captured;
+    while (!(captured = Shown::WaitCapture(id, 50ms))) {
+        if (state.stopping.load(std::memory_order_relaxed) ||
+            std::chrono::steady_clock::now() >= deadline) {
+            Shown::CancelCapture(id);
+            throw std::runtime_error{fmt::format(
+                "{} frames were not shown within {} s (paused or loading?)", count, timeout)};
+        }
+    }
+    const Shown::Result& result = *captured;
+    const u32 shown = static_cast<u32>(result.frames.size());
+    const std::vector<Shown::Times> times = Shown::RelativeTimes(result.frames);
+    const Shown::SheetLayout layout = Shown::LayoutSheet(shown, result.width, result.height);
+    const bool each = params.value("each", false);
+    const auto maybe = [](const std::optional<s64>& value) {
+        return value ? json(*value) : json(nullptr);
+    };
+    const size_t picture_bytes = size_t{result.width} * result.height * 4;
+    std::array<u64, 3> kinds{};
+    std::string presenter = shown != 0 ? std::string{result.frames.front().presenter} : "";
+    u32 with_picture = 0;
+    json frames = json::array();
+    for (u32 index = 0; index < shown; ++index) {
+        const Shown::Shown& frame = result.frames[index];
+        const Shown::Times& timing = times[index];
+        ++kinds[static_cast<size_t>(frame.kind)];
+        if (frame.presenter != presenter) {
+            presenter = "mixed";
+        }
+        json entry = {
+            {"index", index},
+            {"kind", std::string{Shown::KindName(frame.kind)}},
+            {"presenter", std::string{frame.presenter}},
+            {"slot", frame.slot != 0 ? json(frame.slot) : json(nullptr)},
+            {"batch", frame.batch != 0 ? json(frame.batch) : json(nullptr)},
+            {"scheduled_us", maybe(timing.scheduled_us)},
+            {"presented_us", timing.presented_us},
+            {"late_us", maybe(timing.late_us)},
+            {"interval_us", maybe(timing.interval_us)},
+            {"age_us", maybe(timing.age_us)},
+            {"deferred_present", frame.deferred},
+            {"picture", false},
+        };
+        const size_t offset = static_cast<size_t>((std::max)(frame.picture, 0)) * picture_bytes;
+        if (frame.picture >= 0 && layout.width != 0 && offset + picture_bytes <= result.pixels.size()) {
+            ++with_picture;
+            const Shown::SheetTile tile = Shown::TileAt(layout, index, result.width, result.height);
+            entry["picture"] = true;
+            entry["tile"] = {{"x", tile.x},
+                             {"y", tile.y},
+                             {"width", result.width},
+                             {"height", result.height}};
+            if (each) {
+                std::vector<u8> rgb(size_t{result.width} * result.height * 3);
+                const u8* source = result.pixels.data() + offset;
+                for (size_t pixel = 0; pixel < rgb.size() / 3; ++pixel, source += 4) {
+                    rgb[pixel * 3] = source[2];
+                    rgb[pixel * 3 + 1] = source[1];
+                    rgb[pixel * 3 + 2] = source[0];
+                }
+                entry["png_base64"] = Base64(EncodePng(rgb, result.width, result.height));
+            }
+        }
+        frames.push_back(std::move(entry));
+    }
+    json answer = {
+        {"count", shown},
+        {"presenter", presenter},
+        {"kinds", {{"real", kinds[0]}, {"predicted", kinds[1]}, {"interpolated", kinds[2]}}},
+        {"span_us", times.empty() ? s64{0} : times.back().presented_us},
+        {"pictures", with_picture},
+        {"width", result.width},
+        {"height", result.height},
+        {"hdr", result.hdr},
+        {"frames", std::move(frames)},
+    };
+    std::vector<std::string> notes;
+    if (presenter != "fluid") {
+        notes.emplace_back("some or all frames are not on the EDEN_NX2_FLUID vblank clock (off, or "
+                           "its watchdog fell back): those are shown in arrival order, so their slot, "
+                           "scheduled_us and late_us are null, and age_us is null too");
+    } else if (height != 0) {
+        notes.emplace_back("while pictures were taken every screen copy ran on the graphics queue, "
+                           "also with EDEN_NX2_FLUID_QUEUE set: for timing exactly as played, ask "
+                           "with pictures: false");
+    }
+    if (result.hdr) {
+        notes.emplace_back("HDR output: the pictures hold the encoded values cut to 8 bits, not "
+                           "tone-mapped");
+    }
+    if (!result.picture_note.empty()) {
+        answer["picture_note"] = result.picture_note;
+    }
+    answer["notes"] = notes;
+    if (with_picture != 0) {
+        const std::vector<u8> sheet = Shown::ComposeSheet(result, layout);
+        const std::vector<u8> png = EncodePng(sheet, layout.width, layout.height);
+        answer["sheet"] = {{"width", layout.width},
+                           {"height", layout.height},
+                           {"columns", layout.columns},
+                           {"rows", layout.rows},
+                           {"legend", "frames in order, left to right then down; the strip above "
+                                      "each: green real, orange predicted, blue interpolated; grey: "
+                                      "no picture"}};
+        if (params.value("save", false)) {
+            std::filesystem::create_directories(state.dump_directory);
+            const auto path =
+                state.dump_directory / fmt::format("shown-{}-{:04}.png", state.session, id);
+            std::ofstream file{path, std::ios::binary};
+            file.write(reinterpret_cast<const char*>(png.data()),
+                       static_cast<std::streamsize>(png.size()));
+            if (!file) {
+                throw std::runtime_error{fmt::format("cannot write {}", path.generic_string())};
+            }
+            answer["path"] = path.generic_string();
+        }
+        answer["sheet_png_base64"] = Base64(png);
+    }
+    return answer;
 }
 
 json LogTail(ToolState&, const json& params) {
@@ -507,6 +678,28 @@ json CaptureFrame(ToolState& state, const json& params) {
         {"entries", std::move(entries)},
         {"index_command",
          fmt::format("python3 -I tools/nx2/frame_dump_index.py \"{}\"", directory.generic_string())},
+    };
+}
+
+json CaptureBundle(ToolState& state, const json& params) {
+    BugBundle bundle{
+        state.system,
+        {.trigger = "debug_server",
+         .directory = state.dump_directory / "bug-reports",
+         .size_limit = Param<u64>(params, "size_limit_mib", BugBundle::DEFAULT_SIZE_LIMIT >> 20, 1,
+                                  100)
+                       << 20,
+         .capture_timeout = std::chrono::seconds{Param<int>(params, "timeout_s", 90, 5, 600)}}};
+    bundle.Capture(state.stopping);
+    const BugBundle::Result result = bundle.Write(params.value("description", std::string{}));
+    return {
+        {"path", result.path.generic_string()},
+        {"bytes", result.bytes},
+        {"dropped", result.dropped},
+        {"frame_error", result.frame_error},
+        {"manifest", result.manifest},
+        {"index_command", fmt::format("python3 -I tools/nx2/bundle_index.py \"{}\"",
+                                      result.path.generic_string())},
     };
 }
 
@@ -635,6 +828,37 @@ json SetPrepass(ToolState&, const json& params) {
         {"split_draws", counts.split_draws},
         {"plain_draws", counts.plain_draws},
     };
+}
+
+json TraceStatus(ToolState&, const json&) {
+    const auto status = VideoCommon::GpuTrace::GetRecorderStatus();
+    return {{"requested", status.requested},       {"recording", status.recording},
+            {"presents", status.presents},         {"presents_wanted", status.presents_wanted},
+            {"bytes_uncompressed", status.bytes},  {"path", status.path},
+            {"last_trace", status.last_trace},     {"last_error", status.last_error}};
+}
+
+json TraceRecord(ToolState& state, const json& params) {
+    VideoCommon::GpuTrace::RecordOptions options;
+    const double seconds = Param<double>(params, "seconds", 3.0, 0.1, 60.0);
+    options.presents = Param<u32>(params, "presents", static_cast<u32>(seconds * 60.0), 1, 3600);
+    if (params.contains("path")) {
+        options.path = params["path"].get<std::string>();
+    } else {
+        std::filesystem::create_directories(state.dump_directory);
+        options.path = state.dump_directory /
+                       fmt::format("trace-{}-{:03}.lxtrace", state.session, ++state.traces);
+    }
+    std::string error;
+    if (!VideoCommon::GpuTrace::RequestRecording(options, error)) {
+        throw std::runtime_error{error};
+    }
+    return TraceStatus(state, params);
+}
+
+json TraceStop(ToolState& state, const json& params) {
+    VideoCommon::GpuTrace::StopRecording();
+    return TraceStatus(state, params);
 }
 
 json SampleThreads(ToolState& state, const json& params) {
@@ -844,6 +1068,49 @@ json GpuCosts(ToolState& state, const json& params) {
             {"passes", std::move(passes)}};
 }
 
+// EDEN_NX2_GPU_PERF: hardware GPU counters (VK_KHR_performance_query) averaged over a
+// sampling window of submissions: busy, stall, occupancy and core frequency.
+json GpuPerf(ToolState& state, const json& params) {
+    auto& renderer = state.system.GPU().Renderer();
+    if (!renderer.IsGpuPerfSupported()) {
+        return {{"supported", false}, {"reason", renderer.GpuPerfReason()}};
+    }
+    if (params.contains("enable")) {
+        const bool enable = params.at("enable").get<bool>();
+        const u32 frames = Param<u32>(params, "frames", 30, 1, 600);
+        if (!renderer.RequestGpuPerfSampling(enable ? frames : 0)) {
+            return {{"supported", false}, {"reason", renderer.GpuPerfReason()}};
+        }
+    }
+    const std::vector<VideoCore::RendererBase::GpuPerfSample> samples = renderer.ReadGpuPerf();
+    json counters = json::array();
+    json gpu_busy = nullptr;
+    json stall = nullptr;
+    json occupancy = nullptr;
+    json freq = nullptr;
+    for (const auto& sample : samples) {
+        counters.push_back(
+            {{"name", sample.name}, {"value", sample.value}, {"unit", sample.unit}});
+        if (sample.name == "GpuBusy") {
+            gpu_busy = sample.value;
+        } else if (sample.name == "XveStall") {
+            stall = sample.value;
+        } else if (sample.name == "XveThreadOccupancy") {
+            occupancy = sample.value;
+        } else if (sample.name == "AvgGpuCoreFrequencyMHz") {
+            freq = sample.value;
+        }
+    }
+    return {{"supported", true},
+            {"sampling", renderer.IsGpuPerfSampling()},
+            {"frames_sampled", renderer.GpuPerfFramesSampled()},
+            {"counters", std::move(counters)},
+            {"gpu_busy_pct", std::move(gpu_busy)},
+            {"stall_pct", std::move(stall)},
+            {"occupancy_pct", std::move(occupancy)},
+            {"freq_mhz", std::move(freq)}};
+}
+
 // The frame budget controller (EDEN_NX2_TARGET_FPS): sets the target and the GPU time scale live
 // and reports what the controller measured and decided at its last tick.
 json FrameBudgetTool(ToolState&, const json& params) {
@@ -882,7 +1149,8 @@ json FrameBudgetTool(ToolState&, const json& params) {
             {"fast_streak", status.fast_streak},
             {"blind_lowers", status.blind_lowers},
             {"shading_rate_allowed", status.shading_allowed},
-            {"last_change", status.last_change}};
+            {"last_change", status.last_change},
+            {"unanswered_from", status.unanswered_from}};
 }
 
 // The autopilot (EDEN_NX2_AUTOPILOT=1): what its last 2 s window measured and what it holds.
@@ -1143,6 +1411,225 @@ json InputSequence(ToolState& state, const json& params, const ClientGone& clien
     return RunInput(state, steps, params, client_gone);
 }
 
+/// Guest threads' CPU time and waits (EDEN_NX2_GUEST_THREAD_STATS): per thread, the time on a
+/// core split into JIT work (game code, counter polling, hint spins, GPU-cached memory) and
+/// kernel work, the time ready without a core, and the waits by kind. Totals since the thread
+/// first ran, busiest first.
+json ThreadStats(ToolState&, const json& params) {
+    const size_t top = Param<size_t>(params, "top", 16, 1, 128);
+    const std::vector<Kernel::Nx2ThreadStats::ThreadSnapshot> rows =
+        Kernel::Nx2ThreadStats::Snapshot();
+    const u64 freq = Common::g_wall_clock.GetGuestCNTFRQ();
+    const auto ms = [freq](u64 ticks) {
+        return freq != 0 ? static_cast<double>(ticks) * 1000.0 / static_cast<double>(freq) : 0.0;
+    };
+    static constexpr std::array<const char*, Kernel::Nx2ThreadStats::Waits> wait_names{
+        "ipc", "sync_objects", "address_arbiter", "condvar", "lock", "sleep", "other"};
+    json threads = json::array();
+    for (size_t i = 0; i < rows.size() && i < top; ++i) {
+        const Kernel::Nx2ThreadStats::ThreadSnapshot& row = rows[i];
+        const u64 accounted = row.poll_ticks + row.hint_spin_ticks + row.memory_ticks;
+        json waits = json::object();
+        for (size_t kind = 0; kind < Kernel::Nx2ThreadStats::Waits; ++kind) {
+            waits[wait_names[kind]] = {{"ms", ms(row.wait_ticks[kind])},
+                                       {"count", row.wait_counts[kind]}};
+        }
+        threads.push_back({
+            {"thread_id", row.thread_id},
+            {"process", row.process},
+            {"priority", row.priority},
+            {"affinity_mask", Hex(row.affinity)},
+            {"on_core_ms", ms(row.on_core_ticks)},
+            {"jit_ms", ms(row.jit_ticks)},
+            {"game_code_ms", ms(row.jit_ticks > accounted ? row.jit_ticks - accounted : 0)},
+            {"counter_poll_ms", ms(row.poll_ticks)},
+            {"hint_spin_ms", ms(row.hint_spin_ticks)},
+            {"cached_memory_ms", ms(row.memory_ticks)},
+            {"read_back_ms", ms(row.read_back_ticks)},
+            {"outside_jit_ms", ms(row.on_core_ticks > row.jit_ticks ? row.on_core_ticks - row.jit_ticks : 0)},
+            {"ready_ms", ms(row.ready_ticks)},
+            {"held_replies_ms", static_cast<double>(row.held_ns) / 1e6},
+            {"presents", row.presents},
+            {"waits", std::move(waits)},
+        });
+    }
+    json result = {{"enabled", Kernel::Nx2ThreadStats::g_enabled},
+                   {"cntfrq_hz", freq},
+                   {"threads_total", rows.size()},
+                   {"threads", std::move(threads)}};
+    if (!Kernel::Nx2ThreadStats::g_enabled) {
+        result["note"] = "EDEN_NX2_GUEST_THREAD_STATS is not set: the counters only fill with it";
+    }
+    return result;
+}
+
+/// The present thread's counters (the FLUID presenter's fluid_stats, EDEN_NX2_SHOWN_STATS),
+/// the vblank clock it keeps, and the present queue's depth.
+json PresentStatsTool(ToolState& state, const json&) {
+    if (!state.system.IsPoweredOn()) {
+        throw std::runtime_error{"the renderer is not running"};
+    }
+    const auto stats = state.system.GPU().Renderer().GetPresentStats();
+    if (!stats) {
+        throw std::runtime_error{"present stats need the Vulkan renderer"};
+    }
+    const auto mean = [](double sum, u64 samples) {
+        return samples != 0 ? sum / static_cast<double>(samples) : 0.0;
+    };
+    json result = {
+        {"fluid", stats->fluid},
+        {"fallback", stats->fallback},
+        {"shown_stats", stats->shown_stats},
+        {"swapchain_images", stats->swapchain_images},
+        {"present_frames", stats->frame_count},
+        {"queued_frames", stats->queued_frames},
+        {"free_frames", stats->free_frames},
+        {"vblank",
+         {{"refresh_hz", stats->refresh_hz},
+          {"index", stats->vblank_index},
+          {"divisor", stats->divisor},
+          {"lead_ms", stats->lead_ms},
+          {"latency_ms", stats->clock_latency_ms}}},
+        {"slots", stats->slot_count},
+        {"hits", stats->hits},
+        {"missed", stats->no_frame + stats->queued + stats->overslept},
+        {"no_frame", stats->no_frame},
+        {"not_done", stats->not_done},
+        {"uncovered", stats->uncovered},
+        {"rolled", stats->rolled},
+        {"spare", stats->spare},
+        {"stale", stats->stale},
+        {"queued", stats->queued},
+        {"overslept", stats->overslept},
+        {"in_order", stats->in_order},
+        {"late", stats->late},
+        {"dropped", stats->dropped},
+        {"received", stats->received},
+        {"held",
+         {{"1", stats->held[0]},
+          {"2", stats->held[1]},
+          {"3", stats->held[2]},
+          {"4+", stats->held[3]}}},
+        {"age_ms", mean(stats->age_ms, stats->hits)},
+        {"latency_ms", mean(stats->latency_ms, stats->latency_samples)},
+        {"latency_samples", stats->latency_samples},
+        {"present_thread",
+         {{"presents", stats->presents},
+          {"acquire_ms", mean(stats->acquire_ms, stats->presents)},
+          {"acquire_max_ms", stats->acquire_max_ms},
+          {"copy_wait_ms", mean(stats->copy_wait_ms, stats->copy_waits)},
+          {"copy_wait_max_ms", stats->copy_wait_max_ms},
+          {"copy_waits", stats->copy_waits},
+          {"copy_wait_timeouts", stats->copy_wait_timeouts},
+          {"lock_ms", mean(stats->lock_ms, stats->presents)},
+          {"lock_max_ms", stats->lock_max_ms},
+          {"call_ms", mean(stats->call_ms, stats->presents)},
+          {"call_max_ms", stats->call_max_ms},
+          {"margin_ms", mean(stats->margin_ms, stats->margin_samples)},
+          {"margin_min_ms", stats->margin_min_ms},
+          {"after_vblank", stats->after_vblank},
+          {"copy_gpu_ms", mean(stats->copy_gpu_ms, stats->copy_gpu_samples)},
+          {"copy_gpu_max_ms", stats->copy_gpu_max_ms},
+          {"copy_gpu_samples", stats->copy_gpu_samples}}},
+    };
+    if (!stats->shown_stats) {
+        result["note"] = "EDEN_NX2_SHOWN_STATS is not set: the slot counters stay zero; the "
+                         "vblank clock and queue depths are live regardless";
+    }
+    return result;
+}
+
+/// Texture and buffer cache hit/miss/eviction counters since boot, with the memory the caches
+/// last published (Common::g_memory_counters).
+json CacheStats(ToolState&, const json&) {
+    const VideoCommon::Nx2CacheStats::Counters& counters = VideoCommon::Nx2CacheStats::g_counters;
+    const Common::MemoryCounters& memory = Common::g_memory_counters;
+    const auto get = [](const std::atomic<u64>& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    const u64 texture_hits = get(counters.texture_hits);
+    const u64 texture_misses = get(counters.texture_misses);
+    const u64 buffer_hits = get(counters.buffer_hits);
+    const u64 buffer_misses = get(counters.buffer_misses);
+    const auto hit_rate = [](u64 hits, u64 misses) {
+        const u64 total = hits + misses;
+        return total != 0 ? static_cast<double>(hits) / static_cast<double>(total) : 0.0;
+    };
+    return {
+        {"texture",
+         {{"hits", texture_hits},
+          {"misses", texture_misses},
+          {"hit_rate", hit_rate(texture_hits, texture_misses)},
+          {"created", get(counters.texture_created)},
+          {"deleted", get(counters.texture_deleted)},
+          {"evicted", get(counters.texture_evicted)},
+          {"evicted_downloaded", get(counters.texture_evicted_downloaded)},
+          {"device_usage", get(memory.device_usage)},
+          {"expected_threshold", get(memory.texture_expected)},
+          {"critical_threshold", get(memory.texture_critical)}}},
+        {"buffer",
+         {{"hits", buffer_hits},
+          {"misses", buffer_misses},
+          {"hit_rate", hit_rate(buffer_hits, buffer_misses)},
+          {"created", get(counters.buffer_created)},
+          {"deleted", get(counters.buffer_deleted)},
+          {"evicted", get(counters.buffer_evicted)},
+          {"bytes", get(memory.buffer_cache_bytes)}}},
+        {"staging_bytes", get(memory.staging_bytes)},
+        {"graphics_pipelines", get(memory.graphics_pipelines)},
+        {"built_pipelines", get(memory.built_pipelines)},
+    };
+}
+
+/// Guest CPU readback / GPU-flush counters since boot (VideoCore::AsyncReadback::g_counters),
+/// the readback-sync bottleneck telemetry: reads, flush time, reader/GPU-side waits, DMA reads,
+/// early downloads. Cumulative; EDEN_NX2_GPU_PROFILE also logs a per-second line.
+json Readbacks(ToolState&, const json&) {
+    const VideoCore::AsyncReadback::Counters& c = VideoCore::AsyncReadback::g_counters;
+    const auto get = [](const std::atomic<u64>& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    const auto us = [&get](const std::atomic<u64>& ns) { return get(ns) / 1000.0; };
+    using Read = VideoCore::AsyncReadback::Read;
+    return {
+        {"reads_async", get(c.reads[static_cast<size_t>(Read::Async)])},
+        {"reads_inflight", get(c.reads[static_cast<size_t>(Read::InFlight)])},
+        {"read_us", us(c.read_ns[static_cast<size_t>(Read::Async)])},
+        {"flush_us", us(c.flush_ns)},
+        {"reader_waits", get(c.reader_waits)},
+        {"reader_wait_us", us(c.reader_wait_ns)},
+        {"reader_max_wait_us", us(c.reader_max_wait_ns)},
+        {"gpu_side_waits", get(c.gpu_side_waits)},
+        {"gpu_side_wait_us", us(c.gpu_side_wait_ns)},
+        {"dma_reads", get(c.dma_reads)},
+        {"dma_waited", get(c.dma_waited)},
+        {"dma_drained", get(c.dma_drained)},
+        {"dma_wait_us", us(c.dma_wait_ns)},
+        {"clear_landings", get(c.clear_landings)},
+        {"clear_waits", get(c.clear_waits)},
+        {"clear_wait_us", us(c.clear_wait_ns)},
+        {"sync_ops", get(c.sync_ops)},
+        {"sync_us", us(c.sync_ns)},
+        {"sync_max_us", us(c.sync_max_ns)},
+        {"early_recorded", get(c.early_recorded)},
+        {"early_bytes", get(c.early_bytes)},
+        {"early_flushes", get(c.early_flushes)},
+        {"early_refused", get(c.early_refused)},
+        {"note", "cumulative since boot; EDEN_NX2_GPU_PROFILE logs a per-second line"},
+    };
+}
+
+/// The boot phases Common::BootTiming recorded (Mark and Span), oldest first: when each
+/// happened since the process started and how long it took.
+json BootTimingTool(ToolState&, const json&) {
+    json phases = json::array();
+    for (const Common::BootTiming::Phase& phase : Common::BootTiming::RecordedPhases()) {
+        phases.push_back(
+            {{"phase", phase.name}, {"at_ms", phase.at_ms}, {"took_ms", phase.took_ms}});
+    }
+    return {{"now_ms", Common::BootTiming::Now()}, {"phases", std::move(phases)}};
+}
+
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
     const auto handler = [&state](json (*tool)(ToolState&, const json&)) -> Handler {
         return [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
@@ -1156,18 +1643,24 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"status", handler(Status)},
         {"frame_times", handler(FrameTimes)},
         {"screenshot", handler(Screenshot)},
+        {"shown_frames", handler(ShownFrames)},
         {"log_tail", handler(LogTail)},
         {"log_filter", handler(LogFilter)},
         {"capture_frame", handler(CaptureFrame)},
+        {"capture_bundle", handler(CaptureBundle)},
         {"reject_shaders", handler(RejectShaders)},
         {"set_shading_rate", handler(SetShadingRate)},
         {"set_prepass", handler(SetPrepass)},
         {"sample", handler(SampleThreads)},
+        {"trace_record", handler(TraceRecord)},
+        {"trace_stop", handler(TraceStop)},
+        {"trace_status", handler(TraceStatus)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},
         {"power", handler(Power)},
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},
+        {"gpu_perf", handler(GpuPerf)},
         {"frame_budget", handler(FrameBudgetTool)},
         {"autopilot", handler(AutopilotTool)},
         {"memory", handler(MemoryReport)},
@@ -1176,6 +1669,11 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"read_gpu_memory", handler(ReadGpuMemory)},
         {"input", waiting(Input)},
         {"input_sequence", waiting(InputSequence)},
+        {"thread_stats", handler(ThreadStats)},
+        {"present_stats", handler(PresentStatsTool)},
+        {"cache_stats", handler(CacheStats)},
+        {"readbacks", handler(Readbacks)},
+        {"boot_timing", handler(BootTimingTool)},
     };
 }
 
@@ -1398,23 +1896,14 @@ Service::Service(System& system, std::string title, u64 program_id, const Endpoi
                  std::string dump_directory)
     : state{std::make_shared<ToolState>(system, std::move(title), program_id,
                                         std::move(dump_directory))} {
-    VideoCore::Nx2Debug::BeginSession();
     Common::Log::SetRingCapacity(RING_LINES);
-    try {
-        server = std::make_unique<Server>(endpoint, MakeHandlers(state));
-    } catch (...) {
-        VideoCore::Nx2Debug::EndSession();
-        throw;
-    }
-    g_nx2_present_time_services.fetch_add(1, std::memory_order_relaxed);
+    server = std::make_unique<Server>(endpoint, MakeHandlers(state));
     LOG_INFO(Debug, "Debug server listening on {}:{}, dump dir {}", endpoint.host, server->Port(),
              state->dump_directory.generic_string());
 }
 
 Service::~Service() {
     state->stopping.store(true, std::memory_order_relaxed);
-    g_nx2_present_time_services.fetch_sub(1, std::memory_order_relaxed);
-    VideoCore::Nx2Debug::EndSession();
     server.reset();
 }
 

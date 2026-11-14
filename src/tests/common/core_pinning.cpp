@@ -277,3 +277,169 @@ TEST_CASE("Hybrid plan: CPUs that are not hybrid or have too few P cores are lef
     AddCores(small, 8, 1, 1);
     CHECK(!Common::PlanHybridCores(small, true).active);
 }
+
+namespace {
+
+// Moves the processors from `first` on behind a last level cache of their own.
+void OnIsland(std::vector<LogicalProcessor>& processors, size_t first) {
+    for (size_t i = first; i < processors.size(); ++i) {
+        processors[i].last_level_cache = 1;
+    }
+}
+
+// A Core Ultra 9 386H (Panther Lake): 4 P cores, 8 E cores behind the same cache and 4 low-power
+// E cores on an island, no SMT. `three_classes` false is the same CPU with the low-power cores
+// reported in the E cores' class, told apart only by their cache.
+std::vector<LogicalProcessor> PantherLakeH(bool three_classes) {
+    std::vector<LogicalProcessor> processors;
+    AddCores(processors, 4, 1, 2);
+    AddCores(processors, 8, 1, 1);
+    AddCores(processors, 4, 1, three_classes ? 0 : 1);
+    OnIsland(processors, 12);
+    return processors;
+}
+
+// A Lunar Lake CPU: 4 P cores and 4 E cores, the E cores on an island of their own.
+std::vector<LogicalProcessor> LunarLake() {
+    std::vector<LogicalProcessor> processors;
+    AddCores(processors, 4, 1, 1);
+    AddCores(processors, 4, 1, 0);
+    OnIsland(processors, 4);
+    return processors;
+}
+
+void CheckInactive(const Common::HybridPlan& plan) {
+    CHECK(!plan.active);
+    CHECK(!plan.four_p);
+    CHECK(plan.performance.empty());
+    CHECK(plan.latency.empty());
+    CHECK(plan.render.empty());
+    CHECK(plan.front.empty());
+    CHECK(plan.back.empty());
+    CHECK(plan.efficiency.empty());
+    CHECK(plan.low_power.empty());
+    CHECK(plan.responsive.empty());
+}
+
+} // namespace
+
+TEST_CASE("Hybrid plan: Arrow Lake-H keeps the six-P layout", "[common][core_pinning]") {
+    for (const bool pin : {true, false}) {
+        const auto plan = Common::PlanHybridCores(ArrowLakeH(), pin);
+        REQUIRE(plan.active);
+        CHECK(!plan.four_p);
+        CHECK(plan.performance == Ids(0, 6));
+        CHECK(plan.efficiency == Ids(6, 8));
+        CHECK(plan.low_power == Ids(14, 2));
+        CHECK(plan.responsive == Ids(0, 14));
+        // The Vulkan worker, GPU front and back start where the guest cores do, as before.
+        CHECK(plan.render == plan.latency);
+        CHECK(Sorted(plan.latency) == (pin ? Concat(Ids(0, 1), Ids(3, 3)) : Ids(0, 6)));
+        CHECK(plan.front == (pin ? Ids(1, 1) : Ids(0, 6)));
+        CHECK(plan.back == (pin ? Ids(2, 1) : Ids(0, 6)));
+    }
+}
+
+TEST_CASE("Hybrid plan: Panther Lake-H keeps the GPU threads on the P cores and the guest on P "
+          "and E cores",
+          "[common][core_pinning]") {
+    for (const bool three_classes : {true, false}) {
+        for (const bool pin : {true, false}) {
+            const auto plan = Common::PlanHybridCores(PantherLakeH(three_classes), pin);
+            REQUIRE(plan.active);
+            CHECK(plan.four_p);
+            CHECK(plan.performance_cores == 4);
+            CHECK(plan.performance == Ids(0, 4));
+            CHECK(plan.efficiency == Ids(4, 8));
+            CHECK(plan.low_power == Ids(12, 4));
+            CHECK(plan.responsive == Ids(0, 12));
+            CHECK(plan.render == Ids(0, 4));
+            CHECK(plan.front == Ids(0, 4));
+            CHECK(plan.back == Ids(0, 4));
+            CHECK(plan.latency == Ids(0, 12));
+        }
+    }
+}
+
+TEST_CASE("Hybrid plan: Lunar Lake's E-core island is its efficiency cores",
+          "[common][core_pinning]") {
+    for (const bool island : {true, false}) {
+        auto processors = LunarLake();
+        if (!island) {
+            for (auto& processor : processors) {
+                processor.last_level_cache = 0;
+            }
+        }
+        const auto plan = Common::PlanHybridCores(processors, true);
+        REQUIRE(plan.active);
+        CHECK(plan.four_p);
+        CHECK(plan.performance == Ids(0, 4));
+        CHECK(plan.efficiency == Ids(4, 4));
+        CHECK(plan.low_power.empty());
+        CHECK(plan.responsive == Ids(0, 8));
+        CHECK(plan.render == Ids(0, 4));
+        CHECK(plan.latency == Ids(0, 8));
+    }
+}
+
+TEST_CASE("Hybrid plan: 4 P cores with SMT and 8 E cores use the four-P layout",
+          "[common][core_pinning]") {
+    std::vector<LogicalProcessor> processors;
+    AddCores(processors, 4, 2, 1);
+    AddCores(processors, 8, 1, 0);
+    const auto plan = Common::PlanHybridCores(processors, true);
+    REQUIRE(plan.active);
+    CHECK(plan.four_p);
+    CHECK(plan.performance_cores == 4);
+    CHECK(plan.render == Ids(0, 8));
+    CHECK(plan.front == Ids(0, 8));
+    CHECK(plan.back == Ids(0, 8));
+    CHECK(plan.efficiency == Ids(8, 8));
+    CHECK(plan.low_power.empty());
+    CHECK(plan.latency == Ids(0, 16));
+}
+
+TEST_CASE("Hybrid plan: the four-P layout starts at 4 P cores and ends below 6",
+          "[common][core_pinning]") {
+    std::vector<LogicalProcessor> three;
+    AddCores(three, 3, 1, 1);
+    AddCores(three, 8, 1, 0);
+    const auto three_plan = Common::PlanHybridCores(three, true);
+    CHECK(three_plan.performance_cores == 3);
+    CheckInactive(three_plan);
+    std::vector<LogicalProcessor> five;
+    AddCores(five, 5, 1, 1);
+    AddCores(five, 8, 1, 0);
+    const auto five_plan = Common::PlanHybridCores(five, true);
+    REQUIRE(five_plan.active);
+    CHECK(five_plan.four_p);
+    CHECK(five_plan.performance_cores == 5);
+    CHECK(five_plan.render == Ids(0, 5));
+    CHECK(five_plan.latency == Ids(0, 13));
+}
+
+TEST_CASE("Hybrid plan: 2 P cores are left to Windows", "[common][core_pinning]") {
+    // An i5-1235U (2 P cores with SMT, 8 E cores) and a Meteor Lake-U (2 P, 8 E, 2 low-power E).
+    std::vector<LogicalProcessor> alder;
+    AddCores(alder, 2, 2, 1);
+    AddCores(alder, 8, 1, 0);
+    const auto alder_plan = Common::PlanHybridCores(alder, true);
+    CHECK(alder_plan.performance_cores == 2);
+    CheckInactive(alder_plan);
+    std::vector<LogicalProcessor> meteor;
+    AddCores(meteor, 2, 2, 1);
+    AddCores(meteor, 8, 1, 0);
+    AddCores(meteor, 2, 1, 0);
+    OnIsland(meteor, 12);
+    const auto meteor_plan = Common::PlanHybridCores(meteor, false);
+    CHECK(meteor_plan.performance_cores == 2);
+    CheckInactive(meteor_plan);
+}
+
+TEST_CASE("Hybrid plan: a CPU that is not hybrid gets no plan", "[common][core_pinning]") {
+    for (const u32 cores : {4U, 8U}) {
+        const auto plan = Common::PlanHybridCores(Uniform(cores, 2), true);
+        CHECK(plan.performance_cores == 0);
+        CheckInactive(plan);
+    }
+}

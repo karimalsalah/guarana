@@ -435,7 +435,9 @@ fn extract(app: &AppHandle, zip_path: &Path, dest: &Path) -> CmdResult<()> {
     for i in 0..count {
         let mut entry = archive.by_index(i).ctx("The archive is damaged")?;
         let Some(rel) = entry.enclosed_name() else {
-            log::warn!("Skipped archive entry with an unsafe path: {}", entry.name());
+            // zip 9 decodes the name fallibly; fall back to the raw bytes so the warning still names it.
+            let name = entry.name().unwrap_or_else(|_| String::from_utf8_lossy(entry.name_raw()));
+            log::warn!("Skipped archive entry with an unsafe path: {name}");
             continue;
         };
         if is_portable_user_dir(&rel) {

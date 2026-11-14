@@ -1,0 +1,48 @@
+name: switch-registry
+
+# Every EDEN_NX2_* and EDEN_DKB_* switch the code uses has a row in docs/switches.md, or is one of
+# upstream's (the upstream branch, or tools/ci/switch-registry-upstream.txt):
+# tools/ci/switch_registry.py. A missing row fails with the switch's name and where it is used; a
+# row whose switch is used nowhere is a warning. A job of its own rather than a step of
+# build-check.yml, whose builds skip pull requests that change only documentation, such as a new row.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "launcher/**"
+      - "docs/switches.md"
+      - "tools/ci/switch_registry.py"
+      - "tools/ci/switch-registry-upstream.txt"
+      - "tools/ci/tests/test_switch_registry.py"
+      - "tools/ingest/tests/yaml_subset.py"
+      - ".github/workflows/switch-registry.yml"
+
+permissions: {}
+
+jobs:
+  check:
+    name: Check the switch registry
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Test the check
+        run: python3 -I tools/ci/tests/test_switch_registry.py -v
+
+      # Upstream's own tip counts as upstream's list too, so a switch that an upstream merge brings
+      # in needs neither a row nor a regenerated list. It is read from upstream itself: the mirror
+      # branch (upstream-sync.yml) stops following when upstream changes a workflow file and no
+      # UPSTREAM_SYNC_TOKEN is set, so it is only the fallback for when upstream cannot be reached.
+      # The checked-in list still covers names upstream has since dropped.
+      - name: Check docs/switches.md against the tree
+        run: |
+          if ! git fetch --no-tags --depth=1 https://github.com/zortos293/Lichii nx2; then
+            git fetch --no-tags --depth=1 origin upstream
+          fi
+          python3 -I tools/ci/switch_registry.py --upstream-ref FETCH_HEAD

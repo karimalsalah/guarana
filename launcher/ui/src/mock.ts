@@ -9,10 +9,12 @@
 //   warm=1 (an automatic shader warm-up after a driver change runs when the app opens)
 //   open=<title id> (the app was opened with guarana://launch/<title id>; an id not in the library is refused)
 //   speed=<factor> (0.25 makes every delay four times shorter, 20 lets you watch each stage)
+//   boot=session (default) | old | none (the game://boot events a launch plays: a launcher session,
+//     an older emulator whose window only takes the foreground, or nothing at all)
 
 import type { Backend, Unlisten } from "./api";
 import type {
-  AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
+  AppliedProfile, AskAiResult, AutopilotChange, BootProgress, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
   Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink, LaunchRequest, Notifications, BoosterStatus, BoosterLevelInfo,
 } from "./types";
@@ -35,6 +37,7 @@ interface Scenario {
   open: string | null;
   session: number;
   speed: number;
+  boot: "session" | "old" | "none";
 }
 
 const HOME = "C:\\Users\\Player";
@@ -62,6 +65,7 @@ function readScenario(): Scenario {
     open: q.get("open"),
     session: 7,
     speed: 1,
+    boot: "session",
   };
   if (name === "ready" || name === "no-oot" || name === "failure") {
     Object.assign(base, { firstRun: false, keys: true, keysOnDisk: "quick", firmware: true, library: true });
@@ -83,6 +87,8 @@ function readScenario(): Scenario {
   if (session > 0) base.session = session;
   const speed = Number(q.get("speed"));
   if (speed > 0) base.speed = speed;
+  const boot = q.get("boot");
+  if (boot === "session" || boot === "old" || boot === "none") base.boot = boot;
   return base;
 }
 
@@ -104,6 +110,7 @@ const SYSTEM: SystemInfo = {
       shared_mb: 16125,
       vulkan: true,
       arch_hint: "Xe-LPG+ (Arrow Lake-H)",
+      family: "Arrow Lake-H Intel Graphics",
     },
   ],
   primary_gpu: 0,
@@ -181,6 +188,17 @@ function toggles(d: Defaults): Toggle[] {
     c("fps_cap", "Frame rate cap", "Caps how often the game presents a frame. A cap the GPU can always hold gives steadier frame times and saves power.", d.fps_cap, ["off", "30", "40", "45", "60"]),
   ];
 }
+
+// Any Intel GPU the launcher calls integrated, primary or not (profiles.rs `has_intel_igpu`): there the
+// launcher leaves EDEN_NX2_EXTRAPOLATE to the emulator, whose locked 120 and 144 Hz sets for Ocarina of
+// Time interpolate (src/core/game_presets.cpp `ChoosePacingSet`, issue #119).
+function hasIntelIgpu(sys: SystemInfo): boolean {
+  return sys.gpus.some((g) => g.vendor === "intel" && g.is_integrated);
+}
+
+// Appended to the `ocarina_extrapolation` help there (profiles.rs `INTEL_IGPU_HELP`).
+const INTEL_IGPU_HELP =
+  " With an Intel integrated GPU the launcher leaves EDEN_NX2_EXTRAPOLATE to the emulator when this is on: Ocarina of Time still predicts at most refresh rates, but at 115-125 or 140-148 Hz the emulator's 120 or 144 Hz set shows a frame for every refresh, the in-between ones interpolated, and a 1 in your nx2_switches.txt would turn that off. Older emulator builds predict there too (the shipped nx2_switches.txt sets 1).";
 
 function buildGames(withOot: boolean): Game[] {
   const games: Game[] = [
@@ -373,8 +391,11 @@ export function createMockBackend(): Backend {
   }
 
   function buildProfiles(): Profile[] {
+    const intelIgpu = hasIntelIgpu(SYSTEM);
     return PROFILE_DEFS.map((p) => {
       const list = toggles(p.d);
+      const predict = list.find((t) => t.id === "ocarina_extrapolation");
+      if (intelIgpu && predict) predict.help += INTEL_IGPU_HELP;
       const over = appliedOverrides[p.id] ?? {};
       for (const t of list) if (t.id in over) t.value = over[t.id] as ToggleValue;
       return { id: p.id, name: p.name, description: p.description, recommended: p.id === "intel-arc-igpu", toggles: list };
@@ -429,11 +450,14 @@ export function createMockBackend(): Backend {
         : ok("vc_redist", "Visual C++ runtime", "Microsoft Visual C++ 2015-2022 x64 is installed."),
       ok("avx2", "CPU features", "AVX2 is supported."),
       ok("memory", "Memory and page file", "32 GB RAM. The page file is system managed, so it can grow."),
+      ok("memory_now", "Memory free right now", "17.6 GB of RAM is free, and 14.2 of the 37.0 GB Windows can hand out (RAM plus page file) is in use."),
       ok("disk", "Free disk space", "214 GB free on C: for shader caches."),
       { id: "power", title: "Power mode", status: "warn", detail: "Plugged in, Balanced. Best performance keeps the GPU clock up.", fix_id: "open_power_settings", fix_label: "Open power settings" },
       { id: "hags", title: "Hardware-accelerated GPU scheduling", status: "info", detail: "On. If you see stutter, try it off and compare.", fix_id: "open_graphics_settings", fix_label: "Open graphics settings" },
       { id: "intel_shared_memory", title: "Intel Shared GPU Memory Override", status: "info", detail: "Not set. Optional: Intel Graphics Software can give the iGPU more shared memory.", fix_id: "open_intel_graphics", fix_label: "Learn how" },
       { id: "windows_hdr", title: "Windows HDR", status: "info", detail: "This display can do HDR and Windows HDR is off. Turn it on with Win+Alt+B for the game's native HDR.", fix_id: "open_hdr_help", fix_label: "How to turn on HDR" },
+      ok("refresh_rate", "Display refresh rate and frame generation", "120 Hz is a multiple of 60."),
+      { id: "displays", title: "Displays on the integrated GPU", status: "warn", detail: "2 displays are on, all drawn by the Intel(R) Arc(TM) 140T GPU (16GB) that also runs the game. Each one takes memory bandwidth and compositor work from that GPU. If you do not need one while playing, turn it off in Display settings (select it, then Multiple displays > Disconnect this display).", fix_id: "open_display_settings", fix_label: "Open Display settings" },
       { id: "defender", title: "Windows Security and the cache folder", status: "info", detail: "The shader cache folder is scanned on every write. An exclusion can reduce hitches. Guarana never changes this for you.", fix_id: "open_windows_security", fix_label: "Open Windows Security" },
       shaderTmp
         ? { id: "shader_tmp", title: "Shader cache temp files", status: "warn", detail: "14 leftover temp files (38 MB) from an earlier crash.", fix_id: "delete_shader_tmp", fix_label: "Delete temp files" }
@@ -770,6 +794,24 @@ export function createMockBackend(): Backend {
         boosterActive = true;
         emit("booster://changed", boosterStatus());
       }
+      // game://boot as boot.rs emits it: the session output of a 20.3+ emulator (boot=session), only
+      // its window taking the foreground (boot=old, an older version), or nothing (boot=none).
+      const boot = (at: number, phase: BootProgress["phase"], done = 0, total = 0) =>
+        setTimeout(() => {
+          if (gameRunning) emit("game://boot", { phase, done, total } satisfies BootProgress);
+        }, at * sc.speed);
+      if (sc.boot === "session") {
+        boot(100, "starting");
+        boot(600, "loading");
+        boot(1400, "window");
+        boot(1500, "shaders");
+        for (let i = 0; i <= 10; i++) boot(1700 + i * 200, "shaders", Math.round((1346 * i) / 10), 1346);
+        boot(3900, "launching");
+        boot(4600, "first-frame");
+        boot(5100, "shown");
+      } else if (sc.boot === "old") {
+        boot(1200, "window");
+      }
       const exited: GameExited = sc.crash ? { code: 3221225477, seconds: 1 } : { code: 0, seconds: 2715 };
       setTimeout(() => {
         gameRunning = false;
@@ -778,8 +820,9 @@ export function createMockBackend(): Backend {
           emit("booster://changed", boosterStatus());
         }
         emit("game://exited", exited);
-      }, (sc.crash ? 1.4 : sc.session) * 1000);
-      return { pid: 23816 };
+        // The session runs once the game is on screen (after the boot above).
+      }, sc.crash ? 1400 : sc.session * 1000 + (sc.boot === "session" ? 5100 : sc.boot === "old" ? 1200 : 0) * sc.speed);
+      return { pid: 23816, follows_boot: sc.boot === "session" };
     },
     async collect_report(a) {
       await sleep(1400);

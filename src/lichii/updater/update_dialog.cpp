@@ -17,6 +17,7 @@
 #include <qdesktopservices.h>
 #include "common/logging.h"
 #include "common/scm_rev.h"
+#include "common/switch_origin.h"
 #include "frontend_common/update_installer.h"
 #include "qt_common/abstract/frontend.h"
 #include "qt_common/abstract/progress.h"
@@ -35,6 +36,19 @@
 #include <QDesktopServices>
 
 #undef GetSaveFileName
+
+namespace {
+
+// Leaves out the switches this process put in its environment itself (from nx2_switches.txt or a
+// game's switch defaults): the process started in its place reads the files again, and a value of
+// this one would count there as set by the player.
+void RemoveSwitchesSetByProcess(QProcessEnvironment& environment) {
+    for (const std::string& name : Common::SwitchOrigin::SetByProcess()) {
+        environment.remove(QString::fromStdString(name));
+    }
+}
+
+} // Anonymous namespace
 
 UpdateDialog::UpdateDialog(const Common::Net::Release& release, QWidget* parent)
     : QDialog(parent), ui(new Ui::UpdateDialog) {
@@ -121,6 +135,7 @@ void UpdateDialog::Restart(QWidget* window, const QString& target) {
     for (const auto& key : {"APPDIR", "APPIMAGE", "ARGV0", "OWD"}) {
         environment.remove(QString::fromLatin1(key));
     }
+    RemoveSwitchesSetByProcess(environment);
 
     // Wait for this process to exit, so the new one reads the settings this one writes on close.
     QProcess process;
@@ -160,9 +175,15 @@ bool UpdateDialog::LaunchInstaller(QWidget* window, const QString& staging) {
 
     const auto install_dir = QCoreApplication::applicationDirPath();
     const auto native = [](const QString& path) { return QDir::toNativeSeparators(path); };
-    if (!QProcess::startDetached(
-            copy, {QString::number(QCoreApplication::applicationPid()), native(staging),
-                   native(install_dir), native(QCoreApplication::applicationFilePath())})) {
+    // The helper starts the new version with the environment it gets here (updater/main.cpp).
+    auto environment = QProcessEnvironment::systemEnvironment();
+    RemoveSwitchesSetByProcess(environment);
+    QProcess process;
+    process.setProgram(copy);
+    process.setArguments({QString::number(QCoreApplication::applicationPid()), native(staging),
+                          native(install_dir), native(QCoreApplication::applicationFilePath())});
+    process.setProcessEnvironment(environment);
+    if (!process.startDetached()) {
         LOG_ERROR(Frontend, "Could not start the installer helper {}", copy.toStdString());
         QtCommon::Frontend::Critical(tr("Failed to install the update"),
                                      tr("Could not start the update installer."));

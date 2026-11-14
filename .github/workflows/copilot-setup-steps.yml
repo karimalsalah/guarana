@@ -26,7 +26,7 @@ jobs:
       contents: read
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # "Upstream first": the `upstream` branch mirrors zortos293/Lichii nx2, so the agent can
       # search it for an existing fix (git log origin/upstream -- <path>) before writing its own.

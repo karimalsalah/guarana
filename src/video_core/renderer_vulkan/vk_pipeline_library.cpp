@@ -33,8 +33,33 @@ bool GplOptimizeEnabled() {
     return enabled;
 }
 
+bool UnoptimizedFirstEnabled(VkDriverId driver_id, bool libraries) {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_UNOPT_FIRST");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (!requested) {
+        return false;
+    }
+    const bool enabled = UnoptimizedFirstApplies(requested, driver_id, libraries);
+    if (enabled) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_UNOPT_FIRST=1: shader libraries whose optimized build no pipeline has "
+                 "finished yet are built unoptimized first, and their optimized build is swapped "
+                 "in from the background");
+    } else if (!libraries) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_UNOPT_FIRST=1 ignored: graphics pipeline libraries "
+                                "(EDEN_NX2_GPL) are not in use");
+    } else {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_UNOPT_FIRST=1 ignored: only for Intel's Windows driver");
+    }
+    return enabled;
+}
+
 std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
-    GplPart part, const std::string& key, const Builder& build, u64 name) {
+    GplPart part, const std::string& key, const Builder& build, u64 name, bool unoptimized,
+    bool background) {
     const size_t index = static_cast<size_t>(part);
     std::shared_ptr<Entry> entry;
     bool owner = false;
@@ -52,8 +77,13 @@ std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
         if (!entry->done) {
             // Another worker is building the same library: wait for it instead of building it
             // twice.
-            waited[index].fetch_add(1, std::memory_order_relaxed);
+            if (!background) {
+                waited[index].fetch_add(1, std::memory_order_relaxed);
+            }
             entry->condition.wait(lock, [&] { return entry->done; });
+        }
+        if (background) {
+            return entry->library;
         }
         hits[index].fetch_add(1, std::memory_order_relaxed);
         if (entry->library) {
@@ -86,13 +116,22 @@ std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
                                         std::chrono::steady_clock::now() - begin)
                                         .count());
     if (library) {
-        built[index].fetch_add(1, std::memory_order_relaxed);
+        // The total counts every library the cache holds, the background ones too.
         total_libraries.fetch_add(1, std::memory_order_relaxed);
-        build_ns[index].fetch_add(ns, std::memory_order_relaxed);
-        StoreMax(build_max_ns[index], ns);
+        if (!background) {
+            built[index].fetch_add(1, std::memory_order_relaxed);
+            build_ns[index].fetch_add(ns, std::memory_order_relaxed);
+            StoreMax(build_max_ns[index], ns);
+        }
+        if (unoptimized) {
+            unoptimized_built[index].fetch_add(1, std::memory_order_relaxed);
+            unoptimized_build_ns[index].fetch_add(ns, std::memory_order_relaxed);
+            StoreMax(unoptimized_build_max_ns[index], ns);
+        }
         if (ns > 2'000'000 && logged_builds.fetch_add(1, std::memory_order_relaxed) < 400) {
-            LOG_INFO(Render_Vulkan, "Nx2Perf gpl: {} library {:016x} built in {:.1f} ms",
-                     PART_NAMES[index], name, Ms(ns));
+            LOG_INFO(Render_Vulkan, "Nx2Perf gpl: {} library {:016x} built in {:.1f} ms{}",
+                     PART_NAMES[index], name, Ms(ns),
+                     unoptimized ? " (unoptimized)" : (background ? " (background)" : ""));
         }
     } else {
         failed[index].fetch_add(1, std::memory_order_relaxed);
@@ -104,6 +143,46 @@ std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
     }
     entry->condition.notify_all();
     return library;
+}
+
+bool GraphicsPipelineLibraryCache::HasBuilt(const std::string& key) {
+    std::shared_ptr<Entry> entry;
+    {
+        std::scoped_lock lock{mutex};
+        const auto it = entries.find(key);
+        if (it == entries.end()) {
+            return false;
+        }
+        entry = it->second;
+    }
+    std::scoped_lock lock{entry->mutex};
+    return entry->done && entry->library != nullptr;
+}
+
+void GraphicsPipelineLibraryCache::RecordReplacementBuild(bool built,
+                                                          std::chrono::nanoseconds time) {
+    if (!built) {
+        replacement_failures.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const u64 ns = static_cast<u64>(time.count());
+    replacement_builds.fetch_add(1, std::memory_order_relaxed);
+    replacement_build_ns.fetch_add(ns, std::memory_order_relaxed);
+    StoreMax(replacement_build_max_ns, ns);
+}
+
+void GraphicsPipelineLibraryCache::RecordUnoptimizedSwap(u64 pipeline_hash,
+                                                         std::chrono::nanoseconds since_first_draw) {
+    const double ms = Ms(static_cast<u64>(since_first_draw.count()));
+    swapped_unoptimized.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::scoped_lock lock{swap_mutex};
+        swap_delays.Add(ms);
+    }
+    LOG_INFO(Render_Vulkan,
+             "Nx2Perf unopt_first: pipeline {:016x} swapped to its optimized build {:.0f} ms after "
+             "its first draw",
+             pipeline_hash, ms);
 }
 
 /// Counts one link (unoptimized or optimized) and its time for the next report.
@@ -123,12 +202,33 @@ void GraphicsPipelineLibraryCache::RecordFallback() {
     fallbacks.fetch_add(1, std::memory_order_relaxed);
 }
 
+bool GplOptimizeCachedEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_GPL_OPTIMIZE_CACHED");
+        const bool on = value != nullptr && value[0] == '1';
+        if (on) {
+            LOG_INFO(Render_Vulkan,
+                     "Nx2Perf gpl: EDEN_NX2_GPL_OPTIMIZE_CACHED=1, pipelines loaded from the shader "
+                     "cache queue their optimized link at their first draw (only with "
+                     "EDEN_NX2_GPL=1 and EDEN_NX2_GPL_OPTIMIZE_THREADS not 0){}",
+                     GplOptimizeEnabled() ? "" : " (no effect: EDEN_NX2_GPL_OPTIMIZE=0)");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
+GraphicsPipelineLibraryCache::GraphicsPipelineLibraryCache() {
+    static_cast<void>(GplOptimizeCachedEnabled());
+}
+
 void GraphicsPipelineLibraryCache::Report() {
     const auto now = std::chrono::steady_clock::now();
     if (now - window < std::chrono::seconds{10}) {
         return;
     }
     window = now;
+    ReportUnoptimizedFirst();
     const auto take = [](auto& counter) { return counter.exchange(0, std::memory_order_relaxed); };
     const u32 pre_built = take(built[0]), frag_built = take(built[1]);
     const u32 pre_hits = take(hits[0]), frag_hits = take(hits[1]);
@@ -138,10 +238,13 @@ void GraphicsPipelineLibraryCache::Report() {
     const u64 held = take(held_ns);
     const u64 avoided = take(avoided_ns);
     const u64 draws = take(fast_draws);
+    const u64 unoptimized = take(unoptimized_draws);
+    const u32 queued_at_draw = take(links_at_draw);
     const u32 replaced = take(replacements);
     if (pre_built == 0 && frag_built == 0 && pre_hits == 0 && frag_hits == 0 && fast_links == 0 &&
         optimized_links == 0 && held == 0 && pre_failed == 0 && frag_failed == 0 &&
-        fallback_count == 0 && draws == 0 && replaced == 0) {
+        fallback_count == 0 && draws == 0 && unoptimized == 0 && queued_at_draw == 0 &&
+        replaced == 0) {
         return;
     }
     const u32 pre_waited = take(waited[0]), frag_waited = take(waited[1]);
@@ -153,18 +256,57 @@ void GraphicsPipelineLibraryCache::Report() {
         return count == 0 ? 0.0 : Ms(total) / static_cast<double>(count);
     };
     LOG_INFO(Render_Vulkan,
-             "Nx2Perf gpl in the last 10 s: fast-linked draws {}; libraries built "
+             "Nx2Perf gpl in the last 10 s: fast-linked draws {} ({} with no optimized link "
+             "coming); libraries built "
              "pre-rasterization {} ({:.0f} ms, max {:.1f} ms), fragment {} ({:.0f} ms, max "
              "{:.1f} ms); libraries reused pre-rasterization {} (waited on a build {}), fragment "
              "{} (waited {}); failed {}/{}; fast links {} (mean {:.3f} ms, max {:.3f} ms); "
-             "background replacements {} (optimized links {}, mean {:.1f} ms, max {:.1f} ms); "
+             "background replacements {} (optimized links {}, mean {:.1f} ms, max {:.1f} ms; "
+             "{} queued at a cached pipeline's first draw); "
              "monolithic fallbacks {}; draw wait avoided {:.0f} ms (library builds not repeated), "
              "draws held {:.1f} ms; {} libraries cached",
-             draws, pre_built, Ms(pre_ns), Ms(pre_max), frag_built, Ms(frag_ns), Ms(frag_max),
-             pre_hits, pre_waited, frag_hits, frag_waited, pre_failed, frag_failed, fast_links,
-             mean(fast_ns, fast_links), Ms(fast_max), replaced, optimized_links,
-             mean(optimized_ns, optimized_links), Ms(optimized_max), fallback_count, Ms(avoided),
-             Ms(held), total_libraries.load(std::memory_order_relaxed));
+             draws, unoptimized, pre_built, Ms(pre_ns), Ms(pre_max), frag_built, Ms(frag_ns),
+             Ms(frag_max), pre_hits, pre_waited, frag_hits, frag_waited, pre_failed, frag_failed,
+             fast_links, mean(fast_ns, fast_links), Ms(fast_max), replaced, optimized_links,
+             mean(optimized_ns, optimized_links), Ms(optimized_max), queued_at_draw,
+             fallback_count, Ms(avoided), Ms(held),
+             total_libraries.load(std::memory_order_relaxed));
+}
+
+void GraphicsPipelineLibraryCache::ReportUnoptimizedFirst() {
+    if (!unoptimized_first) {
+        return;
+    }
+    const auto take = [](auto& counter) { return counter.exchange(0, std::memory_order_relaxed); };
+    const u32 pre_built = take(unoptimized_built[0]), frag_built = take(unoptimized_built[1]);
+    const u32 replaced = take(replacement_builds);
+    const u32 replace_failed = take(replacement_failures);
+    SwapDelays::Summary swaps;
+    {
+        std::scoped_lock lock{swap_mutex};
+        swaps = swap_delays.Take();
+    }
+    if (pre_built == 0 && frag_built == 0 && replaced == 0 && replace_failed == 0 &&
+        swaps.count == 0) {
+        return;
+    }
+    const u64 pre_ns = take(unoptimized_build_ns[0]), frag_ns = take(unoptimized_build_ns[1]);
+    const u64 pre_max = take(unoptimized_build_max_ns[0]);
+    const u64 frag_max = take(unoptimized_build_max_ns[1]);
+    const u64 replace_ns = take(replacement_build_ns);
+    const u64 replace_max = take(replacement_build_max_ns);
+    const double replace_mean =
+        replaced == 0 ? 0.0 : Ms(replace_ns) / static_cast<double>(replaced);
+    LOG_INFO(Render_Vulkan,
+             "Nx2Perf unopt_first in the last 10 s: unoptimized libraries built "
+             "pre-rasterization {} ({:.0f} ms, max {:.1f} ms), fragment {} ({:.0f} ms, max "
+             "{:.1f} ms); optimized replacements built {} (libraries and link, mean {:.1f} ms, "
+             "max {:.1f} ms), failed {}; swaps {} (first draw to swap p50 {:.0f} ms, p99 {:.0f} "
+             "ms, max {:.0f} ms); since startup {} pipelines started unoptimized, {} swapped",
+             pre_built, Ms(pre_ns), Ms(pre_max), frag_built, Ms(frag_ns), Ms(frag_max), replaced,
+             replace_mean, Ms(replace_max), replace_failed, swaps.count, swaps.p50_ms,
+             swaps.p99_ms, swaps.max_ms, started_unoptimized.load(std::memory_order_relaxed),
+             swapped_unoptimized.load(std::memory_order_relaxed));
 }
 
 size_t GraphicsPipelineLibraryCache::PruneUnused() {

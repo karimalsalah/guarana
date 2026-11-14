@@ -32,6 +32,7 @@
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/fragment_barrier_state.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
+#include "video_core/renderer_vulkan/vk_perf_query.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace VideoCommon {
@@ -171,6 +172,13 @@ public:
     }
     /// Costs of the last sampled frame; frame is 0 when none was taken.
     [[nodiscard]] VideoCore::GpuCostSnapshot GpuCosts() const;
+    /// EDEN_NX2_GPU_PERF: the hardware performance-counter sampler (gpu_perf).
+    [[nodiscard]] PerfQuery& Perf() {
+        return perf_query;
+    }
+    [[nodiscard]] const PerfQuery& Perf() const {
+        return perf_query;
+    }
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
@@ -768,6 +776,9 @@ private:
     std::atomic<bool> cost_sampling{};
     mutable std::mutex gpu_costs_mutex;
     VideoCore::GpuCostSnapshot gpu_costs;
+
+    /// EDEN_NX2_GPU_PERF: performance-counter scopes around sampled submissions.
+    PerfQuery perf_query;
 
     std::atomic<u32> gpu_busy_marks{};
     struct GpuBusySample {

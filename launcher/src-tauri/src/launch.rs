@@ -3,13 +3,18 @@
 //! The emulator boots a game with `guarana.exe -f -g <path>` (`lichii.exe` in builds from before the rename): `-g/--game` is the file and
 //! `-f/--fullscreen` starts it fullscreen (`src/core/launch_params.cpp`, read by
 //! `MainWindow::MainWindow` in `src/lichii/main_window.cpp`). Without a path it opens its own
-//! window.
+//! window. Builds that understand it also get `--launcher-session` first: the emulator then shows
+//! only the fullscreen loading screen and game, never its desktop window, and exits when the game
+//! stops (0 after a stop, 1 when the game did not start) instead of showing its game list.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -20,9 +25,34 @@ use windows::Win32::System::Threading::{
 use crate::state::{self, AppState};
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{autopilot, modes, paths, profiles, system, warm};
+use crate::{autopilot, boot, install, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
+
+/// The first emulator release that understands `--launcher-session`. The flag was added when the
+/// repository's `VERSION` read 20.2.0, the newest release then, so it ships in the next one; this
+/// assumes that is 20.3.0 or later. Raise it if the next release is numbered otherwise.
+const LAUNCHER_SESSION_SINCE: &str = "20.3.0";
+
+/// Whether the emulator version `current.json` names understands `--launcher-session`. Older
+/// builds, which the launcher can roll back to, get `-f -g` only. A nightly, a pre-release or any
+/// label that is not a release version counts as older: its label does not say what it was built
+/// from.
+fn understands_launcher_session(version: &str) -> bool {
+    !install::is_newer(LAUNCHER_SESSION_SINCE, version)
+}
+
+/// The arguments that boot `game` in the emulator `version`.
+fn game_args(version: &str, game: &Path) -> Vec<OsString> {
+    let mut args = Vec::new();
+    if understands_launcher_session(version) {
+        args.push(OsString::from("--launcher-session"));
+    }
+    args.push(OsString::from("-f"));
+    args.push(OsString::from("-g"));
+    args.push(game.as_os_str().to_owned());
+    args
+}
 
 /// Reads the title's shader and pipeline caches (`*.bin`) once, front to back, so the OS file
 /// cache holds them when the emulator boots. Background I/O priority; at most half the free RAM
@@ -134,22 +164,42 @@ pub fn launch(
     warm::make_way_for(app, tid.as_deref())?;
 
     // A mode (Auto by default) decides the settings at every start: power source, community data
-    // and the autopilot's last adjustments are read now. A hand-made profile (custom) is left as is.
+    // and the autopilot's last adjustments are read now. A hand-made profile (custom) keeps its values;
+    // only the launcher's block in nx2_switches.txt is rewritten from them (below).
     let mode = modes::current(&persisted);
     if mode != modes::CUSTOM {
         if let Err(e) = modes::apply_current(app) {
             log::warn!("Settings for mode {mode} not written before the start: {e}");
         }
-    } else if let Some(pid) = profile_id.filter(|p| !p.is_empty()) {
-        if persisted.profile_id.as_deref() != Some(pid.as_str()) {
-            if !profiles::is_known(&pid) {
-                return Err(format!("Unknown profile {pid}"));
+    } else {
+        let mut applied = false;
+        if let Some(pid) = profile_id.filter(|p| !p.is_empty()) {
+            if persisted.profile_id.as_deref() != Some(pid.as_str()) {
+                if !profiles::is_known(&pid) {
+                    return Err(format!("Unknown profile {pid}"));
+                }
+                profiles::apply(&pid, &BTreeMap::new(), &st.system())?;
+                st.update(|s| {
+                    s.profile_id = Some(pid.clone());
+                    s.overrides.clear();
+                })?;
+                applied = true;
             }
-            profiles::apply(&pid, &BTreeMap::new())?;
-            st.update(|s| {
-                s.profile_id = Some(pid.clone());
-                s.overrides.clear();
-            })?;
+        }
+        // The hand-made profile's qt-config.ini stays as the player left it, but the block in
+        // nx2_switches.txt is the launcher's: rewrite it from the saved profile so it follows the
+        // launcher's rules now, not the ones it was written under (an EDEN_NX2_EXTRAPOLATE=1 from
+        // an older launcher defeats the emulator's locked 120 and 144 Hz sets, issue #119).
+        if !applied {
+            if let Some(pid) = persisted.profile_id.as_deref().filter(|p| profiles::is_known(p)) {
+                match profiles::write_switches(pid, &persisted.overrides, &st.system()) {
+                    Ok(changed) if !changed.is_empty() => {
+                        log::info!("nx2_switches.txt block of profile {pid} rewritten before the start: {}", changed.join("; "))
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("nx2_switches.txt block of profile {pid} not rewritten before the start: {e}"),
+                }
+            }
         }
     }
 
@@ -160,7 +210,12 @@ pub fn launch(
     // autopilot reads them after the game.
     cmd.env("EDEN_NX2_SHOWN_STATS", "1");
     if let Some(gp) = &game_path {
-        cmd.arg("-f").arg("-g").arg(gp);
+        cmd.args(game_args(&current.version, gp));
+    }
+    // A launcher session writes its boot to stdout until the game is on screen (`boot.rs`).
+    let follow_boot = game_path.is_some() && understands_launcher_session(&current.version);
+    if follow_boot {
+        cmd.stdout(Stdio::piped());
     }
 
     // Game Booster (Off by default). The GPU preference must be set before the emulator starts, so
@@ -179,6 +234,11 @@ pub fn launch(
         }
     };
     let pid = child.id();
+    // The emulator's first window can appear seconds from now, after the player has used the
+    // launcher; let it take the foreground then so it does not open behind the launcher.
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid);
+    }
     log::info!(
         "Started Guarana {} (pid {pid}){}",
         current.version,
@@ -193,14 +253,30 @@ pub fn launch(
     let started = Instant::now();
     let session_tid = tid.as_ref().map(|t| t.to_ascii_uppercase());
     let had_game = game_path.is_some();
+    // The launch screen holds until the game is on screen: `game://boot` from the session output
+    // and from the foreground watcher; both stop once the game is shown or the process is gone.
+    let boot_done = Arc::new(AtomicBool::new(false));
+    let exit_done = boot_done.clone();
+    let boot_out = if had_game { child.stdout.take() } else { None };
     std::thread::Builder::new()
         .name("game-watch".into())
         .spawn(move || {
             let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
             let seconds = started.elapsed().as_secs_f64();
+            exit_done.store(true, Ordering::Relaxed);
+            // Taken before the event, while the emulator's window may still be the last one active.
+            let foreground = boot::foreground_pid();
             log::info!("Guarana (pid {pid}) exited with {code} after {seconds:.0} s");
             let _ = app2.emit(EXITED_EVENT, GameExited { code, seconds });
             if had_game {
+                // Back to the launcher at once; to the front only if the player was not in another app.
+                if let Some(window) = app2.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
+                        let _ = window.set_focus();
+                    }
+                }
                 let info = autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery };
                 crate::share::after_session(&app2, &info);
                 autopilot::after_session(&app2, info);
@@ -212,11 +288,50 @@ pub fn launch(
             warm::resume_if_interrupted(&app2);
         })
         .ctx("Could not watch the game")?;
+    // After the game-watch thread exists, so `boot_done` is always set when the process ends.
+    if had_game {
+        if let Some(out) = boot_out {
+            boot::follow(app, out, boot_done.clone());
+        }
+        boot::watch_foreground(app, pid, boot_done);
+    }
 
     // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on
     // its own thread: the prompt never holds up the launch or competes with the game before it is up.
     if let Some(prep) = booster_prep {
         crate::booster::launch_helper_async(app, pid, booster_level, prep);
     }
-    Ok(LaunchResult { pid })
+    Ok(LaunchResult { pid, follows_boot: follow_boot })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn launcher_session_only_for_builds_that_know_it() {
+        assert!(understands_launcher_session("20.3.0"));
+        assert!(understands_launcher_session("v20.3.0"));
+        assert!(understands_launcher_session("20.10.1"));
+        assert!(understands_launcher_session("21.0.0"));
+        assert!(!understands_launcher_session("20.2.0"), "the newest release before the flag");
+        assert!(!understands_launcher_session("20.0.2"));
+        assert!(!understands_launcher_session("20.3.0-rc1"), "a pre-release counts as older");
+        assert!(!understands_launcher_session("nightly-20261113-1a2b3c4"));
+        assert!(!understands_launcher_session("bundled"));
+    }
+
+    #[test]
+    fn game_arguments_by_version() {
+        let game = Path::new(r"D:\Games\Zelda [0400486024DEC000].nsp");
+        assert_eq!(strings(game_args("20.2.0", game)), ["-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]);
+        assert_eq!(
+            strings(game_args("20.3.0", game)),
+            ["--launcher-session", "-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]
+        );
+    }
 }
