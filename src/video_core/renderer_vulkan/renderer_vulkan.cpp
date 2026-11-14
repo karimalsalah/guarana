@@ -492,6 +492,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     const HdrPresent output = UpdateHdrPresent();
     frame->color_space = output.color_space;
+    PlanCompose(framebuffers, output);
 
     scheduler.RequestOutsideRenderPassOperationContext();
     {
@@ -502,6 +503,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                               render_window.GetFramebufferLayout(),
                               present_manager.SwapchainImageCount(), output_format.format, output);
     scheduler.RecordEmuEnd();
+    TagComposeFrame(frame);
 
 #ifdef HAS_LSFG
     // Frames predicted from this one (EDEN_NX2_EXTRAPOLATE): presented after it, unlike
@@ -831,6 +833,7 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
         }
         generated->color_space = output.color_space;
         blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        TagComposeFrame(generated);
         const f32 blend =
             static_cast<f32>(static_cast<f64>(generation + 1) / (std::max)(span_slots, 1.0));
         if (!frame_gen.GenerateBlend(device, generated, blend)) {
@@ -850,6 +853,44 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
     present_manager.NoteFluidBatch(true, made < wanted, false);
 }
 #endif
+
+void RendererVulkan::PlanCompose([[maybe_unused]] std::span<const Tegra::FramebufferConfig> framebuffers,
+                                 [[maybe_unused]] const HdrPresent& output) {
+    compose_active = false;
+#ifdef HAS_LSFG
+    if (FluidComposeMode() == 0) {
+        return;
+    }
+    const auto& window = render_window.GetFramebufferLayout();
+    bool streamline = false;
+#ifdef EGLANTINE_STREAMLINE
+    streamline = Streamline::FrameGenSession();
+#endif
+    // The frames stay at the window's size and the slot pass copies them 1:1.
+    compose_rect = FluidComposeMath::Rect{0, 0, window.width, window.height};
+    const FluidComposeMath::Gate gate{
+        .available = present_manager.ComposeAvailable(),
+        .hdr = output.IsHdr(),
+        .extrapolation = ExtrapolationRequested() || frame_gen.Extrapolating(),
+        .streamline = streamline,
+        .frame_generation_fits = FluidComposeMath::FrameGenerationFits(
+            FrameGen::FluidInterpolation(), Settings::values.frame_gen.GetValue()),
+        .pictures_armed = VideoCore::Nx2ShownFrames::PicturesArmed(),
+        .worthwhile = true,
+    };
+    compose_active = FluidComposeMath::Active(gate);
+#endif
+}
+
+void RendererVulkan::TagComposeFrame(Frame* frame) const {
+    if (!compose_active) {
+        return;
+    }
+    const auto& window = render_window.GetFramebufferLayout();
+    frame->target_width = window.width;
+    frame->target_height = window.height;
+    frame->target_rect = compose_rect;
+}
 
 HdrPresent RendererVulkan::UpdateHdrPresent() {
     const auto& monitor = Common::DisplayHdrMonitor::Instance();

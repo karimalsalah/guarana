@@ -9,12 +9,14 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <boost/container/deque.hpp>
 
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
+#include "video_core/renderer_vulkan/fluid_compose_math.h"
 #include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -29,6 +31,7 @@ class EmuWindow;
 namespace Vulkan {
 
 class Device;
+class FluidCompose;
 class Scheduler;
 class Swapchain;
 
@@ -82,6 +85,14 @@ struct Frame {
     u64 gpu_tick{};
     /// A real frame, a prediction or an interpolated frame (the debug server's shown_frames).
     VideoCore::Nx2ShownFrames::Kind shown_kind{};
+    /// EDEN_NX2_FLUID_COMPOSE: the size of the window-sized output the slot pass composes the frame
+    /// into, and the rectangle of it the frame covers (the layout's screen). Zero for a frame the
+    /// screen copy shows.
+    u32 target_width{};
+    u32 target_height{};
+    FluidComposeMath::Rect target_rect{};
+    /// Counts the images RecreateFrame made, so the slot pass writes the frame's descriptor again.
+    u64 image_serial{};
 #ifdef EGLANTINE_STREAMLINE
     // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
     bool frame_gen{};
@@ -137,6 +148,11 @@ public:
         return fluid_presenter && use_present_thread &&
                !fluid_fallback.load(std::memory_order_relaxed);
     }
+
+    /// EDEN_NX2_FLUID_COMPOSE: whether the slot pass can compose frames now: the switch is on, the
+    /// presenter is FLUID, the pipeline was made and its descriptors can be written, the swapchain
+    /// has storage views and the dedicated queue, which can compute, is in use. Any thread.
+    [[nodiscard]] bool ComposeAvailable() const;
 
     /// Renderer thread: one real frame's predictions were recorded (counted for the Fluid
     /// presenter line). `predictable`: the frame could be predicted from; `cut_short`: the frame
@@ -304,6 +320,19 @@ private:
     void SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D extent,
                          VkSemaphore render_semaphore);
 
+    /// EDEN_NX2_FLUID_COMPOSE: whether the slot pass shows this frame: it was drawn for it and
+    /// ComposeAvailable, in the format the pass reads and writes.
+    [[nodiscard]] bool UseCompose(const Frame* frame) const;
+
+    /// Writes the slot pass's descriptor sets if the swapchain or the frame's image is new. False
+    /// (and the pass is off for the session) when they cannot be written.
+    [[nodiscard]] bool ComposeSyncSets(const Frame* frame);
+
+    /// Runs the slot pass on the dedicated queue: scales the frame into the acquired swapchain
+    /// image, waiting for the acquire and render-done semaphores and signalling render_semaphore
+    /// and the frame's fence.
+    void SubmitFluidCompose(Frame* frame, VkExtent2D extent, VkSemaphore render_semaphore);
+
     // Returns false after discarding the frame if creation or transfer cannot proceed.
     bool RecreateSwapchain(Frame* frame);
 
@@ -459,6 +488,13 @@ private:
     VkSemaphore fluid_ahead_semaphore{};
     /// The debug server's shown_frames: pictures and timing of the frames shown.
     ShownCapture shown_capture;
+    /// EDEN_NX2_FLUID_COMPOSE: the slot pass; null while the switch is off or it cannot be made.
+    std::unique_ptr<FluidCompose> compose;
+    std::vector<u64> compose_frame_serials; ///< present thread only: the image each set was written for
+    u64 compose_swapchain_generation{};     ///< present thread only
+    u64 compose_image_serial{};             ///< renderer thread only: RecreateFrame
+    std::atomic<bool> compose_broken{};
+    bool compose_logged{}; ///< present thread only
 };
 
 } // namespace Vulkan

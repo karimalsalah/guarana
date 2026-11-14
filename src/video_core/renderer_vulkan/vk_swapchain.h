@@ -122,6 +122,11 @@ public:
         return storage_enabled.load(std::memory_order_relaxed);
     }
 
+    /// Counts the swapchains made, so the descriptors of their storage views are written again.
+    u64 StorageGeneration() const {
+        return storage_generation;
+    }
+
     /// A storage view of each image, in the format of the swapchain; empty without HasStorage.
     std::span<const VkImageView> StorageViews() const {
         return storage_view_handles;
@@ -179,6 +184,7 @@ private:
     std::vector<vk::ImageView> storage_views;
     std::vector<VkImageView> storage_view_handles;
     std::atomic<bool> storage_enabled{};
+    u64 storage_generation{};
 
     u32 width;
     u32 height;

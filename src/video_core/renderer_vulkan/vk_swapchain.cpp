@@ -648,6 +648,7 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         }
     }
     storage_enabled.store(with_storage, std::memory_order_relaxed);
+    ++storage_generation;
     if (present_mode != logged_present_mode || image_count != logged_image_count) {
         logged_present_mode = present_mode;
         logged_image_count = image_count;
