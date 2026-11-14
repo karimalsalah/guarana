@@ -150,7 +150,7 @@ jobs:
               echo
               echo "$tip_line"
               echo
-              echo "The run's log names the cause. The usual fix: add the UPSTREAM_SYNC_TOKEN secret; see docs/LANES.md, \"When the sync stops\", which lists each error and its fix. The next sync that succeeds closes this issue."
+              echo "The run's log names the cause. The usual fix: add the UPSTREAM_SYNC_TOKEN secret; see [docs/LANES.md, \"When the sync stops\"]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/main/docs/LANES.md#when-the-sync-stops), which lists each error and its fix. The next sync that succeeds closes this issue."
             } > issue.md
             gh issue create --repo "$GITHUB_REPOSITORY" --title "upstream-sync is blocked" --body-file issue.md
             exit 0
