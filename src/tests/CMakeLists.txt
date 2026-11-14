@@ -97,6 +97,7 @@ add_executable(tests
     video_core/frame_budget.cpp
     video_core/fluid_present_mode.cpp
     video_core/fluid_slot_math.cpp
+    video_core/shown_governor.cpp
     video_core/auto_shading_rate.cpp
     common/guarana_modes.cpp
     common/power_governor.cpp

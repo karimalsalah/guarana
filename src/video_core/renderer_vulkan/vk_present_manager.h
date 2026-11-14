@@ -16,6 +16,7 @@
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
 #include "video_core/renderer_vulkan/vk_shown_capture.h"
+#include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -247,6 +248,11 @@ private:
     std::chrono::nanoseconds FluidCountVblanks(std::chrono::steady_clock::time_point wake,
                                                std::chrono::nanoseconds reported);
 
+    /// EDEN_NX2_SHOWN_GOVERNOR: at every wake, collects the GPU busy samples; every 2 s hands the
+    /// window's slots, real frames and GPU busy time to VideoCore::ShownGovernor::Decide and
+    /// publishes the shown rate it chose.
+    void FluidGovern(std::chrono::steady_clock::time_point now, std::chrono::nanoseconds period);
+
     /// Takes the frames sent, frees those only predictions show and answers WaitPresent.
     void FluidTakeFrames(std::chrono::steady_clock::time_point now);
 
@@ -409,6 +415,16 @@ private:
         u64 received{}; ///< since the thread started
         u64 shown{};
     } fluid;
+    /// EDEN_NX2_SHOWN_GOVERNOR, present thread only. The counts are of the window in progress.
+    struct {
+        VideoCore::ShownGovernor::State state{};
+        std::chrono::steady_clock::time_point window_start{};
+        std::chrono::steady_clock::time_point busy_asked{};
+        std::vector<f64> busy_ms; ///< GPU busy time of the real frames sampled in the window
+        u64 slots{};              ///< slots that came, those slept through included
+        u64 hits{};               ///< of those, slots that showed a frame
+        u64 real{};               ///< real frames received
+    } governor;
     /// EDEN_NX2_SHOWN_STATS with EDEN_NX2_FLUID, present thread only.
     struct {
         std::chrono::steady_clock::time_point since{};

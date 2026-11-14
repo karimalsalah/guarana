@@ -19,6 +19,7 @@
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -50,13 +51,20 @@ constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
 
 constexpr u32 CADENCE_MAX_DIVISOR = 4;
 
-[[nodiscard]] f32 CadenceTargetRate() {
+/// The shown rate as configured.
+[[nodiscard]] f32 BaseTargetRate() {
     // EDEN_NX2_SHOWN_RATE=<hz>: the shown rate the FLUID presenter uses, over the setting.
     if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
         return static_cast<f32>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
     }
     const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
     return rate != 0 ? static_cast<f32>(rate) : 60.0f;
+}
+
+/// The shown rate the cadence works to: the one EDEN_NX2_SHOWN_GOVERNOR chose, else the configured.
+[[nodiscard]] f32 CadenceTargetRate() {
+    const u32 governed = VideoCore::ShownGovernor::Rate();
+    return governed != 0 ? static_cast<f32>(governed) : BaseTargetRate();
 }
 
 constexpr auto ACTIVITY_LOG_INTERVAL = std::chrono::seconds(10);
@@ -655,6 +663,7 @@ void FrameGen::ReleaseCadence() {
     LOG_INFO(Render_Vulkan, "Frame cadence: off, frame budget target back to {:.0f} FPS",
              cadence_saved_target);
     cadence_divisor = 0;
+    cadence_governed = 0;
     cadence_slow_checks = 0;
     cadence_fast_checks = 0;
     VideoCore::FrameBudget::SetTargetFps(cadence_saved_target);
@@ -665,21 +674,29 @@ void FrameGen::UpdateCadence() {
     if (setting == 0) {
         return;
     }
-    const f32 target = CadenceTargetRate();
+    // EDEN_NX2_SHOWN_GOVERNOR: the governed shown rate, 0 while the governor is off.
+    const u32 governed = VideoCore::ShownGovernor::Rate();
+    const f32 base_target = BaseTargetRate();
+    const f32 target = governed != 0 ? static_cast<f32>(governed) : base_target;
     // Shown frames per real frame per share of 60: 2 at a target of 120.
     const u32 scale = (std::max)(1U, static_cast<u32>(std::lround(target / 60.0f)));
-    const auto apply = [this, target](u32 divisor, const char* reason) {
-        if (divisor == cadence_divisor) {
+    const auto apply = [this, target, base_target, governed](u32 divisor, const char* reason) {
+        // The governor moves the target, and with it the divisor, so a new rate is applied even
+        // when the divisor stayed.
+        if (divisor == cadence_divisor && governed == cadence_governed) {
             return;
         }
         if (cadence_divisor == 0) {
             cadence_saved_target = VideoCore::FrameBudget::TargetFps();
         }
+        const f32 was_target =
+            cadence_governed != 0 ? static_cast<f32>(cadence_governed) : base_target;
         LOG_INFO(Render_Vulkan,
                  "Frame cadence: {:.0f} real frames shown as {:.0f} ({}), was {:.0f}",
                  target / static_cast<f32>(divisor), target, reason,
-                 cadence_divisor != 0 ? target / static_cast<f32>(cadence_divisor) : 0.0f);
+                 cadence_divisor != 0 ? was_target / static_cast<f32>(cadence_divisor) : 0.0f);
         cadence_divisor = divisor;
+        cadence_governed = governed;
         cadence_slow_checks = 0;
         cadence_fast_checks = 0;
         VideoCore::FrameBudget::SetTargetFps(target / static_cast<f32>(divisor));
@@ -691,16 +708,48 @@ void FrameGen::UpdateCadence() {
         return value ? std::clamp<u32>(static_cast<u32>(std::strtoul(value, nullptr, 10)), 1U, 12U)
                      : 0U;
     }();
+    // With the governor the divisors below are those at the configured rate, scaled to the governed
+    // one so that real frames keep their rate (6 at 144 is 3 at 72 and 2 at 48).
+    const bool governing = VideoCore::ShownGovernor::Enabled();
+    const auto scaled = [base_target, governed](u32 divisor) {
+        return governed != 0
+                   ? VideoCore::ShownGovernor::ScaledDivisor(static_cast<f64>(base_target), divisor,
+                                                             governed)
+                   : divisor;
+    };
     if (raw_divisor != 0) {
-        apply(raw_divisor, "fixed divisor");
+        if (governing) {
+            VideoCore::ShownGovernor::SetRealTarget(static_cast<f64>(base_target) /
+                                                    static_cast<f64>(raw_divisor));
+        }
+        apply(scaled(raw_divisor), "fixed divisor");
         return;
     }
     if (setting >= 2) {
-        apply(std::min(setting, CADENCE_MAX_DIVISOR) * scale, "fixed");
+        const u32 base_scale = (std::max)(1U, static_cast<u32>(std::lround(base_target / 60.0f)));
+        const u32 fixed = std::min(setting, CADENCE_MAX_DIVISOR) * base_scale;
+        if (governing) {
+            VideoCore::ShownGovernor::SetRealTarget(static_cast<f64>(base_target) /
+                                                    static_cast<f64>(fixed));
+        }
+        apply(scaled(fixed), "fixed");
         return;
+    }
+    if (governing) {
+        // The automatic cadence picks its own real frame rate.
+        VideoCore::ShownGovernor::SetRealTarget(0.0);
     }
     if (cadence_divisor == 0) {
         apply(3 * scale, "start");
+        return;
+    }
+    if (governed != cadence_governed) {
+        // The governed shown rate moved: the divisor follows it, so that real frames keep their
+        // rate until the checks below find another. (Never with the governor off: both are 0.)
+        const f32 was_rate = cadence_governed != 0 ? static_cast<f32>(cadence_governed) : base_target;
+        const u32 followed = VideoCore::ShownGovernor::ScaledDivisor(
+            static_cast<f64>(was_rate), cadence_divisor, static_cast<u32>(std::lround(target)));
+        apply(std::clamp<u32>(followed, 1U, CADENCE_MAX_DIVISOR * scale), "the shown rate changed");
         return;
     }
     const auto now = std::chrono::steady_clock::now();
