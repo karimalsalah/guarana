@@ -523,6 +523,51 @@ Use it when the owner has put the controller down: injected buttons add to whate
 presses. For an A/B test, run the same `input_sequence` from the same spot under each variant
 (for example with a `reject_shaders` change in between), then compare screenshots or captures.
 
+### Telemetry (implemented)
+
+Four tools expose internals the log lines already measure, as JSON an agent can compare across
+an A/B run without parsing logs.
+
+**`thread_stats`** `{top?}`. Guest threads' CPU time and waits, from the
+`EDEN_NX2_GUEST_THREAD_STATS` counters (`src/core/hle/kernel/nx2_thread_stats.cpp`,
+`Kernel::Nx2ThreadStats::Snapshot`). Per thread, busiest first: `on_core_ms` split into
+`jit_ms` (and within it `game_code_ms`, `counter_poll_ms`, `hint_spin_ms`, `cached_memory_ms`,
+`read_back_ms`) and `outside_jit_ms` (SVCs and kernel), `ready_ms` (runnable without a core),
+`held_replies_ms` (HLE replies held back), `presents`, and `waits` by kind (`ipc`,
+`sync_objects`, `address_arbiter`, `condvar`, `lock`, `sleep`, `other`) each with `ms` and
+`count`. Times are totals since the thread first ran, converted from guest counter ticks with
+`cntfrq_hz`. `enabled` is false without the switch, and the rows are then empty. `top` (default
+16, at most 128) limits the rows; `threads_total` counts them all.
+
+**`present_stats`** `{}`. The present thread's counters
+(`PresentManager::GetPresentStats`, `src/video_core/renderer_vulkan/vk_present_manager.cpp`):
+the FLUID presenter's `slots`, `hits`, `missed` (= `no_frame` + `queued` + `overslept`),
+`not_done`, `uncovered`, `rolled`, `spare`, `stale`, `in_order`, `late`, `dropped`, `received`,
+`held` (frames shown for 1/2/3/4+ refreshes), `age_ms` (real frame's age at display) and
+`latency_ms` (record to GPU work done), and under `present_thread` the acquire, copy-wait,
+submit-lock and present-call times (mean and max) and the slot margin before the vblank. The
+counters fill with `EDEN_NX2_SHOWN_STATS` at launch (`shown_stats` says whether it is set);
+the `vblank` clock (`refresh_hz`, `index`, `divisor`, `lead_ms`, `latency_ms`),
+`swapchain_images`, `present_frames`, `queued_frames` and `free_frames` are live regardless.
+Vulkan only. The show-path counters are read under the swapchain lock; the arrival counters
+are a best-effort snapshot of monotonic values, fine for a debug read.
+
+**`cache_stats`** `{}`. Texture and buffer cache hit/miss/eviction counters since boot
+(`VideoCommon::Nx2CacheStats::g_counters`, `src/video_core/nx2_cache_stats.h`, counted in
+`TextureCache::FindOrInsertImage`/`DeleteImage`/the collector and
+`BufferCache::FindBuffer`/`CreateBuffer`/`DeleteBuffer`/the collector). Per cache: `hits`,
+`misses`, `hit_rate`, `created`, `deleted`, `evicted` (the collector's), and for textures
+`evicted_downloaded` (those that waited for a GPU download first) with `device_usage` against
+`expected_threshold` and `critical_threshold`; for buffers `bytes`. Also `staging_bytes`,
+`graphics_pipelines` and `built_pipelines` from `Common::g_memory_counters`. Always counted
+(a few relaxed atomic adds per lookup); no switch needed.
+
+**`boot_timing`** `{}`. The boot phases `Common::BootTiming` recorded
+(`src/common/boot_timing.cpp`, `RecordedPhases`): every `Mark` and `Span` since the process
+started, oldest first, each with `phase`, `at_ms` (since process start) and `took_ms`, plus
+`now_ms`. The last 256 phases are kept. The same boundaries the `Boot timing:` log lines show,
+without parsing the log; boot phases logged before the server starts are included.
+
 ### Phase 2: control and input (about 4 to 5 days)
 
 - **pause, resume, step_frames.** The core has `System::Pause` and `Run` (`src/core/core.cpp:279`).

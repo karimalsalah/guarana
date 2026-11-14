@@ -33,6 +33,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_cache_stats.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/render_trace.h"
 #include "video_core/texture_cache/conversion.h"
@@ -197,6 +198,9 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
                 UntrackImage(image, entry.image_id);
             }
             ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
+            VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_evicted);
+            VideoCommon::Nx2CacheStats::Add(
+                VideoCommon::Nx2CacheStats::g_counters.texture_evicted_downloaded);
             UnregisterImage(entry.image_id);
             DeleteImage(entry.image_id, image.scale_tick > frame_tick + 5);
         }
@@ -254,6 +258,11 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             UntrackImage(image, image_id);
         }
         ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
+        VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_evicted);
+        if (must_download) {
+            VideoCommon::Nx2CacheStats::Add(
+                VideoCommon::Nx2CacheStats::g_counters.texture_evicted_downloaded);
+        }
         UnregisterImage(image_id);
         DeleteImage(image_id, image.scale_tick > frame_tick + 5);
         if (out_of_memory) {
@@ -3179,8 +3188,10 @@ template <class P>
 ImageId TextureCache<P>::FindOrInsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
                                            RelaxedOptions options, bool render_target) {
     if (const ImageId image_id = FindImage(info, gpu_addr, options); image_id) {
+        VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_hits);
         return image_id;
     }
+    VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_misses);
     return InsertImage(info, gpu_addr, options, render_target);
 }
 
@@ -3764,6 +3775,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
         ++images_created;
         ++churn.created;
+        VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_created);
         churn.joins += join_overlap_ids.empty() ? 0 : 1;
     }
 
@@ -4659,6 +4671,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     ImageBase& image = slot_images[image_id];
     ++images_deleted;
     ++churn.deleted;
+    VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.texture_deleted);
     VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
     // Drop every decode still queued for it, whatever IsDecoding says: an image re-decoded while
     // a decode was in flight has two, and the first to finish clears the flag. A decode left

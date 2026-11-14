@@ -491,6 +491,77 @@ PresentManager::FluidClock PresentManager::GetFluidClock() const {
     return fluid_clock;
 }
 
+PresentManager::PresentStats PresentManager::GetPresentStats() const {
+    PresentStats stats{};
+    stats.fluid = Fluid();
+    stats.fallback = fluid_fallback.load(std::memory_order_relaxed);
+    stats.shown_stats = std::getenv("EDEN_NX2_SHOWN_STATS") != nullptr;
+    {
+        // fluid_stats belongs to the present thread. The show-path counters (hits, held, age,
+        // latency, late, ...) are written under swapchain_mutex, so taking it here serializes
+        // against those; the arrival counters (received, dropped, no_frame, ...) are written
+        // outside it, so this is a best-effort snapshot of monotonic counters, each a single
+        // aligned word. Good enough for a debug read; it never blocks the show path for long.
+        std::scoped_lock lock{swapchain_mutex};
+        const auto& s = fluid_stats;
+        stats.slots = s.slots;
+        stats.hits = s.hits;
+        stats.no_frame = s.no_frame;
+        stats.not_done = s.not_done;
+        stats.uncovered = s.uncovered;
+        stats.rolled = s.rolled;
+        stats.spare = s.spare;
+        stats.stale = s.stale;
+        stats.queued = s.queued;
+        stats.overslept = s.overslept;
+        stats.in_order = s.in_order;
+        stats.late = s.late;
+        stats.dropped = s.dropped;
+        stats.received = s.received;
+        stats.held = s.held;
+        stats.age_ms = s.age_ms;
+        stats.latency_ms = s.latency_ms;
+        stats.latency_samples = s.latency_samples;
+        stats.presents = s.presents;
+        stats.acquire_ms = s.acquire_ms;
+        stats.acquire_max_ms = s.acquire_max_ms;
+        stats.copy_waits = s.copy_waits;
+        stats.copy_wait_timeouts = s.copy_wait_timeouts;
+        stats.copy_wait_ms = s.copy_wait_ms;
+        stats.copy_wait_max_ms = s.copy_wait_max_ms;
+        stats.lock_ms = s.lock_ms;
+        stats.lock_max_ms = s.lock_max_ms;
+        stats.call_ms = s.call_ms;
+        stats.call_max_ms = s.call_max_ms;
+        stats.margin_ms = s.margin_ms;
+        stats.margin_min_ms = s.margin_min_ms;
+        stats.margin_samples = s.margin_samples;
+        stats.after_vblank = s.after_vblank;
+        stats.copy_gpu_samples = s.copy_gpu_samples;
+        stats.copy_gpu_ms = s.copy_gpu_ms;
+        stats.copy_gpu_max_ms = s.copy_gpu_max_ms;
+    }
+    const FluidClock clock = GetFluidClock();
+    if (clock.Valid()) {
+        stats.refresh_hz = 1.0e9 / static_cast<double>(clock.refresh.count());
+    }
+    stats.vblank_index = clock.vblank_index;
+    stats.divisor = clock.divisor;
+    stats.lead_ms = std::chrono::duration<double, std::milli>(clock.lead).count();
+    stats.clock_latency_ms = std::chrono::duration<double, std::milli>(clock.latency).count();
+    {
+        std::scoped_lock lock{queue_mutex};
+        stats.queued_frames = present_queue.size();
+    }
+    {
+        std::scoped_lock lock{free_mutex};
+        stats.free_frames = free_queue.size();
+    }
+    stats.frame_count = frames.size();
+    stats.swapchain_images = swapchain_image_count.load(std::memory_order_relaxed);
+    return stats;
+}
+
 std::chrono::steady_clock::time_point PresentManager::FluidClock::SlotTime(u64 slot) const {
     return vblank + refresh * (static_cast<s64>(slot) - static_cast<s64>(vblank_index));
 }
