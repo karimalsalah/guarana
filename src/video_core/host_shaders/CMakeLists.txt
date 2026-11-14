@@ -103,6 +103,7 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation_median.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_motion_median.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fluid_compose.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/frame_extrapolation.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/dlss_network_probe.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_camera_motion.comp

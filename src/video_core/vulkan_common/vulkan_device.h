@@ -355,6 +355,12 @@ public:
         return fluid_family;
     }
 
+    /// EDEN_NX2_FLUID_QUEUE: whether the dedicated queue's family can dispatch compute work, which
+    /// EDEN_NX2_FLUID_COMPOSE's slot pass needs.
+    bool FluidFamilyCanCompute() const {
+        return has_fluid_queue && fluid_family_compute;
+    }
+
     /// Returns main graphics queue family index.
     u32 GetGraphicsFamily() const {
         return graphics_family;
@@ -834,6 +840,13 @@ FN_MAX_LIMIT_LIST
     /// matrices of 16-bit floats, with compute subgroups forced to the guest's 32 lanes.
     bool IsCooperativeHmma16x16x16Supported() const {
         return cooperative_hmma_16x16x16;
+    }
+
+    /// Returns true if the guest's HMMA can run through shared memory on 8x16x16 cooperative
+    /// matrices of 16-bit floats, with compute subgroups forced to the guest's 32 lanes. Only on an
+    /// Intel device whose driver lists that shape, with EDEN_NX2_INTEL_COOP_MATRIX=1.
+    bool IsCooperativeHmma8x16x16Supported() const {
+        return cooperative_hmma_8x16x16;
     }
 
     /// Returns true if the device supports VK_KHR_shader_quad_control.
@@ -1499,6 +1512,7 @@ private:
     vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
     u32 fluid_family{};
     bool has_fluid_queue{};
+    bool fluid_family_compute{}; ///< the dedicated queue's family has VK_QUEUE_COMPUTE_BIT
     bool fluid_queue_presents{}; ///< presents come from the fluid queue too
     mutable std::atomic<bool> fluid_queue_enabled{true};
     vk::PipelineCache static_pipeline_cache;
@@ -1592,6 +1606,7 @@ private:
     bool float16_math{};                       ///< Shaders may do float16 arithmetic.
     bool cooperative_hmma_16x8x16{};           ///< HMMA runs on the guest's matrix shape.
     bool cooperative_hmma_16x16x16{};          ///< HMMA runs on 16x16x16 matrices.
+    bool cooperative_hmma_8x16x16{};           ///< HMMA runs on 8x16x16 matrices (Intel, opt-in).
     bool fp8_matrix_shapes{}; ///< 16x16x16 FP16 and FP8 matrices with FP32 results (fsr4-vk).
     bool is_integrated{};                      ///< Is GPU an iGPU.
     bool is_virtual{};                         ///< Is GPU a virtual GPU.

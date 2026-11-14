@@ -79,7 +79,7 @@ it is merged.
   `gh pr list -R karimalsalah/guarana --json number,headRefName,files --jq '.[] | select(any(.files[]; .path | startswith("src/video_core/renderer_vulkan/present"))) | "#\(.number) \(.headRefName)"'`.
   If an open pull request is there, comment on it before you start.
 - **Files that conflict most:**
-  - `CHANGELOG.md`: add one line under `[Unreleased]`; on a conflict, keep both lines.
+  - `CHANGELOG.md`: do not edit it for a new entry. Add one file `changelog.d/<slug>.<section>.md` (the entry as a line that starts with `- `; [changelog.d/README.md](../../changelog.d/README.md)), so two pull requests never touch the same line. `tools/ci/changelog_fragments.py check` fails a pull request that changes code and has neither a fragment nor a line under `[Unreleased]`. On an old conflict in `CHANGELOG.md`, keep both lines and move yours into a fragment.
   - `docs/switches.md` and `dist/nx2_switches.txt`: add rows, never reorder them.
   - `README.md`: one lane owns it at a time ([HANDOVER.md](../../HANDOVER.md)).
   - `src/video_core/renderer_vulkan/present/`: the pacing lane, pull requests #58 and #1 at the
@@ -93,6 +93,13 @@ it is merged.
   unit tests and the Python tool tests. Pull requests that change only documentation, the site,
   issue forms, the label list or benchmark rows skip the builds. **pr-build-comment** links the
   Windows test build (`guarana-pr<N>-<commit>-windows-x86_64`, kept 14 days) on the pull request.
+- **Merging** (the resolver, or anyone who merges): `python -I tools/ci/pr_gate.py <number>` says
+  `ready` or `not-ready` with the reasons (`--json` for a machine-readable answer, exit status 0 or
+  1). Not ready: a draft; a required `build-check` job failing or still running on the head;
+  `main` red while the pull request lacks the `fixes-main` label; a conflict outside the union
+  files `CHANGELOG.md`, `docs/switches.md` and `dist/nx2_switches.txt`, whose conflicts are settled by
+  keeping both sides. Merge one at a time and ask again after each. `build-check` also runs on
+  `merge_group`, so GitHub's merge queue can be turned on later. Details: [LANES.md](../LANES.md#merging).
 - **legacy** runs the `tools/ci` tests, and **ingest-reports** the `tools/ingest` tests, when a
   pull request touches them.
 - **A first pull request** from a new account waits for a maintainer to approve its workflow run.
@@ -107,7 +114,7 @@ it is merged.
   On Windows, the last one is `powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1 -PythonOnly`.
 - **The review** reads the [pull request template](../../.github/PULL_REQUEST_TEMPLATE.md): the
   measured result, switches, risk, upstream and checklist. It also wants an `Assisted-by:` trailer
-  on each commit an AI helped write, a `CHANGELOG.md` line, and a `docs/switches.md` row for every
+  on each commit an AI helped write, a changelog fragment (`changelog.d/`), and a `docs/switches.md` row for every
   switch.
 
 ## 5. Never commit

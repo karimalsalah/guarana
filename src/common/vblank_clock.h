@@ -5,6 +5,9 @@
 
 #include <chrono>
 #include <memory>
+#include <string>
+
+#include "common/common_types.h"
 
 namespace Common {
 
@@ -33,6 +36,21 @@ public:
 
     /// The refresh period of the window's display mode, 0 when it is unknown.
     [[nodiscard]] std::chrono::nanoseconds ReportedPeriod() const;
+
+    /// The host's name for the window's display (on Windows its GDI name, such as
+    /// \\.\DISPLAY2); empty when unknown.
+    [[nodiscard]] std::string DisplayName() const;
+
+    /// Whether the window's display is the primary one. False when unknown.
+    [[nodiscard]] bool OnPrimaryDisplay() const;
+
+    /// The pixels of the window's display's current mode, 0 by 0 when unknown.
+    struct Pixels {
+        u32 width{};
+        u32 height{};
+    };
+
+    [[nodiscard]] Pixels ReportedPixels() const;
 
     [[nodiscard]] Source CurrentSource() const;
 

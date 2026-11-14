@@ -96,8 +96,9 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     }
 }
 
-std::string ApplyGameSwitchDefaults(u64 title_id, const Core::GamePresets::GpuInfo& gpu) {
-    std::string line = Core::GamePresets::ApplySwitchDefaults(title_id, gpu);
+std::string ApplyGameSwitchDefaults(u64 title_id, const Core::GamePresets::GpuInfo& gpu,
+                                    const Core::GamePresets::DisplayInfo& display) {
+    std::string line = Core::GamePresets::ApplySwitchDefaults(title_id, gpu, display);
     // CreateGPU read these before the defaults were in the environment.
     AsyncReadback::ReadSwitch();
     LOG_INFO(HW_GPU,

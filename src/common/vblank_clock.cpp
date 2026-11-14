@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "common/common_types.h"
@@ -156,6 +157,46 @@ struct VblankClock::Impl {
             return MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
         }
         return MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    }
+
+    /// The window's monitor as Windows describes it; false when there is none.
+    [[nodiscard]] bool QueryMonitorInfo(MONITORINFOEXW& info) const {
+        info = {};
+        info.cbSize = sizeof(info);
+        return monitor != nullptr && GetMonitorInfoW(monitor, &info);
+    }
+
+    [[nodiscard]] std::string DisplayName() const {
+        MONITORINFOEXW info{};
+        if (!QueryMonitorInfo(info)) {
+            return {};
+        }
+        // GDI device names are ASCII, such as DISPLAY1 after the \\.\ prefix.
+        std::string name;
+        for (const wchar_t* c = info.szDevice; *c != L'\0'; ++c) {
+            name.push_back(*c < 0x80 ? static_cast<char>(*c) : '?');
+        }
+        return name;
+    }
+
+    [[nodiscard]] bool OnPrimaryDisplay() const {
+        MONITORINFOEXW info{};
+        return QueryMonitorInfo(info) && (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    }
+
+    /// The pixels of the monitor's current display mode, which a process that is not DPI aware
+    /// does not see scaled.
+    [[nodiscard]] Pixels ReportedPixels() const {
+        MONITORINFOEXW info{};
+        if (!QueryMonitorInfo(info)) {
+            return {};
+        }
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode)) {
+            return {};
+        }
+        return {static_cast<u32>(mode.dmPelsWidth), static_cast<u32>(mode.dmPelsHeight)};
     }
 
     [[nodiscard]] std::chrono::nanoseconds QueryPeriod() const {
@@ -320,6 +361,18 @@ struct VblankClock::Impl {
         return last;
     }
 
+    [[nodiscard]] std::string DisplayName() const {
+        return {};
+    }
+
+    [[nodiscard]] bool OnPrimaryDisplay() const {
+        return false;
+    }
+
+    [[nodiscard]] Pixels ReportedPixels() const {
+        return {};
+    }
+
     void SleepUntil(Clock::time_point deadline) {
         std::this_thread::sleep_until(deadline);
     }
@@ -344,6 +397,18 @@ void VblankClock::SleepUntil(std::chrono::steady_clock::time_point deadline) {
 
 std::chrono::nanoseconds VblankClock::ReportedPeriod() const {
     return impl->period;
+}
+
+std::string VblankClock::DisplayName() const {
+    return impl->DisplayName();
+}
+
+bool VblankClock::OnPrimaryDisplay() const {
+    return impl->OnPrimaryDisplay();
+}
+
+VblankClock::Pixels VblankClock::ReportedPixels() const {
+    return impl->ReportedPixels();
 }
 
 VblankClock::Source VblankClock::CurrentSource() const {

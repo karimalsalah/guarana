@@ -9,6 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::{self, AppState};
+use crate::timeline::Timeline;
 use crate::types::{
     AppliedProfile, Check, Controller, Found, Game, ImportResult, InstallResult, LaunchResult, LauncherState,
     PrefetchResult, Profile, Progress, ReportResult, SystemInfo, ToggleValue, UpdateInfo,
@@ -195,8 +196,11 @@ pub async fn launch_game(
     path: Option<String>,
     profile_id: Option<String>,
 ) -> CmdResult<LaunchResult> {
+    let timeline = Timeline::start();
+    timeline.mark("Play pressed");
     install::ensure_bundled(&app).await;
-    blocking(&app, move |app| launch::launch(app, title_id, path, profile_id)).await?
+    timeline.mark("install checked");
+    blocking(&app, move |app| launch::launch(app, title_id, path, profile_id, timeline)).await?
 }
 
 #[tauri::command(rename_all = "snake_case")]

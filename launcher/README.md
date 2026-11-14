@@ -35,6 +35,11 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   loading shaders with the real count, starting the game), read from the boot marks the emulator
   writes to the launcher in a launcher session, and it switches to "Playing" once the game is on
   screen. When the game exits, the launcher comes back to the front.
+  `launcher.log` stamps its lines to the millisecond and records each start's timeline (Play
+  pressed, command built, process spawned, each boot phase, the exit). With the environment switch
+  `EDEN_NX2_LAUNCHER_PAD_IDLE=1` (off by default, not measured) the launcher stops polling
+  controllers while a game runs and resumes when it exits
+  ([CONTRACT.md](CONTRACT.md#pads-and-the-log-while-a-game-runs)).
   It can warm the title's shader
   cache files into memory first, and prepares a title's shaders for a new GPU driver with
   `guarana-cli.exe --warm-pipelines <title id> -c <qt-config.ini>` (`docs/warm-up.md`).

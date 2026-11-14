@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 
+use crate::timeline::{phase_text, PhaseChanges, Timeline};
 use crate::types::BootProgress;
 
 pub const BOOT_EVENT: &str = "game://boot";
@@ -162,11 +163,12 @@ impl Tracker {
 /// Reads the session output on its own thread until the emulator exits (it stops writing once the
 /// game is shown, but keeps the pipe open), and emits `game://boot`. It reads to the end even after
 /// the last event: the emulator writes with blocking calls, so a full pipe would hold it up.
-pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<AtomicBool>) {
+pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<AtomicBool>, timeline: Timeline) {
     let app = app.clone();
     let spawned = std::thread::Builder::new().name("game-boot".into()).spawn(move || {
         let mut reader = BufReader::new(out);
         let mut tracker = Tracker::default();
+        let mut phases = PhaseChanges::default();
         let mut buf = Vec::new();
         loop {
             buf.clear();
@@ -177,6 +179,9 @@ pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<Atomic
             }
             let line = String::from_utf8_lossy(&buf);
             if let Some(progress) = tracker.feed(line.trim_end()) {
+                if phases.is_new(&progress.phase) {
+                    timeline.mark(&format!("boot phase {}", phase_text(&progress)));
+                }
                 if progress.phase == Phase::Shown.name() {
                     log::info!("The game is on screen");
                     done.store(true, Ordering::Relaxed);
@@ -193,12 +198,13 @@ pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<Atomic
 
 /// Emits `game://boot` with phase `window` once a window of process `pid` has the foreground,
 /// polling until then, until `done` (the game was shown or has exited) or for 15 minutes.
-pub fn watch_foreground(app: &AppHandle, pid: u32, done: Arc<AtomicBool>) {
+pub fn watch_foreground(app: &AppHandle, pid: u32, done: Arc<AtomicBool>, timeline: Timeline) {
     let app = app.clone();
     let spawned = std::thread::Builder::new().name("game-window".into()).spawn(move || {
         let started = Instant::now();
         while !done.load(Ordering::Relaxed) && started.elapsed() < FOREGROUND_WATCH {
             if foreground_pid() == Some(pid) {
+                timeline.mark("emulator window has the foreground");
                 let _ = app.emit(BOOT_EVENT, BootProgress { phase: "window".into(), done: 0, total: 0 });
                 return;
             }

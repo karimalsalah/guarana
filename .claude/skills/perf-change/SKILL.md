@@ -48,8 +48,8 @@ expect and the scene that shows it. Then look for prior work: the idea's row in 
 - "Switches added or changed": each switch, its values and its default (off).
 - The commit body: scene, device, driver and power mode, before and after (fps, p50 and p99 frame
   time, or the draw's GPU ms) and the number of paired runs. Subject `area: change`.
-- The switch's row in `docs/switches.md` gets the same measurement, and `CHANGELOG.md` a line under
-  `[Unreleased]`. Say what was not measured: other GPUs, drivers, games.
+- The switch's row in `docs/switches.md` gets the same measurement, and `changelog.d/` a fragment
+  (`<slug>.<section>.md`, see `changelog.d/README.md`). Say what was not measured: other GPUs, drivers, games.
 
 ## 5. Promote or drop
 

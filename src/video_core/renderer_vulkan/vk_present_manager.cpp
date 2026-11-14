@@ -9,6 +9,7 @@
 #endif
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -33,6 +34,8 @@
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
+#include "video_core/renderer_vulkan/fluid_compose_math.h"
+#include "video_core/renderer_vulkan/present/fluid_compose.h"
 #include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -226,6 +229,15 @@ constexpr std::chrono::seconds FluidFirstFrameLimit{60};
     return fmt::format("slot {}", frame->fluid_slot);
 }
 
+/// The size of the output a frame is shown in: its target if the slot pass composes it, else its own.
+[[nodiscard]] u32 FrameTargetWidth(const Frame* frame) {
+    return frame->target_width != 0 ? frame->target_width : frame->width;
+}
+
+[[nodiscard]] u32 FrameTargetHeight(const Frame* frame) {
+    return frame->target_height != 0 ? frame->target_height : frame->height;
+}
+
 void ResetFrame(Frame* frame) {
     frame->present_done.Reset();
     frame->color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -236,6 +248,9 @@ void ResetFrame(Frame* frame) {
     frame->fluid_recorded = {};
     frame->gpu_tick = 0;
     frame->shown_kind = VideoCore::Nx2ShownFrames::Kind::Real;
+    frame->target_width = 0;
+    frame->target_height = 0;
+    frame->target_rect = {};
 #ifdef EGLANTINE_STREAMLINE
     frame->frame_gen = false;
 #endif
@@ -335,6 +350,19 @@ u32 FluidMode() {
     return mode;
 }
 
+u32 FluidComposeMode() {
+    static const u32 mode = FluidComposeMath::ModeOf(std::getenv("EDEN_NX2_FLUID_COMPOSE"));
+    return mode;
+}
+
+bool FluidComposeNative() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_COMPOSE_NATIVE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 PresentManager::PresentManager(const vk::Instance& instance_,
                                Core::Frontend::EmuWindow& render_window_,
                                const Device& device_,
@@ -420,6 +448,19 @@ PresentManager::PresentManager(const vk::Instance& instance_,
         });
         frame.storage_capable = storage_supported;
         free_queue.push_back(&frame);
+    }
+
+    if (FluidComposeMode() != 0 && fluid_presenter && device.FluidFamilyCanCompute()) {
+        try {
+            compose = std::make_unique<FluidCompose>(device, frames.size());
+            compose_frame_serials.assign(frames.size(), 0);
+        } catch (const vk::Exception& exception) {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: the slot pass cannot be made ({}); frames are "
+                        "shown by the screen copy",
+                        exception.what());
+            compose.reset();
+        }
     }
 
     if (use_present_thread) {
@@ -822,6 +863,9 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
                 },
         });
     }
+
+    // EDEN_NX2_FLUID_COMPOSE: the slot pass's descriptor for the frame is written again.
+    frame->image_serial = ++compose_image_serial;
 
     const VkImageView image_view{*frame->image_view};
     frame->framebuffer = dld.CreateFramebuffer({
@@ -1663,8 +1707,8 @@ bool PresentManager::RecreateSwapchain(Frame* frame) {
 #ifdef EGLANTINE_STREAMLINE
     Streamline::FrameGenSuspend();
 #endif
-    if (swapchain.Create(*surface, frame->width, frame->height, frame->format,
-                         frame->color_space)) {
+    if (swapchain.Create(*surface, FrameTargetWidth(frame), FrameTargetHeight(frame),
+                         frame->format, frame->color_space)) {
         SetImageCount();
         if (frame->color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
             UpdateHdrMetadata();
@@ -1887,6 +1931,155 @@ void PresentManager::SubmitFluidCopy(Frame* frame, VkImage image, VkExtent2D ext
     }
 }
 
+bool PresentManager::ComposeAvailable() const {
+    return compose != nullptr && !compose_broken.load(std::memory_order_relaxed) && Fluid() &&
+           swapchain.HasStorage() && device.IsFluidQueueActive();
+}
+
+bool PresentManager::UseCompose(const Frame* frame) const {
+    // A frame the classic path drew has no target. The view the pass samples and the storage view
+    // it writes are both B8G8R8A8_UNORM, so the encoded values pass through as a copy keeps them.
+    return frame->target_width != 0 && ComposeAvailable() &&
+           frame->format == VK_FORMAT_B8G8R8A8_UNORM &&
+           swapchain.GetImageFormat() == VK_FORMAT_B8G8R8A8_UNORM &&
+           frame->color_space == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+}
+
+bool PresentManager::ComposeSyncSets(const Frame* frame) {
+    // The descriptor sets are written when something they point at is new, here and before an
+    // image is acquired: the GPU is not using them in between (the swapchain was idle when it was
+    // created, and the frame's last slot pass is done before the frame is drawn into again).
+    try {
+        if (compose_swapchain_generation != swapchain.StorageGeneration()) {
+            compose->SetSwapchainViews(device, swapchain.StorageViews());
+            compose_swapchain_generation = swapchain.StorageGeneration();
+        }
+        if (compose_frame_serials[frame->index] != frame->image_serial) {
+            compose->SetFrameView(device, frame->index, *frame->image_view);
+            compose_frame_serials[frame->index] = frame->image_serial;
+        }
+        return true;
+    } catch (const vk::Exception& exception) {
+        LOG_WARNING(Render_Vulkan,
+                    "EDEN_NX2_FLUID_COMPOSE: the slot pass's descriptors cannot be written ({}); "
+                    "frames are shown by the screen copy from now on",
+                    exception.what());
+        compose_broken.store(true, std::memory_order_relaxed);
+        return false;
+    }
+}
+
+void PresentManager::SubmitFluidCompose(Frame* frame, VkExtent2D extent,
+                                        VkSemaphore render_semaphore) {
+    const vk::CommandBuffer cmdbuf{frame->fluid_cmdbuf};
+    cmdbuf.Begin({
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr,
+    });
+
+    // The frame image stays in GENERAL, a valid layout to sample in: the render-done semaphore
+    // makes the renderer's writes visible, and the fence the pass signals hands the image back.
+    // Every pixel of the swapchain image is written, bars included, so its old contents are
+    // discarded (UNDEFINED), as the screen copy does.
+    const VkImage image{swapchain.CurrentImage()};
+    const VkImageSubresourceRange range{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+    };
+    const VkImageMemoryBarrier to_general{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = range,
+    };
+    const VkImageMemoryBarrier to_present{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .dstAccessMask = 0,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = range,
+    };
+    const bool timed = fluid_copy_queries && frame->index < 32;
+    if (timed) {
+        cmdbuf.ResetQueryPool(*fluid_copy_queries, 2 * frame->index, 2);
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index);
+    }
+    frame->copy_timed = timed;
+    // The wait below is at the compute stage: the transition waits for the acquire there too.
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, {}, {}, {}, to_general);
+    const FluidComposeMath::Rect target =
+        frame->target_rect.width != 0 ? frame->target_rect
+                                      : FluidComposeMath::Rect{0, 0, extent.width, extent.height};
+    const FluidComposeMath::Rect rect = FluidComposeMath::ScreenRect(
+        extent.width, extent.height, target.x, target.y, target.x + target.width,
+        target.y + target.height);
+    compose->Record(cmdbuf, frame->index, swapchain.CurrentImageIndex(),
+                    FluidComposeMath::MakePushConstants(extent.width, extent.height, rect));
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, {}, {}, {}, to_present);
+    if (timed) {
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *fluid_copy_queries,
+                              2 * frame->index + 1);
+    }
+    cmdbuf.End();
+
+    if (!compose_logged) {
+        compose_logged = true;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_FLUID_COMPOSE: the slot pass runs on queue family {}: a {}x{} frame "
+                 "into the {}x{} swapchain image, rectangle {}x{} at {}, {}",
+                 device.GetFluidFamily(), frame->width, frame->height, extent.width, extent.height,
+                 rect.width, rect.height, rect.x, rect.y);
+    }
+
+    const std::array wait_semaphores = {swapchain.CurrentPresentSemaphore(), *frame->render_ready};
+    static constexpr std::array<VkPipelineStageFlags, 2> wait_stage_masks{
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    };
+    const VkSubmitInfo submit_info{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 2U,
+        .pWaitSemaphores = wait_semaphores.data(),
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = 1,
+        .pCommandBuffers = cmdbuf.address(),
+        .signalSemaphoreCount = 1U,
+        .pSignalSemaphores = &render_semaphore,
+    };
+    // Only the present thread uses this queue, so the renderer's submit mutex is not needed.
+    switch (const VkResult result =
+                device.GetFluidQueue().Submit(submit_info, *frame->present_done)) {
+    case VK_SUCCESS:
+        break;
+    case VK_ERROR_DEVICE_LOST:
+        device.ReportLoss();
+        [[fallthrough]];
+    default:
+        vk::Check(result);
+        break;
+    }
+}
+
 void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     if (fluid_ahead_pending) {
         // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
@@ -1897,8 +2090,8 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
 
     // Recreate for size changes, SDR/HDR10/scRGB transitions, or a suboptimal swapchain.
     const bool is_suboptimal = swapchain.NeedsRecreation() || swapchain.IsOutDated();
-    const bool size_changed =
-        swapchain.GetWidth() != frame->width || swapchain.GetHeight() != frame->height;
+    const bool size_changed = swapchain.GetWidth() != FrameTargetWidth(frame) ||
+                              swapchain.GetHeight() != FrameTargetHeight(frame);
     const bool format_changed = swapchain.GetRequestedFormat() != frame->format;
     const bool color_space_changed = swapchain.GetRequestedColorSpace() != frame->color_space;
     if (is_suboptimal || size_changed || format_changed || color_space_changed) {
@@ -1923,6 +2116,19 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         DiscardFrame(frame);
         return;
     }
+    // EDEN_NX2_FLUID_COMPOSE: the slot pass shows the frames drawn for it. A frame it cannot show
+    // (the watchdog fell back, the swapchain lost its storage views, its descriptors cannot be
+    // written) is blitted to the swapchain like any frame of another size; where the device cannot
+    // blit, it is dropped, as a copy would cut it.
+    // While the debug server wants pictures, a frame drawn for the pass (one in flight when the
+    // capture was armed) is blitted on the graphics queue, which can take them.
+    bool use_compose = !VideoCore::Nx2ShownFrames::PicturesArmed() && UseCompose(frame) &&
+                       ComposeSyncSets(frame);
+    if (!use_compose && frame->target_width != 0 && transfer_mode != TransferMode::Blit &&
+        (frame->width != frame->target_width || frame->height != frame->target_height)) {
+        DiscardFrame(frame);
+        return;
+    }
 
     // The FLUID present thread times its presents itself (not after its watchdog fell back).
     const bool pace = !Fluid();
@@ -1938,6 +2144,12 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             return;
         }
     }
+    if (use_compose && compose_swapchain_generation != swapchain.StorageGeneration()) {
+        // The swapchain was out of date at the acquire and made again: its images have new
+        // storage views, or none. The image is acquired, so a frame the pass cannot show now goes
+        // the classic way with it.
+        use_compose = UseCompose(frame) && ComposeSyncSets(frame);
+    }
     if (timed) {
         const f64 acquire = ms_since(acquire_start);
         fluid_stats.acquire_ms += acquire;
@@ -1949,8 +2161,13 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     // The debug server's shown_frames needs a blit for its pictures, which the dedicated queue's
     // family cannot do: while it captures them the copy runs on the graphics queue.
-    if (UseFluidQueue(frame, extent) && !VideoCore::Nx2ShownFrames::PicturesArmed()) {
-        SubmitFluidCopy(frame, image, extent, render_semaphore);
+    if (use_compose ||
+        (UseFluidQueue(frame, extent) && !VideoCore::Nx2ShownFrames::PicturesArmed())) {
+        if (use_compose) {
+            SubmitFluidCompose(frame, extent, render_semaphore);
+        } else {
+            SubmitFluidCopy(frame, image, extent, render_semaphore);
+        }
         bool streamline_frame = false;
 #ifdef EGLANTINE_STREAMLINE
         streamline_frame = frame->frame_gen;

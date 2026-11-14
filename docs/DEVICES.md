@@ -28,6 +28,7 @@ With 16 GB, enlarge the Windows page file before your first run:
 | Intel Arc 140V / 130V | Lunar Lake | MSI Claw 8 AI+, MSI Claw 7 AI+ | Untested: send a report |
 | Intel Arc | Meteor Lake | MSI Claw A1M | Untested: send a report |
 | Intel Arc B370 / B390 | Panther Lake | MSI Claw 8 EX AI+, other Arc G3 handhelds | Untested: send a report |
+| Intel Graphics, 4 Xe3 cores | Panther Lake | Laptops | Untested: single runs on one laptop, no bench rows yet ([notes](#intel-graphics-4-xe3-cores-panther-lake)) |
 | AMD Radeon 780M | | ROG Ally, ROG Ally X, Legion Go | Untested: send a report |
 | AMD Radeon 880M / 890M | | ROG Xbox Ally X, Legion Go 2, MSI Claw A8 | Untested: send a report |
 | AMD Radeon 8060S | Strix Halo | | Untested: send a report |
@@ -79,6 +80,31 @@ great first contribution.
   ([IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)); a
   fix is in progress.
 - Results depend on the driver build: name yours in every report.
+
+### Intel Graphics, 4 Xe3 cores (Panther Lake)
+
+The GPU family `IntelGraphicsPantherLake` (8086:B0A0 and B090, which Intel lists with 4, 3 or 2 Xe3
+cores). Only a 4-core B0A0 has been seen; the notes below are that one machine, and the 3- and 2-core
+parts are in the family without evidence of their own.
+
+- **Device:** a Panther Lake laptop, Intel driver 32.0.101.8724 (Windows driver 101.8724), a
+  2880x1800 panel at 144 Hz.
+- **What the driver lists** (read from the driver): `VK_KHR_cooperative_matrix` (cooperative
+  matrices in compute shaders), `VK_EXT_vertex_input_dynamic_state`,
+  `VK_EXT_extended_dynamic_state3`, `VK_EXT_graphics_pipeline_library` and `VK_EXT_host_image_copy`;
+  subgroup size 32 (16 to 32, size control on); no native ASTC; present modes IMMEDIATE and FIFO
+  only (no MAILBOX).
+- **What ran:** in a first session the preset for Intel integrated GPUs without matrix cores
+  applied. It is chosen when the emulator finds no cooperative matrix shape it can use for the
+  game's tensor operations, whatever extensions the driver lists. The `Device profile:` line and
+  the preset line in your log say what yours chose.
+- **Measured:** single runs of Ocarina of Time in Kokiri Forest with the 144 Hz pacing set, which
+  is chosen for this display by default: 24 real and 91.5 shown frames a second against 20 and
+  50.5 with the 60 Hz set, in one session. The numbers and their caveats are in the
+  [CHANGELOG](../CHANGELOG.md) and next to the set in `src/core/game_presets.cpp`.
+- **Not measured:** any `tools/bench` row on a verified scene, so no setting is chosen for this
+  GPU alone. A preset for it needs a paired run on a verified scene first
+  ([AGENTS.md](../AGENTS.md), rule 1).
 
 ### AMD Radeon
 
@@ -152,6 +178,21 @@ The class and the family change nothing yet. A preset can match either one, but 
 class or a family comes only with a paired run on a verified scene of that class or family
 ([AGENTS.md](../AGENTS.md), rule 1). The line holds no paths or names from your machine, so you
 can paste it into a report as it is.
+
+## The resolution line in the log
+
+After the device profile, the log gets one `Core` Info line that starts `Resolution:`. It says what
+the game's settings preset, its add-ons and its pacing switches were resolved to on this machine,
+what was decided for each given what you had set (`set`, `already set`, `kept`, `over shipped`),
+and how many of the values rest on a measured row of [switches.md](switches.md). The same data,
+with each entry's reason and evidence, is the debug server's `status.resolution`
+([nx2/debug-mcp.md](nx2/debug-mcp.md)). The line also records the output size against the GPU's
+size: the pixels of the display the window is on, the GPU's compute units or SMs where the driver
+reports them (AMD and NVIDIA; Intel's Windows driver does not, so it says `not reported by the
+driver`), and the output pixels per core. On the reference laptop (2880x1800 on 4 Xe3 cores) 72
+shown frames measured better than 144 on every metric; nothing decides by these numbers yet, they
+are logged so that reports from other machines carry them. A default that follows them needs a
+paired run on a verified scene first ([AGENTS.md](../AGENTS.md), rule 1).
 
 ## Send a device report
 

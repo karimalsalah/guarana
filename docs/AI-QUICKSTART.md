@@ -132,8 +132,8 @@ plays ([AGENTS.md](../AGENTS.md)).
 
 - Commit subject `area: change`; the body says why, with numbers for performance work.
 - Add `Assisted-by: <tool>` to commits the AI helped write, and one line in the description saying what it did.
-- `Closes #<n>`, the acceptance test's output, a `CHANGELOG.md` line under `[Unreleased]`, a
-  `docs/switches.md` row for every switch.
+- `Closes #<n>`, the acceptance test's output, a changelog fragment
+  (`changelog.d/<slug>.<section>.md`, see `changelog.d/README.md`), a `docs/switches.md` row for every switch.
 - A person has read the whole diff before it leaves draft.
 
 Merged work is credited for good on the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html).

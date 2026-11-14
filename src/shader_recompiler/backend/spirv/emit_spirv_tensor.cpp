@@ -40,9 +40,9 @@ bool SupportsCooperativeHmma(const IR::Program& program) {
 // word layout, and PatchCooperativeHmma replaces the opcodes after assembly: OpTypeStruct for the
 // types, OpSelect for the multiply-add, an OpLoad of a matrix for a load and a 7-word OpStore of a
 // multiply-add result for a store. The type operands are constants that no real structure has as
-// members. B and the accumulator are 16 rows by the given columns.
-CooperativeHmmaTypes DefineCooperativeHmmaTypes(Sirit::Module& module, Id u32_type, u32 columns,
-                                                u32 spirv_version) {
+// members. A is the given rows by 16, B 16 by the given columns and the accumulator rows by columns.
+CooperativeHmmaTypes DefineCooperativeHmmaTypes(Sirit::Module& module, Id u32_type, u32 rows,
+                                                u32 columns, u32 spirv_version) {
     module.AddExtension("SPV_KHR_cooperative_matrix");
     module.AddCapability(spv::Capability::CooperativeMatrixKHR);
     module.AddCapability(spv::Capability::Float16);
@@ -55,16 +55,17 @@ CooperativeHmmaTypes DefineCooperativeHmmaTypes(Sirit::Module& module, Id u32_ty
     const Id float16{module.TypeFloat(16)};
     const auto constant{[&](u32 value) { return module.Constant(u32_type, value); }};
     const Id scope{constant(static_cast<u32>(spv::Scope::Subgroup))};
-    const auto matrix{[&](u32 cols, spv::CooperativeMatrixUse use) {
-        return module.TypeStruct(float16, scope, constant(16), constant(cols),
+    const auto matrix{[&](u32 matrix_rows, u32 matrix_columns, spv::CooperativeMatrixUse use) {
+        return module.TypeStruct(float16, scope, constant(matrix_rows), constant(matrix_columns),
                                  constant(static_cast<u32>(use)));
     }};
     return CooperativeHmmaTypes{
         .float16 = float16,
         .float16x2 = module.TypeVector(float16, 2),
-        .matrix_a = matrix(16, spv::CooperativeMatrixUse::MatrixAKHR),
-        .matrix_b = matrix(columns, spv::CooperativeMatrixUse::MatrixBKHR),
-        .matrix_c = matrix(columns, spv::CooperativeMatrixUse::MatrixAccumulatorKHR),
+        .matrix_a = matrix(rows, 16, spv::CooperativeMatrixUse::MatrixAKHR),
+        .matrix_b = matrix(16, columns, spv::CooperativeMatrixUse::MatrixBKHR),
+        .matrix_c = matrix(rows, columns, spv::CooperativeMatrixUse::MatrixAccumulatorKHR),
+        .rows = rows,
     };
 }
 
@@ -136,7 +137,8 @@ void DefineSubgroupId(EmitContext& ctx) {
 std::optional<u32> SoftwareMatrixScratchOffset(const Profile& profile,
                                                const IR::Program& program) {
     if (!profile.support_software_matrix_shared_memory || profile.support_cooperative_hmma ||
-        profile.support_cooperative_hmma_16x16x16 || program.stage != Stage::Compute ||
+        profile.support_cooperative_hmma_16x16x16 || profile.support_cooperative_hmma_8x16x16 ||
+        program.stage != Stage::Compute ||
         !profile.SupportsSubgroupStage(Stage::Compute) || program.workgroup_size[0] == 0 ||
         program.workgroup_size[0] % GUEST_WARP_LANES != 0) {
         return std::nullopt;
@@ -163,22 +165,38 @@ std::optional<u32> SoftwareMatrixScratchOffset(const Profile& profile,
     return scratch_offset;
 }
 
+// Shared memory words per subgroup for the cooperative HMMA tiles A, B and C (128 words each). The
+// 8-row matrices of Intel's 8x16x16 add a second B tile, for the upper K half of a K=16 product.
+u32 CooperativeScratchWordsPerSubgroup(const Profile& profile) {
+    return profile.support_cooperative_hmma_16x16x16 ? 384U : 512U;
+}
+
 // One HMMA.16816.F16 (or .1688 with zero upper halves) of a 32-lane warp on 16x16x16 matrices: the
 // NVIDIA fragments go to row-major A, column-major B (columns 8-15 zero) and row-major C tiles in
 // shared memory, one cooperative-matrix multiply-add replaces the per-lane emulation, and each lane
-// reads its two D words back from where it wrote C.
+// reads its two D words back from where it wrote C. With 8-row matrices (Intel's 8x16x16) the top
+// and bottom halves of A and C are two products with the same B.
 Id EmitCooperativeTensorMulAdd(EmitContext& ctx, const CooperativeHmmaTypes& types,
-                               u32 scratch_word, Id a, Id b, Id c) {
+                               u32 scratch_word, Id a, Id b, Id c, u32 depth) {
     const Id u32ty = ctx.U32[1];
     const auto imm = [&](u32 value) { return ctx.Const(value); };
     const auto add = [&](Id lhs, Id rhs) { return ctx.OpIAdd(u32ty, lhs, rhs); };
     const Id lane = ctx.OpBitwiseAnd(u32ty, ctx.OpLoad(u32ty, ctx.subgroup_local_invocation_id),
                                      imm(31));
     const Id subgroup = ctx.OpLoad(u32ty, ctx.tensor_subgroup_id);
-    const Id base = add(imm(scratch_word), ctx.OpIMul(u32ty, subgroup, imm(384)));
+    const Id base = add(imm(scratch_word),
+                        ctx.OpIMul(u32ty, subgroup,
+                                   imm(CooperativeScratchWordsPerSubgroup(ctx.profile))));
     const Id tile_a = base;
     const Id tile_b = add(base, imm(128));
     const Id tile_c = add(base, imm(256));
+    // HMMA.16816.F16 rounds the accumulator to fp16 after each K=8 group (the software path does
+    // the same), but one K=16 matrix product rounds once. On 8-row matrices a K=16 HMMA is
+    // therefore two products, with B's upper K half zero and then its lower half zero, so the fp16
+    // accumulator in between gives the guest's midpoint rounding. Only B is split. K=8 and the
+    // 16-row paths keep one product.
+    const bool split_k = depth == 16 && types.rows == 8;
+    const Id tile_b_high = split_k ? add(base, imm(384)) : Id{};
     const Id g = ctx.OpShiftRightLogical(u32ty, lane, imm(2));
     const Id t = ctx.OpBitwiseAnd(u32ty, lane, imm(3));
     // Word of (row, first column pair) in a 16x16 fp16 tile with 8 words a row/column.
@@ -192,10 +210,18 @@ Id EmitCooperativeTensorMulAdd(EmitContext& ctx, const CooperativeHmmaTypes& typ
     store(tile_a, add(row_lo, imm(4)), ctx.OpCompositeExtract(u32ty, a, 2));
     store(tile_a, add(row_hi, imm(4)), ctx.OpCompositeExtract(u32ty, a, 3));
     // B column g holds k pairs t (b0) and t+4 (b1); columns 8-15 (words 64-127) are zero.
+    // Split: tile_b holds only the lower K half (b0) and tile_b_high only the upper (b1).
     store(tile_b, row_lo, ctx.OpCompositeExtract(u32ty, b, 0));
-    store(tile_b, add(row_lo, imm(4)), ctx.OpCompositeExtract(u32ty, b, 1));
+    store(tile_b, add(row_lo, imm(4)),
+          split_k ? ctx.u32_zero_value : ctx.OpCompositeExtract(u32ty, b, 1));
     store(tile_b, add(lane, imm(64)), ctx.u32_zero_value);
     store(tile_b, add(lane, imm(96)), ctx.u32_zero_value);
+    if (split_k) {
+        store(tile_b_high, row_lo, ctx.u32_zero_value);
+        store(tile_b_high, add(row_lo, imm(4)), ctx.OpCompositeExtract(u32ty, b, 1));
+        store(tile_b_high, add(lane, imm(64)), ctx.u32_zero_value);
+        store(tile_b_high, add(lane, imm(96)), ctx.u32_zero_value);
+    }
     store(tile_c, row_lo, ctx.OpCompositeExtract(u32ty, c, 0));
     store(tile_c, row_hi, ctx.OpCompositeExtract(u32ty, c, 1));
     SubgroupBarrier(ctx);
@@ -210,16 +236,32 @@ Id EmitCooperativeTensorMulAdd(EmitContext& ctx, const CooperativeHmmaTypes& typ
         return ctx.OpLoad(type, SharedWord(ctx, tile),
                           std::span<const Sirit::MemoryAccessLiteral>(operands));
     };
-    const Id matrix_a = load(types.matrix_a, tile_a, LayoutRowMajor);
-    const Id matrix_b = load(types.matrix_b, tile_b, LayoutColumnMajor);
-    const Id matrix_c = load(types.matrix_c, tile_c, LayoutRowMajor);
-    // OpCooperativeMatrixMulAddKHR and OpCooperativeMatrixStoreKHR %pointer %object %layout
-    // %stride %memory_operands after PatchCooperativeHmma.
-    const Id matrix_d = ctx.OpSelect(types.matrix_c, matrix_a, matrix_b, matrix_c);
-    const std::array<Sirit::MemoryAccessLiteral, 4> store_operands{
-        imm(LayoutRowMajor).value, stride.value, available[0], available[1]};
-    ctx.OpStore(SharedWord(ctx, tile_c), matrix_d,
-                std::span<const Sirit::MemoryAccessLiteral>(store_operands));
+    // Eight rows of a tile are 64 words. The first product emits what the 16-row path always did,
+    // in the same order (A, B, C), so its SPIR-V is unchanged on NVIDIA and AMD.
+    for (u32 k_half = 0; k_half < (split_k ? 2U : 1U); ++k_half) {
+        if (k_half == 1) {
+            // The first K half's fp16 results are in tile_c for the second.
+            SubgroupBarrier(ctx);
+        }
+        Id matrix_b{};
+        for (u32 row = 0; row < 16; row += types.rows) {
+            const Id rows_a = row == 0 ? tile_a : add(tile_a, imm(row * 8));
+            const Id rows_c = row == 0 ? tile_c : add(tile_c, imm(row * 8));
+            const Id matrix_a = load(types.matrix_a, rows_a, LayoutRowMajor);
+            if (row == 0) {
+                matrix_b = load(types.matrix_b, k_half == 0 ? tile_b : tile_b_high,
+                                LayoutColumnMajor);
+            }
+            const Id matrix_c = load(types.matrix_c, rows_c, LayoutRowMajor);
+            // OpCooperativeMatrixMulAddKHR and OpCooperativeMatrixStoreKHR %pointer %object
+            // %layout %stride %memory_operands after PatchCooperativeHmma.
+            const Id matrix_d = ctx.OpSelect(types.matrix_c, matrix_a, matrix_b, matrix_c);
+            const std::array<Sirit::MemoryAccessLiteral, 4> store_operands{
+                imm(LayoutRowMajor).value, stride.value, available[0], available[1]};
+            ctx.OpStore(SharedWord(ctx, rows_c), matrix_d,
+                        std::span<const Sirit::MemoryAccessLiteral>(store_operands));
+        }
+    }
     SubgroupBarrier(ctx);
     const Id d0 = ctx.LoadShared(u32ty, SharedWord(ctx, add(tile_c, row_lo)));
     const Id d1 = ctx.LoadShared(u32ty, SharedWord(ctx, add(tile_c, row_hi)));
@@ -242,7 +284,8 @@ bool UsesCooperativeHmma(const Profile& profile, const IR::Program& program) {
 }
 
 std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Program& program) {
-    if (!profile.support_cooperative_hmma_16x16x16 || !SupportsCooperativeHmma(program)) {
+    if ((!profile.support_cooperative_hmma_16x16x16 && !profile.support_cooperative_hmma_8x16x16) ||
+        !SupportsCooperativeHmma(program)) {
         return std::nullopt;
     }
     bool has_hmma{};
@@ -258,7 +301,7 @@ std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Pro
                             program.workgroup_size[2];
     const u32 subgroups = invocations / GUEST_WARP_LANES;
     const u32 scratch_offset = (program.shared_memory_size + 15U) & ~15U;
-    const u32 total = scratch_offset + subgroups * 384U * 4U;
+    const u32 total = scratch_offset + subgroups * CooperativeScratchWordsPerSubgroup(profile) * 4U;
     // Past the device limit the pipeline would fail to build: keep the emulation.
     if (profile.max_compute_shared_memory_size != 0 &&
         total > profile.max_compute_shared_memory_size) {
@@ -304,8 +347,9 @@ bool CanRoundHalfNatively(const Profile& profile, const Info& info) {
 
 void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program) {
     if (ctx.tensor_scratch_word) {
+        const u32 rows = ctx.profile.support_cooperative_hmma_16x16x16 ? 16 : 8;
         ctx.cooperative_hmma =
-            DefineCooperativeHmmaTypes(ctx, ctx.U32[1], 16, ctx.profile.supported_spirv);
+            DefineCooperativeHmmaTypes(ctx, ctx.U32[1], rows, 16, ctx.profile.supported_spirv);
         DefineSubgroupId(ctx);
         return;
     }
@@ -319,7 +363,7 @@ void DefineSoftwareMatrixFunctions(EmitContext& ctx, const IR::Program& program)
     }
     if (UsesCooperativeHmma(ctx.profile, program)) {
         ctx.cooperative_hmma =
-            DefineCooperativeHmmaTypes(ctx, ctx.U32[1], 8, ctx.profile.supported_spirv);
+            DefineCooperativeHmmaTypes(ctx, ctx.U32[1], 16, 8, ctx.profile.supported_spirv);
     }
     std::array<bool, 2> needed{};
     for (const auto* block : program.blocks) {
@@ -540,7 +584,7 @@ Id EmitTensorMulAdd(EmitContext& ctx, IR::Inst* inst, Id a, Id b, Id c) {
     }
     if (ctx.tensor_scratch_word) {
         return EmitCooperativeTensorMulAdd(ctx, *ctx.cooperative_hmma, *ctx.tensor_scratch_word, a,
-                                           b, c);
+                                           b, c, depth);
     }
     if (depth == 16 && ctx.cooperative_hmma) {
         return EmitCooperativeHmma(ctx, *ctx.cooperative_hmma, ctx.U32[1], ctx.U32[2], a, b, c);
@@ -589,7 +633,7 @@ std::vector<u32> EmitCooperativeHmmaTest(u32 spirv_version) {
     const Id u32x2_type{module.TypeVector(u32_type, 2)};
     const Id u32x4_type{module.TypeVector(u32_type, 4)};
     const CooperativeHmmaTypes types{
-        DefineCooperativeHmmaTypes(module, u32_type, 8, spirv_version)};
+        DefineCooperativeHmmaTypes(module, u32_type, 16, 8, spirv_version)};
 
     const Id words_type{module.TypeRuntimeArray(u32_type)};
     module.Decorate(words_type, spv::Decoration::ArrayStride, 4U);

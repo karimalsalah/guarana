@@ -34,6 +34,7 @@ add_executable(tests
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
     core/game_presets.cpp
+    core/game_resolver.cpp
     core/key_derivation.cpp
     common/boot_split.cpp
     common/display_hdr.cpp
@@ -100,6 +101,7 @@ add_executable(tests
     video_core/fluid_present_mode.cpp
     video_core/fluid_slot_math.cpp
     video_core/shown_governor.cpp
+    video_core/fluid_compose_math.cpp
     video_core/auto_shading_rate.cpp
     common/guarana_modes.cpp
     common/power_governor.cpp
@@ -125,6 +127,7 @@ add_executable(tests
     video_core/pipeline_eviction_policy.cpp
     video_core/async_shader_emission.cpp
     video_core/graphics_pipeline_library_policy.cpp
+    video_core/pipeline_binaries_policy.cpp
     video_core/oot_network.cpp
     video_core/page_filter.cpp
     video_core/query_stream.cpp

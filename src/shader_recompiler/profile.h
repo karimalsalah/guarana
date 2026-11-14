@@ -125,6 +125,9 @@ struct Profile {
     bool support_cooperative_hmma{};
     /// Without the above, HMMA runs on 16x16x16 cooperative matrices through shared memory
     bool support_cooperative_hmma_16x16x16{};
+    /// Without either, HMMA runs through shared memory as 8x16x16 cooperative matrix products (a
+    /// K=16 HMMA as two, rounding after each K=8 half, as the guest does)
+    bool support_cooperative_hmma_8x16x16{};
     /// Software HMMA gathers its operands from a subgroup's scratch in shared memory instead of
     /// shuffling them; the pipeline gets full subgroups of the guest's 32 lanes
     bool support_software_matrix_shared_memory{};

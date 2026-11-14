@@ -32,6 +32,7 @@
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
+#include "video_core/vulkan_common/pipeline_binaries_policy.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -638,6 +639,8 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         if (chosen) {
             fluid_family = *chosen;
             has_fluid_queue = true;
+            fluid_family_compute =
+                (family_properties[fluid_family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
             const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
             fluid_high_priority =
                 fluid_queue_mode != 2 && fluid_queue_mode != 5 && !copy_engine &&
@@ -2301,9 +2304,10 @@ void Device::RemoveUnsuitableExtensions() {
         if (extensions.cooperative_matrix) {
             shapes = physical.GetCooperativeMatrixPropertiesKHR();
         }
-        const auto has_shape = [&](u32 columns) {
+        // Whether the driver lists a rows x columns x 16 fp16 subgroup shape without saturation.
+        const auto has_shape = [&](u32 rows, u32 columns) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
-                return shape.MSize == 16 && shape.NSize == columns && shape.KSize == 16 &&
+                return shape.MSize == rows && shape.NSize == columns && shape.KSize == 16 &&
                        shape.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.CType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
@@ -2349,7 +2353,7 @@ void Device::RemoveUnsuitableExtensions() {
                             extensions.subgroup_size_control &&
                             features.subgroup_size_control.computeFullSubgroups;
         cooperative_hmma_16x8x16 =
-            usable && has_shape(8) &&
+            usable && has_shape(16, 8) &&
             (properties.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
             properties.subgroup_properties.subgroupSize == GuestWarpSize &&
             // Compute subgroups may vary between these sizes (always with SPIR-V 1.6), and the
@@ -2357,7 +2361,29 @@ void Device::RemoveUnsuitableExtensions() {
             properties.subgroup_size_control.minSubgroupSize == GuestWarpSize &&
             properties.subgroup_size_control.maxSubgroupSize == GuestWarpSize;
         cooperative_hmma_16x16x16 =
-            usable && has_shape(16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            usable && has_shape(16, 16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+        // EDEN_NX2_INTEL_COOP_MATRIX=1 (default off, parsed with strtoul like its neighbours):
+        // Intel's drivers list only an 8x16x16 shape, so the two paths above never apply. Each HMMA
+        // then runs through shared memory as 8-row products (Fritchii-Intel-Fixes 0007 and 0008,
+        // zortos293/Lichii#779). The condition is what the driver reports, on an Intel device:
+        // the shape, 32-lane compute subgroups and the features `usable` checks. Intel's Windows
+        // driver turns shaderFloat16 off for shaders ("broken float16 math", float16_math), but
+        // the device keeps it for the matrices, so that workaround does not matter here.
+        static const bool intel_coop_matrix = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COOP_MATRIX");
+            return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        }();
+        constexpr u32 intel_vendor_id = 0x8086;
+        if (intel_coop_matrix && properties.properties.vendorID == intel_vendor_id) {
+            const bool has_8x16x16 = has_shape(8, 16);
+            const bool guest_warp = IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            cooperative_hmma_8x16x16 = usable && has_8x16x16 && guest_warp;
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_COOP_MATRIX: {} cooperative matrix shapes listed, 8x16x16 "
+                     "fp16 {}, 32-lane compute subgroups {}, usable {}: 8x16x16 HMMA {}",
+                     shapes.size(), has_8x16x16, guest_warp, usable,
+                     cooperative_hmma_8x16x16);
+        }
         const auto has_fp32_result_shape = [&](VkComponentTypeKHR input) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
                 return shape.MSize == 16 && shape.NSize == 16 && shape.KSize == 16 &&
@@ -2370,7 +2396,8 @@ void Device::RemoveUnsuitableExtensions() {
         };
         fp8_matrix_shapes = has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT16_KHR) &&
                             has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT8_E4M3_EXT);
-        extensions.cooperative_matrix = cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16;
+        extensions.cooperative_matrix =
+            cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16 || cooperative_hmma_8x16x16;
         features.cooperative_matrix.cooperativeMatrixRobustBufferAccess = VK_FALSE;
         RemoveExtensionFeatureIfUnsuitable(extensions.cooperative_matrix,
                                            features.cooperative_matrix,
@@ -2415,7 +2442,21 @@ void Device::RemoveUnsuitableExtensions() {
     // with VK_DYNAMIC_STATE_VERTEX_INPUT_EXT (#770), so an RX 6650 XT rebuilt ~5,800 boot
     // pipelines at ~120 ms each (12-15 min to the first frame) at every boot, and turning dynamic
     // vertex input off lost the device on the first pipeline. The store keeps them instead.
-    const bool amd_binaries = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
+    // EDEN_NX2_PIPELINE_BINARIES=0 or 1 overrides that choice (pipeline_binaries_policy.h), never
+    // where the driver lacks the extension, the feature or maintenance5.
+    const char* const pipeline_binaries_env = std::getenv("EDEN_NX2_PIPELINE_BINARIES");
+    const PipelineBinariesOverride pipeline_binaries_requested =
+        ParsePipelineBinariesOverride(pipeline_binaries_env);
+    const PipelineBinariesDecision pipeline_binaries_decision = DecidePipelineBinaries({
+        .extension = extensions.pipeline_binary,
+        .feature = features.pipeline_binary.pipelineBinaries != VK_FALSE,
+        .maintenance5 = extensions.maintenance5,
+        .prefers_internal_cache =
+            properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
+        .driver_caches_pipelines = DriverCachesPipelines(),
+        .amd_proprietary = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY,
+        .requested = pipeline_binaries_requested,
+    });
     if (extensions.pipeline_binary) {
         LOG_INFO(Render_Vulkan,
                  "VK_KHR_pipeline_binary: pipelineBinaries {}, internal cache {}, prefers internal "
@@ -2425,10 +2466,16 @@ void Device::RemoveUnsuitableExtensions() {
                  properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
                  properties.pipeline_binary.pipelineBinaryCompressedData != VK_FALSE);
     }
-    extensions.pipeline_binary =
-        features.pipeline_binary.pipelineBinaries && extensions.maintenance5 &&
-        !properties.pipeline_binary.pipelineBinaryPrefersInternalCache &&
-        (!DriverCachesPipelines() || amd_binaries);
+    if (pipeline_binaries_decision.reason != PipelineBinariesReason::NotOffered ||
+        pipeline_binaries_requested != PipelineBinariesOverride::Unset) {
+        const bool value_ignored = pipeline_binaries_env != nullptr && *pipeline_binaries_env &&
+                                   pipeline_binaries_requested == PipelineBinariesOverride::Unset;
+        LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary store: {} ({}){}",
+                 pipeline_binaries_decision.enabled ? "on" : "off",
+                 PipelineBinariesReasonText(pipeline_binaries_decision.reason),
+                 value_ignored ? ", EDEN_NX2_PIPELINE_BINARIES is neither 0 nor 1: ignored" : "");
+    }
+    extensions.pipeline_binary = pipeline_binaries_decision.enabled;
     RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_binary, features.pipeline_binary,
                                        VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
 
