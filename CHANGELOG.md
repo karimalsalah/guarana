@@ -24,6 +24,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Agent kit: [docs/agents/README.md](docs/agents/README.md#what-costs-nothing-today) lists the agent tiers that cost nothing today, with the vendors' stated limits.
 - Pull request template: a note for a first pull request, a tests item for contributors who cannot build (CI runs the tests), and an `Assisted-by:` trailer item; CONTRIBUTING.md says why a first-time contributor's checks may wait for approval.
 - Docs: [docs/lifecycle.md](docs/lifecycle.md) lists what Guarana and its launcher store, from switch files and settings to shader caches and markers, and when each is flushed, loaded and preloaded, with the code that does it; [docs/design/settings-hygiene.md](docs/design/settings-hygiene.md) is the proposal in [#125](https://github.com/karimalsalah/guarana/issues/125) (not yet built) to record who wrote each value, reset what the player did not choose, and let the doctor run on its own.
+- Launcher: `EDEN_NX2_LAUNCHER_PAD_IDLE=1` (experiment, off by default, read from the launcher's own environment): the launcher stops polling controllers while a game it started runs, its 250 ms loop and gilrs' own polling thread, and resumes when the game exits (not measured; [launcher/CONTRACT.md](launcher/CONTRACT.md#pads-and-the-log-while-a-game-runs)).
+- Launcher: `launcher.log` lines carry milliseconds, and every start writes a launch timeline (Play pressed, settings ready, command built, process spawned, each boot phase, the emulator's window, the exit), each with the milliseconds since Play ([launcher/CONTRACT.md](launcher/CONTRACT.md#pads-and-the-log-while-a-game-runs)).
 
 ### Changed
 

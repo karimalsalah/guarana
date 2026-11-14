@@ -23,9 +23,10 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::state::{self, AppState};
+use crate::timeline::Timeline;
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{autopilot, boot, install, modes, paths, profiles, system, warm};
+use crate::{autopilot, boot, controllers, install, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
 
@@ -120,6 +121,7 @@ pub fn launch(
     title_id: Option<String>,
     path: Option<String>,
     profile_id: Option<String>,
+    timeline: Timeline,
 ) -> CmdResult<LaunchResult> {
     let st = app.state::<AppState>();
     let persisted = st.load();
@@ -203,6 +205,7 @@ pub fn launch(
         }
     }
 
+    timeline.mark("settings ready");
     let launch_on_battery = st.system().power.on_ac == Some(false);
     let mut cmd = Command::new(&exe);
     cmd.current_dir(exe.parent().unwrap_or(Path::new(".")));
@@ -217,12 +220,16 @@ pub fn launch(
     if follow_boot {
         cmd.stdout(Stdio::piped());
     }
+    timeline.mark("command built");
 
     // Game Booster (Off by default). The GPU preference must be set before the emulator starts, so
     // it and the journal go down now; priority and throttling come after the process exists, and the
     // one elevated step after the game-watch thread does. It never fails the launch.
     let booster_level = crate::booster::level_of(&persisted);
     let booster_prep = crate::booster::apply_before_spawn(&exe, booster_level);
+    if booster_prep.is_some() {
+        timeline.mark("Game Booster prepared");
+    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -234,6 +241,11 @@ pub fn launch(
         }
     };
     let pid = child.id();
+    timeline.mark(&format!("process spawned (pid {pid})"));
+    // With EDEN_NX2_LAUNCHER_PAD_IDLE on, the launcher's controller polling stops until the game-watch
+    // thread has seen the process end (the guard is dropped there, or with the closure should the
+    // thread not start).
+    let pad_guard = controllers::idle_while_game_runs();
     // The emulator's first window can appear seconds from now, after the player has used the
     // launcher; let it take the foreground then so it does not open behind the launcher.
     unsafe {
@@ -262,7 +274,9 @@ pub fn launch(
         .name("game-watch".into())
         .spawn(move || {
             let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+            drop(pad_guard);
             let seconds = started.elapsed().as_secs_f64();
+            timeline.mark(&format!("process exited with {code}"));
             exit_done.store(true, Ordering::Relaxed);
             // Taken before the event, while the emulator's window may still be the last one active.
             let foreground = boot::foreground_pid();
@@ -291,9 +305,9 @@ pub fn launch(
     // After the game-watch thread exists, so `boot_done` is always set when the process ends.
     if had_game {
         if let Some(out) = boot_out {
-            boot::follow(app, out, boot_done.clone());
+            boot::follow(app, out, boot_done.clone(), timeline);
         }
-        boot::watch_foreground(app, pid, boot_done);
+        boot::watch_foreground(app, pid, boot_done, timeline);
     }
 
     // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on
