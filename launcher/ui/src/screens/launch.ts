@@ -1,6 +1,6 @@
 // Launch stage: the hero card has morphed into the full window. launch_game runs, and the stage
-// follows the boot (game://boot: the phase in words, the shader counts as a real bar) until the
-// game is on screen, then gives way to "Playing". game://exited brings us back.
+// follows the boot (game://boot: the phase in words and the real shader count, on its one status
+// line) until the game is on screen, then gives way to "running". game://exited brings us back.
 
 import { api, errorText, events } from "../api";
 import { h } from "../dom";
@@ -12,7 +12,7 @@ import { go, type ScreenDef } from "../router";
 import { recordSession } from "../sessions";
 import type { BootProgress, Game, GameExited } from "../types";
 import { icon } from "../icons";
-import { button } from "../ui/controls";
+import { button, spinner } from "../ui/controls";
 import { heroArt } from "../ui/hero-art";
 
 type Phase = "starting" | "handoff" | "playing" | "failed" | "done";
@@ -65,21 +65,20 @@ const screen: ScreenDef = {
     const byPath = ctx.params.byPath === true;
     const art = heroArt({ cls: "launch-art" });
     const title = h("h1", { class: "launch-title", text: game?.title ?? "Game" });
-    if (ctx.params.morph === true) {
-      art.style.setProperty("view-transition-name", "hero-art");
-      title.style.setProperty("view-transition-name", "hero-title");
-    } else if (ctx.params.morph === "title") {
-      // From a library row only the title morphs (that page has no hero art).
-      title.style.setProperty("view-transition-name", "hero-title");
-    }
-    const status = h("p", { class: "launch-status", role: "status", text: "Starting Guarana…" });
-    // The counts change every percent: outside the live region, so screen readers hear the phases.
-    const detail = h("p", { class: "launch-detail" });
-    const bar = h("div", { class: "launch-bar", "aria-hidden": "true" }, h("i"));
+    // From the hero both morph; from a library row only the title does (that page has no hero art).
+    if (ctx.params.morph === true) art.style.setProperty("view-transition-name", "hero-art");
+    if (ctx.params.morph === true || ctx.params.morph === "title") title.style.setProperty("view-transition-name", "hero-title");
+    // One line of what is happening: the boot phase in words (game://boot), and while shaders load
+    // their real count after it. A small spinner says the line is live; the text changes when the
+    // phase does. The count changes every percent, so it sits outside the live region: screen
+    // readers hear the phases, not every number.
+    const statusText = h("span", { role: "status", text: "Starting Guarana…" });
+    const countText = h("span", { class: "launch-count" });
+    const status = h("p", { class: "launch-status" }, spinner("launch-spin"), statusText, countText);
     const actions = h("div", { class: "launch-actions" });
     const blackout = h("div", { class: "blackout", "aria-hidden": "true" });
     const eyebrow = h("p", { class: "eyebrow launch-eyebrow", text: "Starting" });
-    const body = h("div", { class: "launch-body" }, eyebrow, title, status, detail, bar, actions);
+    const body = h("div", { class: "launch-body" }, eyebrow, title, status, actions);
     const el = h("div", { class: "launch is-starting" }, art, body, blackout);
 
     let phase: Phase = "starting";
@@ -111,23 +110,21 @@ const screen: ScreenDef = {
 
     const showBoot = (b: BootProgress) => {
       const text = bootText(b);
-      if (text) status.textContent = text;
+      if (text) statusText.textContent = text;
       const counted = (b.phase === "shaders" || b.phase === "precache") && b.total > 0;
-      detail.textContent = counted ? `${count(b.done)} of ${count(b.total)}` : "";
-      bar.classList.toggle("is-determinate", counted);
-      if (counted) bar.style.setProperty("--done", `${((b.done / b.total) * 100).toFixed(1)}%`);
+      countText.textContent = counted ? `${count(b.done)} of ${count(b.total)}` : "";
     };
 
     const fail = (message: string) => {
       clearTimeout(holdTimer);
-      detail.textContent = "";
+      countText.textContent = "";
       phase = "failed";
       setPaused("game", false);
       setPadSuspended(false);
       el.classList.remove("is-starting", "is-handoff", "is-playing");
       el.classList.add("is-failed");
       eyebrow.replaceChildren(icon("fail"), "Didn't start");
-      status.textContent = message;
+      statusText.textContent = message;
       actions.replaceChildren(
         button("Back to Home", { kind: "primary", size: "lg", primary: true, autofocus: true, onClick: () => void go("home", { transition: "back", reset: true }) }),
         button("Report a problem", { kind: "secondary", size: "lg", icon: "flag", onClick: () => void go("report", { params: { kind: "crash", note: message } }) }),
@@ -158,11 +155,11 @@ const screen: ScreenDef = {
     const handOver = async () => {
       if (ctx.signal.aborted || phase !== "starting") return;
       clearTimeout(holdTimer);
-      // Behind the game's window the dimming would play unseen: straight to "Playing" then.
+      // Behind the game's window the dimming would play unseen: straight to "running" then.
       if (!sawWindow) {
         phase = "handoff";
-        status.textContent = "Handing over to the game window…";
-        detail.textContent = "";
+        statusText.textContent = "Handing over to the game window…";
+        countText.textContent = "";
         el.classList.replace("is-starting", "is-handoff");
         await wait(reducedMotion() ? 0 : 1000);
         if (phase !== "handoff") return;
@@ -170,6 +167,8 @@ const screen: ScreenDef = {
       phase = "playing";
       el.classList.remove("is-starting", "is-handoff");
       el.classList.add("is-playing");
+      // "Running", not "Playing": after a HOLD_* time without news the launcher knows only that the
+      // process started, not that a frame is up.
       const playing = h(
         "div",
         { class: "playing" },

@@ -214,8 +214,8 @@ the output.
 |---|---|---|
 | `starting` | `frontend:`, `startup:` and `vulkan:` marks | Starting Guarana… |
 | `loading` | `boot:`, `core:`, `nup:`, `romfs:` marks | Loading the game… |
-| `shaders` | `shaders:` marks, `Boot progress: prepare` and `build` (done of total pipelines) | Loading shaders…, with the count and a bar |
-| `precache` | `Boot progress: warm` (done of total; the emulator's loading screen can skip it) | Preparing shaders ahead…, with the count and a bar |
+| `shaders` | `shaders:` marks, `Boot progress: prepare` and `build` (done of total pipelines) | Loading shaders…, with the count after it |
+| `precache` | `Boot progress: warm` (done of total; the emulator's loading screen can skip it) | Preparing shaders ahead…, with the count after it |
 | `launching` | `Boot progress: complete`, `guest:` marks | Starting the game… |
 | `first-frame` | the mark `frontend: first guest frame presented` (`GRenderWindow::OnFrameDisplayed`, after the first composite of a guest frame; the loading screen still covers it and fades out over 0.5 s) | |
 | `shown` | the mark `frontend: loading screen hidden, game shown` (the loading screen's fade is over and the render window is shown; also in the log of every session) | |
@@ -224,10 +224,10 @@ the output.
 Phases only move forward (a late `vulkan:` mark does not take `loading` back), `shaders` and
 `precache` can follow each other on progress lines only (a `shaders:` mark after the precache keeps
 `precache`), and an event is emitted only when the phase moves or the counts
-change. `done` and `total` are 0 outside `shaders` and `precache`; the bar is never shown without a
-real count.
+change. `done` and `total` are 0 outside `shaders` and `precache`; the count is never shown without a
+real one.
 
-The launch stage holds (`screens/launch.ts`) until the game is on screen, then shows "Playing":
+The launch stage holds (`screens/launch.ts`) until the game is on screen, then shows the title "is running":
 
 - at `shown` at once, and 1 s after `first-frame` if `shown` does not come;
 - at `window` it pauses its animations (the emulator's window covers it, and they would take GPU

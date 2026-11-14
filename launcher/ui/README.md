@@ -82,8 +82,10 @@ library, then "This PC": the Game Booster as a folded card that shows its curren
 controllers and setup cards. The share prompt, when offered, sits under the hero with a secondary
 Share button. First run is Scan and then Home in Auto mode, so the top bar says "Set up" without a
 step count; Scan's Continue unlocks once the device and the files are known, and Health finishes in
-the background. The launch stage shows the title, one status line with a spinner (launch_game sends
-no progress, so there is no bar), then the game's title followed by "is running" on black: the launcher knows the process
+the background. The launch stage shows the title and one status line with a spinner: the boot phase
+from `game://boot` in words, with the real shader count after it while shaders load (no bar). It
+holds until the game is on screen, then shows the game's title followed by "is running" on black;
+when it hands over after a hold time without news, the launcher knows only that the process
 started, not that the game has drawn a frame.
 
 Every listener is registered before the command that streams, and removed when its screen goes.
@@ -129,7 +131,7 @@ The night stages (Welcome, the game hero, Launch) stay dark in both themes.
 - One pause switch: while a game runs or the window is hidden, `html[data-paused]` stops every CSS animation and the pad loop stops; while the window is unfocused, ambient loops (`.ambient`) and pad polling stop.
 - Gamepad polling runs only with a pad connected and the window focused, and is suspended from `launch_game` until `game://exited`, so in-game presses never reach the launcher.
 - Screens are separate chunks loaded with `import()`; Home is preloaded while Scan runs; the library list and the Markdown renderer load when needed; the mock is its own chunk.
-- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title morph into the full-window launch stage, which follows the boot until the game is on screen; it dims to black over one second only when it hands over without the emulator's window having taken the foreground (otherwise the dimming would play unseen behind the game), and its animations pause as soon as that window is in front. The intro's logo flies into the top bar's mark when you press Set up.
+- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title (or only the pressed library row's title) morph into the full-window launch stage, which follows the boot until the game is on screen; it dims to black over one second only when it hands over without the emulator's window having taken the foreground (otherwise the dimming would play unseen behind the game), and its animations pause as soon as that window is in front. The intro's logo flies into the top bar's mark when you press Set up.
 - Reduced motion (the system setting or `?motion=reduce`): the intro shows its final frame, transitions are instant, nothing loops.
 
 ## Controllers and keyboard
