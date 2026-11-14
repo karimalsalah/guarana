@@ -1622,13 +1622,14 @@ void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
 }
 
 void MainWindow::ConnectWidgetEvents() {
+    // Guarana's reports go to its own GitHub forms through Help > Report a problem, with this
+    // game's session, not to upstream's compatibility site (CompatibilityReporting::Site).
     connect(game_list, &GameList::ReportCompatibilityRequested, this, [this](u64 program_id) {
         if (!report_session || report_session->program_id != program_id || emulation_running ||
             boot_in_progress || close_pending) {
             return;
         }
-        CompatibilityReporting::Dialog dialog(*report_session, this);
-        dialog.exec();
+        OnReportProblem();
     });
     connect(game_list, &GameList::BootGame, this, &MainWindow::BootGameFromList);
     connect(game_list, &GameList::GameChosen, this, &MainWindow::OnGameListLoadFile);
