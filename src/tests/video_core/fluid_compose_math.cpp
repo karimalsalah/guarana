@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cmath>
 
 #include <catch2/catch_test_macros.hpp>
@@ -95,8 +98,9 @@ TEST_CASE("The push constants match the shader's block", "[video_core][fluid_com
     STATIC_REQUIRE(constants.rect_y == 90);
     STATIC_REQUIRE(constants.rect_width == 2880);
     STATIC_REQUIRE(constants.rect_height == 1620);
-    // The layout is also pinned by static_asserts in the header: six 32-bit scalars.
-    STATIC_REQUIRE(sizeof(FCM::PushConstants) == 6 * sizeof(s32));
+    STATIC_REQUIRE(constants.filter_mode == 0);
+    // The layout is also pinned by static_asserts in the header: seven 32-bit scalars.
+    STATIC_REQUIRE(sizeof(FCM::PushConstants) == 7 * sizeof(s32));
 }
 
 TEST_CASE("Work groups cover the output", "[video_core][fluid_compose]") {
@@ -182,4 +186,118 @@ TEST_CASE("Each fallback returns the composite to the classic path", "[video_cor
     gate = ready;
     gate.worthwhile = false;
     REQUIRE_FALSE(FCM::Active(gate));
+}
+
+TEST_CASE("Compose filter selection defaults to bilinear", "[video_core][fluid_compose]") {
+    REQUIRE(FCM::FilterModeOf(nullptr) == 0U);
+    REQUIRE(FCM::FilterModeOf("") == 0U);
+    REQUIRE(FCM::FilterModeOf("false") == 0U);
+    REQUIRE(FCM::FilterModeOf("0") == 0U);
+    REQUIRE(FCM::FilterModeOf("1") == 1U);
+    REQUIRE(FCM::FilterModeOf("2") == 2U);
+    REQUIRE(FCM::FilterModeOf("7") == 2U);
+}
+
+TEST_CASE("Catmull-Rom five taps preserve constants and integer texels",
+          "[video_core][fluid_compose]") {
+    for (int x = 0; x <= 100; ++x) {
+        for (int y = 0; y <= 100; ++y) {
+            const f32 fx = static_cast<f32>(x) / 100.0f;
+            const f32 fy = static_cast<f32>(y) / 100.0f;
+            const auto cubic = FCM::CatmullRomWeights(fx);
+            REQUIRE(std::abs(cubic[0] + cubic[1] + cubic[2] + cubic[3] - 1.0f) < 1.0e-6f);
+            const auto axis = FCM::CatmullRomAxis(fx);
+            REQUIRE(axis.middle_offset >= 0.0f);
+            REQUIRE(axis.middle_offset <= 1.0f);
+            const auto weights = FCM::CatmullRomFiveWeights(fx, fy);
+            f32 sum = 0.0f;
+            for (const f32 weight : weights) {
+                sum += weight;
+            }
+            REQUIRE(std::abs(sum - 1.0f) < 1.0e-6f);
+            REQUIRE(std::abs(FCM::CatmullRomFiveSample({0.3f, 0.3f, 0.3f, 0.3f, 0.3f},
+                                                     fx, fy) - 0.3f) < 1.0e-6f);
+            const f32 clamped = FCM::CatmullRomFiveSample({0.1f, 0.9f, 0.2f, 0.8f, 0.5f}, fx, fy);
+            REQUIRE(clamped >= 0.1f);
+            REQUIRE(clamped <= 0.9f);
+        }
+    }
+    const auto integer = FCM::CatmullRomFiveWeights(0.0f, 0.0f);
+    constexpr std::array<f32, 5> expected{0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    REQUIRE(integer == expected);
+    REQUIRE(FCM::CatmullRomAxis(0.0f).middle_offset == 0.0f);
+    REQUIRE(FCM::CatmullRomFiveSample({0.0f, 1.0f, 0.4f, 0.0f, 1.0f}, 0.0f, 0.0f) == 0.4f);
+    // Negative outer weights would overshoot an isolated bright or dark centre.
+    REQUIRE(FCM::CatmullRomFiveSample({0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, 0.5f, 0.5f) == 1.0f);
+    REQUIRE(FCM::CatmullRomFiveSample({1.0f, 1.0f, 0.0f, 1.0f, 1.0f}, 0.5f, 0.5f) == 0.0f);
+}
+
+TEST_CASE("Catmull-Rom tap positions reconstruct a clamped synthetic image",
+          "[video_core][fluid_compose]") {
+    std::array<std::array<f32, 8>, 8> image{};
+    for (std::size_t y = 0; y < image.size(); ++y) {
+        for (std::size_t x = 0; x < image[y].size(); ++x) {
+            image[y][x] = static_cast<f32>(x) + 0.25f * static_cast<f32>(y);
+        }
+    }
+    const auto bilinear = [&image](FCM::CubicTap tap) {
+        const f32 x = tap.x - 0.5f;
+        const f32 y = tap.y - 0.5f;
+        const f32 base_x = std::floor(x);
+        const f32 base_y = std::floor(y);
+        const f32 fx = x - base_x;
+        const f32 fy = y - base_y;
+        const auto texel = [&image](s32 px, s32 py) {
+            return image[static_cast<std::size_t>(std::clamp(py, 0, 7))]
+                        [static_cast<std::size_t>(std::clamp(px, 0, 7))];
+        };
+        const s32 ix = static_cast<s32>(base_x);
+        const s32 iy = static_cast<s32>(base_y);
+        return (1.0f - fy) * ((1.0f - fx) * texel(ix, iy) + fx * texel(ix + 1, iy)) +
+               fy * ((1.0f - fx) * texel(ix, iy + 1) + fx * texel(ix + 1, iy + 1));
+    };
+    const auto reconstruct = [&bilinear](f32 x, f32 y) {
+        const auto positions = FCM::CatmullRomFivePositions(x, y);
+        std::array<f32, 5> taps{};
+        for (std::size_t i = 0; i < taps.size(); ++i) {
+            taps[i] = bilinear(positions[i]);
+        }
+        return FCM::CatmullRomFiveSample(taps, x - std::floor(x), y - std::floor(y));
+    };
+    for (std::size_t y = 0; y < image.size(); ++y) {
+        for (std::size_t x = 0; x < image[y].size(); ++x) {
+            REQUIRE(reconstruct(static_cast<f32>(x), static_cast<f32>(y)) == image[y][x]);
+        }
+    }
+    // Interior ramps tolerate the small bias from dropping the four corner taps.
+    for (int x = 0; x <= 100; ++x) {
+        for (int y = 0; y <= 100; ++y) {
+            const f32 px = 2.0f + static_cast<f32>(x) / 100.0f;
+            const f32 py = 3.0f + static_cast<f32>(y) / 100.0f;
+            REQUIRE(std::abs(reconstruct(px, py) - (px + 0.25f * py)) < 0.01f);
+        }
+    }
+    // Negative positions use floor, and the sampler clamps beyond all four edges.
+    constexpr auto edge = FCM::CatmullRomFivePositions(-0.5f, -0.5f);
+    STATIC_REQUIRE(edge[0].x == -1.5f);
+    REQUIRE(bilinear({-1.5f, -1.5f}) == image[0][0]);
+    REQUIRE(bilinear({10.5f, 10.5f}) == image[7][7]);
+}
+
+TEST_CASE("Contrast-adaptive sharpen strengthens detail without clipping",
+          "[video_core][fluid_compose]") {
+    REQUIRE(FCM::ContrastAdaptiveSharpen(0.6f, {0.4f, 0.4f, 0.4f, 0.4f}) > 0.6f);
+    REQUIRE(FCM::ContrastAdaptiveSharpen(0.4f, {0.6f, 0.6f, 0.6f, 0.6f}) < 0.4f);
+    for (int c = 0; c <= 100; ++c) {
+        const f32 centre = static_cast<f32>(c) / 100.0f;
+        REQUIRE(std::abs(FCM::ContrastAdaptiveSharpen(centre, {centre, centre, centre, centre}) -
+                         centre) < 1.0e-6f);
+        for (int n = 0; n <= 100; ++n) {
+            const f32 neighbour = static_cast<f32>(n) / 100.0f;
+            const f32 result = FCM::ContrastAdaptiveSharpen(
+                centre, {neighbour, neighbour, neighbour, neighbour});
+            REQUIRE(result >= 0.0f);
+            REQUIRE(result <= 1.0f);
+        }
+    }
 }
