@@ -11,6 +11,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -32,6 +34,12 @@ struct RendererDeviceInfo {
     std::string driver;
     std::string api;
     bool integrated{}; ///< An integrated GPU: it shares the package power budget with the CPU
+    /// Vulkan only, for bug reports: the API version, device-local memory, the device's
+    /// extensions and the features Lichii checks.
+    std::string api_version;
+    u64 device_local_memory{};
+    std::vector<std::string> extensions;
+    std::vector<std::pair<std::string, bool>> features;
 };
 
 enum class FrameGenState : u8 {

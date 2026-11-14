@@ -39,6 +39,21 @@ inline constexpr u64 LowMemoryKeptSpirvBytes = u64{96} << 20;
 /// Low memory mode's budget of prebuilt pipelines no draw has used, where only those are kept.
 inline constexpr size_t LowMemoryUnusedPrebuiltPipelines = 500;
 
+/// Without a kept limit (`kept` 0, Android), prebuilt pipelines no draw has used stay up to this
+/// budget (~0.9 GB of driver memory): evicting them throws the prebuild away (OoT: 1174 of 1346
+/// evicted on the title screen, 684 rebuilt in 10 s on entering the field).
+inline constexpr size_t MaxUnusedPrebuiltPipelines = 2000;
+
+/// Cached pipelines the background prebuild may hold built until a draw takes them: what the kept
+/// limit leaves past the `boot_built` pipelines the boot builds, or MaxUnusedPrebuiltPipelines
+/// without a kept limit.
+constexpr size_t PrebuildLimit(size_t kept, size_t boot_built) {
+    if (kept == 0) {
+        return MaxUnusedPrebuiltPipelines;
+    }
+    return kept - std::min(kept, boot_built);
+}
+
 /// Picks which unused pipelines to destroy so that at most `kept` stay built.
 /// @param last_uses Frame each candidate was last used (0 for a prebuilt one no draw has used).
 ///                  Candidates are built pipelines old enough to evict and not the current one.
