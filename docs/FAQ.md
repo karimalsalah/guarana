@@ -87,7 +87,7 @@ progress (`EDEN_NX2_FLUID=1`, experimental): see
 
 ### Which settings should I use?
 
-On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#get-it). On
+On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#quick-start). On
 anything else, nobody knows yet: measure with and without each switch
 ([BENCHMARKING.md](BENCHMARKING.md)) and share the result.
 
