@@ -4,6 +4,28 @@
 cmake_minimum_required(VERSION 3.31)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "macOS deployment target")
+# On Windows with clang-cl, CMake's Platform/Windows-Clang picks llvm-rc for
+# CMAKE_RC_COMPILER_INIT when it is on PATH and then routes every .rc through
+# "cmake -E cmake_llvm_rc" (clang preprocess, then the SDK rc.exe). That
+# wrapper's line-marker conversion misses clang's SDK-header markers, so
+# rc.exe floods RC2019 errors, fills the wrapper's output pipe and both
+# processes deadlock, hanging the build (CMake issue #20198). Our .rc files
+# are plain icon/manifest/version resources, so compile them with the SDK
+# rc.exe directly and skip the wrapper. Must run before project().
+if(WIN32 AND CMAKE_HOST_WIN32)
+    file(GLOB _guarana_sdk_rc_dirs
+        "C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64"
+        "C:/Program Files/Windows Kits/10/bin/10.*/x64")
+    list(SORT _guarana_sdk_rc_dirs ORDER DESCENDING)
+    find_program(GUARANA_RC_COMPILER NAMES rc.exe
+        HINTS "$ENV{WindowsSdkVerBinPath}x64" ${_guarana_sdk_rc_dirs})
+    if(GUARANA_RC_COMPILER)
+        set(CMAKE_RC_COMPILER "${GUARANA_RC_COMPILER}" CACHE FILEPATH
+            "Windows resource compiler" FORCE)
+        set(CMAKE_RC_COMPILER_INIT "${GUARANA_RC_COMPILER}")
+    endif()
+    unset(_guarana_sdk_rc_dirs)
+endif()
 project(lichii)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules")

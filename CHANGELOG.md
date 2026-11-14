@@ -25,6 +25,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- Windows clang-cl builds no longer hang on the resource step: the `.rc` files are compiled
+  with the SDK `rc.exe` directly instead of CMake's `cmake_llvm_rc` wrapper, whose clang
+  line-marker conversion left SDK-header markers unconverted, flooding `rc.exe` with RC2019
+  errors until its output pipe filled and the build deadlocked (CMake #20198).
 - The end of the boot shader load (`LoadPipelinesV2`) ran its last block twice: the async-boot
   completion, the boot-timing mark and the warm-only final save were duplicated by an earlier
   merge. The second `AsyncBoot::Done()` counted the load as finished one job early, so the
