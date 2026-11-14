@@ -68,6 +68,12 @@ enum class GplPart : u32 {
     Fragment = 1,
 };
 
+/// EDEN_NX2_GPL_OPTIMIZE_CACHED=1 (experiment, off by default): pipelines loaded from the shader
+/// cache, which their owner builds without shader jobs, queue the optimized link at their first
+/// draw (DecideOptimizedLinkAtDraw); without it they stay fast-linked until they are evicted and
+/// rebuilt. Logged once when set.
+bool GplOptimizeCachedEnabled();
+
 /// A cached shader library and the layout objects it was created with.
 struct GplLibrary {
     std::vector<vk::DescriptorSetLayout> set_layouts;
@@ -109,6 +115,9 @@ private:
 class GraphicsPipelineLibraryCache {
 public:
     using Builder = std::function<GplLibrary()>;
+
+    /// Reads (and logs) EDEN_NX2_GPL_OPTIMIZE_CACHED at startup.
+    GraphicsPipelineLibraryCache();
 
     /// The library for `key`: built with `build` on this thread when nobody has built it yet,
     /// waited for when another thread is building it. Null when its build failed (a failed key
@@ -154,6 +163,15 @@ public:
     void RecordReplacement() {
         replacements.fetch_add(1, std::memory_order_relaxed);
     }
+    /// A draw with a fast-linked pipeline that has no optimized link coming (one loaded from the
+    /// shader cache, without EDEN_NX2_GPL_OPTIMIZE_CACHED).
+    void RecordUnoptimizedDraw() {
+        unoptimized_draws.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// A draw queued the optimized link of such a pipeline (EDEN_NX2_GPL_OPTIMIZE_CACHED).
+    void RecordOptimizedLinkAtDraw() {
+        links_at_draw.fetch_add(1, std::memory_order_relaxed);
+    }
 
     /// Logs the counters of the last 10 s (Nx2Perf gpl), when there were any.
     void Report();
@@ -189,6 +207,8 @@ private:
     std::atomic<u64> held_ns{};
     std::atomic<u64> avoided_ns{};
     std::atomic<u64> fast_draws{};
+    std::atomic<u64> unoptimized_draws{};
+    std::atomic<u32> links_at_draw{};
     std::atomic<u32> replacements{};
     std::atomic<u32> fallbacks{};
     std::atomic<u32> logged_builds{};

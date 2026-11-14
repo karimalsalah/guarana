@@ -42,6 +42,7 @@
 #include "video_core/shader_handle_program.h"
 #include "video_core/shader_notify.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "common/settings.h"
@@ -810,6 +811,7 @@ GraphicsPipeline::GraphicsPipeline(
             const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
             Validate();
             if (library_cache) {
+                library_render_pass = render_pass;
                 MakeLibraryBuild(render_pass);
             } else {
                 MakePipeline(render_pass);
@@ -1979,6 +1981,47 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 library_cache->RecordReplacement();
             }
         });
+    }
+    if (library_cache && !optimized_bound) {
+        // A pipeline loaded from the shader cache was built by its owner, without shader jobs,
+        // so its build queued no optimized link (MakeLibraryBuild). Read what the build wrote only
+        // once it is done.
+        const bool built = IsBuilt();
+        const bool is_linked = built && linked.load(std::memory_order_relaxed);
+        const bool fast_link = device.CanFastLinkGraphicsLibraries();
+        const bool optimize = GplOptimizeEnabled();
+        const bool has_optimized_build = built && optimized_build.has_value();
+        const bool optimize_cached = GplOptimizeCachedEnabled();
+        const OptimizedLinkAtDraw link_at_draw = DecideOptimizedLinkAtDraw({
+            .built = built,
+            .linked = is_linked,
+            .fast_link = fast_link,
+            .optimize = optimize,
+            .has_optimized_build = has_optimized_build,
+            .optimize_cached = optimize_cached,
+            // Asked only when it would queue: the first call starts the pool and logs its size.
+            .has_pool = optimize_cached && is_linked && fast_link && optimize &&
+                        !has_optimized_build && GplOptimizeWorkers() != nullptr,
+        });
+        if (link_at_draw == OptimizedLinkAtDraw::Queue) {
+            // EDEN_NX2_GPL_OPTIMIZE_CACHED: the optimized link a build with jobs queues, on the
+            // same low-priority pool, swapped in at a later draw (above). Only pipelines that
+            // are drawn queue one, so unused prebuilt ones do not flood the pool.
+            auto link = [this, render_pass = library_render_pass] {
+                try {
+                    optimized_pipeline = LinkLibraries(render_pass, true, shader_libraries);
+                } catch (const vk::Exception& exception) {
+                    LOG_ERROR(Render_Vulkan, "Nx2Perf gpl: optimized link of {:016x} failed: {}",
+                              key.Hash(), exception.what());
+                    return;
+                }
+                optimized_ready.store(true, std::memory_order_release);
+            };
+            optimized_build.emplace(GplOptimizeWorkers(), std::move(link), true);
+            library_cache->RecordOptimizedLinkAtDraw();
+        } else if (link_at_draw == OptimizedLinkAtDraw::StaysFast) {
+            library_cache->RecordUnoptimizedDraw();
+        }
     }
     if (library_cache && !optimized_bound && (!IsBuilt() || linked.load(std::memory_order_relaxed))) {
         library_cache->RecordFastDraw();
