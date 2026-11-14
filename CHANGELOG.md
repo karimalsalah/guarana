@@ -25,6 +25,11 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- The end of the boot shader load (`LoadPipelinesV2`) ran its last block twice: the async-boot
+  completion, the boot-timing mark and the warm-only final save were duplicated by an earlier
+  merge. The second `AsyncBoot::Done()` counted the load as finished one job early, so the
+  async boot's driver-cache save could run while a pipeline build was still in flight (the
+  crash upstream #1685 guards against), and warm-only runs saved and reported twice.
 - Fix unit-test linking when the OpenGL shader backends are disabled.
 - The ingest shallow-checkout test clones with `--no-local` and a plain path instead of a `file://` URI, so it runs on Windows git (which rejects `file:///C:/...`) as well as Linux; the clone is still shallow.
 - Ocarina of Time on an Intel integrated GPU with a 120 Hz or 144 Hz display gets its locked set out of the box, with interpolated in-between frames ([#119](https://github.com/karimalsalah/guarana/issues/119)). The shipped `nx2_switches.txt` sets `EDEN_NX2_EXTRAPOLATE=1`, which turned `EDEN_NX2_FLUID_INTERP` off. A game's switch defaults now replace a value that only the shipped `nx2_switches.txt` set; the real environment and your own `nx2_switches.txt` still win. The 120 Hz and 144 Hz sets name `EDEN_NX2_EXTRAPOLATE=0`, the only value of any set that differs from the shipped file's. A value that a game's defaults or a switch file put in the environment no longer passes to the new version started after an in-app update, where it would count as yours, nor to a second game started in the same process. The `Switch defaults for this game and GPU` log line now lists the values it set, the ones it set over the shipped file (with that file's value) and the ones the player set. Not measured after the change; the 144 Hz set's own rows were measured with `EDEN_NX2_EXTRAPOLATE=0` ([docs/switches.md](docs/switches.md#defaults-for-ocarina-of-time-on-a-windows-integrated-gpu)).

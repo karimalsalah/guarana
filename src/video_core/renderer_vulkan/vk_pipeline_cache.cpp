@@ -2682,37 +2682,6 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             .left = warm_left,
         });
     }
-    if (async_boot) {
-        // The load is done submitting; the marker and lock go with the last build
-        LOG_INFO(Render_Vulkan,
-                 "Async boot: {} cached graphics pipelines build in the background while the "
-                 "game starts",
-                 async_graphics);
-        async_boot->Done();
-    }
-    Common::BootTiming::Mark("shaders: LoadPipelinesV2 done");
-    if (warm_only) {
-        // The process ends when this returns: wait for the background builds too (a stop cancels
-        // them) and save the driver's cache with them in it.
-        if (scheduled_prebuild) {
-            scheduled_prebuild->Batch().Wait();
-        }
-        if (!stop_loading.stop_requested()) {
-            serialization_thread.WaitForRequests();
-            if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
-                last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
-                                                                   vulkan_pipeline_cache,
-                                                                   CACHE_VERSION, true),
-                                      std::memory_order_relaxed);
-            }
-        }
-        ShaderWarm::ReportWarmOnly({
-            .built = build_at_boot,
-            .graphics_records = graphics_records,
-            .already_built = warm_already_built,
-            .left = warm_left,
-        });
-    }
 }
 
 void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_token stop_loading,
