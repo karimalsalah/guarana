@@ -36,6 +36,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Launcher setup: Scan no longer shows "Step 1 of 2" or a profile picker, since setup ends in Auto mode and neither did anything. Continue no longer waits for the health checks; they finish in the background.
 - Launcher Home: the game and Play come first, and Play is the only orange button. The library follows, then Game Booster, controllers and setup under "This PC", with the Booster folded to one line that shows its level. In Doctor, Copy diagnostics is a secondary button, so the fix buttons stand out.
 - Launcher launch: Playing from the library carries the game's title into the launch stage. The stage shows one status line instead of a looping placeholder bar, then the game's title followed by "is running" rather than "Playing", since the launcher cannot see the game's first frame. The welcome stage stops animating after its intro, and the hero art pulses three times on arrival.
+- The README opens with what Guarana is, the measured proof, three setup steps, device status, a 10-minute device test ([#55](https://github.com/karimalsalah/guarana/issues/55)) and how to contribute (`/claim`, good first issues).
 
 ### Fixed
 
