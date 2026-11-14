@@ -1215,7 +1215,7 @@ std::optional<u64> GraphicsEnvironment::DetachedSizeEstimate() const {
     u64 bytes = sizeof(*this) + code.capacity() * sizeof(u64);
     // Flat hash tables retain their capacity; allow for control bytes, alignment and spare space.
     const auto table_bytes = [](const auto& table) -> u64 {
-        return table.capacity() * (sizeof(typename std::decay_t<decltype(table)>::value_type) + 16) * 2;
+        return table.bucket_count() * (sizeof(typename std::decay_t<decltype(table)>::value_type) + 16) * 2;
     };
     bytes += table_bytes(texture_types) + table_bytes(texture_pixel_formats) +
              table_bytes(cbuf_values) + table_bytes(storage_pointer_types) +
