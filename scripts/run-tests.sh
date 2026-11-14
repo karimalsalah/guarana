@@ -4,6 +4,8 @@
 # Builds and runs the unit tests the way the linux-gcc job of .github/workflows/build-check.yml
 # does (GCC, Release, no PGO, BUILD_TESTING and LICHII_TESTS on, update checker on) in build/tests,
 # through scripts/build-linux.sh, then runs the Python tool tests. Exits 1 when anything fails.
+# The tests of tools/ci and tools/ingest run in .github/workflows/legacy.yml and
+# ingest-reports.yml, not here.
 #
 #   bash scripts/run-tests.sh [options] [-- extra cmake arguments]
 #
@@ -90,6 +92,13 @@ if [ $no_python = 0 ]; then
   run_python test_debug_mcp "$python" tools/nx2/test_debug_mcp.py
   run_python test_cache_metrics "$python" tools/nx2/test_cache_metrics.py
   run_python test_cache_bench "$python" tools/nx2/test_cache_bench.py
+  run_python test_trace_replay "$python" tools/nx2/test_trace_replay.py
+  run_python radv_offline_test_checks "$python" tools/nx2/radv_offline/test_checks.py
+  # tools-nx2.yml runs these on pull requests that change tools/nx2.
+  for test in test_bundle_index test_pipeline_stats test_shader_archive test_shader_containers \
+      test_shader_static test_shader_sweep; do
+    run_python "$test" "$python" "tools/nx2/$test.py"
+  done
   run_python test_bench "$python" -I tools/bench/test_bench.py
   cxx=${CXX:-g++}
   if command -v "$cxx" >/dev/null 2>&1; then

@@ -8,7 +8,8 @@ Builds and runs the unit tests the way CI's build-check does on Windows, then th
 Configures build\tests through scripts\build-windows.ps1 like the windows-clang-cl job of
 .github/workflows/build-check.yml (clang-cl, Release, no ThinLTO, no PGO, BUILD_TESTING and
 LICHII_TESTS on, update checker on), builds every target and runs ctest. Then it runs the Python
-tests of tools\nx2 and tools\bench, which need no build. Exits 1 when anything fails.
+tests of tools\nx2 and tools\bench, which need no build. Exits 1 when anything fails. The tests of
+tools\ci and tools\ingest run in .github/workflows/legacy.yml and ingest-reports.yml, not here.
 
     powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 
@@ -67,6 +68,14 @@ $PythonTests = @(
     @('tools\nx2\test_debug_mcp.py'),
     @('tools\nx2\test_cache_metrics.py'),
     @('tools\nx2\test_cache_bench.py'),
+    @('tools\nx2\test_trace_replay.py'),
+    @('tools\nx2\radv_offline\test_checks.py'),
+    @('tools\nx2\test_bundle_index.py'),
+    @('tools\nx2\test_pipeline_stats.py'),
+    @('tools\nx2\test_shader_archive.py'),
+    @('tools\nx2\test_shader_containers.py'),
+    @('tools\nx2\test_shader_static.py'),
+    @('tools\nx2\test_shader_sweep.py'),
     @('-I', 'tools\bench\test_bench.py')
 )
 

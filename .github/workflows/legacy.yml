@@ -67,6 +67,10 @@ on:
       - "tools/ingest/tests/fakes.py"
       - "tools/ingest/tests/yaml_subset.py"
       - "tools/nx2/frame_dump_index.py"
+      - "tools/nx2/test_*.py"
+      - "tools/nx2/radv_offline/test_checks.py"
+      - "scripts/run-tests.ps1"
+      - "scripts/run-tests.sh"
       # The README markers, the llms-full.txt sources and the sync guide (test_legacy.py,
       # test_build_llms_full.py, test_upstream_sync.py).
       - "README.md"
