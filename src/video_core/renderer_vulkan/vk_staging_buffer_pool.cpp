@@ -139,6 +139,30 @@ void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
     it->deferred = false;
 }
 
+void StagingBufferPool::RetainUntilCurrentTick(const StagingBufferRef& ref) {
+    const u64 tick = scheduler.CurrentTick();
+    if (ref.buffer == *stream_buffer) {
+        if (ref.mapped_span.empty()) {
+            return;
+        }
+        const size_t first = Region(static_cast<size_t>(ref.offset));
+        const size_t last = Region(static_cast<size_t>(ref.offset) + ref.mapped_span.size() - 1);
+        for (size_t region = first; region <= last; ++region) {
+            sync_ticks[region] = (std::max)(sync_ticks[region], tick);
+        }
+        return;
+    }
+    auto& entries = GetCache(ref.usage)[ref.log2_level].entries;
+    const auto it = std::find_if(entries.begin(), entries.end(), [&ref](const StagingBuffer& entry) {
+        return entry.index == ref.index;
+    });
+    ASSERT(it != entries.end());
+    // Deferred inputs remain pinned until their owner's FreeDeferred call.
+    if (!it->deferred) {
+        it->tick = (std::max)(it->tick, tick);
+    }
+}
+
 void StagingBufferPool::TickFrame() {
     current_delete_level = (current_delete_level + 1) % NUM_LEVELS;
 
