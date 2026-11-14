@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+- Shader translation ([#105](https://github.com/karimalsalah/guarana/issues/105)): on GPUs with hardware float atomic adds (Intel), a float atomic add left on a global address no longer calls an undefined function (invalid SPIR-V); and with `EDEN_NX2_GM` bit 2, a Vertex B program joined to a Vertex A one now searches its own buffers, not the ones at its old indices.
 
 ## [20.3.0] - 2026-11-14
 
