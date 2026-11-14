@@ -55,6 +55,7 @@ add_executable(tests
     core/gpu_dirty_memory.cpp
     core/memory_acquire.cpp
     core/builtin_patches.cpp
+    core/oot_render_scale.cpp
     core/builtin_font_glyphs.cpp
     core/system_test_context.h
     video_core/ampere_branch_modifiers.cpp
