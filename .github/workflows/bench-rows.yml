@@ -1,0 +1,54 @@
+name: bench-rows
+
+# Device data arrives as pull requests that add rows under tools/bench/results/
+# (tools/bench/CONTRIBUTING-bench.md). This job checks them the way a reviewer would and keeps the
+# benchmark tool tested. It needs Python only; build-check skips its builds for a pull request that
+# changes nothing but rows and RESULTS.md.
+#
+# It runs the pull request's own code, so it is triggered by pull_request only (no target-branch
+# event that would hand that code a write token), uses a read-only token and no secrets, and the
+# checkout keeps no credentials.
+
+on:
+  pull_request:
+    paths:
+      - "tools/bench/**"
+      - ".github/workflows/bench-rows.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/bench/**"
+      - ".github/workflows/bench-rows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-rows-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bench:
+    name: Benchmark tool tests and result rows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      # Types, valid and probe, the median of the three windows, the machine id, no home directory paths.
+      - name: Validate result rows
+        run: python3 -I tools/bench/bench.py validate tools/bench/results
+
+      # Each check runs even when the one before failed, so the log gives every reason at once.
+      - name: Check RESULTS.md is regenerated from the rows
+        if: success() || failure()
+        run: python3 -I tools/bench/bench.py table tools/bench/results --check tools/bench/RESULTS.md
+
+      - name: Test the benchmark tool
+        if: success() || failure()
+        run: python3 -I tools/bench/test_bench.py

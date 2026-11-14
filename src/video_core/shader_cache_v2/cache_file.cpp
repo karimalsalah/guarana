@@ -80,6 +80,16 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
     return log;
 }
 
+LogFile MapLogFile(const std::filesystem::path& file, const ForEach& for_each) {
+    LogFile log;
+    log.mapping = Common::FS::MappedFile{file};
+    if (!log.mapping.IsMapped()) {
+        return ReadLogFile(file, for_each);
+    }
+    log.parsed = ParseLog(log.mapping.Bytes(), for_each);
+    return log;
+}
+
 std::optional<std::vector<u8>> ReadRecordPayload(const std::filesystem::path& file,
                                                  RecordKind kind, u64 key, u64 offset,
                                                  u64 payload_size) {

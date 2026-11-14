@@ -403,6 +403,11 @@ pub fn decide(st: &mut AutopilotState, m: &SessionMetrics, c: &Ctx) -> Option<Ou
     if c.seconds < MIN_SESSION_SECS {
         return None;
     }
+    // Exit code 1 with no frame shown: a launcher session whose game did not start (a load error
+    // left open for a while). Nothing ran, so nothing is judged, the trial included.
+    if c.exit_code == 1 && m.shown.is_none() && m.game_fps.is_none() {
+        return None;
+    }
     let crashed = c.exit_code != 0;
     let fluid_setting = c.values.get("fluid_presenter").and_then(|v| v.as_bool()).unwrap_or(false);
     let fluid_session = m.fluid_active.unwrap_or(fluid_setting);
@@ -894,6 +899,17 @@ FluidLogStats: Fluid presenter (10 s): 91% of shown frames held one slot (0 real
         c.exit_code = 3;
         let o = decide(&mut st, &metrics(30.0, 80.0), &c);
         assert!(matches!(&o, Some(Outcome::Set { setting, to, .. }) if setting == "fluid_presenter" && *to == ToggleValue::Bool(false)));
+    }
+
+    #[test]
+    fn a_game_that_did_not_start_keeps_the_trial() {
+        let mut st = AutopilotState::default();
+        st.fluid_trial = Some(FluidTrial { base_within2: 60.0, base_spread: 1.5, base_fps: None, waited: 0 });
+        let mut c = ctx("auto", "1x", false);
+        c.values.insert("fluid_presenter".into(), true.into());
+        c.exit_code = 1;
+        assert_eq!(decide(&mut st, &SessionMetrics::default(), &c), None);
+        assert!(st.fluid_trial.is_some() && st.frozen.is_empty() && st.samples.is_empty());
     }
 
     #[test]

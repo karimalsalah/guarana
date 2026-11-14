@@ -470,7 +470,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     render_window->setWindowIcon(Guarana::AppIcon());
     UpdateWindowTitle();
 
-    show();
+    // A launcher session (--launcher-session, parsed with the other options below) shows the
+    // window only when the game goes fullscreen, so its desktop form never appears.
+    launcher_session = QApplication::arguments().contains(QStringLiteral("--launcher-session"));
+    if (!launcher_session) {
+        show();
+    }
+    // The launcher follows the boot on stdout until the game is on screen (Hidden, below).
+    Common::BootTiming::SetSessionOutput(launcher_session);
     Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
@@ -512,7 +519,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    // A launcher session never shows the game list, so it does not scan for it.
+    if (!launcher_session) {
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
     Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
 
     if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
@@ -602,12 +612,29 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
+    // A launcher session needs a game; without one the desktop window opens after all.
+    if (launcher_session &&
+        (!launch_params || !launch_params->launcher_session || launch_params->filepath.empty())) {
+        launcher_session = false;
+        Common::BootTiming::SetSessionOutput(false);
+        show();
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+
     if (launch_params) {
         auto const& lp = *launch_params;
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
-            ui->action_Fullscreen->setChecked(lp.fullscreen);
+            ui->action_Fullscreen->setChecked(lp.fullscreen || launcher_session);
+        }
+
+        // The launcher session plays in the main window, where the loading screen is, until the
+        // window closes. Separate windows would leave the loading screen in a hidden window.
+        if (launcher_session && !ui->action_Single_Window_Mode->isChecked()) {
+            launcher_session_separate_window = true;
+            ui->action_Single_Window_Mode->setChecked(true);
+            ToggleWindowMode();
         }
 
         if (!lp.filepath.empty()) {
@@ -1023,6 +1050,11 @@ void MainWindow::InitializeWidgets() {
         if (emulation_running) {
             render_window->show();
             render_window->setFocus();
+            Common::BootTiming::Mark("frontend: loading screen hidden, game shown");
+            // A launcher session's output ends here: the launcher has handed over to the game.
+            if (launcher_session) {
+                Common::BootTiming::SetSessionOutput(false);
+            }
         }
     });
 
@@ -1448,6 +1480,14 @@ void MainWindow::InitializeHotkeys() {
     };
 
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
+        // A launcher session has no desktop window to leave to: the key stops the game (with the
+        // usual confirmation) and the launcher comes back.
+        if (launcher_session) {
+            if (emulation_running) {
+                OnStopGame();
+            }
+            return;
+        }
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
             ui->action_Fullscreen->setChecked(false);
             ToggleFullscreen();
@@ -2215,9 +2255,16 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
         Common::BootTiming::Mark("boot: launch finished, the loading screen waits for the game");
-        if (!emulation_running && !close_pending) {
+        if (!emulation_running && !close_pending && !launcher_session) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
+        }
+        if (launcher_session && !emulation_running) {
+            // The game did not start (an error, or a dialog cancelled): back to the launcher.
+            launcher_session_failed = true;
+            if (!close_pending) {
+                QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
+            }
         }
         if (close_pending) {
             QTimer::singleShot(0, this, &QWidget::close);
@@ -2440,6 +2487,15 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     connect(QtCommon::emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
             &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+    if (launcher_session) {
+        // The launcher shows the shader counts too: one line per stage and whole percent.
+        connect(
+            QtCommon::emu_thread.get(), &EmuThread::LoadProgress, this,
+            [](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+                Common::BootTiming::SessionProgress(static_cast<int>(stage), value, total);
+            },
+            Qt::QueuedConnection);
+    }
 
     connect(
         QtCommon::emu_thread.get(), &EmuThread::ShaderCacheReloadStarted, this,
@@ -2565,7 +2621,8 @@ bool MainWindow::OnShutdownBegin() {
         return false;
     }
 
-    if (ui->action_Fullscreen->isChecked()) {
+    // A launcher session stays fullscreen until its window closes: no desktop window in between.
+    if (ui->action_Fullscreen->isChecked() && !launcher_session) {
         HideFullscreen();
     }
     if (guarana_toast != nullptr) {
@@ -2716,12 +2773,15 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
-        game_list_placeholder->show();
-    } else {
-        game_list->show();
+    // A launcher session closes instead (below), so its window stays black.
+    if (!launcher_session) {
+        if (game_list->IsEmpty()) {
+            game_list_placeholder->show();
+        } else {
+            game_list->show();
+        }
+        game_list->SetFilterFocus();
     }
-    game_list->SetFilterFocus();
     tas_label->clear();
     input_subsystem->GetTas()->Stop();
     OnTasStateChanged();
@@ -2765,7 +2825,10 @@ void MainWindow::OnEmulationStopped() {
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
     LOG_INFO(Frontend, "Emulation cleanup completed");
-    if (close_pending) {
+    if (launcher_session) {
+        // Back to the launcher rather than the game list, unless a restart boots again.
+        QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
+    } else if (close_pending) {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
         game_list->SetScanEnabled(true);
@@ -3618,6 +3681,11 @@ void MainWindow::OnRestartGame() {
     if (ConfirmShutdownGame()) {
         // Make a copy since ShutdownGame edits game_path
         const auto current_game = QString(current_game_path);
+        // ShutdownGame runs a nested event loop: the session must not end in it before the reboot.
+        launcher_session_rebooting = true;
+        SCOPE_EXIT {
+            launcher_session_rebooting = false;
+        };
         ShutdownGame();
         BootGame(current_game, ApplicationAppletParameters());
     }
@@ -3694,6 +3762,11 @@ void MainWindow::OnExecuteProgram(std::size_t program_index) {
     LOG_INFO(Frontend, "ExecuteProgram requested, program_index={} previous_program_id={:016X}",
              program_index, previous_program_id);
 
+    // As in OnRestartGame: a launcher session survives the nested event loop of ShutdownGame.
+    launcher_session_rebooting = true;
+    SCOPE_EXIT {
+        launcher_session_rebooting = false;
+    };
     ShutdownGame();
 
     auto params = ApplicationAppletParameters();
@@ -3810,6 +3883,11 @@ void MainWindow::ToggleFullscreen() {
     if (!emulation_running) {
         return;
     }
+    if (launcher_session && !ui->action_Fullscreen->isChecked()) {
+        // A launcher session has no desktop window to go back to: it stays fullscreen.
+        ui->action_Fullscreen->setChecked(true);
+        return;
+    }
     if (ui->action_Fullscreen->isChecked()) {
         ShowFullscreen();
     } else {
@@ -3855,12 +3933,21 @@ void MainWindow::ShowFullscreen() {
     };
 
     if (ui->action_Single_Window_Mode->isChecked()) {
-        UISettings::values.geometry = saveGeometry();
+        // A launcher session never has the desktop geometry: the one restored at start stays.
+        if (!launcher_session) {
+            UISettings::values.geometry = saveGeometry();
+        }
 
         ui->menubar->hide();
         statusBar()->hide();
 
         show_fullscreen(this);
+        if (launcher_session) {
+            // First shown seconds after the launcher started this process: ask for the foreground
+            // (the launcher allows it) so the game does not open behind the launcher.
+            raise();
+            activateWindow();
+        }
         ShowMenuHintToast();
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
@@ -3878,7 +3965,9 @@ void MainWindow::ShowMenuHintToast() {
     // After the window has settled into fullscreen
     QTimer::singleShot(600, this, [this] {
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
-            guarana_toast->ShowMessage(Guarana::MenuHintText());
+            // A launcher session has no menu: its hint names the way back to the launcher.
+            guarana_toast->ShowMessage(launcher_session ? Guarana::LauncherSessionHintText()
+                                                        : Guarana::MenuHintText());
         }
     });
 }
@@ -4619,7 +4708,8 @@ void MainWindow::OnToggleFilterBar() {
 }
 
 void MainWindow::OnToggleStatusBar() {
-    statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
+    // A launcher session never shows the status bar; the setting is kept for the desktop window.
+    statusBar()->setVisible(!launcher_session && ui->action_Show_Status_Bar->isChecked());
 }
 
 void MainWindow::OnTogglePerfOverlay() {
@@ -6032,6 +6122,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     LOG_INFO(Frontend, "Closing frontend after emulation cleanup");
 
+    if (launcher_session_separate_window) {
+        // The launcher session borrowed single window mode: save the player's own.
+        ui->action_Single_Window_Mode->setChecked(false);
+    }
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
     UISettings::SaveWindowState();
@@ -6050,7 +6144,30 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     QtCommon::system->HIDCore().UnloadInputDevices();
     Network::Shutdown();
 
+    if (launcher_session) {
+        // Hand back to the launcher, which waits for this process. The loop is ended here because
+        // the window may never have been shown (a game that did not start), so closing it would
+        // not end the application on its own.
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        LOG_INFO(Frontend, "Launcher session over, exiting with {}", *launcher_session_exit);
+        QCoreApplication::exit(*launcher_session_exit);
+    }
+
     QWidget::closeEvent(event);
+}
+
+void MainWindow::EndLauncherSession() {
+    // A restart or a sub-program stops the emulation and boots again; wait for that to settle.
+    if (launcher_session_exit || launcher_session_rebooting || emulation_running ||
+        boot_in_progress) {
+        return;
+    }
+    // closeEvent ends the application. A window Qt closes without that event (one it never
+    // created natively) must not leave a process the launcher waits on.
+    if (close() && !launcher_session_exit) {
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        QCoreApplication::exit(*launcher_session_exit);
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {

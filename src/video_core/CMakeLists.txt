@@ -150,6 +150,8 @@ add_library(video_core STATIC
     nx2_cmdpage_diag.h
     nx2_debug_control.cpp
     nx2_debug_control.h
+    nx2_shown_frames.cpp
+    nx2_shown_frames.h
     nx2_fast_draw.cpp
     nx2_fast_draw.h
     nx2_profile.h
@@ -283,6 +285,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_present_manager.cpp
     renderer_vulkan/vk_present_manager.h
     renderer_vulkan/vk_present_predict.cpp
+    renderer_vulkan/vk_shown_capture.cpp
+    renderer_vulkan/vk_shown_capture.h
     renderer_vulkan/vk_query_cache.cpp
     renderer_vulkan/vk_query_cache.h
     renderer_vulkan/vk_rasterizer.cpp
