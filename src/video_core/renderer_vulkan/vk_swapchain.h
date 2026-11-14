@@ -12,6 +12,7 @@
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/present_trace.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Layout {
@@ -54,7 +55,8 @@ public:
     /// acquired (out of date) and the swapchain has to be recreated first.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
     /// `pace`: false skips the wait for the image's last GPU tick and the frame pacing sleep.
-    bool AcquireNextImage(bool may_flush = true, bool pace = true);
+    bool AcquireNextImage(bool may_flush = true, bool pace = true,
+                          PresentTrace* trace = nullptr);
 
     /// Presents the rendered image to the swapchain.
     void Present(VkSemaphore render_semaphore);

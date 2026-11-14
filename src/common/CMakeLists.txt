@@ -63,6 +63,7 @@ add_library(
     elf.h
     error.cpp
     error.h
+    event_ring.h
     event_wait.h
     fiber.cpp
     fiber.h

@@ -291,6 +291,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_cache_v2.cpp
     renderer_vulkan/vk_shader_cache_v2.h
     renderer_vulkan/vk_present_manager.cpp
+    renderer_vulkan/present_trace.h
     renderer_vulkan/vk_present_manager.h
     renderer_vulkan/vk_present_predict.cpp
     renderer_vulkan/vk_shown_capture.cpp

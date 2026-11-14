@@ -19,6 +19,7 @@
 #endif
 
 #include "common/display_hdr.h"
+#include "common/event_ring.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -321,10 +322,17 @@ bool Swapchain::Create(
     return true;
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush, bool pace) {
+bool Swapchain::AcquireNextImage(bool may_flush, bool pace, PresentTrace* trace) {
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);
+    if (trace != nullptr && result != VK_SUCCESS) {
+        trace->Record(1, {static_cast<u64>(static_cast<s64>(result)), StorageGeneration(),
+                          image_index, frame_index}, "acquire");
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            trace->Record(2, {StorageGeneration(), 0, 0, 0}, "surface-lost");
+        }
+    }
     switch (result) {
     case VK_SUCCESS:
         break;

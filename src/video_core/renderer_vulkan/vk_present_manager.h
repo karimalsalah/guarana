@@ -15,8 +15,10 @@
 #include <boost/container/deque.hpp>
 
 #include "common/common_types.h"
+#include "common/event_ring.h"
 #include "common/polyfill_thread.h"
 #include "video_core/renderer_vulkan/fluid_compose_math.h"
+#include "video_core/renderer_vulkan/present_trace.h"
 #include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
@@ -343,7 +345,8 @@ private:
     void SubmitFluidCompose(Frame* frame, VkExtent2D extent, VkSemaphore render_semaphore);
 
     // Returns false after discarding the frame if creation or transfer cannot proceed.
-    bool RecreateSwapchain(Frame* frame);
+    bool RecreateSwapchain(Frame* frame, const char* reason);
+    void DumpRecreateTrace(const char* reason, bool failure = true) const;
 
     /// Caches a copy, blit, or unsupported transfer decision for this frame and active swapchain.
     void ConfigureTransfer(const Frame* frame);
@@ -360,6 +363,9 @@ private:
                    std::chrono::steady_clock::time_point now);
 
 private:
+    std::unique_ptr<PresentTrace> recreate_trace;
+    std::unique_ptr<PresentDispatchTrace> dispatch_trace;
+    bool recreate_trace_deferred{}; ///< Coalesce consecutive zero-extent deferrals.
     const vk::Instance& instance;
     Core::Frontend::EmuWindow& render_window;
     const Device& device;
