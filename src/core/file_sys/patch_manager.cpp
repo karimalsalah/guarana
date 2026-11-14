@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -24,6 +25,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/ips_layer.h"
+#include "core/file_sys/oot_render_scale.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
@@ -833,6 +835,15 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
 
     const auto disabled = GetDisabledAddons();
     std::vector<std::string_view> replaced;
+    // EDEN_NX2_OOT_RENDER_SCALE (oot_render_scale.h): read once per module, off unless 75 or 50.
+    const auto render_scale =
+        OotRenderScale::ParseRequest(std::getenv("EDEN_NX2_OOT_RENDER_SCALE"));
+#ifdef EGLANTINE_STREAMLINE
+    const bool dlss_scale_in_use = Settings::OcarinaDlssRenderScale().has_value();
+#else
+    constexpr bool dlss_scale_in_use = false;
+#endif
+    bool max_resolution_applied = false;
     for (const auto& patch : BUILTIN_PATCHES) {
         if (patch.title_id != title_id || patch.module != name) {
             continue;
@@ -846,6 +857,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                      patch.name);
             continue;
         }
+        bool render_scale_by_switch = false;
         if (patch.dlss_quality) {
 #ifdef EGLANTINE_STREAMLINE
             const bool wanted = Settings::OcarinaDlssRenderScale() == patch.dlss_quality &&
@@ -854,7 +866,17 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
 #else
             constexpr bool wanted = false;
 #endif
-            if (!wanted) {
+            if (render_scale == OotRenderScale::Request::Invalid &&
+                patch.dlss_quality == Settings::NvidiaDlssQuality::Performance) {
+                // Once per module: the three records share the request.
+                LOG_WARNING(Loader,
+                            "    - EDEN_NX2_OOT_RENDER_SCALE is neither 75 nor 50: ignored");
+            }
+            render_scale_by_switch =
+                !wanted && OotRenderScale::WantedBySwitch(render_scale, *patch.dlss_quality,
+                                                          max_resolution_applied,
+                                                          dlss_scale_in_use);
+            if (!wanted && !render_scale_by_switch) {
                 continue;
             }
         }
@@ -943,7 +965,16 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (!patch.replaces.empty()) {
             replaced.push_back(patch.replaces);
         }
-        if (patch.dlss_quality) {
+        if (patch.name == MAX_RESOLUTION_NAME) {
+            max_resolution_applied = true;
+        }
+        if (render_scale_by_switch) {
+            // The render size only: the applied-scale state would turn FSR on and the network
+            // bypass off.
+            LOG_INFO(Loader,
+                     "    - EDEN_NX2_OOT_RENDER_SCALE: the game draws at {}% of its output",
+                     OotRenderScale::Percent(render_scale));
+        } else if (patch.dlss_quality) {
             Settings::SetAppliedOcarinaRenderScale(patch.dlss_quality);
         }
     }

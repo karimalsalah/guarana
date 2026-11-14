@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -834,4 +835,83 @@ TEST_CASE("Built-in DLSS render scale follows the NVIDIA DLSS quality", "[patch_
     for (const auto& patch : context.Manager().GetPatches()) {
         CHECK(patch.name.find("render scale") == std::string::npos);
     }
+}
+
+TEST_CASE("EDEN_NX2_OOT_RENDER_SCALE applies the render scale next to Max Resolution",
+          "[patch_manager]") {
+    constexpr size_t ScaleOffset = sizeof(Loader::NSOHeader) + 0x806420;
+    constexpr u32 ScaleOne = 0x52A7F009;
+    constexpr u32 ScaleThreeQuarters = 0x52A7E809;
+    constexpr u32 ScaleHalf = 0x52A7E009;
+    struct Guard {
+        static void SetSwitch(const char* value) {
+#ifdef _WIN32
+            static_cast<void>(_putenv_s("EDEN_NX2_OOT_RENDER_SCALE", value));
+#else
+            static_cast<void>(setenv("EDEN_NX2_OOT_RENDER_SCALE", value, 1));
+#endif
+        }
+        ~Guard() {
+            SetSwitch("");
+            Settings::values.nvidia_dlss.SetValue(false);
+            Settings::values.nvidia_dlss_quality.SetValue(Settings::NvidiaDlssQuality::Automatic);
+            Settings::values.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
+        }
+    } guard;
+    PatchManagerTestContext context;
+    auto nso = MakeMain(OcarinaBuildId, TbzInstruction);
+    nso.resize(ScaleOffset + sizeof(u32));
+    std::memcpy(nso.data() + ScaleOffset, &ScaleOne, sizeof(ScaleOne));
+    const auto patch = [&](const char* value) {
+        Guard::SetSwitch(value);
+        return context.Manager().PatchNSO(nso, "main");
+    };
+
+    // Off: unset (an empty value), 0, false, and any number that is not a scale.
+    for (const char* value : {"", "0", "false", "1", "100", "74"}) {
+        const auto patched = patch(value);
+        CHECK(WordAt(patched, ScaleOffset) == ScaleOne);
+        CHECK(WordAt(patched) == BranchInstruction);
+        CHECK_FALSE(Settings::AppliedOcarinaRenderScale());
+    }
+
+    // 75 and 50: the record of that scale, Max Resolution still applied, and the applied-scale
+    // state (FSR on, bypass off) not set.
+    auto patched = patch("75");
+    CHECK(WordAt(patched, ScaleOffset) == ScaleThreeQuarters);
+    CHECK(WordAt(patched) == BranchInstruction);
+    CHECK_FALSE(Settings::AppliedOcarinaRenderScale());
+    patched = patch("50");
+    CHECK(WordAt(patched, ScaleOffset) == ScaleHalf);
+    CHECK(WordAt(patched) == BranchInstruction);
+    CHECK_FALSE(Settings::AppliedOcarinaRenderScale());
+
+    // Another module and another title are not touched.
+    Guard::SetSwitch("75");
+    CHECK(WordAt(context.Manager().PatchNSO(nso, "sdk"), ScaleOffset) == ScaleOne);
+    CHECK(WordAt(context.Manager(OtherTitleId).PatchNSO(nso, "main"), ScaleOffset) == ScaleOne);
+
+    // Without the Max Resolution patch there is no fixed-scale path to scale.
+    SECTION("Max Resolution disabled in Add-Ons") {
+        Settings::values.disabled_addons[OcarinaTitleId] = {std::string{MaxResolution}};
+        CHECK(WordAt(patch("75"), ScaleOffset) == ScaleOne);
+    }
+    SECTION("Max Resolution skipped for another original word") {
+        auto other = MakeMain(OcarinaBuildId, NopInstruction);
+        other.resize(ScaleOffset + sizeof(u32));
+        std::memcpy(other.data() + ScaleOffset, &ScaleOne, sizeof(ScaleOne));
+        Guard::SetSwitch("75");
+        CHECK(WordAt(context.Manager().PatchNSO(other, "main"), ScaleOffset) == ScaleOne);
+    }
+
+#ifdef EGLANTINE_STREAMLINE
+    // With DLSS choosing a render scale the DLSS record wins, and sets the applied-scale state.
+    SECTION("NVIDIA DLSS render scale wins") {
+        Settings::values.nvidia_dlss.SetValue(true);
+        Settings::values.use_docked_mode.SetValue(Settings::ConsoleMode::Docked);
+        Settings::values.nvidia_dlss_quality.SetValue(Settings::NvidiaDlssQuality::Balanced);
+        CHECK(WordAt(patch("50"), ScaleOffset) == 0x52A7EBE9);
+        CHECK(Settings::AppliedOcarinaRenderScale() == Settings::NvidiaDlssQuality::Balanced);
+    }
+#endif
 }
