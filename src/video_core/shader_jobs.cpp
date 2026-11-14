@@ -33,6 +33,11 @@ struct ShaderJobState {
     ShaderJob work;
     std::shared_ptr<ShaderJobBatchState> batch;
     std::exception_ptr exception;
+    /// The priority of the thread running the stage now (EDEN_NX2_WAIT_BOOST); has a lock of its
+    /// own, held by no other code while it calls out. Attached by a worker before it runs a stage,
+    /// detached by RunCpu or RunDriver before the job is handed on or finished, so at most one
+    /// worker is attached at a time.
+    StageBoost boost;
     ShaderJobPriority queued_priority{}; ///< Which queue holds the live entry
     u64 held_bytes{};                    ///< Counted in the in-flight bytes now
     std::optional<u64> reported_cpu_bytes;
@@ -82,6 +87,36 @@ void LogFailure(const std::exception_ptr& exception, const char* stage) {
         LOG_ERROR(Render_Vulkan, "Shader job {} stage failed with an unknown exception", stage);
     }
 }
+
+/// The calling thread as a PriorityTarget; made by the thread itself.
+class ThreadTarget final : public PriorityTarget {
+public:
+    ThreadTarget() : token{Common::OpenCurrentThreadPriorityToken()} {}
+
+    ~ThreadTarget() override {
+        Common::CloseThreadPriorityToken(token);
+    }
+
+    ThreadTarget(const ThreadTarget&) = delete;
+    ThreadTarget& operator=(const ThreadTarget&) = delete;
+
+    bool Valid() const {
+        return token != 0;
+    }
+
+    bool Set(Common::ThreadPriority priority) override {
+        const bool set{Common::SetThreadPriorityOf(token, priority)};
+        if (!set && !refusal_logged.exchange(true, std::memory_order_relaxed)) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_WAIT_BOOST: the host refused to change a shader "
+                                    "worker's priority; no job is raised");
+        }
+        return set;
+    }
+
+private:
+    inline static std::atomic<bool> refusal_logged{};
+    Common::ThreadPriorityToken token;
+};
 
 } // Anonymous namespace
 
@@ -158,7 +193,8 @@ u64 DefaultShaderJobBudget() {
 
 ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
     : budget{config.memory_budget != 0 ? config.memory_budget : DefaultShaderJobBudget()},
-      background_aging{config.background_aging} {
+      background_aging{config.background_aging}, wait_boost{config.wait_boost},
+      make_priority_target{config.priority_target} {
     stats.budget_bytes = budget;
     const auto start{[this](std::string name, bool driver) {
         threads.emplace_back([this, name = std::move(name), driver] {
@@ -214,30 +250,46 @@ ShaderJobBatch ShaderJobScheduler::CreateBatch() {
 
 void ShaderJobScheduler::Promote(const ShaderJobHandle& handle, ShaderJobPriority priority) {
     ShaderJobState& job{*handle.state};
-    std::scoped_lock lock{mutex};
-    const ShaderJobStatus status{job.status.load()};
-    const ShaderJobPriority old_priority{job.priority.load()};
-    if (IsFinal(status) || Index(priority) >= Index(old_priority)) {
-        return;
+    {
+        std::scoped_lock lock{mutex};
+        const ShaderJobStatus status{job.status.load()};
+        const ShaderJobPriority old_priority{job.priority.load()};
+        if (IsFinal(status) || Index(priority) >= Index(old_priority)) {
+            return;
+        }
+        auto& from{stats.priorities[Index(old_priority)]};
+        auto& to{stats.priorities[Index(priority)]};
+        if (IsQueued(status)) {
+            --from.queued;
+            ++to.queued;
+        } else {
+            --from.running;
+            ++to.running;
+        }
+        job.priority = priority;
+        if (IsQueued(status)) {
+            const bool driver{status == ShaderJobStatus::DriverQueued};
+            job.queued_priority = priority;
+            (driver ? driver_queue : cpu_queue)[Index(priority)].push_back(handle.state);
+            // A worker the budget holds back may now take it.
+            (driver ? driver_condition : cpu_condition).notify_all();
+            return;
+        }
+        // Running: a draw waits for it now.
+        if (!wait_boost || priority != ShaderJobPriority::NeedNow) {
+            return;
+        }
     }
-    auto& from{stats.priorities[Index(old_priority)]};
-    auto& to{stats.priorities[Index(priority)]};
-    if (IsQueued(status)) {
-        --from.queued;
-        ++to.queued;
-    } else {
-        --from.running;
-        ++to.running;
+    // Outside the scheduler's lock, as it is a system call. A stage that ended meanwhile is left
+    // alone, and one that is about to start finds the priority NeedNow and raises itself.
+    RaiseRunning(job);
+}
+
+void ShaderJobScheduler::RaiseRunning(ShaderJobState& job) {
+    if (job.boost.Raise() && wait_boosts.fetch_add(1, std::memory_order_relaxed) == 0) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_WAIT_BOOST: a draw waits for a running shader job; its "
+                                "thread runs at normal priority until the job ends");
     }
-    job.priority = priority;
-    if (!IsQueued(status)) {
-        return;
-    }
-    const bool driver{status == ShaderJobStatus::DriverQueued};
-    job.queued_priority = priority;
-    (driver ? driver_queue : cpu_queue)[Index(priority)].push_back(handle.state);
-    // A worker the budget holds back may now take it.
-    (driver ? driver_condition : cpu_condition).notify_all();
 }
 
 void ShaderJobScheduler::Cancel(const ShaderJobHandle& handle) {
@@ -313,12 +365,31 @@ void ShaderJobScheduler::Shutdown() {
 
 ShaderJobStats ShaderJobScheduler::Stats() const {
     std::scoped_lock lock{mutex};
-    return stats;
+    ShaderJobStats result{stats};
+    result.wait_boosts = wait_boosts.load(std::memory_order_relaxed);
+    return result;
+}
+
+std::unique_ptr<PriorityTarget> ShaderJobScheduler::MakePriorityTarget() const {
+    if (!wait_boost) {
+        return nullptr;
+    }
+    if (make_priority_target) {
+        return make_priority_target();
+    }
+    auto target{std::make_unique<ThreadTarget>()};
+    // Where another thread's priority cannot be set, there is nothing to raise.
+    if (!target->Valid()) {
+        return nullptr;
+    }
+    return target;
 }
 
 void ShaderJobScheduler::Worker(bool driver) {
     // EDEN_NX2_HYBRID: the thread starts on EcoQoS; a job a draw waits for runs without it.
     bool eco = true;
+    // EDEN_NX2_WAIT_BOOST: how a draw's wait reaches this thread's priority.
+    const std::unique_ptr<PriorityTarget> target{MakePriorityTarget()};
     std::unique_lock lock{mutex};
     while (true) {
         JobPtr job;
@@ -337,11 +408,19 @@ void ShaderJobScheduler::Worker(bool driver) {
                 eco = want_eco;
             }
         }
+        if (target) {
+            job->boost.Attach(*target, Common::ThreadPriority::Low);
+            // A draw may have promoted the job after StartStage, before Attach.
+            if (job->priority.load() == ShaderJobPriority::NeedNow) {
+                RaiseRunning(*job);
+            }
+        }
         if (driver) {
             RunDriver(job);
         } else {
             RunCpu(job, false);
         }
+        // RunCpu and RunDriver already detached the boost and restored the priority.
         job.reset();
         lock.lock();
     }
@@ -423,6 +502,9 @@ void ShaderJobScheduler::RunCpu(const JobPtr& job, bool run_driver_here) {
     }
     // The CPU stage's captures go before the driver stage can start.
     job->work.cpu = {};
+    // EDEN_NX2_WAIT_BOOST: this worker is back to its own priority before the job can reach a
+    // driver worker, which attaches to the same job.
+    job->boost.Detach();
     if (exception) {
         LogFailure(exception, "CPU");
     }
@@ -476,6 +558,8 @@ void ShaderJobScheduler::RunDriver(const JobPtr& job) {
         exception = std::current_exception();
     }
     job->work.driver = {};
+    // EDEN_NX2_WAIT_BOOST: back to the worker's own priority before the job turns Done.
+    job->boost.Detach();
     if (exception) {
         LogFailure(exception, "driver");
     }

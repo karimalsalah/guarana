@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -17,6 +18,7 @@
 
 #include "common/common_types.h"
 #include "common/unique_function.h"
+#include "video_core/shader_job_boost.h"
 
 namespace VideoCommon {
 
@@ -123,6 +125,8 @@ struct ShaderJobStats {
     /// Over the CPU stages that reported their size: their estimates and the reported sizes.
     u64 estimated_cpu_bytes{};
     u64 reported_cpu_bytes{};
+    /// EDEN_NX2_WAIT_BOOST: stages whose worker thread a draw's wait raised to normal priority.
+    u64 wait_boosts{};
 };
 
 struct ShaderJobConfig {
@@ -135,6 +139,12 @@ struct ShaderJobConfig {
     std::chrono::nanoseconds background_aging{std::chrono::seconds{2}};
     /// Worker threads are named <name>Cpu and <name>Driver.
     std::string name{"ShaderJobs"};
+    /// EDEN_NX2_WAIT_BOOST: a running stage that a draw waits for gets its worker thread raised
+    /// from below normal to normal priority until the stage ends.
+    bool wait_boost{};
+    /// With wait_boost: the target of each worker's priority, made on the worker's own thread, by
+    /// any worker at once. Without it, the thread itself (none where priorities cannot be set).
+    std::function<std::unique_ptr<PriorityTarget>()> priority_target;
 };
 
 /// An eighth of physical memory, at least 512 MiB.
@@ -158,6 +168,7 @@ public:
     ShaderJobBatch CreateBatch();
 
     /// Raises a job's priority, wherever it is queued or running. A lower priority is ignored.
+    /// With wait_boost, a running stage promoted to NeedNow runs at normal thread priority.
     void Promote(const ShaderJobHandle& handle, ShaderJobPriority priority);
 
     /// A queued job is cancelled at once. A running CPU stage sees StopRequested() and no driver
@@ -191,9 +202,14 @@ private:
     void Finish(ShaderJobState& job, ShaderJobStatus status, std::vector<ShaderJob>& dead);
     void ReleaseBytes(ShaderJobState& job);
     void WakeHeldWorkers();
+    std::unique_ptr<PriorityTarget> MakePriorityTarget() const;
+    void RaiseRunning(ShaderJobState& job);
 
     const u64 budget;
     const std::chrono::nanoseconds background_aging;
+    const bool wait_boost;
+    const std::function<std::unique_ptr<PriorityTarget>()> make_priority_target;
+    std::atomic<u64> wait_boosts{};
 
     mutable std::mutex mutex;
     std::condition_variable cpu_condition;

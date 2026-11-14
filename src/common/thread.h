@@ -12,6 +12,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <thread>
 #include "common/common_types.h"
@@ -132,6 +133,19 @@ enum class ThreadPlacement : u32 {
 };
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
+
+/// Names a thread so that another thread can change its priority. 0 is no thread.
+using ThreadPriorityToken = std::uintptr_t;
+
+/// Windows: a handle to the calling thread that may set its priority. Linux: its thread id. 0 on
+/// other hosts, where another thread's priority cannot be set. Close it with
+/// CloseThreadPriorityToken once the thread no longer needs it.
+ThreadPriorityToken OpenCurrentThreadPriorityToken();
+void CloseThreadPriorityToken(ThreadPriorityToken token);
+/// SetCurrentThreadPriority for the thread `token` names. On Linux, lowering a thread's nice value
+/// needs CAP_SYS_NICE or a RLIMIT_NICE that allows it.
+/// @return True when the priority was set; false for token 0, or when the host refused.
+bool SetThreadPriorityOf(ThreadPriorityToken token, ThreadPriority priority);
 void SetCurrentThreadName(const char* name);
 /// Guest cores and latency threads (present, fencing, timing, vsync, snapshot). With
 /// EDEN_NX2_HYBRID on a four-P CPU this is the performance and efficiency cores; see
