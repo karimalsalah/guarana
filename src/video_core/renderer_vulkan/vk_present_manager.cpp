@@ -33,6 +33,7 @@
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
+#include "video_core/renderer_vulkan/fluid_compose_math.h"
 #include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -331,6 +332,11 @@ u32 FluidMode() {
         const u32 parsed = value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
         return parsed == 0 ? 0U : (parsed == 2 ? 2U : 1U);
     }();
+    return mode;
+}
+
+u32 FluidComposeMode() {
+    static const u32 mode = FluidComposeMath::ModeOf(std::getenv("EDEN_NX2_FLUID_COMPOSE"));
     return mode;
 }
 

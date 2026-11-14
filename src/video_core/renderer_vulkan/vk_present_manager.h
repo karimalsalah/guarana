@@ -39,6 +39,11 @@ class Swapchain;
 /// the real frame itself is shown when it is on time and predictions reach less far.
 [[nodiscard]] u32 FluidMode();
 
+/// EDEN_NX2_FLUID_COMPOSE. 0: off. 1: with the FLUID presenter and a dedicated queue that can
+/// compute, the slot's frame is scaled into the swapchain image by a compute pass, and the frames
+/// are drawn at the game's internal size (EDEN_NX2_FLUID_COMPOSE_NATIVE keeps them at the window's).
+[[nodiscard]] u32 FluidComposeMode();
+
 struct Frame {
     u32 width;
     u32 height;
