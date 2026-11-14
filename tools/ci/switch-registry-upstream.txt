@@ -1,4 +1,4 @@
-# Switches upstream Lichii (zortos293/Lichii, branch nx2) uses in src/ at commit 87d84d513c67275ad0d6ae50ba51cce76e7e3ded.
+# Switches upstream Lichii (zortos293/Lichii, branch nx2) uses in src/ at commit 57b75fec58d0373bf5f37556a484c1aded248c37.
 # tools/ci/switch_registry.py does not ask for a docs/switches.md row for these; every other
 # EDEN_NX2_* or EDEN_DKB_* name used in src/ or launcher/ needs one, unless --upstream-ref has it.
 #
@@ -69,6 +69,8 @@ EDEN_NX2_FRAME_DUMP_SAMPLED
 EDEN_NX2_FS_READ_TRACE
 EDEN_NX2_GPU_ONLY_LAZY
 EDEN_NX2_GPU_PROFILE
+EDEN_NX2_GPU_TRACE
+EDEN_NX2_GPU_TRACE_PRESENTS
 EDEN_NX2_GUEST_THREAD_STATS
 EDEN_NX2_HANDLE_TABLE_NOTES
 EDEN_NX2_HIDE_WINDOW
@@ -83,7 +85,6 @@ EDEN_NX2_IPC_TRACE
 EDEN_NX2_KEEP_ASTC
 EDEN_NX2_KEY_RECORD
 EDEN_NX2_KEY_SCRIPT
-EDEN_NX2_LIST_HLE_VERIFY
 EDEN_NX2_LIST_MACRO_TRACE
 EDEN_NX2_LIST_MACRO_VERIFY
 EDEN_NX2_LIVE_READ_CHECK
