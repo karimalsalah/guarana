@@ -22,6 +22,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/fluid_present_mode.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -55,6 +56,16 @@ bool FrameGenLoaded() {
 #else
     return false;
 #endif
+}
+
+/// EDEN_NX2_FLUID_MAILBOX=<n>, n not 0: the FLUID presenter asks for MAILBOX when the surface
+/// lists it. Parsed as EDEN_NX2_FLUID is. Read once.
+[[nodiscard]] bool FluidMailboxRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_MAILBOX");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return requested;
 }
 
 #ifdef EGLANTINE_STREAMLINE
@@ -123,8 +134,9 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
         // Choose Mailbox or Immediate if unlocked and those modes are supported
         const auto mode = Settings::values.vsync_mode.GetValue();
         if (FluidMode() != 0) {
-            // The FLUID presenter times each present to be shown at the next vblank.
-            return Settings::VSyncMode::Fifo;
+            // The FLUID presenter times each present to be shown at the next vblank: FIFO, or
+            // MAILBOX with EDEN_NX2_FLUID_MAILBOX when the surface lists it.
+            return ChooseFluidPresentMode(FluidMailboxRequested(), has_mailbox);
         }
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
@@ -573,6 +585,10 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
                  PresentModeName(present_mode), image_count,
                  Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
                  Settings::values.frame_gen.GetValue() ? "on" : "off", FluidMode());
+    }
+    if (FluidMode() != 0 && FluidMailboxRequested()) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_MAILBOX: present mode {} (surface {} MAILBOX)",
+                 PresentModeName(present_mode), has_mailbox ? "offers" : "does not offer");
     }
 #ifdef __ANDROID__
     // Android is already ordered the same as Switch.
