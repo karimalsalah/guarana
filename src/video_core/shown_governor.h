@@ -27,6 +27,41 @@ inline constexpr f64 WindowSeconds = 2.0;
 inline constexpr size_t MaxRungs = 3;
 /// The lowest rate a rung may have (EDEN_NX2_SHOWN_RATE is clamped to 30 to 240).
 inline constexpr u32 MinRateHz = 30;
+/// The highest rate EDEN_NX2_SHOWN_RATE is taken as.
+inline constexpr u32 MaxRateHz = 240;
+
+/// What EDEN_NX2_SHOWN_RATE said. `set` is false when the variable is unset (nullptr). A set
+/// variable is clamped to MinRateHz..MaxRateHz, including empty or non-numeric text (strtol
+/// gives 0, which clamps to 30), the same as the presenter did on every vblank.
+struct ShownRateEnv {
+    bool set{};
+    f64 hz{};
+};
+
+[[nodiscard]] inline ShownRateEnv ParseShownRateEnv(const char* text) {
+    if (text == nullptr) {
+        return {};
+    }
+    const long parsed = std::strtol(text, nullptr, 10);
+    return {true, static_cast<f64>(std::clamp(parsed, static_cast<long>(MinRateHz),
+                                              static_cast<long>(MaxRateHz)))};
+}
+
+/// The override when the variable is set, otherwise the frame-generation target, otherwise 60.
+[[nodiscard]] inline f64 ResolveShownRateHz(ShownRateEnv env, u32 frame_gen_target_hz) {
+    if (env.set) {
+        return env.hz;
+    }
+    return frame_gen_target_hz != 0 ? static_cast<f64>(frame_gen_target_hz) : 60.0;
+}
+
+/// The configured shown rate. The environment is read once: the present thread used to call
+/// getenv and strtol on every vblank. The frame-generation setting is still read on each call,
+/// so a change in the UI applies without a restart when the environment did not override it.
+[[nodiscard]] inline f64 LiveShownRateHz(u32 frame_gen_target_hz) {
+    static const ShownRateEnv env = ParseShownRateEnv(std::getenv("EDEN_NX2_SHOWN_RATE"));
+    return ResolveShownRateHz(env, frame_gen_target_hz);
+}
 /// A window with fewer slots than this says nothing (a paused game, a loading screen).
 inline constexpr u64 MinSlots = 40;
 /// Windows after a step before the next one may be decided; the first ones are the cadence settling
