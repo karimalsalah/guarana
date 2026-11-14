@@ -2588,7 +2588,14 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     // Whether the driver cache file holds what the boot built (with that cache off, the driver's
     // own shader cache does, if it keeps one)
     bool boot_saved = !use_vulkan_pipeline_cache;
-    if (use_vulkan_pipeline_cache && !async_boot) {
+    // Skip the intermediate save where reading the driver cache during a build crashes (see
+    // Device::CanReadPipelineCacheDuringBuilds, upstream #1685): without a precache the
+    // background prebuild can already be building into the cache here, and nothing joins its
+    // builds before this read; a stopped load can leave a cancelled prebuild build running
+    // past the same point. The session-end save in ~PipelineCache stays ordered after the
+    // build workers shut down and still covers persistence.
+    if (use_vulkan_pipeline_cache && !async_boot &&
+        (device.CanReadPipelineCacheDuringBuilds() || device.SerializesPipelineCacheReads())) {
         // Its size from the save's own read: another read would need the build lock as well
         last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
                                                            vulkan_pipeline_cache, CACHE_VERSION,
