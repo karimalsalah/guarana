@@ -1,0 +1,1 @@
+- Launcher: a new interface. The fruit is now an eye that follows your focus and opens into the game when you press Play, and Home shows your last measured session: the share of shown frames on time, a pacing strip and the fps readouts ([#188](https://github.com/karimalsalah/guarana/issues/188)).

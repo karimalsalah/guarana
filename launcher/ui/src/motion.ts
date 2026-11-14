@@ -60,6 +60,12 @@ export function isIdle(): boolean {
   return idle;
 }
 
+/** Re-reads focus: a webview does not always get `blur` when its window loses focus. */
+export function syncIdle(): boolean {
+  setIdle(!document.hasFocus());
+  return idle;
+}
+
 export function onIdleChange(fn: (idle: boolean) => void): () => void {
   idleSubs.add(fn);
   return () => idleSubs.delete(fn);

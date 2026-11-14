@@ -11,6 +11,9 @@
 //   speed=<factor> (0.25 makes every delay four times shorter, 20 lets you watch each stage)
 //   boot=session (default) | old | none (the game://boot events a launch plays: a launcher session,
 //     an older emulator whose window only takes the foreground, or nothing at all)
+//   share=0|1 (a finished session's numbers, the "Share my numbers" offer, are waiting; default 1,
+//     0 for first-run. With 0 the sample PC has never finished a session, and the numbers the UI
+//     kept from an earlier visit are forgotten too)
 
 import type { Backend, Unlisten } from "./api";
 import type {
@@ -38,6 +41,8 @@ interface Scenario {
   session: number;
   speed: number;
   boot: "session" | "old" | "none";
+  /** `?share=`: a finished session's numbers wait in the share offer. */
+  share: boolean;
   /** `?mock=contaminated`: the settings-hygiene rows of the doctor find something (issue #125). */
   contaminated: boolean;
 }
@@ -68,6 +73,7 @@ function readScenario(): Scenario {
     session: 7,
     speed: 1,
     boot: "session",
+    share: name !== "first-run",
     contaminated: name === "contaminated",
   };
   if (name === "ready" || name === "no-oot" || name === "failure" || name === "contaminated") {
@@ -82,6 +88,7 @@ function readScenario(): Scenario {
   base.firstRun = flag("first", base.firstRun);
   base.crash = flag("crash", base.crash);
   base.autoWarm = flag("warm", base.autoWarm);
+  base.share = flag("share", base.share);
   const pad = q.get("pad");
   if (pad === "playstation" || pad === "xbox" || pad === "switch" || pad === "generic" || pad === "none" || pad === "late") {
     base.pad = pad;
@@ -269,9 +276,27 @@ export function createMockBackend(): Backend {
   // Modes and the autopilot (the backend's modes.rs and autopilot.rs, in short).
   let mode: ModeStatus["mode"] = "auto";
   let autopilotOn = true;
-  // "Share my numbers": the mock offers one session until Share or Not now.
-  let shareOn = true;
+  // "Share my numbers": the mock offers one session until Share or Not now (share=0: none yet), and
+  // a fresh one after each clean exit, like share.rs after a session with a minute of gameplay.
+  let shareOn = sc.share;
   let sharePrompt = true;
+  /** The sample sessions: the one waiting at start (three hours ago), then each one played here. */
+  const SESSIONS = [
+    { game_fps: 25.2, within2: 93.4, shown_fps: 49.6, p50: 16.7, p95: 33.4, p99: 100.1 },
+    { game_fps: 26.8, within2: 96.1, shown_fps: 52.9, p50: 16.7, p95: 25.1, p99: 50.2 },
+    { game_fps: 24.1, within2: 88.7, shown_fps: 47.3, p50: 16.7, p95: 41.7, p99: 116.8 },
+  ];
+  let sessionIndex = sc.share ? 0 : -1;
+  let offerAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+  let offerSecs = 1290;
+  if (!sc.share) {
+    // A PC that never finished a session: forget numbers the UI kept from an earlier sample visit.
+    try {
+      localStorage.removeItem("guarana.pacing");
+    } catch {
+      /* storage disabled: nothing kept anyway */
+    }
+  }
   let notifications = false;
   // guarana://launch/<id> (open=<id>): the backend's open.rs checks it against the library.
   const opened = sc.open ? allGames.find((g) => g.title_id.toLowerCase() === sc.open?.toLowerCase()) : undefined;
@@ -315,7 +340,22 @@ export function createMockBackend(): Backend {
     enabled: sharePrompt,
     offer:
       shareOn && sharePrompt
-        ? { at: new Date().toISOString(), title_id: "0400486024DEC000", game: "The Legend of Zelda: Ocarina of Time", game_fps: 25.2, within2: 93.4, shown_fps: 49.6, p50: 16.7, p95: 33.4, p99: 100.1, gameplay_secs: 75, fluid: true, on_battery: false, mode: "auto", profile: "intel-arc-igpu", build: "20.1.0 (stable)", text: "Your session: 25 game fps, 93% of frames on time. Share it with the community?" }
+        ? (() => {
+            const m = SESSIONS[Math.max(0, sessionIndex) % SESSIONS.length];
+            return {
+              at: offerAt,
+              title_id: OOT_ID,
+              game: "The Legend of Zelda: Ocarina of Time",
+              ...m,
+              gameplay_secs: offerSecs,
+              fluid: true,
+              on_battery: false,
+              mode: "auto",
+              profile: "intel-arc-igpu",
+              build: "20.1.0 (stable)",
+              text: `Your session: ${Math.round(m.game_fps)} game fps, ${Math.round(m.within2)}% of frames on time. Share it with the community?`,
+            };
+          })()
         : null,
   });
   const history: AutopilotChange[] = [];
@@ -836,6 +876,14 @@ export function createMockBackend(): Backend {
           emit("booster://changed", boosterStatus());
         }
         emit("game://exited", exited);
+        // A clean exit with a minute of gameplay data: the backend offers this session's numbers.
+        if (exited.code === 0 && sharePrompt && String(a.title_id ?? "") === OOT_ID) {
+          sessionIndex += 1;
+          offerAt = new Date().toISOString();
+          offerSecs = Math.max(60, Math.round(exited.seconds * 0.96));
+          shareOn = true;
+          emit("share://changed", shareStatus());
+        }
         // The session runs once the game is on screen (after the boot above).
       }, sc.crash ? 1400 : sc.session * 1000 + (sc.boot === "session" ? 5100 : sc.boot === "old" ? 1200 : 0) * sc.speed);
       return { pid: 23816, follows_boot: sc.boot === "session" };

@@ -14,11 +14,12 @@ export function libraryList(games: Game[], opts: { canPlay: boolean; onPlay: (g:
     "ul",
     { class: "games" },
     games.map((g, i) => {
-      const title = h("p", { class: "item-title", text: g.title });
+      const title = h("p", { class: "item-title game-title", text: g.title });
+      // A typographic row, not a tile: its number, the title, the file, and Play.
       return h(
         "li",
-        { class: "game-row", style: { "--i": String(i) } },
-        h("span", { class: "item-icon" }, icon("game")),
+        { class: "game-row", style: { "--i": String(Math.min(i, 10)) } },
+        h("span", { class: "game-index", "aria-hidden": "true" }, icon("game"), String(i + 1).padStart(2, "0")),
         h("div", { class: "game-text" }, title, h("p", { class: "item-sub", text: `${CONTAINER[g.container]} · ${bytes(g.size_bytes)}` })),
         button("Play", {
           kind: "secondary",

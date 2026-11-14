@@ -222,12 +222,72 @@ function clickPrimary(): void {
 }
 
 // ---- Focus halo --------------------------------------------------------------------------------
+// Liquid ember: the halo springs to the next control, stretching along the way it travels, and a
+// short comet tail streaks from where it was. The halo takes the focused control's own shape (all
+// four corners, so leaf-shaped controls get a leaf-shaped halo). Everything that moves is
+// transform or opacity on two small fixed layers; the tail is one element, reused.
 
 let halo: HTMLDivElement | null = null;
+let haloRing: HTMLDivElement | null = null;
+let tail: HTMLDivElement | null = null;
+let tailStreak: HTMLDivElement | null = null;
+let tailAnim: Animation | null = null;
 let haloOn = false;
 let haloFrame = 0;
+let haloTarget: Element | null = null;
+let lastCx = 0;
+let lastCy = 0;
 let observed: Element | null = null;
 const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => refreshHalo()) : null;
+
+function cornerRadii(target: HTMLElement, pad: number, w: number, h: number): string {
+  const cs = getComputedStyle(target);
+  const max = Math.min(w, h) / 2;
+  const corner = (v: string) => {
+    const n = parseFloat(v) || 0;
+    return `${Math.round(Math.min(max, n > 0 ? n + pad : pad + 4))}px`;
+  };
+  return [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].map(corner).join(" ");
+}
+
+function comet(fromX: number, fromY: number, cx: number, cy: number, hw: number, hh: number): void {
+  if (!tail || !tailStreak || reducedMotion() || typeof tailStreak.animate !== "function") return;
+  const vx = cx - fromX;
+  const vy = cy - fromY;
+  // The head stops where the line meets the new control's edge, so the tail never crosses its label.
+  const t = Math.min(vx ? hw / Math.abs(vx) : Infinity, vy ? hh / Math.abs(vy) : Infinity, 1);
+  const toX = cx - vx * t;
+  const toY = cy - vy * t;
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 24) return;
+  // The tail's head sits on the new control and it points back to the old one.
+  const len = Math.min(dist, 420);
+  tail.style.width = `${Math.round(len)}px`;
+  tail.style.transform = `translate(${Math.round(toX - len)}px, ${Math.round(toY - 3)}px) rotate(${Math.atan2(dy, dx).toFixed(4)}rad)`;
+  tailAnim?.cancel();
+  tailAnim = tailStreak.animate(
+    [
+      { transform: "scaleX(1)", opacity: 0.85 },
+      { transform: "scaleX(0)", opacity: 0 },
+    ],
+    { duration: 340, easing: "cubic-bezier(.2,.7,.3,1)", fill: "both" },
+  );
+}
+
+function stretch(dx: number, dy: number): void {
+  if (!haloRing || reducedMotion() || typeof haloRing.animate !== "function") return;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 24) return;
+  const k = Math.min(0.14, dist / 2400);
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  const s = horizontal ? `${(1 + k).toFixed(3)}, ${(1 - k * 0.6).toFixed(3)}` : `${(1 - k * 0.6).toFixed(3)}, ${(1 + k).toFixed(3)}`;
+  haloRing.animate([{ transform: "scale(1, 1)" }, { transform: `scale(${s})`, offset: 0.32 }, { transform: "scale(1, 1)" }], {
+    duration: 460,
+    easing: "cubic-bezier(.3,.7,.3,1)",
+  });
+}
 
 function placeHalo(): void {
   haloFrame = 0;
@@ -242,22 +302,34 @@ function placeHalo(): void {
   if (!show) {
     if (haloOn) halo.classList.remove("is-on");
     haloOn = false;
+    haloTarget = null;
     return;
   }
   const target = el as HTMLElement;
   const r = target.getBoundingClientRect();
   const pad = 4;
-  const radius = parseFloat(getComputedStyle(target).borderTopLeftRadius) || 8;
+  const w = Math.round(r.width + pad * 2);
+  const hgt = Math.round(r.height + pad * 2);
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  const moved = haloOn && haloTarget !== target;
   if (!haloOn) halo.classList.add("no-anim");
   halo.style.transform = `translate(${Math.round(r.left - pad)}px, ${Math.round(r.top - pad)}px)`;
-  halo.style.width = `${Math.round(r.width + pad * 2)}px`;
-  halo.style.height = `${Math.round(r.height + pad * 2)}px`;
-  halo.style.borderRadius = `${Math.min(radius + pad, (r.height + pad * 2) / 2)}px`;
+  halo.style.width = `${w}px`;
+  halo.style.height = `${hgt}px`;
+  halo.style.borderRadius = cornerRadii(target, pad, w, hgt);
   halo.classList.add("is-on");
   if (!haloOn) {
     void halo.offsetWidth;
     halo.classList.remove("no-anim");
   }
+  if (moved) {
+    comet(lastCx, lastCy, cx, cy, w / 2, hgt / 2);
+    stretch(cx - lastCx, cy - lastCy);
+  }
+  lastCx = cx;
+  lastCy = cy;
+  haloTarget = target;
   haloOn = true;
 }
 
@@ -266,10 +338,12 @@ export function refreshHalo(): void {
 }
 
 function bump(dir: Direction): void {
-  if (!halo || !haloOn || reducedMotion()) return;
-  const dx = dir === "left" ? -6 : dir === "right" ? 6 : 0;
-  const dy = dir === "up" ? -6 : dir === "down" ? 6 : 0;
-  halo.animate([{ translate: "0 0" }, { translate: `${dx}px ${dy}px` }, { translate: "0 0" }], { duration: 220, easing: "ease-out" });
+  if (!haloRing || !haloOn || reducedMotion()) return;
+  // Nothing further that way: the liquid halo leans into the edge and springs back.
+  const dx = dir === "left" ? -7 : dir === "right" ? 7 : 0;
+  const dy = dir === "up" ? -7 : dir === "down" ? 7 : 0;
+  const s = dx ? "0.94, 1.04" : "1.04, 0.94";
+  haloRing.animate([{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${s})`, offset: 0.3 }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.3,.7,.3,1)" });
 }
 
 // ---- Wiring ------------------------------------------------------------------------------------
@@ -279,7 +353,16 @@ export function initInput(): void {
   halo = document.createElement("div");
   halo.id = "focus-halo";
   halo.setAttribute("aria-hidden", "true");
-  document.body.appendChild(halo);
+  haloRing = document.createElement("div");
+  haloRing.className = "halo-ring";
+  halo.appendChild(haloRing);
+  tail = document.createElement("div");
+  tail.id = "focus-tail";
+  tail.setAttribute("aria-hidden", "true");
+  tailStreak = document.createElement("div");
+  tailStreak.className = "tail-streak";
+  tail.appendChild(tailStreak);
+  document.body.append(tail, halo);
 
   document.addEventListener("focusin", refreshHalo);
   document.addEventListener("focusout", refreshHalo);

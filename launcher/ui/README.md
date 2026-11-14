@@ -32,11 +32,12 @@ Add query parameters to the URL, for example `http://localhost:5173/?mock=ready&
 | `warm` | `1`: an automatic shader warm-up (as after a GPU driver change) runs 2.5 s after start | off |
 | `session` | seconds the game runs once it is on screen, then `game://exited` | `7` |
 | `boot` | the `game://boot` events a launch plays: `session` (a 20.3+ emulator: phases, shader counts, its window taking the foreground, then the game shown after about 5 s), `old` (only its window taking the foreground), `none` (nothing: the stage hands over after 20 s) | `session` |
+| `share` | `0` or `1`: a finished session's numbers wait in the "Share my numbers" offer (`0`: the sample PC never finished a session, and numbers the UI kept from an earlier visit are forgotten). Each clean exit of a sample game offers a new session | `1`, `0` for `first-run` |
 | `speed` | multiplies every mock delay (`0.25` is fast, `20` lets you watch each stage) | `1` |
 | `screen` | `welcome`, `scan`, `profile`, `home`, `updates`, `doctor`, `report` | from `get_state` |
 | `motion` | `reduce`: the reduced-motion version | system setting |
 
-The footer shows a "Sample data" badge whenever the mock is in use.
+The hint bar shows a "Sample data" badge whenever the mock is in use.
 
 ## Structure
 
@@ -50,17 +51,17 @@ src/
   types.ts            CONTRACT.md types, plus Controller and the proposed Toggle bounds
   state.ts            cached reads (detect_system, list_profiles, get_state, list_games), signals
   router.ts           lazy screens, back stack, tabs, focus and announcements per navigation
-  shell.ts            top bar (brand, tabs, theme), main outlet, footer, toasts, live region
-  input.ts            intent layer (keyboard + pad), spatial navigation, moving focus halo
+  shell.ts            rail (the seed's mark, tabs, theme), main outlet, hint bar, toasts, live region
+  input.ts            intent layer (keyboard + pad), spatial navigation, liquid focus halo and comet tail
   gamepad.ts          Gamepad API polling, per-pad layouts, button glyphs, rumble
   motion.ts           reduced motion, view transitions, pause switch, idle scheduling
   theme.ts            dark by default, light on request, circular reveal
   markdown.ts         minimal safe Markdown -> DOM (no innerHTML of data)
   sessions.ts         last-played times and last applied profile (localStorage)
   format.ts, dom.ts, icons.ts
-  ui/                 controls, toast, progress ring, checks, controller card, key art, library list
+  ui/                 controls, toast, progress ring, checks, controller card, the seed (and its launch orbit), the session's numbers (rolling numerals, pacing strip, readouts), library list
   screens/            welcome, scan, profile, home, launch, updates, doctor, report (one chunk each)
-  styles/             tokens.css, base.css, components.css, screens.css, intro.css (app.css imports them)
+  styles/             tokens.css, base.css, components.css, seed.css, numbers.css, screens.css, intro.css (app.css imports them)
 ```
 
 ## Screens and the contract
@@ -77,16 +78,33 @@ src/
 | Doctor | `run_doctor`, `apply_fix`, `ask_ai` (the `install_update` fix shows its `install://progress` on the button) | `doctor://progress`, `install://progress` |
 | Report | `ask_ai`, `collect_report {kind, note}`, `open_path`, `open_url` | |
 
-Home has one ember button, Play. Below the hero come the mode card (when keys are imported), the
-library, then "This PC": the Game Booster as a folded card that shows its current level, and the
-controllers and setup cards. The share prompt, when offered, sits under the hero with a secondary
-Share button. First run is Scan and then Home in Auto mode, so the top bar says "Set up" without a
-step count; Scan's Continue unlocks once the device and the files are known, and Health finishes in
-the background. The launch stage shows the title and one status line with a spinner: the boot phase
-from `game://boot` in words, with the real shader count after it while shaders load (no bar). It
-holds until the game is on screen, then shows the game's title followed by "is running" on black;
-when it hands over after a hold time without news, the launcher knows only that the process
-started, not that the game has drawn a frame.
+Home is a full-bleed stage: the seed on the right, the game's title, Play (the one ember button)
+and Prepare shaders on the left, with the mode switch (when keys are imported) under them. Under the
+seed sit the last measured session's numbers ("Your last measured session"): frames on time as a large
+rolling numeral, the frame-pacing strip (one stem per frame, modelled from the session's percentiles
+and captioned so; late stems are red and drawn taller), and game fps, frame time (median, with the 95th
+percentile), shown fps and when it was measured (the session's own date and length of play). The
+"Last played" line by the title stays: it is the launcher's own record and can be newer.
+Their only source is the "Share my numbers" data (`get_share_status`, `share://changed`); the latest per
+game is kept in `localStorage` (`sessions.ts`) because the backend drops the offer after Share or Not
+now, and it is shown with its date. The seed wears the frames-on-time share as one leaf arc around the
+fruit (the session ring). With no finished session the seed stands alone with one line that says the
+numbers appear after the first session (or, with the share prompt off, how to get them back). The seed
+stays closed until the keys are in, half-opens while the library loads or when Ocarina is missing,
+opens when the game is ready, and shuts on an error. The share prompt, when offered, is a quiet
+line along the bottom of the stage with a secondary Share button. Below the stage come the rest of
+the library (a typographic list) and "This PC": the Game Booster as a folded pane that shows its
+current level, and the controllers and setup panes. First run is Scan and then Home in Auto mode,
+so the rail says "Set up" without a step count; Scan's Continue unlocks once the device and the
+files are known, and Health finishes in the background. On Play the interface folds into the seed
+and the seed flies to the centre of the launch stage. Each boot phase from `game://boot` blooms as
+a ring around it (start, load, shaders, the game), and while shaders load their real count settles
+onto the shader ring as sparks and rolls as a number beside the rings, with the time since Play (it
+settles in leaf when the shaders are in, and the clock stops at how long they took); one status line says the phase in words, with the count after it,
+and a row of phase names under it says the same in text. It holds until the game is on screen; then
+the rings fall into the seed, the iris opens to black, and the stage shows the game's title followed
+by "is running". When it hands over after a hold time without news, the launcher knows only that
+the process started, not that the game has drawn a frame.
 
 Every listener is registered before the command that streams, and removed when its screen goes.
 Links never navigate the webview: `https://` links go through `open_url`, nothing else opens.
@@ -108,32 +126,43 @@ contract's check and fix ids in order, and the stage names of every progress eve
 ## Design tokens
 
 All in `src/styles/tokens.css`. Brand values come from `assets/brand` and `site/assets/site.css`.
+The direction is "the living seed": a ripe guarana fruit split open looks like an eye (red shell,
+white flesh, black seed), and that seed (`src/ui/seed.ts`) is the heart of the interface. Dark is
+"Rainforest night", light is "Aril" (the fruit's white flesh).
 
 | Token | Dark (default) | Light | Use |
 |---|---|---|---|
-| `--ember-1` / `--ember-2` | `#FFC94A` / `#F2851A` | same | brand gradient (`--grad-ember`): primary buttons, Play, selection |
-| `--leaf`, `--echo` | `#3CCF7E`, `#F59E0B` | same | logo leaf, echo arcs |
-| `--bg` | `#070B14` night blue | `#F7F5F0` paper | page |
-| `--surface` / `-2` / `-3` | `#0E1527` / `#141D33` / `#1B2640` | `#FFF` / `#F4F2ED` / `#EBE7DF` | cards, controls |
-| `--text` / `--text-2` / `--muted` | `#EEF1F6` / `#C2C9D6` / `#8F99AD` | `#16181D` / `#434954` / `#5C626D` | text |
-| `--accent` | `#FBBF24` | `#A8510A` | links, focus, kickers (the site's accents, 4.5:1 on their backgrounds) |
-| `--ok` `--warn` `--fail` `--info` | green, orange, red, violet tints | darker shades | status, always with an icon and a word |
+| `--ember-1` / `--ember-2` | `#FFC94A` / `#F2851A` | same | brand gradient (`--grad-ember`): primary buttons, Play, the focus halo, progress |
+| `--leaf`, `--leaf-ink` | `#3CCF7E`, `#6FE3A0` | `#3CCF7E`, `#0B6B39` | the one green accent: what is on, chosen or done (rail marker, switch, segmented drop, settled rings) |
+| `--shell`, `--flesh`, `--seed`, `--echo` | `#D8321F`, `#F6F1E6`, `#060504`, `#F59E0B` | same | the seed's art, echo arcs |
+| `--bg` | `#000000` true OLED black | `#F5F0E6` aril | page |
+| `--surface` / `-2` / `-3` | `#06120C` / `#0A1B12` / `#10271A` canopy greens | `#FBF8F1` / `#EFE9DC` / `#E6DFCF` | panes, controls |
+| `--text` / `--text-2` / `--muted` | `#F3EFE6` / `#C8C9BB` / `#8E9C90` | `#0F1A12` / `#3B4A3F` / `#546155` | text (all at least 4.9:1 on every surface) |
+| `--accent` | `#FFBF5A` | `#974407` | links, kickers |
+| `--halo` | `#FFB547` | `#B4530A` | focus (at least 3.7:1 on every surface) |
+| `--ok` `--warn` `--fail` `--info` | leaf, amber, shell-red, aril tints | darker shades | status, always with an icon and a word |
 
-The night stages (Welcome, the game hero, Launch) stay dark in both themes.
+The night stages (Welcome, Launch) stay dark in both themes; Home's stage follows the theme.
 
-- Type: system fonts only (`Segoe UI Variable` on Windows 11), like the site. Sizes `--fs-xs` 12 px to `--fs-3xl` 44 px; headings use the display cut, weight 750-800, tight tracking.
-- Space: 4 px grid (`--sp-1` 4 px … `--sp-12` 48 px). Radius: `--r-sm` 8, `--r-md` 14, `--r-lg` 20, `--r-xl` 28, `--r-pill`.
-- Motion: `--dur-1/2/3` 150/200/250 ms for micro-interactions, `--dur-screen` 420 ms, `--dur-hero` 700 ms. `--ease-spring` (3 % overshoot) and `--ease-bounce` (12 %) are sampled damped springs in CSS `linear()`, with cubic-bezier fallbacks; `--ease-emph` for large morphs.
+- Shape: the leaf. Two opposite corners round, two nearly sharp (`--r-leaf-sm` 14/4, `--r-leaf` 24/7, `--r-leaf-lg` 34/10) on buttons, panes, fields and toasts. The focus halo copies each corner of what it surrounds.
+- Type: system fonts only (`Segoe UI Variable` on Windows 11), like the site. Sizes `--fs-xs` 12 px to `--fs-3xl` 44 px and `--fs-stage` for the game's title; headings use the display cut, weight 700, tight tracking. Kickers (`.eyebrow`) start with a tiny seed.
+- Space: 4 px grid (`--sp-1` 4 px … `--sp-12` 48 px). Chrome: `--rail-w` 84 px, `--hint-h` 38 px.
+- Motion: `--dur-1/2/3` 140/200/260 ms for micro-interactions, `--dur-screen` 380 ms, `--dur-hero` 760 ms, `--dur-fold` 560 ms, `--dur-iris` 760 ms. `--ease-spring` (3 % overshoot), `--ease-bounce` (12 %) and `--ease-jelly` (25 %) are sampled damped springs in CSS `linear()`, with cubic-bezier fallbacks; `--ease-fold` for things being swallowed, `--ease-bloom` for things opening, `--ease-emph` for large morphs.
 
 ## Motion and performance rules
 
-- Everything that loops or covers a large area animates `transform` and `opacity` only: the intro's layers, beam, embers and grain, the key art's echo arcs and glow, screen transitions, skeleton shimmer.
-- Nothing decorative loops while the player is only looking. The intro's stars, haze and grain run a few cycles and come to rest on their base frame while Set up waits. The hero's echo arcs pulse three times when Home opens, then rest. The launch stage's art holds still, so the spinner next to the status line is the only thing that moves while a game starts. Spinners, skeletons and progress bars run only while something is loading. Small one-off transitions also touch other properties (the focus halo's size, the segmented thumb's width, the progress ring's stroke, button shadows and colours), and the intro paints three small things once (the drop's path, the streak masks, the wordmark's light sweep). Bloom and grain are pre-made textures; nothing uses a live `filter: blur` or `backdrop-filter`.
+- Everything that loops or covers a large area animates `transform` and `opacity` only: the seed's breath, the orbit's spin, the intro's canopy layers and fireflies, screen transitions, the launch fold and the iris, skeleton shimmer.
+- The seed breathes and blinks only on Home's stage and the intro, stepped to 24 fps (`steps()` on a composited transform). The breath is on `.ambient` so it stops while the window is unfocused, and is stopped by `html[data-paused]`. The blink is not a loop: a timer starts one 312 ms blink about every ten seconds, re-reads focus each time (a webview does not always get `blur`), and is not set at all while the window is unfocused, hidden or paused, or the seed is asleep. After 45 s without input it dozes off (half-closed, no breath): nothing moves at all on an idle Home.
+- The session's numbers roll by `translateY` on each digit's reel (a transition per change; none while paused or under reduced motion), the strip's stems grow in once by `scaleY`, and the session ring draws in once (a transition of its dash). The launch's elapsed time is one text update a second, only while the count shows and nothing is paused. Its gaze follows focus (keyboard and pad) or the pointer (mouse) through transitions fired by those events, never a loop.
+- The focus halo is liquid ember: it springs to the next control, stretches along its path (a 460 ms one-off scale on the ring), and a comet tail streaks from where it was (one reused element, 340 ms). Both are skipped under reduced motion and hidden for the mouse.
+- The launch orbit spins only while a game starts and only before the emulator's window takes the foreground (`game://boot` "window" sets the pause switch). The shader count lights ticks through short transitions as events arrive, and up to four sparks fly per update (skipped while paused). The iris is one black disc scaled from the pupil past the corners: a transition, so it completes even after the pause switch flips.
+- Nothing decorative loops while the player is only looking: the intro's haze and fireflies drift once and rest, the echo arcs slide out only while Play has focus or the pointer, spinners, skeletons and progress bars run only while something is loading. Small one-off transitions also touch other properties (the halo's size and corners, the segmented drop's width, the progress ring's stroke, button shadows and colours), and the intro paints the seed's leaf once. Glows are pre-made gradients; nothing uses a live `filter` or `backdrop-filter`.
 - One pause switch: while a game runs or the window is hidden, `html[data-paused]` stops every CSS animation and the pad loop stops; while the window is unfocused, ambient loops (`.ambient`) and pad polling stop.
 - Gamepad polling runs only with a pad connected and the window focused, and is suspended from `launch_game` until `game://exited`, so in-game presses never reach the launcher.
 - Screens are separate chunks loaded with `import()`; Home is preloaded while Scan runs; the library list and the Markdown renderer load when needed; the mock is its own chunk.
-- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title (or only the pressed library row's title) morph into the full-window launch stage, which follows the boot until the game is on screen; it dims to black over one second only when it hands over without the emulator's window having taken the foreground (otherwise the dimming would play unseen behind the game), and its animations pause as soon as that window is in front. The intro's logo flies into the top bar's mark when you press Set up.
-- Reduced motion (the system setting or `?motion=reduce`): the intro shows its final frame, transitions are instant, nothing loops.
+- Screen changes use the View Transitions API: forward and back grow in from the side, tabs (on a vertical rail) lift the next screen from below or above. On Play the old screen spirals down into the seed's eye while the rail and the hint bar slip away, the seed flies to the launch stage and the title follows (from a library row: the seed if it is on screen, and the row's title). Back from a game the stage rises out of the black and the seed wakes up. The theme switch is one composited cross-fade. The intro's seed flies into the rail's mark when you press Set up.
+- Reduced motion (the system setting or `?motion=reduce`): the intro shows its final frame, the seed neither breathes nor blinks, the orbit does not spin, the halo has no tail or stretch, transitions and the iris are instant, nothing loops.
+- Forced colours (Windows contrast themes): the halo and tail are hidden and a real `Highlight` outline shows focus.
 
 ## Controllers and keyboard
 
@@ -157,7 +186,7 @@ pad `list_controllers` reports) and are drawn here: letters or shapes in circles
 
 ## Content rules
 
-- No Nintendo artwork, logos or names in imagery. The key art is brand-abstract (the drop, its streaks and echo arcs); game titles appear only as text from the user's own files.
+- No Nintendo artwork, logos or names in imagery. The seed and the intro's canopy are procedural and brand-abstract (the drop with its streaks, leaf and echo arcs, split open like a guarana fruit; leaves drawn from a seeded random); game titles appear only as text from the user's own files.
 - Numbers come from the site: "Measured on an Arc 140T: Hyrule Field 14.75 → 22.83 game fps, frame generation off".
 - The Files card always carries: "Guarana never downloads keys, firmware or games. Use your own, dumped from your console." Nothing is imported until the user presses Import or Add folder.
 - Diagnostics copied from Doctor are scrubbed (`C:\Users\<name>` becomes `%USERPROFILE%`); reports are built and scrubbed by the backend and only leave the PC when the user submits the GitHub issue.
