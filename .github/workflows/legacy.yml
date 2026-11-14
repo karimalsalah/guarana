@@ -20,6 +20,7 @@ on:
         description: Build the output and print what would change, without pushing or touching the pull request
         type: boolean
         default: false
+  # The list must cover every file the suite reads.
   pull_request:
     paths:
       - "tools/ci/legacy.py"
@@ -57,6 +58,34 @@ on:
       - ".github/workflows/welcome.yml"
       - "CONTRIBUTING.md"
       - "docs/AI-QUICKSTART.md"
+      # Every workflow, which test_supply_chain.py reads, and the scripts the other tests import.
+      - ".github/workflows/**"
+      - "tools/ci/thanks.py"
+      - "tools/ci/switch_registry.py"
+      - "tools/ci/switch-registry-upstream.txt"
+      - "tools/ingest/issue_forms.py"
+      - "tools/ingest/tests/fakes.py"
+      - "tools/ingest/tests/yaml_subset.py"
+      - "tools/nx2/frame_dump_index.py"
+      # The README markers, the llms-full.txt sources and the sync guide (test_legacy.py,
+      # test_build_llms_full.py, test_upstream_sync.py).
+      - "README.md"
+      - "AGENTS.md"
+      - "LEGAL.md"
+      - "VERSION"
+      - "docs/switches.md"
+      - "docs/LANES.md"
+      # The credits wiring that tools/ci/tests/test_wiring.py checks.
+      - "CONTRIBUTORS.md"
+      - "CMakeModules/GuaranaContributors.cmake"
+      - "src/lichii/about_dialog.cpp"
+      - "src/lichii/CMakeLists.txt"
+      - "src/lichii/guarana_contributors.h.in"
+      - "launcher/CONTRACT.md"
+      - "launcher/src-tauri/build.rs"
+      - "launcher/src-tauri/src/credits.rs"
+      - "launcher/src-tauri/src/main.rs"
+      - "launcher/ui/src/screens/about.ts"
 
 permissions: {}
 
