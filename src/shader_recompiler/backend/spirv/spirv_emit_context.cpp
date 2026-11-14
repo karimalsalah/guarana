@@ -1912,11 +1912,11 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
     }
     if (info.uses_global_increment) {
         increment_cas_ssbo = CasLoop(*this, Operation::Increment, storage_types.U32.array,
-                                     storage_types.U32, U32[1], spv::Scope::Device);
+                                     storage_types.U32.element, U32[1], spv::Scope::Device);
     }
     if (info.uses_global_decrement) {
         decrement_cas_ssbo = CasLoop(*this, Operation::Decrement, storage_types.U32.array,
-                                     storage_types.U32, U32[1], spv::Scope::Device);
+                                     storage_types.U32.element, U32[1], spv::Scope::Device);
     }
     // Also with native_f32_atomic_add: only storage atomics take the native path, and the routed
     // global AddF32 function (DefineGlobalMemoryFunctions) calls this loop.
