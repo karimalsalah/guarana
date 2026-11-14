@@ -18,6 +18,8 @@
 #include <thread>
 
 #include "common/fs/path_util.h"
+#include "common/boot_timing.h"
+#include "common/cpu_features.h"
 #include "common/host_memory.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
@@ -37,6 +39,7 @@
 #include "core/frontend/framebuffer_layout.h"
 #include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/nx2_thread_stats.h"
 #include "core/memory.h"
 #include "core/nx2_autopilot_session.h"
 #include "core/nx2_power_session.h"
@@ -45,6 +48,7 @@
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_trace/recorder.h"
+#include "video_core/nx2_cache_stats.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_frame_predictor.h"
 #include "video_core/nx2_shown_frames.h"
@@ -1363,6 +1367,187 @@ json InputSequence(ToolState& state, const json& params, const ClientGone& clien
     return RunInput(state, steps, params, client_gone);
 }
 
+/// Guest threads' CPU time and waits (EDEN_NX2_GUEST_THREAD_STATS): per thread, the time on a
+/// core split into JIT work (game code, counter polling, hint spins, GPU-cached memory) and
+/// kernel work, the time ready without a core, and the waits by kind. Totals since the thread
+/// first ran, busiest first.
+json ThreadStats(ToolState&, const json& params) {
+    const size_t top = Param<size_t>(params, "top", 16, 1, 128);
+    const std::vector<Kernel::Nx2ThreadStats::ThreadSnapshot> rows =
+        Kernel::Nx2ThreadStats::Snapshot();
+    const u64 freq = Common::g_wall_clock.GetGuestCNTFRQ();
+    const auto ms = [freq](u64 ticks) {
+        return freq != 0 ? static_cast<double>(ticks) * 1000.0 / static_cast<double>(freq) : 0.0;
+    };
+    static constexpr std::array<const char*, Kernel::Nx2ThreadStats::Waits> wait_names{
+        "ipc", "sync_objects", "address_arbiter", "condvar", "lock", "sleep", "other"};
+    json threads = json::array();
+    for (size_t i = 0; i < rows.size() && i < top; ++i) {
+        const Kernel::Nx2ThreadStats::ThreadSnapshot& row = rows[i];
+        const u64 accounted = row.poll_ticks + row.hint_spin_ticks + row.memory_ticks;
+        json waits = json::object();
+        for (size_t kind = 0; kind < Kernel::Nx2ThreadStats::Waits; ++kind) {
+            waits[wait_names[kind]] = {{"ms", ms(row.wait_ticks[kind])},
+                                       {"count", row.wait_counts[kind]}};
+        }
+        threads.push_back({
+            {"thread_id", row.thread_id},
+            {"process", row.process},
+            {"priority", row.priority},
+            {"affinity_mask", Hex(row.affinity)},
+            {"on_core_ms", ms(row.on_core_ticks)},
+            {"jit_ms", ms(row.jit_ticks)},
+            {"game_code_ms", ms(row.jit_ticks > accounted ? row.jit_ticks - accounted : 0)},
+            {"counter_poll_ms", ms(row.poll_ticks)},
+            {"hint_spin_ms", ms(row.hint_spin_ticks)},
+            {"cached_memory_ms", ms(row.memory_ticks)},
+            {"read_back_ms", ms(row.read_back_ticks)},
+            {"outside_jit_ms", ms(row.on_core_ticks > row.jit_ticks ? row.on_core_ticks - row.jit_ticks : 0)},
+            {"ready_ms", ms(row.ready_ticks)},
+            {"held_replies_ms", static_cast<double>(row.held_ns) / 1e6},
+            {"presents", row.presents},
+            {"waits", std::move(waits)},
+        });
+    }
+    json result = {{"enabled", Kernel::Nx2ThreadStats::g_enabled},
+                   {"cntfrq_hz", freq},
+                   {"threads_total", rows.size()},
+                   {"threads", std::move(threads)}};
+    if (!Kernel::Nx2ThreadStats::g_enabled) {
+        result["note"] = "EDEN_NX2_GUEST_THREAD_STATS is not set: the counters only fill with it";
+    }
+    return result;
+}
+
+/// The present thread's counters (the FLUID presenter's fluid_stats, EDEN_NX2_SHOWN_STATS),
+/// the vblank clock it keeps, and the present queue's depth.
+json PresentStatsTool(ToolState& state, const json&) {
+    if (!state.system.IsPoweredOn()) {
+        throw std::runtime_error{"the renderer is not running"};
+    }
+    const auto stats = state.system.GPU().Renderer().GetPresentStats();
+    if (!stats) {
+        throw std::runtime_error{"present stats need the Vulkan renderer"};
+    }
+    const auto mean = [](double sum, u64 samples) {
+        return samples != 0 ? sum / static_cast<double>(samples) : 0.0;
+    };
+    json result = {
+        {"fluid", stats->fluid},
+        {"fallback", stats->fallback},
+        {"shown_stats", stats->shown_stats},
+        {"swapchain_images", stats->swapchain_images},
+        {"present_frames", stats->frame_count},
+        {"queued_frames", stats->queued_frames},
+        {"free_frames", stats->free_frames},
+        {"vblank",
+         {{"refresh_hz", stats->refresh_hz},
+          {"index", stats->vblank_index},
+          {"divisor", stats->divisor},
+          {"lead_ms", stats->lead_ms},
+          {"latency_ms", stats->clock_latency_ms}}},
+        {"slots", stats->slots},
+        {"hits", stats->hits},
+        {"missed", stats->no_frame + stats->queued + stats->overslept},
+        {"no_frame", stats->no_frame},
+        {"not_done", stats->not_done},
+        {"uncovered", stats->uncovered},
+        {"rolled", stats->rolled},
+        {"spare", stats->spare},
+        {"stale", stats->stale},
+        {"queued", stats->queued},
+        {"overslept", stats->overslept},
+        {"in_order", stats->in_order},
+        {"late", stats->late},
+        {"dropped", stats->dropped},
+        {"received", stats->received},
+        {"held",
+         {{"1", stats->held[0]},
+          {"2", stats->held[1]},
+          {"3", stats->held[2]},
+          {"4+", stats->held[3]}}},
+        {"age_ms", mean(stats->age_ms, stats->hits)},
+        {"latency_ms", mean(stats->latency_ms, stats->latency_samples)},
+        {"latency_samples", stats->latency_samples},
+        {"present_thread",
+         {{"presents", stats->presents},
+          {"acquire_ms", mean(stats->acquire_ms, stats->presents)},
+          {"acquire_max_ms", stats->acquire_max_ms},
+          {"copy_wait_ms", mean(stats->copy_wait_ms, stats->copy_waits)},
+          {"copy_wait_max_ms", stats->copy_wait_max_ms},
+          {"copy_waits", stats->copy_waits},
+          {"copy_wait_timeouts", stats->copy_wait_timeouts},
+          {"lock_ms", mean(stats->lock_ms, stats->presents)},
+          {"lock_max_ms", stats->lock_max_ms},
+          {"call_ms", mean(stats->call_ms, stats->presents)},
+          {"call_max_ms", stats->call_max_ms},
+          {"margin_ms", mean(stats->margin_ms, stats->margin_samples)},
+          {"margin_min_ms", stats->margin_min_ms},
+          {"after_vblank", stats->after_vblank},
+          {"copy_gpu_ms", mean(stats->copy_gpu_ms, stats->copy_gpu_samples)},
+          {"copy_gpu_max_ms", stats->copy_gpu_max_ms},
+          {"copy_gpu_samples", stats->copy_gpu_samples}}},
+    };
+    if (!stats->shown_stats) {
+        result["note"] = "EDEN_NX2_SHOWN_STATS is not set: the slot counters stay zero; the "
+                         "vblank clock and queue depths are live regardless";
+    }
+    return result;
+}
+
+/// Texture and buffer cache hit/miss/eviction counters since boot, with the memory the caches
+/// last published (Common::g_memory_counters).
+json CacheStats(ToolState&, const json&) {
+    const VideoCommon::Nx2CacheStats::Counters& counters = VideoCommon::Nx2CacheStats::g_counters;
+    const Common::MemoryCounters& memory = Common::g_memory_counters;
+    const auto get = [](const std::atomic<u64>& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    const u64 texture_hits = get(counters.texture_hits);
+    const u64 texture_misses = get(counters.texture_misses);
+    const u64 buffer_hits = get(counters.buffer_hits);
+    const u64 buffer_misses = get(counters.buffer_misses);
+    const auto hit_rate = [](u64 hits, u64 misses) {
+        const u64 total = hits + misses;
+        return total != 0 ? static_cast<double>(hits) / static_cast<double>(total) : 0.0;
+    };
+    return {
+        {"texture",
+         {{"hits", texture_hits},
+          {"misses", texture_misses},
+          {"hit_rate", hit_rate(texture_hits, texture_misses)},
+          {"created", get(counters.texture_created)},
+          {"deleted", get(counters.texture_deleted)},
+          {"evicted", get(counters.texture_evicted)},
+          {"evicted_downloaded", get(counters.texture_evicted_downloaded)},
+          {"device_usage", get(memory.device_usage)},
+          {"expected_threshold", get(memory.texture_expected)},
+          {"critical_threshold", get(memory.texture_critical)}}},
+        {"buffer",
+         {{"hits", buffer_hits},
+          {"misses", buffer_misses},
+          {"hit_rate", hit_rate(buffer_hits, buffer_misses)},
+          {"created", get(counters.buffer_created)},
+          {"deleted", get(counters.buffer_deleted)},
+          {"evicted", get(counters.buffer_evicted)},
+          {"bytes", get(memory.buffer_cache_bytes)}}},
+        {"staging_bytes", get(memory.staging_bytes)},
+        {"graphics_pipelines", get(memory.graphics_pipelines)},
+        {"built_pipelines", get(memory.built_pipelines)},
+    };
+}
+
+/// The boot phases Common::BootTiming recorded (Mark and Span), oldest first: when each
+/// happened since the process started and how long it took.
+json BootTimingTool(ToolState&, const json&) {
+    json phases = json::array();
+    for (const Common::BootTiming::Phase& phase : Common::BootTiming::RecordedPhases()) {
+        phases.push_back(
+            {{"phase", phase.name}, {"at_ms", phase.at_ms}, {"took_ms", phase.took_ms}});
+    }
+    return {{"now_ms", Common::BootTiming::Now()}, {"phases", std::move(phases)}};
+}
+
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
     const auto handler = [&state](json (*tool)(ToolState&, const json&)) -> Handler {
         return [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
@@ -1401,6 +1586,10 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"read_gpu_memory", handler(ReadGpuMemory)},
         {"input", waiting(Input)},
         {"input_sequence", waiting(InputSequence)},
+        {"thread_stats", handler(ThreadStats)},
+        {"present_stats", handler(PresentStatsTool)},
+        {"cache_stats", handler(CacheStats)},
+        {"boot_timing", handler(BootTimingTool)},
     };
 }
 
