@@ -1060,8 +1060,9 @@ mod tests {
         assert_eq!(found[0].status, CheckStatus::Warn);
         assert!(found[0].text.contains("EDEN_NX2_EXTRAPOLATE=1 (this launcher leaves it out)"), "{}", found[0].text);
         assert!(found[0].text.contains("issue #119"), "{}", found[0].text);
-        // What this launcher writes now is not reported.
-        let now = block(&["EDEN_NX2_FLUID=1"]);
+        // What this launcher writes now (no switch lines: extrapolation and fluid stay with
+        // the emulator) is not reported.
+        let now = block(&[]);
         assert!(switch_file(&input(&now, Some(expected.as_slice()), &gpus)).is_empty());
         // On a PC without an Intel iGPU the launcher still writes EXTRAPOLATE=1.
         let dgpu = [rtx()];
