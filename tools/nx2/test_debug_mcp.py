@@ -168,6 +168,30 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(json.loads(result["content"][0]["text"])["running"], False)
         self.assertEqual(self.fake.requests[-1]["method"], "autopilot")
 
+    def test_boot_timing_lists_the_split_and_forwards_a_mark(self):
+        tool = next(tool for tool in debug_mcp.TOOLS if tool["name"] == "boot_timing")
+        for field in ("held_draw_ms", "held_dispatch_ms", "builds", "graphics_monolithic",
+                      "graphics_library", "graphics_fast_link", "graphics_optimized_link",
+                      "compute", "file_read_ms", "first_frame", "marks", "since_first_frame"):
+            self.assertIn(field, tool["description"])
+        mark = tool["inputSchema"]["properties"]["mark"]
+        self.assertEqual((mark["type"], mark["minLength"], mark["maxLength"]), ("string", 1, 64))
+        # The same names, in the same order, as BuildKindNames in src/common/boot_split.h.
+        header = os.path.join(HERE, "..", "..", "src", "common", "boot_split.h")
+        if os.path.isfile(header):
+            with open(header, encoding="utf-8") as file:
+                names = re.search(r"BuildKindNames\{(.*?)\};", file.read(), re.S).group(1)
+            kinds = re.findall(r'"(\w+)"', names)
+            self.assertEqual(len(kinds), 6)
+            self.assertEqual(kinds[0], "graphics_monolithic")
+            self.assertEqual(kinds[-1], "compute")
+            for kind in kinds:
+                self.assertIn(kind.replace("_pre_rasterization", "").replace("_fragment", ""),
+                              tool["description"])
+        self.call("boot_timing", {"mark": "gameplay"})
+        self.assertEqual(self.fake.requests[-1]["method"], "boot_timing")
+        self.assertEqual(self.fake.requests[-1]["params"], {"mark": "gameplay"})
+
     def test_call_once_reaches_speed_limit(self):
         # docs/nx2/debug-mcp.md: speed_limit is used through --call.
         stdout = io.StringIO()

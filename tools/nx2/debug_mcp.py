@@ -526,8 +526,22 @@ TOOLS = [
         "name": "boot_timing",
         "description": "The boot phases recorded since the process started (BootTiming Mark "
                        "and Span), oldest first: each phase's name, when it happened (ms since "
-                       "process start) and how long it took, plus now_ms.",
-        "inputSchema": {"type": "object", "properties": {}},
+                       "process start) and how long it took, plus now_ms. split holds the "
+                       "cumulative held-draw time (held_draws, held_draw_ms, held_dispatches, "
+                       "held_dispatch_ms), pipeline builds by kind (builds: count and ms for "
+                       "graphics_monolithic, the two graphics_library parts, graphics_fast_link, "
+                       "graphics_optimized_link and compute) and guest file reads (file_reads, "
+                       "file_read_bytes, file_read_ms), now (current), at the first presented "
+                       "frame (first_frame) and at each mark taken with the mark argument "
+                       "(marks, each with since_first_frame).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mark": {"type": "string", "minLength": 1, "maxLength": 64,
+                         "description": "Label of a sample of the split totals to take now, "
+                                        "for example gameplay. At most 16 marks are kept."},
+            },
+        },
     }
 ]
 

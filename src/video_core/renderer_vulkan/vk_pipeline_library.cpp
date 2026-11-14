@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <exception>
 
+#include "common/boot_split.h"
 #include "common/logging.h"
 #include "video_core/renderer_vulkan/vk_pipeline_library.h"
 
@@ -118,6 +119,10 @@ std::shared_ptr<const GplLibrary> GraphicsPipelineLibraryCache::GetOrCreate(
     if (library) {
         // The total counts every library the cache holds, the background ones too.
         total_libraries.fetch_add(1, std::memory_order_relaxed);
+        Common::BootSplit::NoteBuild(index == 0
+                                         ? Common::BootSplit::BuildKind::GraphicsLibraryPreRasterization
+                                         : Common::BootSplit::BuildKind::GraphicsLibraryFragment,
+                                     ns);
         if (!background) {
             built[index].fetch_add(1, std::memory_order_relaxed);
             build_ns[index].fetch_add(ns, std::memory_order_relaxed);
@@ -190,6 +195,9 @@ void GraphicsPipelineLibraryCache::RecordLink(bool optimized, std::chrono::nanos
     const size_t index = optimized ? 1 : 0;
     const u64 ns = static_cast<u64>(time.count());
     link_count[index].fetch_add(1, std::memory_order_relaxed);
+    Common::BootSplit::NoteBuild(optimized ? Common::BootSplit::BuildKind::GraphicsOptimizedLink
+                                           : Common::BootSplit::BuildKind::GraphicsFastLink,
+                                 ns);
     link_ns[index].fetch_add(ns, std::memory_order_relaxed);
     StoreMax(link_max_ns[index], ns);
 }

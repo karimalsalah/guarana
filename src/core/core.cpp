@@ -15,6 +15,7 @@
 #include "game_settings.h"
 #include "common/cpu_features.h"
 #include "audio_core/audio_core.h"
+#include "common/boot_split.h"
 #include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/literals.h"
@@ -136,6 +137,10 @@ double Nx2RecentFrameMs() {
 
 void RecordGuestPresent() {
     const u64 present = g_nx2_present_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (present == 1) {
+        // The debug server's boot_timing samples the held-draw, build and file read totals here.
+        Common::BootSplit::NoteFirstFrame(present);
+    }
     const u64 present_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
                                .count();
