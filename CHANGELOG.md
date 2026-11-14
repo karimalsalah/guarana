@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+- **FLUID presenter timing at refresh rates other than 60 and 120 Hz** ([#104](https://github.com/karimalsalah/guarana/issues/104)): `EDEN_NX2_FLUID_INTERP` batches no longer carry lateness of more than one slot from rounding and late real frames into every later batch, the screen copy wait (`EDEN_NX2_FLUID_QUEUE_HOST_WAIT`) ends before the next slot's wake instead of possibly making the present thread sleep through it at 75 or 144 Hz, and "% of shown frames held one slot" counts slots of four or more refreshes correctly. Not measured. Real frames on whole slots, with or without jitter, plan as before; at 60 and 120 Hz the wait bound is unchanged when the copy wait starts at the present offset (unit tests).
 
 ## [20.3.0] - 2026-11-14
 

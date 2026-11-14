@@ -31,6 +31,7 @@
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
+#include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -165,7 +166,8 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
 
 /// EDEN_NX2_FLUID_HOST_WAIT_US=<us> (500 to 16000): how long that wait lasts at most, by default
 /// 12000 at 60 shown frames a second and 4000 above 75 (at 120 a slot is 8.3 ms: a longer wait makes
-/// the present thread sleep through the next slot).
+/// the present thread sleep through the next slot). FluidSlots::CopyWaitNs cuts it to end before
+/// the next slot's wake at other refresh rates too.
 [[nodiscard]] u64 FluidHostWaitNs(f64 shown_rate) {
     static const u64 limit = [] {
         const char* value = std::getenv("EDEN_NX2_FLUID_HOST_WAIT_US");
@@ -950,6 +952,8 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
         VideoCore::AutopilotFeed::SetRefreshPeriod(period);
         const auto offset = (std::min)(FluidPresentOffsetFor(), period * 42 / 100);
+        // A screen copy wait from this wake ends in time for the next slot's wake.
+        fluid.copy_wait_due = wake + FluidSlots::CopyWaitDue(period, fluid.vblank, fluid.divisor);
         {
             std::scoped_lock lock{fluid_clock_mutex};
             fluid_clock = FluidClock{
@@ -1393,6 +1397,8 @@ void PresentManager::FluidShow(Frame* frame, u64 shown_vblank) {
     if (fluid.last_shown_vblank != 0 && shown_vblank > fluid.last_shown_vblank) {
         const u64 held = (std::min<u64>)(shown_vblank - fluid.last_shown_vblank, 4);
         ++fluid_stats.held[static_cast<size_t>(held - 1)];
+        fluid_stats.one_slot +=
+            FluidSlots::HeldOneSlot(shown_vblank, fluid.last_shown_vblank, fluid.divisor) ? 1 : 0;
     }
     fluid.last_shown_vblank = shown_vblank;
     NoteShownFrame();
@@ -1410,8 +1416,10 @@ void PresentManager::FluidPresentAhead() {
     if (fluid.showing != nullptr && fluid.showing == fluid_ahead_frame) {
         // Its copy had a slot; a copy still running is late anyway.
         const auto wait_start = std::chrono::steady_clock::now();
-        const bool copied = fluid_ahead_frame->present_done.Wait(
-                                FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+        const bool copied =
+            fluid_ahead_frame->present_done.Wait(FluidSlots::CopyWaitNs(
+                FluidHostWaitNs(FluidShownRate()),
+                fluid.copy_wait_due - std::chrono::steady_clock::now())) == VK_SUCCESS;
         if (shown_stats) {
             const f64 waited = std::chrono::duration<f64, std::milli>(
                                    std::chrono::steady_clock::now() - wait_start)
@@ -1489,7 +1497,6 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
         return;
     }
     const u64 held = stats.held[0] + stats.held[1] + stats.held[2] + stats.held[3];
-    const u64 one_slot = fluid.divisor <= stats.held.size() ? stats.held[fluid.divisor - 1] : 0;
     const auto share = [](u64 part, u64 whole) {
         return whole != 0 ? 100.0 * static_cast<f64>(part) / static_cast<f64>(whole) : 0.0;
     };
@@ -1508,9 +1515,10 @@ void PresentManager::FluidLogStats(std::chrono::steady_clock::time_point now, co
              "Fluid presenter (10 s): {:.0f}% of shown frames held one slot, held 1/2/3/4+ "
              "refreshes {}/{}/{}/{}; real frame age at display {:.1f} ms; GPU work done {:.1f} ms "
              "after recording ({} real frames); {} frames received, {} dropped unshown",
-             share(one_slot, held), stats.held[0], stats.held[1], stats.held[2], stats.held[3],
-             mean(stats.age_ms, stats.hits), mean(stats.latency_ms, stats.latency_samples),
-             stats.latency_samples, stats.received, stats.dropped);
+             share(stats.one_slot, held), stats.held[0], stats.held[1], stats.held[2],
+             stats.held[3], mean(stats.age_ms, stats.hits),
+             mean(stats.latency_ms, stats.latency_samples), stats.latency_samples, stats.received,
+             stats.dropped);
     LOG_INFO(Render_Vulkan,
              "Fluid presenter (10 s): {} late or blocked frames shown a slot later instead of "
              "dropped, {} shown frames predicted from an older real frame than the newest, {} "
@@ -1855,7 +1863,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             // A copy still running after this long is late anyway: present and move on.
             const auto wait_start = std::chrono::steady_clock::now();
             const bool copied =
-                frame->present_done.Wait(FluidHostWaitNs(FluidShownRate())) == VK_SUCCESS;
+                frame->present_done.Wait(FluidSlots::CopyWaitNs(
+                    FluidHostWaitNs(FluidShownRate()), fluid.copy_wait_due - wait_start)) ==
+                VK_SUCCESS;
             if (timed) {
                 const f64 waited = ms_since(wait_start);
                 ++fluid_stats.copy_waits;

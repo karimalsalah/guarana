@@ -391,6 +391,8 @@ private:
         u64 vblank{}; ///< vblanks counted, the last one woken for
         u64 divisor{1};
         std::chrono::steady_clock::time_point last_wake{};
+        /// A screen copy wait ends by then, so the next slot's wake is not slept through.
+        std::chrono::steady_clock::time_point copy_wait_due{};
         std::array<s64, 15> intervals{}; ///< between the last wakes, in ns
         size_t interval_count{};
         size_t interval_next{};
@@ -425,6 +427,7 @@ private:
         u64 dropped{};
         u64 received{};
         std::array<u64, 4> held{}; ///< frames shown for 1, 2, 3 and 4+ refreshes
+        u64 one_slot{};            ///< of those, frames shown for exactly one slot's refreshes
         f64 age_ms{};
         f64 latency_ms{};
         u64 latency_samples{};

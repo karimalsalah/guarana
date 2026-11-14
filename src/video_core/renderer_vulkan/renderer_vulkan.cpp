@@ -33,6 +33,7 @@
 #include "video_core/nx2_frame_predictor.h"
 #include "video_core/present.h"
 #include "video_core/render_trace.h"
+#include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #ifdef HAS_RESHADE
 #include "video_core/post_processing/fx_chain.h"
@@ -649,6 +650,9 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
     const auto recorded = std::chrono::steady_clock::now();
     frame->fluid_batch = ++fluid_batch;
     frame->fluid_recorded = recorded;
+    // A FLUID_INTERP batch after this frame starts afresh, rather than from an older real frame.
+    fluid_last_real_slot = 0;
+    fluid_last_real_recorded = {};
     const PresentManager::FluidClock slots = present_manager.GetFluidClock();
     if (!slots.Valid()) {
         // No vblank counted yet: shown in arrival order.
@@ -806,28 +810,17 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
                 std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
         }
     }
-    // As many in-between frames as the time since the last real frame spans in slots, so a real
-    // frame that comes late stretches its batch rather than leaving slots empty, and each frame's
-    // blend is its slot's share of that interval. Batches follow on from the last real frame's slot.
-    size_t wanted = generations;
-    f64 span_slots = static_cast<f64>(generations + 1);
-    if (first != 0 && fluid_last_real_slot != 0 &&
-        fluid_last_real_recorded != std::chrono::steady_clock::time_point{}) {
-        const f64 slot_ns =
-            static_cast<f64>((slots.refresh * static_cast<s64>(slots.divisor)).count());
-        const f64 interval_ns = static_cast<f64>(
-            duration_cast<nanoseconds>(recorded - fluid_last_real_recorded).count());
-        const f64 slots_between = slot_ns > 0.0 ? interval_ns / slot_ns : 0.0;
-        if (slots_between >= 1.0 && slots_between <= 24.0) {
-            span_slots = (std::max)(1.0, std::round(slots_between));
-            wanted = static_cast<size_t>(span_slots) - 1;
-            // Right after the last real frame's slot when the batch is done in time for it.
-            first = (std::max)(first, fluid_last_real_slot + slots.divisor);
-        }
-    }
-    // At most two more than the cadence's share: each extra frame costs GPU time, and a game that
-    // slows down must not get still more frames to make (and so slow down further).
-    wanted = (std::min<size_t>)(wanted, (std::min<size_t>)(generations + 2, 11));
+    // How many in-between frames, on which slots (FluidSlots::PlanInterpBatch).
+    const FluidSlots::InterpBatch interp = FluidSlots::PlanInterpBatch(
+        first,
+        fluid_last_real_recorded != std::chrono::steady_clock::time_point{} ? fluid_last_real_slot
+                                                                             : 0,
+        static_cast<f64>(duration_cast<nanoseconds>(recorded - fluid_last_real_recorded).count()),
+        static_cast<f64>((slots.refresh * static_cast<s64>(slots.divisor)).count()),
+        slots.divisor, generations);
+    first = interp.first;
+    const size_t wanted = interp.wanted;
+    const f64 span_slots = interp.span_slots;
     size_t made = 0;
     for (size_t generation = 0; generation < wanted; ++generation) {
         // Never waits: with no frame to spare the real frame comes sooner.
