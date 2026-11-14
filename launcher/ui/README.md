@@ -1,13 +1,13 @@
 # Guarana Launcher UI
 
 The web UI of the Guarana Launcher (Tauri 2): first run, game launcher, updater, doctor and problem
-reports. Vite 5 + TypeScript, no UI framework. It talks to the Rust backend only through the commands
+reports. Vite 8 + TypeScript, no UI framework. It talks to the Rust backend only through the commands
 and events in [`../CONTRACT.md`](../CONTRACT.md), and runs on sample data in a plain browser.
 
 ## Run it
 
 ```sh
-npm install          # no lockfile is committed yet, so CI needs `npm install`, not `npm ci`
+npm ci               # package-lock.json is committed; launcher's `ui:install` runs `npm ci` too
 npm run dev          # Vite on http://localhost:5173 (the port tauri.conf.json's devUrl should use)
 npm run build        # production build into dist/ (Tauri's frontendDist: ../ui/dist)
 npm run typecheck    # tsc --noEmit; kept out of `build` so a type slip can't block a Tauri build
@@ -97,9 +97,10 @@ Rejections are shown as the sentence the backend sends. The Stable/Nightly switc
 `{ channel }` to `check_updates`.
 
 `list_profiles` returns the applied profile with the user's saved values merged in, and
-`apply_profile` replaces the saved overrides, so Profile's Apply sends every toggle's value and
-"Restore defaults" applies the profile without overrides. On a first start `get_state` waits for
-the install of the bundled build; its `install://progress` shows under the boot mark.
+`apply_profile` replaces the saved overrides, so Profile's Apply sends only the toggles that differ
+from `Toggle.default` and "Restore defaults" applies the profile without overrides. On a first
+start `get_state` waits for the install of the bundled build; its `install://progress` shows under
+the boot mark.
 
 The mock mirrors the backend: the same profiles and toggles as `src-tauri/src/profiles.rs`, the
 contract's check and fix ids in order, and the stage names of every progress event.
