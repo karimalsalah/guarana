@@ -413,6 +413,12 @@ std::vector<PerfQuery::Sample> PerfQuery::Read() {
     }
     CollectLocked();
     if (collected == 0) {
+        // Queries drained but every counter reported unavailable: the Intel driver did
+        // not write results for command-buffer-scope performance queries on this queue.
+        if (drained > 0 && avail_yes == 0) {
+            reason = "the driver returned no counter data (command-buffer-scope performance "
+                     "queries are unavailable on this Intel queue; needs render-pass scope)";
+        }
         return {};
     }
     std::vector<Sample> samples;

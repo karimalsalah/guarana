@@ -1104,6 +1104,7 @@ json GpuPerf(ToolState& state, const json& params) {
     return {{"supported", true},
             {"sampling", renderer.IsGpuPerfSampling()},
             {"frames_sampled", renderer.GpuPerfFramesSampled()},
+            {"reason", renderer.GpuPerfReason()},
             {"diag", renderer.GpuPerfDiag()},
             {"counters", std::move(counters)},
             {"gpu_busy_pct", std::move(gpu_busy)},
