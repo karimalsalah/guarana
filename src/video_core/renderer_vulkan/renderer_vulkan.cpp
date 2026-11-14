@@ -45,6 +45,7 @@
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/textures/decoders.h"
+#include "video_core/video_core.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
 #include "video_core/vulkan_common/vulkan_debug_callback.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -317,7 +318,7 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         // The class and the family are the ones ApplyGamePresets gets: DeviceProfileOf reads the
         // driver ID from the physical device, so a family is known before the device is built.
         const Common::DeviceClassification machine = ClassificationOf(physical_device);
-        void(Core::GamePresets::ApplySwitchDefaults(
+        void(VideoCore::ApplyGameSwitchDefaults(
             Settings::GetCurrentProgramID(),
             {.vendor = vendor,
              .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
