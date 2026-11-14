@@ -68,6 +68,17 @@ bool FrameGenLoaded() {
     return requested;
 }
 
+/// EDEN_NX2_FLUID_IMMEDIATE=<n>, n not 0: the FLUID presenter asks for IMMEDIATE when the surface
+/// lists it (MAILBOX still wins when EDEN_NX2_FLUID_MAILBOX is on and listed). Parsed as
+/// EDEN_NX2_FLUID is. Read once.
+[[nodiscard]] bool FluidImmediateRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_IMMEDIATE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return requested;
+}
+
 #ifdef EGLANTINE_STREAMLINE
 /// Streamline asks for a flushed pipeline and no Vulkan calls while a feature unloads.
 void UnloadFrameGen(Scheduler& scheduler, const Device& device, std::string_view reason) {
@@ -135,8 +146,10 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
         const auto mode = Settings::values.vsync_mode.GetValue();
         if (FluidMode() != 0) {
             // The FLUID presenter times each present to be shown at the next vblank: FIFO, or
-            // MAILBOX with EDEN_NX2_FLUID_MAILBOX when the surface lists it.
-            return ChooseFluidPresentMode(FluidMailboxRequested(), has_mailbox);
+            // MAILBOX with EDEN_NX2_FLUID_MAILBOX, or IMMEDIATE with EDEN_NX2_FLUID_IMMEDIATE,
+            // when the surface lists it.
+            return ChooseFluidPresentMode(FluidMailboxRequested(), has_mailbox,
+                                          FluidImmediateRequested(), has_imm);
         }
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
@@ -589,6 +602,10 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (FluidMode() != 0 && FluidMailboxRequested()) {
         LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_MAILBOX: present mode {} (surface {} MAILBOX)",
                  PresentModeName(present_mode), has_mailbox ? "offers" : "does not offer");
+    }
+    if (FluidMode() != 0 && FluidImmediateRequested()) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_IMMEDIATE: present mode {} (surface {} IMMEDIATE)",
+                 PresentModeName(present_mode), has_imm ? "offers" : "does not offer");
     }
 #ifdef __ANDROID__
     // Android is already ordered the same as Switch.
