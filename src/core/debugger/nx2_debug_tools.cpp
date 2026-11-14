@@ -1101,11 +1101,17 @@ json GpuPerf(ToolState& state, const json& params) {
             freq = sample.value;
         }
     }
-    const auto [pending, begin_calls, gpu_tick] = renderer.GpuPerfDiag();
+    const auto [pending, begin_calls, flags] = renderer.GpuPerfDiag();
     return {{"supported", true},
             {"sampling", renderer.IsGpuPerfSampling()},
             {"frames_sampled", renderer.GpuPerfFramesSampled()},
-            {"diag", {{"pending", pending}, {"begin_calls", begin_calls}, {"gpu_tick", gpu_tick}}},
+            {"diag",
+             {{"pending", pending},
+              {"begin_calls", begin_calls},
+              {"scope_open", (flags & 1) != 0},
+              {"lock_held", (flags & 2) != 0},
+              {"frames_left", (flags >> 8) & 0xFFFFFFFF},
+              {"gpu_tick", (flags >> 40) & 0xFFFFFF}}},
             {"counters", std::move(counters)},
             {"gpu_busy_pct", std::move(gpu_busy)},
             {"stall_pct", std::move(stall)},

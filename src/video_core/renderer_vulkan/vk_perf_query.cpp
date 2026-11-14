@@ -390,8 +390,12 @@ u64 PerfQuery::FramesSampled() const {
 
 std::tuple<u64, u64, u64> PerfQuery::Diag() const {
     std::scoped_lock lock{mutex};
+    // Pack the gate flags into the third word: bit0 scope_open, bit1 lock_held,
+    // bits 8..39 frames_left, bits 40..63 gpu_tick (low 24 bits).
     const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
-    return {static_cast<u64>(pending_slots.size()), begin_calls, gpu_tick};
+    const u64 flags = (scope_open ? 1u : 0u) | (lock_held ? 2u : 0u) |
+                      (static_cast<u64>(frames_left) << 8) | ((gpu_tick & 0xFFFFFF) << 40);
+    return {static_cast<u64>(pending_slots.size()), begin_calls, flags};
 }
 
 void PerfQuery::ReleaseLock() {
