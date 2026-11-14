@@ -12,14 +12,19 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "common/switch_origin.h"
 
 namespace Core::GamePresets {
 namespace {
@@ -83,12 +88,16 @@ constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
 // own motion), 20 real frames a second (CADENCE=3 is a share of 60, six slots each at 120), the
 // present thread time-critical in the MMCSS Games task. Arc 140T, Hyrule Field, while Link runs:
 // 1181-1200 of 1200 slots on time per 10 s, 118-120 shown frames a second, p99 9.6-13.6 ms.
+// EXTRAPOLATE=0: with EXTRAPOLATE on, frames are extrapolated and FLUID_INTERP does nothing, and
+// the shipped nx2_switches.txt turns it on (a game's switch default replaces a value only that
+// file set). The rows above do not record whether it was unset or 0.
 constexpr std::array OCARINA_INTEL_IGPU_120_SWITCHES{
     SwitchValue{"EDEN_NX2_FLUID", "2"},
     SwitchValue{"EDEN_NX2_FLUID_INTERP", "1"},
     SwitchValue{"EDEN_NX2_FLUID_RT", "1"},
     SwitchValue{"EDEN_NX2_SHOWN_RATE", "120"},
     SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "0"},
     SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
     SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
     SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
@@ -117,8 +126,10 @@ constexpr std::array OCARINA_INTEL_IGPU_120_SWITCHES{
 // A scripted walk outdoors with this set held 17.6 to 24.1 real frames a second. The real frame
 // shown is older: 89.9 ms against 57.0 ms. A paired A-B-A-B of the first
 // two rows held in both pairs (79-83 shown a second against 44-51, 24 real against 20-22, real
-// frame age 74-87 ms against 53-57 ms; one session, 14 November). With EDEN_NX2_EXTRAPOLATE=1
-// set (the shipped nx2_switches.txt sets it, and a switch already set stays as set) the presenter
+// frame age 74-87 ms against 53-57 ms; one session, 14 November). The set names EXTRAPOLATE=0, as
+// measured, because the shipped nx2_switches.txt sets EXTRAPOLATE=1 and a game's switch default
+// replaces a value only that file set (ApplySwitchDefaults). With EDEN_NX2_EXTRAPOLATE=1 set by
+// the player (their environment or their own nx2_switches.txt), which stays as set, the presenter
 // extrapolates and FLUID_INTERP does nothing: that combination is the last row, not this one, and
 // ApplySwitchDefaults says so in its log line.
 constexpr std::array OCARINA_INTEL_IGPU_144_SWITCHES{
@@ -128,6 +139,7 @@ constexpr std::array OCARINA_INTEL_IGPU_144_SWITCHES{
     SwitchValue{"EDEN_NX2_SHOWN_RATE", "144"},
     SwitchValue{"EDEN_NX2_CADENCE", "3"},
     SwitchValue{"EDEN_NX2_CADENCE_DIVISOR", "6"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "0"},
     SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
     SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
     SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
@@ -383,7 +395,70 @@ std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu) {
 #endif
 }
 
+SwitchDecision DecideSwitch(std::optional<std::string_view> current,
+                            std::optional<std::string_view> shipped_only) {
+    if (!current) {
+        return SwitchDecision::Set;
+    }
+    // Only while the value is still the shipped file's: what changed it since is not that file.
+    if (shipped_only && *shipped_only == *current) {
+        return SwitchDecision::ReplaceShipped;
+    }
+    return SwitchDecision::KeepPlayers;
+}
+
+namespace {
+
+// A value an ApplySwitchDefaults call set, so the next call in this process (a later game start)
+// can put back what was there before it.
+struct AppliedDefault {
+    std::string name;
+    std::string value;
+    std::optional<std::string> before; ///< The shipped file's value it replaced; nullopt: unset.
+};
+
+struct AppliedDefaults {
+    std::mutex mutex;
+    std::vector<AppliedDefault> items;
+    u32 calls{};
+};
+
+AppliedDefaults& TheAppliedDefaults() {
+    static AppliedDefaults applied_defaults;
+    return applied_defaults;
+}
+
+// Sets `name` to `value` in this process's environment, or removes it when `value` is nullopt.
+void SetSwitchInEnvironment(const std::string& name, const std::optional<std::string>& value) {
+#ifdef _WIN32
+    // An empty value removes the variable.
+    _putenv_s(name.c_str(), value ? value->c_str() : "");
+#else
+    if (value) {
+        setenv(name.c_str(), value->c_str(), 1);
+    } else {
+        unsetenv(name.c_str());
+    }
+#endif
+}
+
+} // Anonymous namespace
+
 std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
+    AppliedDefaults& applied = TheAppliedDefaults();
+    const std::scoped_lock lock{applied.mutex};
+    // A game started earlier in this process: put back what its defaults set, where the value is
+    // still theirs, so none of it carries over to this game and the decisions below are those of a
+    // first start (a value an earlier default set is not the player's).
+    for (const AppliedDefault& earlier : applied.items) {
+        const char* const now = std::getenv(earlier.name.c_str());
+        if (now != nullptr && earlier.value == now) {
+            SetSwitchInEnvironment(earlier.name, earlier.before);
+        }
+    }
+    applied.items.clear();
+    const bool first_start = applied.calls == 0;
+    ++applied.calls;
 #ifdef _WIN32
     const u32 refresh_hz = PrimaryDisplayRefreshHz();
 #else
@@ -402,23 +477,46 @@ std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
         return fmt::format("switch defaults ({}) not used, automatic presets are off", why);
     }
     std::string set;
+    std::string replaced;
     std::string kept;
     for (const SwitchValue& item : defaults) {
         const std::string name{item.name};
-        if (const char* current = std::getenv(name.c_str()); current != nullptr) {
-            kept += fmt::format(" {}={}", name, current);
+        const char* const in_environment = std::getenv(name.c_str());
+        std::optional<std::string_view> current;
+        if (in_environment != nullptr) {
+            current = in_environment;
+        }
+        const std::optional<std::string> shipped = Common::SwitchOrigin::ShippedOnlyValue(name);
+        std::optional<std::string_view> shipped_only;
+        if (shipped) {
+            shipped_only = *shipped;
+        }
+        const SwitchDecision decision = DecideSwitch(current, shipped_only);
+        if (decision == SwitchDecision::KeepPlayers) {
+            kept += fmt::format(" {}={}", name, in_environment);
             continue;
         }
         const std::string value{item.value};
-#ifdef _WIN32
-        _putenv_s(name.c_str(), value.c_str());
-#else
-        setenv(name.c_str(), value.c_str(), 0);
-#endif
-        set += fmt::format(" {}={}", name, value);
+        // Listed as set over the shipped file only where it changes that file's value.
+        const bool over_shipped = decision == SwitchDecision::ReplaceShipped && *shipped != value;
+        if (over_shipped) {
+            replaced += fmt::format(" {}={} (shipped {})", name, value, *shipped);
+        } else {
+            set += fmt::format(" {}={}", name, value);
+        }
+        // After the lines above: `in_environment` points into the environment this may change.
+        SetSwitchInEnvironment(name, value);
+        Common::SwitchOrigin::RecordSetByProcess(name);
+        std::optional<std::string> before;
+        if (decision == SwitchDecision::ReplaceShipped) {
+            before = shipped;
+        }
+        applied.items.push_back(AppliedDefault{name, value, std::move(before)});
     }
-    // The locked sets leave EXTRAPOLATE out, so the loop above never names it; set elsewhere (the
-    // shipped nx2_switches.txt, the launcher) it wins over FLUID_INTERP (ExtrapolationRequested).
+    // The locked sets name EXTRAPOLATE=0, so after the loop above it is non-zero only where the
+    // player set it (their environment or their own nx2_switches.txt, the launcher's or the
+    // settings page's lines in it included); then it wins over FLUID_INTERP
+    // (ExtrapolationRequested).
     std::string extrapolating;
     if (pacing == PacingSet::Hz120 || pacing == PacingSet::Hz144) {
         if (const char* extrapolate = std::getenv("EDEN_NX2_EXTRAPOLATE");
@@ -429,14 +527,22 @@ std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
                 extrapolate);
         }
     }
-    LOG_INFO(Core, "Switch defaults for this game and GPU ({}):{}{}{}", why,
-             set.empty() ? std::string{" none needed"} : set,
-             kept.empty() ? std::string{} : fmt::format("; set by the user:{}", kept),
-             extrapolating);
-    return fmt::format("switch defaults ({}):{}{}{}", why,
-                       set.empty() ? std::string{" none needed"} : set,
-                       kept.empty() ? std::string{} : fmt::format(" (user set:{})", kept),
-                       extrapolating);
+    std::string outcome = set.empty() && replaced.empty() ? std::string{" none needed"} : set;
+    if (!replaced.empty()) {
+        outcome += fmt::format("{} over the shipped nx2_switches.txt:{}", set.empty() ? "" : ";",
+                               replaced);
+    }
+    if (!kept.empty()) {
+        outcome += fmt::format("; set by the player:{}", kept);
+    }
+    outcome += extrapolating;
+    if (!first_start) {
+        // ExtrapolationRequested and most other switches are read once per process.
+        outcome += "; not the first game started in this process: switches read once, "
+                   "EDEN_NX2_EXTRAPOLATE among them, keep the values of the first start";
+    }
+    LOG_INFO(Core, "Switch defaults for this game and GPU ({}):{}", why, outcome);
+    return fmt::format("switch defaults ({}):{}", why, outcome);
 }
 
 bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {
