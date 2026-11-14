@@ -584,7 +584,26 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
     // Don't add code within this and the swapchain creation.
     try {
-        swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        try {
+            swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        } catch (const vk::Exception& storage_exception) {
+            // EDEN_NX2_FLUID_COMPOSE: a driver that refuses the storage usage still gets the
+            // swapchain main makes, and the frames are shown by the screen copy.
+            const VkResult storage_result = storage_exception.GetResult();
+            if (!with_storage || storage_result == VK_ERROR_SURFACE_LOST_KHR ||
+                storage_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                throw;
+            }
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: the swapchain cannot be made with storage usage "
+                        "({}); frames are shown by the screen copy",
+                        storage_exception.what());
+            with_storage = false;
+            swapchain_ci.imageUsage &= ~static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT);
+            format_list.viewFormatCount = static_cast<u32>(view_formats.size());
+            format_list.pViewFormats = view_formats.data();
+            swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        }
     } catch ([[maybe_unused]] const vk::Exception& exception) {
         // A lost surface or a window still in use is transient: the present loop retries those.
         const VkResult result = exception.GetResult();
