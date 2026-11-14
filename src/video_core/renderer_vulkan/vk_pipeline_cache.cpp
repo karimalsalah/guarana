@@ -3203,44 +3203,6 @@ void PipelineCache::DropPipelinesWithoutPrepass() {
              drop.size());
 }
 
-void PipelineCache::DropPipelinesWithoutPrepass() {
-    std::vector<GraphicsPipelineCacheKey> drop;
-    for (const auto& [key, pipeline] : graphics_cache) {
-        if (pipeline != nullptr && pipeline->IsBuilt() && !pipeline->HasPrepassSplit() &&
-            key.unique_hashes[5] != 0 &&
-            VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5])) {
-            drop.push_back(key);
-        }
-    }
-    if (drop.empty()) {
-        return;
-    }
-    // As an eviction, but nothing is kept: the next draw translates the pipeline again.
-    const u64 tick = scheduler.CurrentTick();
-    for (const GraphicsPipelineCacheKey& key : drop) {
-        const auto it = graphics_cache.find(key);
-        if (it->second.get() == current_pipeline) {
-            current_pipeline = nullptr;
-        }
-        if (const auto used = used_this_session.find(it->second.get());
-            used != used_this_session.end()) {
-            used_and_evicted.try_emplace(it->first.Hash(), used->second);
-            used_this_session.erase(used);
-        }
-        evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
-        evicted_pipelines.emplace_back(tick, std::move(it->second));
-        graphics_cache.erase(it);
-    }
-    for (auto& [key, pipeline] : graphics_cache) {
-        if (pipeline) {
-            pipeline->ClearTransitions();
-        }
-    }
-    LOG_INFO(Render_Vulkan,
-             "Prepass split: {} graphics pipelines of the listed fragment shaders are made again",
-             drop.size());
-}
-
 void PipelineCache::EvictUnusedPipelines() {
     // Building a pipeline again on MoltenVK means a Metal compile mid-game, far dearer than the
     // rebuild cost below, so none are evicted there.
