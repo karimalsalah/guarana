@@ -66,7 +66,9 @@ const screen: ScreenDef = {
     const copyFallback = h("div", { class: "copy-fallback", hidden: true });
     const listEl = h("ul", { class: "checks" }, skeleton([80, 70, 85, 60, 75], "skeleton-tall"));
     const rerun = button("Run again", { kind: "secondary", size: "md", icon: "refresh" });
-    const copy = button("Copy diagnostics", { kind: "primary", size: "md", icon: "copy", primary: true });
+    // Secondary in colour: the ember buttons on this screen are the fixes for failed checks. It stays
+    // the screen's main action for a pad's Menu / Options button.
+    const copy = button("Copy diagnostics", { kind: "secondary", size: "md", icon: "copy", primary: true });
 
     const el = h(
       "div",

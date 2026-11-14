@@ -18,7 +18,7 @@ let backAction: () => void = () => undefined;
 let tabAction: (dir: 1 | -1) => void = () => undefined;
 
 const FOCUSABLE =
-  'a[href], button, input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  'a[href], button, summary, input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
 export function configureIntents(opts: { back: () => void; tab: (dir: 1 | -1) => void }): void {
   backAction = opts.back;

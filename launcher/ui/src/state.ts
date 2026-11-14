@@ -69,7 +69,7 @@ export const library = cached<Game[]>(() => api.listGames());
 export const found = new Signal<Found | null>(null);
 export const checks = new Signal<Check[] | null>(null);
 
-/** The profile the user picked on Scan or Profile, and their per-toggle overrides (not applied yet). */
+/** The profile the user picked on Profile, and their per-toggle overrides (not applied yet). */
 export const profileDraft = {
   id: null as string | null,
   overrides: {} as Overrides,
