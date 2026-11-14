@@ -30,6 +30,7 @@
 #include "video_core/nx2_hitch.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_uma.h"
+#include "video_core/renderer_vulkan/mesh_before_pass.h"
 #include "video_core/renderer_vulkan/upload_batch.h"
 #include "video_core/renderer_vulkan/vk_command_pool.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
@@ -647,20 +648,102 @@ void Scheduler::DispatchWork() {
         // The worker must receive everything recorded so far.
         FlushUploads();
     }
-    if (chunk && !chunk->Empty()) {
+    // The active pass's begin goes to the worker now (it is in a held chunk or this one), and
+    // runs whenever the worker gets to it: nothing more can be put before it.
+    pass_prelude.reset();
+    const bool send_current = chunk && !chunk->Empty();
+    if (send_current || !held_chunks.empty()) {
+        ++chunks_dispatched;
         // Waking the worker is a system call (~2% of the GPU thread at one dispatch per 8
         // draws): skip it while the worker is still busy, it pops the queue before waiting.
         bool wake;
         {
             std::scoped_lock ql{queue_mutex};
-            work_queue.push(std::move(chunk));
+            for (auto& held : held_chunks) {
+                work_queue.push(std::move(held));
+            }
+            if (send_current) {
+                work_queue.push(std::move(chunk));
+            }
             wake = worker_waiting;
         }
+        held_chunks.clear();
         if (wake) {
             event_cv.notify_all();
         }
-        AcquireNewChunk();
+        if (send_current) {
+            AcquireNewChunk();
+        }
     }
+}
+
+bool Scheduler::MeshBeforePassEnabled() {
+    static const bool enabled = [] {
+        const bool on = MeshBeforePass::ParseSwitch(std::getenv("EDEN_NX2_MESH_BEFORE_PASS"));
+        if (on) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_MESH_BEFORE_PASS: the mesh emulation's compute "
+                                    "passes run before the render pass they draw in");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
+bool Scheduler::HoldFullChunk() {
+    if (!pass_prelude || held_chunks.size() >= MaxHeldChunks) {
+        return false;
+    }
+    held_chunks.push_back(std::move(chunk));
+    AcquireNewChunk();
+    return true;
+}
+
+bool Scheduler::RecordBeforePass(const Framebuffer* framebuffer,
+                                 std::function<void(vk::CommandBuffer)>&& command) {
+    static std::atomic<u64> hoisted{};
+    static std::atomic<u64> refused{};
+    if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+        VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordBeforePass");
+    }
+    const auto decide = [&] {
+        return MeshBeforePass::Decide(MeshBeforePass::State{
+            .pass_active = IsRenderPassActive(),
+            .deferred_clear_matches = deferred_clear.framebuffer == framebuffer,
+            .has_prelude = pass_prelude != nullptr,
+            .pass_has_stores = render_pass_has_stores,
+            .uploads_pending = uploads_pending || reorders_pending,
+            .same_framebuffer = state.framebuffer == framebuffer->Handle(),
+            .same_render_area = state.render_area.width == framebuffer->RenderArea().width &&
+                                state.render_area.height == framebuffer->RenderArea().height,
+        });
+    };
+    MeshBeforePass::Verdict verdict{decide()};
+    if (verdict == MeshBeforePass::Verdict::RealizeClear) {
+        // The clear becomes this draw's pass: begin it now, with a prelude to take the command.
+        RealizeDeferredClear();
+        verdict = decide();
+    }
+    switch (verdict) {
+    case MeshBeforePass::Verdict::NoPass:
+        // No pass to cut: the caller records the command before the pass it begins.
+        return false;
+    case MeshBeforePass::Verdict::RealizeClear:
+    case MeshBeforePass::Verdict::Refuse:
+        refused.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    case MeshBeforePass::Verdict::Hoist:
+        break;
+    }
+    pass_prelude->commands.push_back(std::move(command));
+    ++record_serial;
+    const u64 count = hoisted.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count & 0xffff) == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_MESH_BEFORE_PASS: {} mesh emulation draws ran before their render "
+                 "pass, {} cut it",
+                 count, refused.load(std::memory_order_relaxed));
+    }
+    return true;
 }
 
 void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies,
@@ -827,8 +910,20 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
         Record([this, pass](vk::CommandBuffer cmdbuf) { TracePassBegin(cmdbuf, pass); });
     }
     const bool after_compute = std::exchange(compute_writes_pending, false);
+    std::shared_ptr<PassPrelude> prelude;
+    if (MeshBeforePassEnabled()) {
+        prelude = std::make_shared<PassPrelude>();
+    }
+    const u64 dispatched_before = chunks_dispatched;
     Record([renderpass, framebuffer_handle, render_area, values, clear_value_count,
-            after_compute](vk::CommandBuffer cmdbuf) {
+            after_compute, prelude](vk::CommandBuffer cmdbuf) {
+        // EDEN_NX2_MESH_BEFORE_PASS: what the pass's draws asked to run before it. The recording
+        // thread stopped adding to it when this chunk was handed over.
+        if (prelude) {
+            for (const auto& command : prelude->commands) {
+                command(cmdbuf);
+            }
+        }
         const VkRenderPassBeginInfo renderpass_bi{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .pNext = nullptr,
@@ -858,6 +953,11 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
     });
     if (trace_pass_begun) {
         Record([this](vk::CommandBuffer cmdbuf) { TracePassStamp(cmdbuf, 1); });
+    }
+    // After the last Record of the begin: a full chunk it dispatched would have taken the begin
+    // with it, and then nothing may be added to the prelude.
+    if (prelude && chunks_dispatched == dispatched_before) {
+        pass_prelude = std::move(prelude);
     }
     num_renderpass_images = framebuffer->NumImages();
     renderpass_images = framebuffer->Images();
@@ -1540,7 +1640,7 @@ void Scheduler::RecordSiteMarker(std::source_location location) {
         TraceSiteStamp(cmdbuf, file, line);
     };
     if (!chunk->Record(marker)) {
-        DispatchWork();
+        DispatchOrHold();
         (void)chunk->Record(marker);
     }
 }
@@ -2055,6 +2155,8 @@ void Scheduler::EndRenderPass()
             return;
         }
         const PassEnd end_reason = std::exchange(pass_end_reason, PassEnd::Other);
+        // The pass is over: what comes next runs after it.
+        pass_prelude.reset();
         ++recording_epoch;
         fragment_barrier.Reset();
         render_pass_has_stores = false;

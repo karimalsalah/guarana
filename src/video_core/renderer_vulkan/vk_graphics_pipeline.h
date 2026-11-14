@@ -696,6 +696,8 @@ private:
     vk::ShaderModule mesh_vertex_module;
     vk::Pipeline mesh_compute_pipeline;
     VkDescriptorSet mesh_descriptor_set{}; ///< shared by the dispatch and the draw it feeds
+    /// The draw samples one of its render targets (EDEN_NX2_MESH_BEFORE_PASS keeps it in place).
+    bool mesh_reads_targets{};
     VkBuffer mesh_output_buffer{};
     VkDeviceSize mesh_output_offset{};
     VkDeviceSize mesh_output_size{};
