@@ -2646,7 +2646,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
         // Their binaries are stored under the graphics key, one key per program
         const auto make_compute = [&](VkShaderModule module, VkPipelineLayout layout,
                                       const Shader::Info* info, u64 program) {
-            const bool uses_warp_ops{info && (info->uses_subgroup_vote ||
+            const bool uses_warp_ops{info && (info->demoted_conditional_barrier || info->uses_subgroup_vote ||
                                               info->uses_subgroup_invocation_id ||
                                               info->uses_subgroup_shuffles ||
                                               info->uses_subgroup_mask ||
@@ -3022,7 +3022,7 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
         const VkShaderStageFlagBits stage_flag{
             StageFlag(info, MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage)))};
         // Same warp size rule as the monolithic pipeline (MakePipeline).
-        const bool uses_warp_ops = info.removed_conditional_barrier || info.uses_subgroup_vote ||
+        const bool uses_warp_ops = info.demoted_conditional_barrier || info.uses_subgroup_vote ||
                                    info.uses_subgroup_invocation_id ||
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask;
         const bool force_warp_size = uses_warp_ops && device.IsExtSubgroupSizeControlSupported() &&
