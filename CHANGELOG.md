@@ -10,6 +10,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Fixed
+
+- The README no longer shows its agent, contributor and hall-of-fame sections twice (a merge doubled them), and the tools/ci tests pass again after the actions/checkout bump: the pin test reads the commit from build-check.yml, and the legacy workflow test accepts any major version.
+
 ## [20.3.0] - 2026-11-14
 
 ### Changed
