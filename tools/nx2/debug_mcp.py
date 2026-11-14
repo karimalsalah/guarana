@@ -451,6 +451,48 @@ TOOLS = [
         "description": "GPU trace recorder state: requested, recording, presents so far and "
                        "wanted, the path, the last trace written and the last error.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "thread_stats",
+        "description": "Guest threads' CPU time and waits (needs EDEN_NX2_GUEST_THREAD_STATS at "
+                       "launch): per thread, time on a core split into game code, counter "
+                       "polling, hint spins, GPU-cached memory and read-backs, kernel time, "
+                       "time ready without a core, and waits by kind (IPC, sync objects, "
+                       "arbiter, condvar, lock, sleep) with counts. Totals since boot, busiest "
+                       "first; 'top' limits the rows. 'enabled' false means the counters are "
+                       "off.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"top": {"type": "integer", "minimum": 1, "maximum": 128}},
+        },
+    },
+    {
+        "name": "present_stats",
+        "description": "The present thread's counters: the FLUID presenter's slots, hits, "
+                       "missed (no_frame, not_done, uncovered, queued, overslept), rolled, "
+                       "spare, stale, in_order, late, dropped, frames held 1/2/3/4+ refreshes, "
+                       "real-frame age at display and record-to-GPU-done latency, and the "
+                       "present thread's acquire/copy-wait/submit-lock/present-call times "
+                       "(needs EDEN_NX2_SHOWN_STATS at launch for the counters). The vblank "
+                       "clock (refresh_hz, divisor, lead) and the present queue depth are live "
+                       "regardless. Vulkan only.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cache_stats",
+        "description": "Texture and buffer cache hit/miss/eviction counters since boot: lookups "
+                       "that found a live image/buffer vs made a new one, hit rates, images "
+                       "and buffers created, deleted and evicted by the collector (texture "
+                       "evictions that downloaded first), with the device memory in use "
+                       "against the texture cache thresholds and the buffer cache's bytes.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "boot_timing",
+        "description": "The boot phases recorded since the process started (BootTiming Mark "
+                       "and Span), oldest first: each phase's name, when it happened (ms since "
+                       "process start) and how long it took, plus now_ms.",
+        "inputSchema": {"type": "object", "properties": {}},
     }
 ]
 

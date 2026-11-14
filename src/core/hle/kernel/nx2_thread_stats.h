@@ -6,6 +6,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <string>
+#include <vector>
 #include "common/common_types.h"
 
 namespace Kernel {
@@ -122,5 +124,30 @@ void OnStateChanged(KThread* thread, s64 now, bool was_waiting, bool now_runnabl
 void OnPresent(KThread* client);
 /// HoldHleReply kept the reply to `client` back for `ns`.
 void AddHold(KThread* client, s64 ns);
+
+/// One guest thread's totals for the debug server's thread_stats tool. Times are guest counter
+/// ticks (CoreTiming's clock, Common::g_wall_clock.GetGuestCNTFRQ()); presents and the wait
+/// counts are plain counts. Monotonic since the thread first ran.
+struct ThreadSnapshot {
+    u64 thread_id{};
+    std::string process;
+    s32 priority{};
+    u64 affinity{};
+    u64 on_core_ticks{};
+    u64 jit_ticks{};
+    u64 poll_ticks{};
+    u64 hint_spin_ticks{};
+    u64 memory_ticks{};
+    u64 read_back_ticks{};
+    u64 ready_ticks{};
+    u64 held_ns{};
+    u64 presents{};
+    std::array<u64, Waits> wait_ticks{};
+    std::array<u64, Waits> wait_counts{};
+};
+
+/// Every registered thread's totals now, busiest (most time on a core) first. Empty unless
+/// EDEN_NX2_GUEST_THREAD_STATS is set: the counters only fill then.
+[[nodiscard]] std::vector<ThreadSnapshot> Snapshot();
 
 } // namespace Kernel::Nx2ThreadStats
