@@ -11,13 +11,10 @@
 #include <string>
 
 #include "common/common_types.h"
+#include "core/game_presets.h"
 
 namespace Core {
 class System;
-}
-
-namespace Core::GamePresets {
-struct GpuInfo;
 }
 
 namespace Core::Frontend {
