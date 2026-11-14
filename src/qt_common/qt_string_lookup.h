@@ -114,7 +114,7 @@ static const constexpr frozen::map<StringKey, frozen::string, 29> strings = {
                 "Select the corresponding button to migrate data from that emulator.\n"
                 "This may take a while.")},
     {MigrationTooltipClearShader, QT_TR_NOOP("Clearing shader cache is recommended when migrating "
-                                             "from another emulator.\nEarlier Guarana builds kept "
+                                             "from another emulator.\nEarlier Lichii builds kept "
                                              "their own cache in Eden's directory.")},
     {MigrationTooltipKeepOld,
      QT_TR_NOOP("Keeps the old data directory. This is recommended if you aren't\n"

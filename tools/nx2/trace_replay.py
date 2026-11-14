@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Replays GPU traces (docs/nx2/gpu-trace.md) and compares their frames.
 
-  trace_replay.py replay --cli <eden-cli> <trace> --out <dir>
-  trace_replay.py compare --base <eden-cli> --head <eden-cli> <trace> --out <dir>
-  trace_replay.py check --cli <eden-cli> --corpus tests/gpu_traces/corpus.json [--traces <dir>]
+  trace_replay.py replay --cli <guarana-cli> <trace> --out <dir>
+  trace_replay.py compare --base <guarana-cli> --head <guarana-cli> <trace> --out <dir>
+  trace_replay.py check --cli <guarana-cli> --corpus tests/gpu_traces/corpus.json [--traces <dir>]
+
+<guarana-cli> is the path of the SDL frontend (eden-cli before v20.2).
 
 compare replays one trace on two builds and writes <out>/index.html with the frames side by
 side and, per frame, the hashes, the largest channel difference, the mean difference and PSNR.
@@ -49,7 +51,7 @@ def device_class(renderer):
 
 
 def read_png(path):
-    """Decodes an 8-bit RGBA or RGB PNG (what eden-cli writes) to (width, height, rgba bytes)."""
+    """Decodes an 8-bit RGBA or RGB PNG (what guarana-cli writes) to (width, height, rgba bytes)."""
     data = Path(path).read_bytes()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError(f"{path} is not a PNG")
