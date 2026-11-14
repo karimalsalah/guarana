@@ -1,0 +1,2 @@
+- A render target that gets no memory is left out of the framebuffer instead of being bound as the null view, which handed the driver a null attachment (an access violation on AMD's Windows driver with a small UMA carve-out). Port of [zortos293/Lichii#1766](https://github.com/zortos293/Lichii/pull/1766).
+- The pipeline prebuild's failed-translation counter takes its lock as `failed_lock`, so GCC's `-Wshadow` does not stop the build (port of [zortos293/Lichii#1759](https://github.com/zortos293/Lichii/pull/1759)).

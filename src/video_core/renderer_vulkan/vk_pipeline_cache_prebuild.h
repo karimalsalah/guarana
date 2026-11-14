@@ -94,7 +94,7 @@ public:
                     }
                     if (!pipeline) {
                         {
-                            std::scoped_lock lock{mutex};
+                            std::scoped_lock failed_lock{mutex};
                             ++failed;
                         }
                         finish(done);
