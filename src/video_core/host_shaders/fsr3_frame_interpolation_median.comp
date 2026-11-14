@@ -1,0 +1,57 @@
+#version 460 core
+
+// EDEN_NX2_FG_MEDIAN_ONCE: fsr3_frame_interpolation.comp with the 3x3 motion median read from the
+// image fsr3_motion_median.comp wrote once for this real frame (binding 2), with one fetch.
+// Everything after the motion lookup is the same as in fsr3_frame_interpolation.comp: change one,
+// change the other.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D CurrentFrame;
+layout(binding = 1) uniform sampler2D PreviousFrame;
+layout(binding = 2) uniform sampler2D MedianMotion;
+layout(binding = 3) uniform writeonly image2D OutGeneratedFrame;
+
+layout(push_constant) uniform PushConstants {
+    vec2 inv_render_size;
+    vec2 render_size;
+    float blend_factor; // timestamp between 0.0 and 1.0
+    float flow_scale;
+};
+
+void main() {
+    ivec2 pixel_coord = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel_coord.x >= int(render_size.x) || pixel_coord.y >= int(render_size.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel_coord) + 0.5) * inv_render_size;
+
+    // The median of the 3x3 around the flow texel this pixel falls in: one fetch.
+    ivec2 flow_size = textureSize(MedianMotion, 0);
+    ivec2 flow_coord = clamp(ivec2(uv * vec2(flow_size)), ivec2(0), flow_size - ivec2(1));
+    vec2 motion = texelFetch(MedianMotion, flow_coord, 0).xy / vec2(flow_size);
+
+    // Forward and backward warped coordinates
+    vec2 forward_uv  = clamp(uv + motion * blend_factor,         0.0, 1.0);
+    vec2 backward_uv = clamp(uv - motion * (1.0 - blend_factor), 0.0, 1.0);
+
+    vec4 forward_color  = texture(PreviousFrame, forward_uv);
+    vec4 backward_color = texture(CurrentFrame,  backward_uv);
+
+    // Colour-difference occlusion
+    vec3 color_diff = abs(forward_color.rgb - backward_color.rgb);
+    float occlusion = clamp(dot(color_diff, vec3(0.333)) * 2.0, 0.0, 1.0);
+
+    // Smooth bilateral interpolation, bias toward centre on occlusion
+    float alpha = mix(blend_factor, 0.5, occlusion * 0.4);
+    vec4 interpolated = mix(forward_color, backward_color, alpha);
+
+    // Anti-flicker: blend with un-warped centre pixel
+    float motion_magnitude = length(motion * render_size);
+    float direct_weight = exp(-motion_magnitude * 0.5);
+    vec4 center_color = mix(texture(PreviousFrame, uv), texture(CurrentFrame, uv), blend_factor);
+    interpolated = mix(interpolated, center_color, direct_weight * 0.3);
+
+    imageStore(OutGeneratedFrame, pixel_coord, interpolated);
+}
