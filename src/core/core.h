@@ -247,14 +247,6 @@ public:
     [[nodiscard]] SystemResultStatus SetupHeadlessVideo(Frontend::EmuWindow& emu_window,
                                                         u64 title_id);
 
-    /**
-     * Creates the GPU and the renderer for `title_id` with no guest program, so that the renderer's
-     * disk caches can be loaded and built (eden-cli --warm-pipelines). The system is not powered
-     * on. End it with ShutdownMainProcess(), as after Load.
-     * @returns Success, or ErrorMemoryAllocation / ErrorVideoCore.
-     */
-    [[nodiscard]] SystemResultStatus SetupHeadlessVideo(Frontend::EmuWindow& emu_window,
-                                                        u64 title_id);
 
     /**
      * Indicates if the emulated system is powered on (all subsystems initialized and able to run an
