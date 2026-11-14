@@ -254,10 +254,14 @@ private:
     /// or written or, with `skip_same_size`, its size is the one the file holds (the exit's save
     /// doesn't take that guess). There, with `max_lock_wait`, each of a few tries a second apart
     /// waits that long for the running builds, and the save is dropped when none gets the lock.
+    /// `saved`, when given, is set to whether the file now holds what the cache held when read
+    /// (written, or left as it is because it held that already); false when the save was dropped
+    /// or failed, which still returns a size.
     size_t SerializeVulkanPipelineCache(
         const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
         u32 cache_version, bool skip_same_size = false,
-        std::optional<std::chrono::milliseconds> max_lock_wait = std::nullopt);
+        std::optional<std::chrono::milliseconds> max_lock_wait = std::nullopt,
+        bool* saved = nullptr);
 
     vk::PipelineCache LoadVulkanPipelineCache(const std::filesystem::path& filename,
                                               u32 expected_cache_version);
@@ -266,9 +270,12 @@ private:
 
     /// Queues one write of the driver pipeline cache file on the serialization thread, with no
     /// throttle. For the end of a precache: its builds never reach the timed flush, which counts
-    /// only pipelines built during play. Where reads are serialized against builds, it writes it
-    /// here instead, before the background prebuild starts.
-    void QueueVulkanPipelineCacheSave();
+    /// only pipelines built during play. Where reads are serialized against builds, or can't be
+    /// made during builds at all (Intel's Windows driver), it writes it here instead, before the
+    /// background prebuild starts. `on_saved` runs once the file holds the precache's builds (not
+    /// when the save fails): the precache markers, which say what the file holds. Without a file
+    /// to save (the driver cache is off) it runs here.
+    void QueueVulkanPipelineCacheSave(Common::UniqueFunction<void> on_saved);
 
     /// One build of the shader precache: a compute pipeline built and destroyed
     struct PrecacheJob {
@@ -283,8 +290,9 @@ private:
     /// built, then thrown away. They only fill the driver's shader cache, so a later build of the
     /// same pipeline finds the driver's work done. The cached graphics pipelines the boot skipped
     /// are the background prebuild's. Reports progress through `callback` and returns when it is
-    /// done, skipped from the loading screen or the load is stopped.
-    void PrecacheShaders(u64 title_id, std::stop_token stop_loading,
+    /// done, skipped from the loading screen or the load is stopped. `boot_saved`: whether the
+    /// boot's save of the driver cache file succeeded.
+    void PrecacheShaders(u64 title_id, bool boot_saved, std::stop_token stop_loading,
                          const VideoCore::DiskResourceLoadCallback& callback);
 
     const Device& device;
