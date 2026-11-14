@@ -1,0 +1,65 @@
+#version 460 core
+
+// EDEN_NX2_FG_MEDIAN_ONCE: the 3x3 median of the optical flow's motion field, written once per
+// real frame at flow resolution. fsr3_frame_interpolation_median.comp reads it with one fetch.
+// This is fsr3_frame_interpolation.comp's sampleMotionMedian, run at the centre of each flow
+// texel. The nine values come from the same four gathers (clamp to border: outside the image is
+// zero motion), except that the centre is the texel itself where the per-pixel version samples
+// the field bilinearly at the output pixel's position.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D MotionVectors;
+layout(binding = 1, rg16f) uniform writeonly image2D OutMedianMotion;
+
+void insertionSort5(inout float a[5]) {
+    for (int i = 1; i < 5; i++) {
+        float key = a[i];
+        int j = i - 1;
+        while (j >= 0 && a[j] > key) {
+            a[j + 1] = a[j];
+            j--;
+        }
+        a[j + 1] = key;
+    }
+}
+
+void main() {
+    ivec2 texel_coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 flow_size = textureSize(MotionVectors, 0);
+    if (texel_coord.x >= flow_size.x || texel_coord.y >= flow_size.y) {
+        return;
+    }
+
+    vec2 texel = 1.0 / vec2(flow_size);
+    vec2 uv = (vec2(texel_coord) + 0.5) * texel;
+
+    // Each gather returns a 2x2 quad: .x = bottom left, .y = bottom right, .z = top right,
+    // .w = top left. The quad of gather 0 has the centre texel as its bottom right.
+    vec4 gx0 = textureGather(MotionVectors, uv + vec2(-0.5, -0.5) * texel, 0);
+    vec4 gx1 = textureGather(MotionVectors, uv + vec2( 0.5, -0.5) * texel, 0);
+    vec4 gx2 = textureGather(MotionVectors, uv + vec2(-0.5,  0.5) * texel, 0);
+    vec4 gx3 = textureGather(MotionVectors, uv + vec2( 0.5,  0.5) * texel, 0);
+
+    vec4 gy0 = textureGather(MotionVectors, uv + vec2(-0.5, -0.5) * texel, 1);
+    vec4 gy1 = textureGather(MotionVectors, uv + vec2( 0.5, -0.5) * texel, 1);
+    vec4 gy2 = textureGather(MotionVectors, uv + vec2(-0.5,  0.5) * texel, 1);
+    vec4 gy3 = textureGather(MotionVectors, uv + vec2( 0.5,  0.5) * texel, 1);
+
+    float xs[9] = float[](gx0.w, gx1.w, gx1.z, gx0.x, gx0.y, gx1.y, gx2.x, gx3.x, gx3.y);
+    float ys[9] = float[](gy0.w, gy1.w, gy1.z, gy0.x, gy0.y, gy1.y, gy2.x, gy3.x, gy3.y);
+
+    // The median is element 4 of the sorted nine: sort the first five, then let each of the
+    // other four replace the largest of the five smallest when it is smaller.
+    float xlo[5] = float[](xs[0], xs[1], xs[2], xs[3], xs[4]);
+    float ylo[5] = float[](ys[0], ys[1], ys[2], ys[3], ys[4]);
+    insertionSort5(xlo);
+    insertionSort5(ylo);
+
+    for (int i = 5; i < 9; i++) {
+        if (xs[i] < xlo[4]) { xlo[4] = xs[i]; insertionSort5(xlo); }
+        if (ys[i] < ylo[4]) { ylo[4] = ys[i]; insertionSort5(ylo); }
+    }
+
+    imageStore(OutMedianMotion, texel_coord, vec4(xlo[4], ylo[4], 0.0, 0.0));
+}
