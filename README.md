@@ -258,7 +258,7 @@ flowchart LR
 
 Before v20.3 the screen copy shared the graphics queue and waited behind the game's queued work. Now it runs on a queue of its own at default priority, beside the game's rendering, and the present thread waits for the copy to finish before it presents. The frame budget now only lowers the resolution: raising it into the GPU time the cadence frees would keep the GPU queue deep.
 
-**v20.3 defaults for Ocarina of Time on a Windows integrated GPU.** The game's preset sets them, only where you left them at their defaults; `EDEN_NX2_NO_PRESETS=1` or *Automatic presets* off turns it off.
+**v20.3 defaults for Ocarina of Time on a Windows integrated GPU, the 60 Hz set.** The game's preset sets them, only where you left them at their defaults; `EDEN_NX2_NO_PRESETS=1` or *Automatic presets* off turns it off. Intel iGPUs with a 120 or 144 Hz primary display get the locked sets in [docs/switches.md](docs/switches.md#defaults-for-ocarina-of-time-on-a-windows-integrated-gpu).
 
 | Switch or setting | Value | What it does |
 |---|---|---|
