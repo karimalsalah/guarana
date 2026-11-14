@@ -69,12 +69,14 @@ Guarana is tuned for integrated GPUs: **Intel Arc first, AMD handhelds next, and
 
 *Community reports* are third-party numbers from other builds and scenes. For context, a survey of other Switch 2 forks, as of 2026-11-13, found none claiming more than 26 fps in Hyrule Field on an Intel integrated GPU. Requirements, vendor notes and the device profile line: [docs/DEVICES.md](docs/DEVICES.md). Reports feed the leaderboard on the [benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html).
 
-## Coming in v20.3
+<a name="coming-in-v203"></a>
 
-Merged on `main` and listed under [Unreleased](CHANGELOG.md#unreleased) in the changelog; it reaches [Releases](https://github.com/karimalsalah/guarana/releases) with the next version.
+## New in v20.3
+
+Released in [v20.3.0](https://github.com/karimalsalah/guarana/releases/tag/v20.3.0) on 2026-11-14; the details are in the [changelog](CHANGELOG.md#2030---2026-11-14).
 
 - **Frames on time in Ocarina of Time** on Windows integrated GPUs, by default: the screen copy runs on a queue of its own, and the frame budget no longer raises the resolution into the GPU time the cadence frees. The numbers are at the top of this page.
-- **FLUID at 120 Hz**, opt-in (`EDEN_NX2_SHOWN_RATE=120`, or a frame generation target of 120): a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790-801 to 1134-1137 of 1200.
+- **FLUID at 120 Hz**, the default for Ocarina of Time on Windows Intel integrated GPUs with a 120 Hz primary display (a 144 Hz one gets a locked 144 Hz set), and opt-in elsewhere (`EDEN_NX2_SHOWN_RATE=120`, or a frame generation target of 120): a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790-801 to 1134-1137 of 1200.
 - **Fewer freezes.** Pointer-slot compute rebuilds compile on a worker, which removes 2.5-3.4 s freezes in Hyrule Field (upstream [#995](https://github.com/zortos293/Lichii/pull/995)), and guest writes no longer block the game thread when the caches are busy (upstream [#1602](https://github.com/zortos293/Lichii/pull/1602)).
 - **A device profile in the log**: GPU, CPU cores, RAM, power, display refresh and a device class, in one line you can paste into a report. No default changes with it yet ([docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log)).
 - **Launcher:** an opt-in three-level [Game Booster](launcher/CONTRACT.md#game-booster) that undoes everything when the game exits, and [Windows integration](launcher/README.md#windows-integration): game files open from Explorer, `guarana://` links, taskbar progress and opt-in notifications.
@@ -298,7 +300,7 @@ flowchart LR
 
 Before v20.3 the screen copy shared the graphics queue and waited behind the game's queued work. Now it runs on a queue of its own at default priority, beside the game's rendering, and the present thread waits for the copy to finish before it presents. The frame budget now only lowers the resolution: raising it into the GPU time the cadence frees would keep the GPU queue deep.
 
-**v20.3 defaults for Ocarina of Time on a Windows integrated GPU.** The game's preset sets them, only where you left them at their defaults; `EDEN_NX2_NO_PRESETS=1` or *Automatic presets* off turns it off.
+**v20.3 defaults for Ocarina of Time on a Windows integrated GPU, the 60 Hz set.** The game's preset sets them, only where you left them at their defaults; `EDEN_NX2_NO_PRESETS=1` or *Automatic presets* off turns it off. Intel iGPUs with a 120 or 144 Hz primary display get the locked sets in [docs/switches.md](docs/switches.md#defaults-for-ocarina-of-time-on-a-windows-integrated-gpu).
 
 | Switch or setting | Value | What it does |
 |---|---|---|
@@ -329,7 +331,7 @@ A real frame that lands between two refreshes cannot stay up as long as the one 
 
 ## Roadmap
 
-**Planned next** (no dates yet): **per-device defaults.** v20.3 logs a device class at boot; a default for a class comes only with a paired run on a verified scene of that class ([docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log)). The Game Booster, signed build provenance and the Windows integrations that were on this list are in v20.3 ([Coming in v20.3](#coming-in-v203)).
+**Planned next** (no dates yet): **per-device defaults.** v20.3 logs a device class at boot; a default for a class comes only with a paired run on a verified scene of that class ([docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log)). The Game Booster, signed build provenance and the Windows integrations that were on this list are in v20.3 ([New in v20.3](#coming-in-v203)).
 
 **Open in [ROADMAP.md](ROADMAP.md)**, each item with a problem, a plan and a definition of done: the Intel pipeline-cache crash ([IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)), shader translation off the GPU thread, persisted SPIR-V, non-blocking boot and memory-mapped caches, cheaper Intel pipeline compiles, the AMD Radeon iGPU path, disocclusion fill for predicted frames and shader-need prediction. Later: LSE atomics in the JIT, handheld mode and hotkeys, portable mode out of the box, and auto-update. What already shipped: [CHANGELOG.md](CHANGELOG.md).
 

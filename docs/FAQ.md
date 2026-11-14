@@ -142,8 +142,8 @@ off, from one shader fix. Other machines are untested: send a [device report](DE
 
 Two causes. Entering a new area compiles shaders once (0.4-1 s per pipeline on Intel). Uneven frame times are pacing: the
 vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against
-33-54% before, and ships in the next release. A development build (v21) measured 19 stutters per 30 s in a scene that
-had 37-92 on the old setup. One laptop, one scene. [Detail](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html).
+33-54% before; it shipped in v20.1 and is the default for Ocarina of Time on Windows iGPUs since v20.2. A development
+build (v21) measured 19 stutters per 30 s in a scene that had 37-92 on the old setup. One laptop, one scene. [Detail](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html).
 
 ### I get a black screen or a crash
 

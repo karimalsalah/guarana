@@ -64,7 +64,7 @@
       "applicationCategory": "GameApplication",
       "applicationSubCategory": "Game console emulator",
       "operatingSystem": "Windows, Linux, macOS",
-      "softwareVersion": "20.2.0",
+      "softwareVersion": "20.3.0",
       "downloadUrl": "https://github.com/karimalsalah/guarana/releases/latest",
       "installUrl": "https://github.com/karimalsalah/guarana/releases/latest",
       "releaseNotes": "https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md",
@@ -236,7 +236,7 @@
       <div><dt>Driver</dt><dd>Intel 32.0.101.9175</dd></div>
       <div><dt>Display</dt><dd>120 Hz OLED; a slot is one 16.7 ms display interval</dd></div>
     </dl>
-    <p>The v20.3 defaults are merged on <code>main</code> and come with the next release. Game fps counts only frames the game renders; generated frames never count. No input latency figure is published yet.</p>
+    <p>The v20.3 defaults shipped in v20.3.0. Game fps counts only frames the game renders; generated frames never count. No input latency figure is published yet.</p>
     <p><a href="benchmarks.html">All results and third-party reports</a> &middot; <a href="https://github.com/karimalsalah/guarana/blob/main/docs/switches.md">Every switch with its measurement</a> &middot; <a href="https://github.com/karimalsalah/guarana/blob/main/docs/BENCHMARKING.md">How to measure on your machine</a></p>
   </div>
 </section>
@@ -356,11 +356,11 @@
 
 <section class="section" aria-labelledby="next">
   <div class="wrap">
-    <h2 id="next">Coming in v20.3</h2>
-    <p class="section-intro">Merged on <code>main</code>, listed under Unreleased in the <a href="https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md">changelog</a>, and in the next release.</p>
+    <h2 id="next">New in v20.3</h2>
+    <p class="section-intro">Released in v20.3.0 on 2026-11-14; see the <a href="https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md">changelog</a>.</p>
     <ul>
       <li><strong>Frames on time in Ocarina of Time</strong> on Windows integrated GPUs, by default: the screen copy runs on a queue of its own, and the frame budget no longer raises the resolution into the GPU time the cadence frees. The numbers are at the top of this page.</li>
-      <li><strong>FLUID at 120 Hz</strong>, opt-in: a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790&ndash;801 to 1134&ndash;1137 of 1200.</li>
+      <li><strong>FLUID at 120 Hz</strong>, the default for Ocarina of Time on Windows Intel iGPUs at 120 Hz (a 144 Hz display gets a locked 144 Hz set), opt-in elsewhere: a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790&ndash;801 to 1134&ndash;1137 of 1200.</li>
       <li><strong>Fewer freezes:</strong> pointer-slot compute rebuilds compile on a worker, which removes 2.5&ndash;3.4 s freezes in Hyrule Field (upstream Lichii #995).</li>
       <li><strong>A device profile in the log:</strong> GPU, CPU cores, RAM, power, display refresh and a device class, in one line you can paste into a report. No default changes with it yet.</li>
       <li><strong>Launcher:</strong> an opt-in three-level Game Booster that undoes everything when the game exits, and Windows integration: game files open from Explorer, <code>guarana://</code> links, taskbar progress and opt-in notifications.</li>
@@ -441,7 +441,6 @@
     <h3 class="group-title">Known issues, in the open</h3>
     <ul class="issues">
       <li>First visit to an area hitches while shaders compile; later visits load them from the cache, and a headless warm-up can build the cached ones ahead of time.</li>
-      <li>Until v20.3 is released, v20.2.0 still flips about 200 frames per 10 s late in Hyrule Field on the Arc 140T; the v20.3 defaults bring that to 0.</li>
       <li>Intel driver crash when the pipeline cache is saved during builds (IGCIT #1614): open on the roadmap. <code>EDEN_NX2_CACHE_SAFE=1</code> avoids it but can deadlock at boot, so it stays off.</li>
       <li>No input latency figure is published yet.</li>
     </ul>

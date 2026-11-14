@@ -89,7 +89,7 @@
           "name": "Does frame generation work on Intel Arc?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing has improved in the next release: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before."
+            "text": "Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing improved in v20.1: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before."
           }
         },
         {
@@ -97,7 +97,7 @@
           "name": "Why do Arc laptops hitch when I enter a new area?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) ships in the next release."
+            "text": "Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) shipped in v20.1."
           }
         }
       ]
@@ -192,9 +192,9 @@
       <tbody>
         <tr><td data-label="What">Hyrule Field, one shader fix (<code>EDEN_NX2_GM=11</code>), frame generation off</td><td data-label="Before">14.8 game fps</td><td data-label="After"><strong>22.8 game fps</strong></td><td data-label="Status">Shipped in v20; on by default for Ocarina of Time only</td></tr>
         <tr><td data-label="What">Foliage mesh draw, same runs</td><td data-label="Before">15.7 ms GPU</td><td data-label="After"><strong>5.8 ms GPU</strong></td><td data-label="Status">Shipped in v20</td></tr>
-        <tr><td data-label="What">Frame pacing, title screen: frames within 2 ms of the median interval</td><td data-label="Before">n/a</td><td data-label="After"><strong>100%</strong></td><td data-label="Status">Next release</td></tr>
-        <tr><td data-label="What">Same measure, Hyrule Field</td><td data-label="Before">33-54%</td><td data-label="After"><strong>75%</strong></td><td data-label="Status">Next release</td></tr>
-        <tr><td data-label="What">Headless shader warm-up</td><td data-label="Before">n/a</td><td data-label="After"><strong>4,515 pipelines in 155 s</strong></td><td data-label="Status">Next release</td></tr>
+        <tr><td data-label="What">Frame pacing, title screen: frames within 2 ms of the median interval</td><td data-label="Before">n/a</td><td data-label="After"><strong>100%</strong></td><td data-label="Status">In v20.1, opt-in; default for Ocarina of Time on Windows iGPUs since v20.2</td></tr>
+        <tr><td data-label="What">Same measure, Hyrule Field</td><td data-label="Before">33-54%</td><td data-label="After"><strong>75%</strong></td><td data-label="Status">In v20.1, opt-in; default for Ocarina of Time on Windows iGPUs since v20.2</td></tr>
+        <tr><td data-label="What">Headless shader warm-up</td><td data-label="Before">n/a</td><td data-label="After"><strong>4,515 pipelines in 155 s</strong></td><td data-label="Status">Since v20.1 (<code>guarana-cli --warm-pipelines</code>)</td></tr>
       </tbody>
     </table>
   </div>
@@ -230,11 +230,11 @@
 </div>
 <div class="faq-item">
   <h3>Does frame generation work on Intel Arc?</h3>
-  <p>Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing has improved in the next release: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before.</p>
+  <p>Yes, the extrapolating frame generation runs on the iGPU and was measured on the Arc 140T. Pacing improved in v20.1: 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before.</p>
 </div>
 <div class="faq-item">
   <h3>Why do Arc laptops hitch when I enter a new area?</h3>
-  <p>Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) ships in the next release.</p>
+  <p>Intel's driver spends about 0.4 to 1 s compiling each pipeline the first time. They are cached afterwards. Shader warm-up (4,515 pipelines in 155 s on our laptop, headless) shipped in v20.1.</p>
 </div>
 </section>
 <section class="section" aria-labelledby="next">
