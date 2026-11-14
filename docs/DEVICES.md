@@ -179,6 +179,21 @@ class or a family comes only with a paired run on a verified scene of that class
 ([AGENTS.md](../AGENTS.md), rule 1). The line holds no paths or names from your machine, so you
 can paste it into a report as it is.
 
+## The resolution line in the log
+
+After the device profile, the log gets one `Core` Info line that starts `Resolution:`. It says what
+the game's settings preset, its add-ons and its pacing switches were resolved to on this machine,
+what was decided for each given what you had set (`set`, `already set`, `kept`, `over shipped`),
+and how many of the values rest on a measured row of [switches.md](switches.md). The same data,
+with each entry's reason and evidence, is the debug server's `status.resolution`
+([nx2/debug-mcp.md](nx2/debug-mcp.md)). The line also records the output size against the GPU's
+size: the pixels of the display the window is on, the GPU's compute units or SMs where the driver
+reports them (AMD and NVIDIA; Intel's Windows driver does not, so it says `not reported by the
+driver`), and the output pixels per core. On the reference laptop (2880x1800 on 4 Xe3 cores) 72
+shown frames measured better than 144 on every metric; nothing decides by these numbers yet, they
+are logged so that reports from other machines carry them. A default that follows them needs a
+paired run on a verified scene first ([AGENTS.md](../AGENTS.md), rule 1).
+
 ## Send a device report
 
 [Open a device report](https://github.com/karimalsalah/guarana/issues/new/choose), or attach bench rows

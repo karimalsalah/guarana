@@ -8,6 +8,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include "common/device_profile.h"
@@ -51,6 +52,11 @@ struct DeviceStartProfile {
     Common::DeviceProfile machine;
     Common::DeviceClassification classification;
     Core::GameSettings::GPUVendor vendor{Core::GameSettings::GPUVendor::Unknown};
+    /// The GPU's compute units or SMs where the driver reports them (VK_AMD_shader_core_properties,
+    /// VK_NV_shader_sm_builtins), else 0; what it counts is `gpu_cores_unit`. A resolver input
+    /// only. Intel's Windows driver reports neither.
+    u32 gpu_cores{};
+    std::string_view gpu_cores_unit;
 };
 
 /// window: the native window (an HWND on Windows) whose display's refresh rate the profile and

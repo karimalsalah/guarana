@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 
+#include "common/common_types.h"
+
 namespace Common {
 
 /// Waits for the vertical blanks of the display a window is on: on Windows through the window's
@@ -41,6 +43,14 @@ public:
 
     /// Whether the window's display is the primary one. False when unknown.
     [[nodiscard]] bool OnPrimaryDisplay() const;
+
+    /// The pixels of the window's display's current mode, 0 by 0 when unknown.
+    struct Pixels {
+        u32 width{};
+        u32 height{};
+    };
+
+    [[nodiscard]] Pixels ReportedPixels() const;
 
     [[nodiscard]] Source CurrentSource() const;
 

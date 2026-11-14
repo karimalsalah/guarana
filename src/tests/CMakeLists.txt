@@ -34,6 +34,7 @@ add_executable(tests
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
     core/game_presets.cpp
+    core/game_resolver.cpp
     core/key_derivation.cpp
     common/display_hdr.cpp
     common/dkb_cpu_trace.cpp

@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -246,14 +247,55 @@ Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     return profile;
 }
 
+// The compute units or SMs of the GPU where the driver reports them: AMD's shader core properties
+// and NVIDIA's SM builtins. Intel's Windows driver reports neither, so a count of 0 means the
+// driver does not say, not that the GPU has none.
+struct GpuCoreCount {
+    u32 count{};
+    std::string_view unit;
+};
+
+GpuCoreCount GpuCoresOf(const vk::PhysicalDevice& physical) {
+    const std::vector<VkExtensionProperties> extensions =
+        physical.EnumerateDeviceExtensionProperties();
+    const auto has = [&extensions](std::string_view name) {
+        return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
+            return name == extension.extensionName;
+        });
+    };
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    if (has("VK_AMD_shader_core_properties")) {
+        VkPhysicalDeviceShaderCorePropertiesAMD core{};
+        core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_PROPERTIES_AMD;
+        properties2.pNext = &core;
+        physical.GetProperties2(properties2);
+        return {core.shaderEngineCount * core.shaderArraysPerEngineCount *
+                    core.computeUnitsPerShaderArray,
+                "compute units"};
+    }
+    if (has("VK_NV_shader_sm_builtins")) {
+        VkPhysicalDeviceShaderSMBuiltinsPropertiesNV sm{};
+        sm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SM_BUILTINS_PROPERTIES_NV;
+        properties2.pNext = &sm;
+        physical.GetProperties2(properties2);
+        return {sm.shaderSMCount, "SMs"};
+    }
+    return {};
+}
+
 // The display the window is on: its refresh rate (0 where the host does not say: Windows says),
-// its name and whether it is the primary one. A window of null is the primary display.
+// its name, whether it is the primary one and the pixels of its mode. A window of null is the
+// primary display.
 Core::GamePresets::DisplayInfo WindowDisplayOf(void* window) {
     const Common::VblankClock display{window};
     const auto period = display.ReportedPeriod().count();
+    const Common::VblankClock::Pixels pixels = display.ReportedPixels();
     return {.refresh_hz = period > 0 ? 1.0e9 / static_cast<double>(period) : 0.0,
             .name = display.DisplayName(),
-            .primary = display.OnPrimaryDisplay()};
+            .primary = display.OnPrimaryDisplay(),
+            .width_px = pixels.width,
+            .height_px = pixels.height};
 }
 
 // What the game presets and the switch defaults match on, from the profile read before the device:
@@ -264,6 +306,8 @@ Core::GamePresets::GpuInfo GpuInfoOf(const DeviceStartProfile& start) {
         .integrated = start.machine.gpu.kind == Common::GpuKind::Integrated,
         .device_class = start.classification.device_class,
         .gpu_family = start.classification.gpu_family,
+        .cores = start.gpu_cores,
+        .cores_unit = start.gpu_cores_unit,
     };
 }
 
@@ -309,6 +353,9 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
     }
     start.classification = Common::Classify(start.machine);
     start.vendor = Core::GamePresets::VendorOfPciId(start.machine.gpu.vendor_id);
+    const GpuCoreCount cores = GpuCoresOf(physical_device);
+    start.gpu_cores = cores.count;
+    start.gpu_cores_unit = cores.unit;
     // The switch defaults go in before the device reads its switches (it picks extensions by some
     // of them); VideoCore::ApplyGameSwitchDefaults also reads again the read-back's switches.
     void(VideoCore::ApplyGameSwitchDefaults(Settings::GetCurrentProgramID(), GpuInfoOf(start),

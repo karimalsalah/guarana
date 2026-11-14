@@ -130,7 +130,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 
 | Tool | Today | With the server | Phase |
 |---|---|---|---|
-| `status` | Ask the owner what is on screen, read the log header | One call: title, program id, build, paused, presents, fps, renderer, rejected hashes | 1 |
+| `status` | Ask the owner what is on screen, read the log header | One call: title, program id, build, paused, presents, fps, renderer, rejected hashes, the boot resolution | 1 |
 | `frame_times` | Frame trace and manual interval analysis | Guest-present interval statistics and VSync histogram over a timed window | 1 |
 | `screenshot` | Owner takes and sends a screenshot | PNG of the next presented frame, as MCP image content | 1 |
 | `shown_frames` | Nobody sees generated frames; the owner describes the motion | The next frames the presenter shows, generated ones included: kind, slot, the vblank it was due at and when the present call returned, and one contact sheet (done) | 3 |
@@ -155,6 +155,25 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 `Common::g_build_fullname` and `g_scm_rev`, and `System::IsPaused`. It measures fps from
 `Core::g_nx2_present_count` (`src/core/core.cpp:78`) over a short window. It does not call
 `GetAndResetPerfStats`, which would reset the Qt status bar's counters.
+
+`status.resolution` is what the game's settings, add-ons and switches were resolved to at boot
+(`Core::GamePresets::Resolve`, `src/core/game_presets.cpp`; the same as the `Resolution:` line of
+the log), or `{"resolved": false}` before the boot resolved anything. Its fields: `resolved`,
+`title_id`, `presets_enabled` (false: nothing was applied, and the `decision` of each entry is what
+it would have been), `preset` (the settings preset's reason, empty without one), `pacing_set`
+(`none`, `60hz`, `120hz` or `144hz`) and `pacing_why`, and the lists `settings`, `addons` and
+`switches`. Each entry has its value (`label` and `value` for a setting, with `available` false
+where there is no per-game setting by that label and `current` the player's value where they set
+one; `name` and `value` for a switch; `name` and `disabled` for an add-on), the `decision` about
+what the player chose (settings: `apply`, `already_set`, `user_per_game`, `user_global`; switches:
+`set`, `replace_shipped`, `keep_players`, with the player's value in `player_value` and the shipped
+file's in `shipped`), its `reason`, and its `evidence`: `measured` and `where`, which names the
+`docs/switches.md` row that holds the numbers or says that nothing was measured. `inputs` holds what
+the resolver was given: `vendor`, `integrated`, `software_tensor_math`, `device_class`,
+`gpu_family`, `refresh_hz`, `display`, and the output size against the GPU's size: `output_width`
+and `output_height` (the pixels of the display the window is on), `gpu_cores` and `gpu_cores_unit`
+(compute units or SMs where the driver reports them, else 0; Intel's Windows driver does not) and
+`pixels_per_core`. Those two are recorded only: nothing decides by them yet.
 
 **`frame_times`** `{seconds?, refresh_hz?}` waits for `seconds` (default 5, > 0, at most 60),
 interruptible on shutdown like `status`. It measures intervals between guest presents inside

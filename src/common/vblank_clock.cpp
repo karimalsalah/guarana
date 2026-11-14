@@ -140,6 +140,21 @@ struct VblankClock::Impl {
         return QueryMonitorInfo(info) && (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
     }
 
+    /// The pixels of the monitor's current display mode, which a process that is not DPI aware
+    /// does not see scaled.
+    [[nodiscard]] Pixels ReportedPixels() const {
+        MONITORINFOEXW info{};
+        if (!QueryMonitorInfo(info)) {
+            return {};
+        }
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode)) {
+            return {};
+        }
+        return {static_cast<u32>(mode.dmPelsWidth), static_cast<u32>(mode.dmPelsHeight)};
+    }
+
     [[nodiscard]] std::chrono::nanoseconds QueryPeriod() const {
         MONITORINFOEXW info{};
         info.cbSize = sizeof(info);
@@ -287,6 +302,10 @@ struct VblankClock::Impl {
         return false;
     }
 
+    [[nodiscard]] Pixels ReportedPixels() const {
+        return {};
+    }
+
     void SleepUntil(Clock::time_point deadline) {
         std::this_thread::sleep_until(deadline);
     }
@@ -319,6 +338,10 @@ std::string VblankClock::DisplayName() const {
 
 bool VblankClock::OnPrimaryDisplay() const {
     return impl->OnPrimaryDisplay();
+}
+
+VblankClock::Pixels VblankClock::ReportedPixels() const {
+    return impl->ReportedPixels();
 }
 
 VblankClock::Source VblankClock::CurrentSource() const {
