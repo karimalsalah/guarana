@@ -104,6 +104,7 @@ const SYSTEM: SystemInfo = {
       shared_mb: 16125,
       vulkan: true,
       arch_hint: "Xe-LPG+ (Arrow Lake-H)",
+      family: "Arrow Lake-H Intel Graphics",
     },
   ],
   primary_gpu: 0,
@@ -429,11 +430,14 @@ export function createMockBackend(): Backend {
         : ok("vc_redist", "Visual C++ runtime", "Microsoft Visual C++ 2015-2022 x64 is installed."),
       ok("avx2", "CPU features", "AVX2 is supported."),
       ok("memory", "Memory and page file", "32 GB RAM. The page file is system managed, so it can grow."),
+      ok("memory_now", "Memory free right now", "17.6 GB of RAM is free, and 14.2 of the 37.0 GB Windows can hand out (RAM plus page file) is in use."),
       ok("disk", "Free disk space", "214 GB free on C: for shader caches."),
       { id: "power", title: "Power mode", status: "warn", detail: "Plugged in, Balanced. Best performance keeps the GPU clock up.", fix_id: "open_power_settings", fix_label: "Open power settings" },
       { id: "hags", title: "Hardware-accelerated GPU scheduling", status: "info", detail: "On. If you see stutter, try it off and compare.", fix_id: "open_graphics_settings", fix_label: "Open graphics settings" },
       { id: "intel_shared_memory", title: "Intel Shared GPU Memory Override", status: "info", detail: "Not set. Optional: Intel Graphics Software can give the iGPU more shared memory.", fix_id: "open_intel_graphics", fix_label: "Learn how" },
       { id: "windows_hdr", title: "Windows HDR", status: "info", detail: "This display can do HDR and Windows HDR is off. Turn it on with Win+Alt+B for the game's native HDR.", fix_id: "open_hdr_help", fix_label: "How to turn on HDR" },
+      ok("refresh_rate", "Display refresh rate and frame generation", "120 Hz is a multiple of 60."),
+      { id: "displays", title: "Displays on the integrated GPU", status: "warn", detail: "2 displays are on, all drawn by the Intel(R) Arc(TM) 140T GPU (16GB) that also runs the game. Each one takes memory bandwidth and compositor work from that GPU. If you do not need one while playing, turn it off in Display settings (select it, then Multiple displays > Disconnect this display).", fix_id: "open_display_settings", fix_label: "Open Display settings" },
       { id: "defender", title: "Windows Security and the cache folder", status: "info", detail: "The shader cache folder is scanned on every write. An exclusion can reduce hitches. Guarana never changes this for you.", fix_id: "open_windows_security", fix_label: "Open Windows Security" },
       shaderTmp
         ? { id: "shader_tmp", title: "Shader cache temp files", status: "warn", detail: "14 leftover temp files (38 MB) from an earlier crash.", fix_id: "delete_shader_tmp", fix_label: "Delete temp files" }
