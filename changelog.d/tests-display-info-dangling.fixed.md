@@ -1,0 +1,1 @@
+- Build: the game preset tests pass a named `DisplayInfo` to `SwitchDefaults` in their range-for loops, so GCC 13 no longer rejects them as possibly dangling references. `main` compiled on Windows but not on Linux.

@@ -26,6 +26,10 @@ using Common::GpuFamily;
 using Core::GameSettings::GPUVendor;
 
 constexpr u64 OcarinaTitleId = 0x0400486024DEC000;
+// A named display for the range-for loops below: with the defaulted argument GCC 13 warns that
+// the span SwitchDefaults returns may refer to that temporary (-Wdangling-reference).
+const DisplayInfo UnknownDisplay{};
+
 constexpr GpuInfo Arc140T{.vendor = GPUVendor::Intel,
                           .integrated = true,
                           .software_tensor_math = true};
@@ -558,7 +562,7 @@ TEST_CASE("A game's read-back switch defaults are in effect from its first start
     constexpr std::array early{"EDEN_NX2_EARLY_SUBMIT", "EDEN_NX2_EARLY_PAGES",
                                "EDEN_NX2_EARLY_AFTER"};
     // The switch defaults go into this process's environment: only where none of them is set.
-    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T, UnknownDisplay)) {
         if (std::getenv(std::string{item.name}.c_str()) != nullptr) {
             SKIP("A switch of Ocarina of Time's defaults is set in the environment");
         }
@@ -601,7 +605,7 @@ TEST_CASE("A game's read-back switch defaults are in effect from its first start
     CHECK(EarlySubmit() == 0U);
     CHECK(EarlyPages() == 64U);
     CHECK(EarlyAfter() == 2);
-    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T, UnknownDisplay)) {
         CAPTURE(item.name);
         CHECK(std::getenv(std::string{item.name}.c_str()) == nullptr);
     }
