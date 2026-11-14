@@ -74,6 +74,11 @@ enum class GplPart : u32 {
 /// rebuilt. Logged once when set.
 bool GplOptimizeCachedEnabled();
 
+/// EDEN_NX2_GPL_PARALLEL_PARTS=1 (experiment, off by default; gpl_parallel_parts.h): a pipeline
+/// built with shader jobs builds its fragment library as a job of its own while its building
+/// thread builds the pre-rasterization one. Logged once when set.
+bool GplParallelPartsEnabled();
+
 /// A cached shader library and the layout objects it was created with.
 struct GplLibrary {
     std::vector<vk::DescriptorSetLayout> set_layouts;
@@ -172,6 +177,14 @@ public:
     void RecordOptimizedLinkAtDraw() {
         links_at_draw.fetch_add(1, std::memory_order_relaxed);
     }
+    /// EDEN_NX2_GPL_PARALLEL_PARTS: a pipeline built its two libraries together. `ran_here`: no
+    /// worker took the fragment library's job, so the building thread built it after the other.
+    void RecordParallelParts(bool ran_here) {
+        parallel_builds.fetch_add(1, std::memory_order_relaxed);
+        if (ran_here) {
+            parallel_ran_here.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 
     /// Logs the counters of the last 10 s (Nx2Perf gpl), when there were any.
     void Report();
@@ -191,6 +204,8 @@ private:
 
     /// The EDEN_NX2_UNOPT_FIRST line of Report, when it is on and anything happened.
     void ReportUnoptimizedFirst();
+    /// The EDEN_NX2_GPL_PARALLEL_PARTS line of Report, when a pipeline was built that way.
+    void ReportParallelParts();
 
     std::mutex mutex;
     std::unordered_map<std::string, std::shared_ptr<Entry>> entries;
@@ -228,6 +243,10 @@ private:
     std::atomic<u64> swapped_unoptimized{}; ///< Since startup, not reset by Report
     std::mutex swap_mutex;
     SwapDelays swap_delays;
+
+    // EDEN_NX2_GPL_PARALLEL_PARTS
+    std::atomic<u32> parallel_builds{};
+    std::atomic<u32> parallel_ran_here{};
 };
 
 } // namespace Vulkan

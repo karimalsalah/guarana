@@ -677,6 +677,9 @@ private:
     /// The scheduler of the build's job (PipelineBuildQueue::jobs), which also runs the optimized
     /// build as a Background job. Null when built without jobs.
     VideoCommon::ShaderJobScheduler* const build_jobs;
+    /// The build job's priority (PipelineBuildQueue::priority), also given to the fragment
+    /// library's job of EDEN_NX2_GPL_PARALLEL_PARTS.
+    const VideoCommon::ShaderJobPriority build_priority;
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;

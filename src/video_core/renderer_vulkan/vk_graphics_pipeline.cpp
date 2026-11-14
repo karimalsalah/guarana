@@ -18,6 +18,7 @@
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 
+#include "video_core/renderer_vulkan/gpl_parallel_parts.h"
 #include "video_core/renderer_vulkan/pipeline_build_failure.h"
 #include "video_core/renderer_vulkan/pipeline_build_trace.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
@@ -511,6 +512,7 @@ GraphicsPipeline::GraphicsPipeline(
       descriptor_buffer_ring{descriptor_buffer_ring_}, draw_templates{draw_templates_},
       template_owner{draw_templates_.NewOwner()}, spirv{std::move(stages)},
       library_cache{library_params.library_cache}, build_jobs{build_queue.jobs},
+      build_priority{build_queue.priority},
       worker_only_build{build_queue.jobs && static_cast<bool>(emit_stages)},
       mesh_emulation{std::move(mesh_emulation_)}, prepass_shaders{std::move(prepass_shaders_)},
       prepass_split{prepass_shaders != nullptr},
@@ -3200,7 +3202,10 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         states.depth_stencil_ci.maxDepthBounds = 0.0f;
     }
     static constexpr std::array parts{GplPart::PreRasterization, GplPart::Fragment};
-    for (size_t index = 0; index < parts.size(); ++index) {
+    // Gets or builds the library of parts[index]. False when it failed. It reads this pipeline and
+    // `states` and writes only its own element of the two arrays, so the two parts can run at the
+    // same time (EDEN_NX2_GPL_PARALLEL_PARTS).
+    const auto make_part = [&](size_t index) {
         const GplPart part = parts[index];
         // The log names a library after its vertex (or fragment) program.
         const u64 name = part == GplPart::PreRasterization ? key.unique_hashes[1]
@@ -3223,6 +3228,25 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
             return false;
         }
         unoptimized_libraries[index] = unoptimized;
+        return true;
+    };
+    if (build_jobs && GplParallelPartsEnabled()) {
+        // EDEN_NX2_GPL_PARALLEL_PARTS: the fragment library is a job of its own that a free driver
+        // worker takes while this thread builds pre-rasterization; this thread runs it itself when
+        // none is free (RunPartsInParallel).
+        const bool ran_here = RunPartsInParallel(
+            *build_jobs, build_priority, [&] { static_cast<void>(make_part(0)); },
+            [&] { static_cast<void>(make_part(1)); });
+        library_cache->RecordParallelParts(ran_here);
+        if (!shader_libraries[0] || !shader_libraries[1]) {
+            return false;
+        }
+    } else {
+        for (size_t index = 0; index < parts.size(); ++index) {
+            if (!make_part(index)) {
+                return false;
+            }
+        }
     }
     const VkGraphicsPipelineLibraryCreateInfoEXT vertex_input_ci{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
