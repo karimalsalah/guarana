@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
+#include <utility>
 
+#include "common/logging.h"
 #include "video_core/renderer_vulkan/present/fsr3_frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -139,6 +142,21 @@ void CopyImageToImage(vk::CommandBuffer cmdbuf, VkImage source, VkImage destinat
                            0, {}, {}, after);
 }
 
+// EDEN_NX2_FG_PINGPONG=<n>, n not 0: parsed as a number, as EDEN_NX2_FLUID is, so unset, empty,
+// `0` and `false` are off. Read once per process, logged once when on.
+bool PingPongRequested() {
+    static const bool requested = [] {
+        const char* const value = std::getenv("EDEN_NX2_FG_PINGPONG");
+        const bool on = value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        if (on) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FG_PINGPONG: FSR3 frame generation copies one "
+                                    "frame per real frame; its two images swap roles");
+        }
+        return on;
+    }();
+    return requested;
+}
+
 } // anonymous namespace
 
 struct FlowPushConstants {
@@ -164,6 +182,7 @@ Fsr3FrameGen::Fsr3FrameGen(const Device& device, MemoryAllocator& memory_allocat
     : m_allocator{memory_allocator}, m_extent{extent},
       m_flow_extent{(std::max)(1u, extent.width / 2), (std::max)(1u, extent.height / 2)},
       m_format{format} {
+    m_pingpong = PingPongRequested();
     CreateResources(device);
     CreateShaders(device);
     CreatePipelines(device);
@@ -199,13 +218,15 @@ void Fsr3FrameGen::CreateResources(const Device& device) {
     m_motion_image = CreateWrappedImage(m_allocator, m_flow_extent, VK_FORMAT_R16G16_SFLOAT);
     m_motion_view = CreateWrappedImageView(device, m_motion_image, VK_FORMAT_R16G16_SFLOAT);
 
+    // One optical flow set, or one per parity of the image roles with EDEN_NX2_FG_PINGPONG.
+    const u32 flow_sets = m_pingpong ? 2U : 1U;
     const std::array pool_sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2U * flow_sets},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, flow_sets},
     };
     m_desc_pool = device.GetLogical().CreateDescriptorPool(VkDescriptorPoolCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 1,
+        .maxSets = flow_sets,
         .poolSizeCount = static_cast<u32>(pool_sizes.size()),
         .pPoolSizes = pool_sizes.data(),
     });
@@ -295,7 +316,13 @@ void Fsr3FrameGen::CreatePipelines(const Device& device) {
     });
 
     // Allocate descriptor sets
-    m_flow_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, {*m_flow_desc_layout});
+    if (m_pingpong) {
+        // One flow set per parity of the image roles (Fsr3PingPong::SetRoles).
+        const std::array flow_layouts{*m_flow_desc_layout, *m_flow_desc_layout};
+        m_flow_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, flow_layouts);
+    } else {
+        m_flow_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, {*m_flow_desc_layout});
+    }
 }
 
 void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
@@ -303,6 +330,10 @@ void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage c
     if (frame_count == 0) {
         m_has_history = false;
         m_flow_valid = false;
+    }
+    if (m_pingpong) {
+        ProcessPingPong(device, scheduler, current_frame, frame_count);
+        return;
     }
     if (!m_has_history) {
         // First frame: populate history and current-frame copy via batched dual-copy
@@ -376,6 +407,107 @@ void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage c
         cmdbuf.Dispatch((flow_w + 15) / 16, (flow_h + 15) / 16, 1);
 
         BarrierComputeWriteToRead(cmdbuf, *m_motion_image);
+    });
+
+    m_flow_valid = true;
+}
+
+// EDEN_NX2_FG_PINGPONG: Process without the copy of the current image into history. The images
+// swap roles here, between recording and execution, so the recorded commands take the image
+// handles and the descriptor set as they are now instead of reading the members later.
+void Fsr3FrameGen::ProcessPingPong(const Device& device, Scheduler& scheduler,
+                                   VkImage current_frame, u64 frame_count) {
+    if (!m_has_history) {
+        // First frame: populate both images via batched dual-copy
+        scheduler.Record([this, current_frame, history = *m_history_image,
+                          current = *m_current_image](vk::CommandBuffer cmdbuf) {
+            CopyImageToTwo(cmdbuf, current_frame, history, current, m_extent);
+            DiscardForComputeWrite(cmdbuf, *m_motion_image);
+        });
+        m_has_history = true;
+        m_last_frame_count = frame_count;
+        return;
+    }
+
+    if (frame_count == m_last_frame_count) {
+        return;
+    }
+    m_last_frame_count = frame_count;
+
+    if (!m_flow_descriptors_initialized) {
+        // Image 0 and image 1 of Fsr3PingPong, from the roles the members hold now.
+        const Fsr3PingPong::Roles now = m_roles.Now();
+        std::array<VkImageView, 2> views{};
+        views[now.current] = *m_current_view;
+        views[now.history] = *m_history_view;
+
+        const VkDescriptorImageInfo motion_store_info{
+            .imageView = *m_motion_view,
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+        };
+        std::vector<VkDescriptorImageInfo> image_infos;
+        image_infos.reserve(4);
+        std::vector<VkWriteDescriptorSet> updates;
+        updates.reserve(6);
+        for (u32 set_index = 0; set_index < 2; ++set_index) {
+            const Fsr3PingPong::Roles roles = Fsr3PingPong::SetRoles(set_index);
+            const VkDescriptorSet written_set = m_flow_desc_sets[set_index];
+            updates.push_back(CreateWriteDescriptorSet(image_infos, *m_linear_sampler,
+                                                       views[roles.current], written_set, 0));
+            updates.push_back(CreateWriteDescriptorSet(image_infos, *m_linear_sampler,
+                                                       views[roles.history], written_set, 1));
+            updates.push_back(VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = written_set,
+                .dstBinding = 2,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .pImageInfo = &motion_store_info,
+            });
+        }
+        device.GetLogical().UpdateDescriptorSets(updates, {});
+        m_flow_descriptors_initialized = true;
+    }
+
+    // The image that held the older frame becomes current and takes the new frame; the one that
+    // held the newer frame is history as it stands.
+    std::swap(m_current_image, m_history_image);
+    std::swap(m_current_view, m_history_view);
+    m_roles.Advance();
+
+    // Dispatch Optical Flow at half resolution
+    const u32 flow_w = m_flow_extent.width;
+    const u32 flow_h = m_flow_extent.height;
+    const FlowPushConstants constants{
+        .inv_render_w = 1.0f / static_cast<float>(flow_w),
+        .inv_render_h = 1.0f / static_cast<float>(flow_h),
+        .render_w = static_cast<float>(flow_w),
+        .render_h = static_cast<float>(flow_h),
+        .search_radius = 2.0f,
+        .block_size = 2.0f,
+    };
+    const VkImage destination = *m_current_image;
+    const VkImage motion = *m_motion_image;
+    const VkDescriptorSet flow_set = m_flow_desc_sets[m_roles.FlowSet()];
+
+    scheduler.Record([this, constants, current_frame, destination, motion, flow_set, flow_w,
+                      flow_h](vk::CommandBuffer cmdbuf) {
+        CopyImageToImage(cmdbuf, current_frame, destination, m_extent);
+
+        const auto barrier = MakeBarrier(motion,
+                                         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                                         VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                                         VK_IMAGE_LAYOUT_GENERAL);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, barrier);
+
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_flow_pipeline);
+        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_flow_pipe_layout, 0,
+                                  flow_set, {});
+        cmdbuf.PushConstants(*m_flow_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, constants);
+        cmdbuf.Dispatch((flow_w + 15) / 16, (flow_h + 15) / 16, 1);
+
+        BarrierComputeWriteToRead(cmdbuf, motion);
     });
 
     m_flow_valid = true;
