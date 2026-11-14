@@ -64,8 +64,7 @@ constexpr size_t FLUID_MAX_FRAMES = 16;
 /// The rate EDEN_NX2_FLUID shows frames at: EDEN_NX2_SHOWN_RATE=<hz> (30 to 240) if set, else the
 /// frame generation target rate, else 60. The environment is parsed once (LiveShownRateHz).
 [[nodiscard]] f64 FluidShownRate() {
-    return VideoCore::ShownGovernor::LiveShownRateHz(
-        Settings::values.frame_gen_target_rate.GetValue());
+    return VideoCore::ShownGovernor::LiveShownRateHz(Settings::FrameGenTargetRate());
 }
 
 /// EDEN_NX2_FLUID_FRAMES=<n> (7 to 16): the FLUID presenter's frame pool, by default 7, or 12 when

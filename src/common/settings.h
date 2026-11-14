@@ -1175,6 +1175,9 @@ constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 
 [[nodiscard]] size_t FrameGenMaxGenerations();
 
+/// Effective target, including the optional session-only frame target hotkeys override.
+[[nodiscard]] u32 FrameGenTargetRate();
+
 bool GetDebugKnobAt(u8 i);
 
 void UpdateGPUAccuracy();

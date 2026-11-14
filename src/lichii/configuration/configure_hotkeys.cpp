@@ -11,6 +11,7 @@
 #include <QStandardItemModel>
 #include <QTimer>
 
+#include "common/frame_target_hotkeys.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 
@@ -99,6 +100,11 @@ void ConfigureHotkeys::Populate(const HotkeyRegistry& registry) {
         parent_item->setEditable(false);
         parent_item->setData(parent_item_data);
         for (const auto& hotkey : group.second) {
+            // The switch adds these hotkeys: off, they are neither listed nor connected.
+            if (!Common::FrameTargetHotkeys::Enabled() &&
+                Common::FrameTargetHotkeys::IsHotkeyName(hotkey.first)) {
+                continue;
+            }
             QString hotkey_action_data = QString::fromStdString(hotkey.first);
             auto* action = new QStandardItem(HotkeyDisplayName(hotkey_action_data));
             auto* keyseq =

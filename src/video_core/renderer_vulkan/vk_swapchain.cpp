@@ -484,7 +484,7 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (env_on("EDEN_NX2_FLUID")) {
         const char* shown = std::getenv("EDEN_NX2_SHOWN_RATE");
         const u32 rate = shown != nullptr ? static_cast<u32>(std::strtoul(shown, nullptr, 10))
-                                          : Settings::values.frame_gen_target_rate.GetValue();
+                                          : Settings::FrameGenTargetRate();
         const u32 least = rate > 75 ? 5U : env_on("EDEN_NX2_FLUID_COPY_AHEAD") ? 4U : 0U;
         const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
         requested_image_count = (std::min)((std::max)(requested_image_count, least), most);

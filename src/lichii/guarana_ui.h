@@ -47,7 +47,8 @@ class Toast : public QLabel {
 
 public:
     explicit Toast(QWidget* anchor);
-    void ShowMessage(const QString& text, int duration_ms = 4500);
+    void ShowMessage(const QString& text, int duration_ms = 4500,
+                     QWidget* message_anchor = nullptr);
 
 private:
     QWidget* anchor;
