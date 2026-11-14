@@ -558,7 +558,10 @@ TEST_CASE("A game's read-back switch defaults are in effect from its first start
     constexpr std::array early{"EDEN_NX2_EARLY_SUBMIT", "EDEN_NX2_EARLY_PAGES",
                                "EDEN_NX2_EARLY_AFTER"};
     // The switch defaults go into this process's environment: only where none of them is set.
-    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+    // A named span: GCC 13's -Wdangling-reference misreads the range-for over the call with its
+    // default DisplayInfo{} argument; the span points at static switch arrays, not the temporary.
+    const std::span<const SwitchValue> defaults = SwitchDefaults(OcarinaTitleId, Arc140T);
+    for (const SwitchValue& item : defaults) {
         if (std::getenv(std::string{item.name}.c_str()) != nullptr) {
             SKIP("A switch of Ocarina of Time's defaults is set in the environment");
         }
@@ -601,7 +604,8 @@ TEST_CASE("A game's read-back switch defaults are in effect from its first start
     CHECK(EarlySubmit() == 0U);
     CHECK(EarlyPages() == 64U);
     CHECK(EarlyAfter() == 2);
-    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+    const std::span<const SwitchValue> restored = SwitchDefaults(OcarinaTitleId, Arc140T);
+    for (const SwitchValue& item : restored) {
         CAPTURE(item.name);
         CHECK(std::getenv(std::string{item.name}.c_str()) == nullptr);
     }

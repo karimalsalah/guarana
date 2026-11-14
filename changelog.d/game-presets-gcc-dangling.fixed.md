@@ -1,0 +1,1 @@
+- Tests: `game_presets` binds the `SwitchDefaults` span to a named local before its range-for, so GCC 13's `-Wdangling-reference` no longer reads the default `DisplayInfo{}` argument as a destroyed temporary. The span points at the static switch arrays; behaviour is unchanged.
