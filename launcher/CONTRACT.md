@@ -382,7 +382,15 @@ shows the picker and, for each level, exactly what it changes and whether it nee
 `low-power-handheld` (any iGPU on battery: 30 fps cap, lower resolution), `desktop-dgpu`, `safe-defaults`.
 Toggles map to `%APPDATA%\guarana\nx2_switches.txt` lines and `qt-config.ini` keys, e.g.
 `frame_generation` → `[Renderer] frame_gen=true, frame_gen_multiplier=3, frame_gen_target_rate=60`,
-`ocarina_extrapolation` → `EDEN_NX2_EXTRAPOLATE=1`, `gm_routing` → `EDEN_NX2_GM=11`,
+`ocarina_extrapolation` → `EDEN_NX2_EXTRAPOLATE=1` (off: `=0`, since the shipped file sets 1; on, with any
+Intel integrated GPU in `gpus`, primary or not, the line is left out at every refresh rate so the emulator
+decides at each start: its locked 120 and 144 Hz sets for Ocarina of Time interpolate the in-between
+frames at 115-125 and 140-148 Hz, and its 60 Hz Intel set and the shipped file predict elsewhere;
+`list_profiles` then appends a sentence saying so to the toggle's `help`, and `apply_profile`'s `changed`
+says "removed, left to the emulator on an Intel integrated GPU" when it removes the line;
+`profiles::extrapolate_switch`, issue #119. In custom mode `launch_game` rewrites only this block of
+`nx2_switches.txt` from the saved profile and overrides at every start, so a line an older launcher wrote
+goes; `qt-config.ini` stays as the player left it), `gm_routing` → `EDEN_NX2_GM=11`,
 `igpu_power_policy` (experimental) → `EDEN_NX2_POWER_POLICY=igpu`, `async_shaders`, `vram_mode`.
 Also: `fluid_presenter` → `EDEN_NX2_FLUID=1` (on for `intel-arc-igpu` and `amd-igpu-handheld`;
 experimental except on `intel-arc-igpu`), `hdr_auto` → `[Renderer] hdr_mode=2, hdr_swapchain=0`

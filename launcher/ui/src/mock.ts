@@ -189,6 +189,17 @@ function toggles(d: Defaults): Toggle[] {
   ];
 }
 
+// Any Intel GPU the launcher calls integrated, primary or not (profiles.rs `has_intel_igpu`): there the
+// launcher leaves EDEN_NX2_EXTRAPOLATE to the emulator, whose locked 120 and 144 Hz sets for Ocarina of
+// Time interpolate (src/core/game_presets.cpp `ChoosePacingSet`, issue #119).
+function hasIntelIgpu(sys: SystemInfo): boolean {
+  return sys.gpus.some((g) => g.vendor === "intel" && g.is_integrated);
+}
+
+// Appended to the `ocarina_extrapolation` help there (profiles.rs `INTEL_IGPU_HELP`).
+const INTEL_IGPU_HELP =
+  " With an Intel integrated GPU the launcher leaves EDEN_NX2_EXTRAPOLATE to the emulator when this is on: Ocarina of Time still predicts at most refresh rates, but at 115-125 or 140-148 Hz the emulator's 120 or 144 Hz set shows a frame for every refresh, the in-between ones interpolated, and a 1 in your nx2_switches.txt would turn that off. Older emulator builds predict there too (the shipped nx2_switches.txt sets 1).";
+
 function buildGames(withOot: boolean): Game[] {
   const games: Game[] = [
     { title_id: "040074A01BF12000", title: "Donkey Kong Bananza", path: `${GAME_DIR}\\Donkey Kong Bananza.xci`, container: "xci", size_bytes: 10_955_210_752, is_ocarina: false },
@@ -380,8 +391,11 @@ export function createMockBackend(): Backend {
   }
 
   function buildProfiles(): Profile[] {
+    const intelIgpu = hasIntelIgpu(SYSTEM);
     return PROFILE_DEFS.map((p) => {
       const list = toggles(p.d);
+      const predict = list.find((t) => t.id === "ocarina_extrapolation");
+      if (intelIgpu && predict) predict.help += INTEL_IGPU_HELP;
       const over = appliedOverrides[p.id] ?? {};
       for (const t of list) if (t.id in over) t.value = over[t.id] as ToggleValue;
       return { id: p.id, name: p.name, description: p.description, recommended: p.id === "intel-arc-igpu", toggles: list };
