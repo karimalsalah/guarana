@@ -322,6 +322,9 @@ void PerfQuery::CollectLocked() {
     if (!semaphore) {
         return;
     }
+    // IsFree reads the known GPU tick, which only advances on Refresh(); without this
+    // the pending slots would never look complete from the debug thread.
+    semaphore->Refresh();
     // Only read once a submission's tick has completed on the GPU; the profiling lock
     // stays held until the window's last result is read (the spec requires the lock
     // while queried command buffers are pending).
