@@ -230,7 +230,13 @@ private:
     /// Marks a frame of this composite as one the slot pass composes.
     void TagComposeFrame(Frame* frame) const;
     bool compose_active{};
+    bool compose_native{};
     FluidComposeMath::Rect compose_rect{};
+    /// The peak size of the game's frames, the size the slot pass's frames are drawn at.
+    FluidComposeMath::Extent compose_internal{};
+    /// The layout this composite's frames are drawn at: the window's, or with the slot pass
+    /// scaling them the game's size with the screen covering all of it.
+    [[nodiscard]] Layout::FramebufferLayout FrameLayout() const;
     /// SDR, with the luminances the game was told: screenshots and captures tone map HDR layers.
     HdrPresent CaptureHdrPresent() const;
 

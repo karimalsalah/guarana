@@ -354,6 +354,14 @@ u32 FluidComposeMode() {
     return mode;
 }
 
+bool FluidComposeNative() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_COMPOSE_NATIVE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 PresentManager::PresentManager(const vk::Instance& instance_,
                                Core::Frontend::EmuWindow& render_window_,
                                const Device& device_,

@@ -19,6 +19,15 @@
 
 namespace Vulkan {
 
+namespace {
+
+/// EDEN_NX2_FLUID_COMPOSE: the frames the slot pass scales are composited without upscaling.
+[[nodiscard]] Settings::ScalingFilter ComposeScalingFilter() {
+    return Settings::ScalingFilter::Bilinear;
+}
+
+} // Anonymous namespace
+
 BlitScreen::BlitScreen(Tegra::MaxwellDeviceMemoryManager& device_memory_, const Device& device_, MemoryAllocator& memory_allocator_, PresentManager& present_manager_, Scheduler& scheduler_, const PresentFilters& filters_)
     : device_memory{device_memory_}
     , memory_allocator{memory_allocator_}
@@ -28,9 +37,22 @@ BlitScreen::BlitScreen(Tegra::MaxwellDeviceMemoryManager& device_memory_, const 
     , image_count{1}
     , image_index{0}
     , swapchain_view_format{VK_FORMAT_B8G8R8A8_UNORM}
-{}
+{
+    compose_filters = std::make_unique<PresentFilters>(PresentFilters{
+        .get_scaling_filter = &ComposeScalingFilter,
+        .get_anti_aliasing = filters_.get_anti_aliasing,
+    });
+}
 
 BlitScreen::~BlitScreen() = default;
+
+void BlitScreen::SetComposeInternal(bool internal) {
+    compose_internal = internal;
+}
+
+const PresentFilters& BlitScreen::ActiveFilters() const {
+    return compose_internal ? *compose_filters : filters;
+}
 
 void BlitScreen::WaitIdle(const Device& device) {
     present_manager.WaitPresent();
@@ -40,7 +62,8 @@ void BlitScreen::WaitIdle(const Device& device) {
 
 void BlitScreen::SetWindowAdaptPass(const Device& device) {
     layers.clear();
-    scaling_filter = filters.get_scaling_filter();
+    scaling_filter = ActiveFilters().get_scaling_filter();
+    compose_internal_built = compose_internal;
 
     hdr10_encode.reset();
     hdr10_composite.clear();
@@ -127,7 +150,8 @@ void BlitScreen::DrawToFrame(const Device& device, RasterizerVulkan& rasterizer,
     bool resource_update_required = false;
     bool presentation_recreate_required = false;
 
-    if (!window_adapt || scaling_filter != filters.get_scaling_filter()) {
+    if (!window_adapt || scaling_filter != ActiveFilters().get_scaling_filter() ||
+        compose_internal_built != compose_internal) {
         resource_update_required = true;
     }
 
@@ -170,7 +194,7 @@ void BlitScreen::DrawToFrame(const Device& device, RasterizerVulkan& rasterizer,
         layers.clear();
         for (size_t i = 0; i < framebuffers.size(); ++i) {
             layers.emplace_back(device, memory_allocator, scheduler, device_memory, image_count,
-                                window_size, window_adapt->GetDescriptorSetLayout(), filters);
+                                window_size, window_adapt->GetDescriptorSetLayout(), ActiveFilters());
         }
     }
 
@@ -192,7 +216,7 @@ vk::Framebuffer BlitScreen::CreateFramebuffer(const Device& device, const Layout
     bool format_updated = swapchain_view_format != current_view_format;
     swapchain_view_format = current_view_format;
 
-    if (!window_adapt || scaling_filter != filters.get_scaling_filter() || format_updated) {
+    if (!window_adapt || scaling_filter != ActiveFilters().get_scaling_filter() || format_updated) {
         WaitIdle(device);
         SetWindowAdaptPass(device);
         image_index = 0;

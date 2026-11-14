@@ -47,6 +47,9 @@ class Swapchain;
 /// are drawn at the game's internal size (EDEN_NX2_FLUID_COMPOSE_NATIVE keeps them at the window's).
 [[nodiscard]] u32 FluidComposeMode();
 
+/// EDEN_NX2_FLUID_COMPOSE_NATIVE (diagnostic): with the slot pass, frames stay at the window's size.
+[[nodiscard]] bool FluidComposeNative();
+
 struct Frame {
     u32 width;
     u32 height;
