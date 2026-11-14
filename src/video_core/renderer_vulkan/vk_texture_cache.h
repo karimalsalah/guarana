@@ -191,10 +191,6 @@ public:
 
     void ConvertImage(Framebuffer* dst, ImageView& dst_view, ImageView& src_view);
 
-    bool CanAccelerateImageUpload(Image&) const noexcept {
-        return false;
-    }
-
     bool CanUploadMSAA() const noexcept {
         return true;
     }
@@ -253,9 +249,6 @@ public:
     }
 
     void BarrierFeedbackLoop();
-
-    bool IsFormatDitherable(VideoCore::Surface::PixelFormat format);
-    bool IsFormatScalable(VideoCore::Surface::PixelFormat format);
 
     VkFormat GetSupportedFormat(VkFormat requested_format, VkFormatFeatureFlags required_features) const;
 
@@ -746,8 +739,6 @@ public:
 
     [[nodiscard]] VkImageView StencilView();
 
-    [[nodiscard]] VkImageView ColorView();
-
     [[nodiscard]] VkImageView StorageView(Shader::TextureType texture_type,
                                           Shader::ImageFormat image_format, bool is_byte_addressed);
 
@@ -818,7 +809,6 @@ private:
     vk::ImageView typeless_storage_view;
     vk::ImageView depth_view;
     vk::ImageView stencil_view;
-    vk::ImageView color_view;
     vk::Image null_image;
     VkImage image_handle = VK_NULL_HANDLE;
     VkImageView render_target = VK_NULL_HANDLE;
