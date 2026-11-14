@@ -38,7 +38,8 @@ class FakeEmulator:
     def answer(self, request):
         method = request["method"]
         if method == "status":
-            return {"result": {"title": "Test", "presents": 3}}
+            return {"result": {"title": "Test", "presents": 3,
+                               "resolution": {"resolved": True, "pacing_set": "144hz"}}}
         if method == "frame_times":
             return {"result": {"frames": 2, "intervals_ms": [16.7, 33.3], "truncated": False}}
         if method == "screenshot":
@@ -208,6 +209,36 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(json.loads(result["content"][0]["text"])["title"], "Test")
         self.assertEqual(self.fake.requests[-1]["params"], {"fps_window_ms": 0})
 
+    def test_status_lists_the_resolution_fields(self):
+        # status.resolution is built in nx2_debug_tools.cpp (ResolutionState) from the resolver's
+        # record; every field it has is named in the adapter's description of status and in the
+        # docs, so a field added to one is added to the others.
+        fields = ["resolved", "title_id", "presets_enabled", "inputs", "preset", "settings",
+                  "addons", "pacing_set", "pacing_why", "switches", "vendor", "integrated",
+                  "software_tensor_math", "device_class", "gpu_family", "refresh_hz", "display",
+                  "output_width", "output_height", "gpu_cores", "gpu_cores_unit",
+                  "pixels_per_core", "decision", "reason", "evidence", "measured", "where",
+                  "player_value", "shipped", "label", "available", "current", "name", "disabled"]
+        result = self.call("status", {"fps_window_ms": 0})
+        status = json.loads(result["content"][0]["text"])
+        self.assertEqual(status["resolution"]["pacing_set"], "144hz")
+        description = next(tool["description"] for tool in debug_mcp.TOOLS
+                           if tool["name"] == "status")
+        self.assertIn("resolution", description)
+        source = os.path.join(HERE, "..", "..", "src", "core", "debugger", "nx2_debug_tools.cpp")
+        docs = os.path.join(HERE, "..", "..", "docs", "nx2", "debug-mcp.md")
+        if not (os.path.isfile(source) and os.path.isfile(docs)):
+            self.skipTest("emulator source not checked out")
+        with open(source, encoding="utf-8") as file:
+            whole = file.read()
+        body = whole.partition("json ResolutionState()")[2].partition("json Status(")[0]
+        with open(docs, encoding="utf-8") as file:
+            text = file.read()
+        for field in fields:
+            self.assertIn('["%s"]' % field, body, field)
+            self.assertIn("`%s`" % field, text, field)
+        self.assertIn('{"resolution", ResolutionState()}', whole)
+
     def test_memory_reads_are_forwarded(self):
         arguments = {"address": "0x8000001000", "size": 4, "as": "hex"}
         result = self.call("read_memory", arguments)
@@ -351,7 +382,9 @@ class AdapterTest(unittest.TestCase):
         stdout = io.StringIO()
         self.assertEqual(debug_mcp.call_once(self.adapter, " status\n", None, stdout), 0,
                          stdout.getvalue())
-        self.assertEqual(json.loads(stdout.getvalue()), {"title": "Test", "presents": 3})
+        self.assertEqual(json.loads(stdout.getvalue()),
+                         {"title": "Test", "presents": 3,
+                          "resolution": {"resolved": True, "pacing_set": "144hz"}})
         self.assertEqual(self.fake.requests[-1]["method"], "status")
         self.assertEqual(self.fake.requests[-1]["params"], {})
         stdout = io.StringIO()

@@ -8,9 +8,12 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 
+#include "common/device_profile.h"
 #include "common/dynamic_library.h"
+#include "core/game_settings.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/renderer_base.h"
 #ifdef HAS_LSFG
@@ -40,9 +43,30 @@ class GPU;
 
 namespace Vulkan {
 
-Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
-                    VkSurfaceKHR surface,
-                    const std::function<void(const Device&)>& on_capabilities = {});
+/// The machine as it is read once, before the device is made: the GPU from the physical device,
+/// the host's CPU, RAM and power, and the refresh rate of the display the window is on. The GPU
+/// vendor is read here once (by PCI vendor ID), and the device class and the GPU family are
+/// derived from this profile once; the game's switch defaults and its settings presets both take
+/// them from here.
+struct DeviceStartProfile {
+    Common::DeviceProfile machine;
+    Common::DeviceClassification classification;
+    Core::GameSettings::GPUVendor vendor{Core::GameSettings::GPUVendor::Unknown};
+    /// The GPU's compute units or SMs where the driver reports them (VK_AMD_shader_core_properties,
+    /// VK_NV_shader_sm_builtins), else 0; what it counts is `gpu_cores_unit`. A resolver input
+    /// only. Intel's Windows driver reports neither.
+    u32 gpu_cores{};
+    std::string_view gpu_cores_unit;
+};
+
+/// window: the native window (an HWND on Windows) whose display's refresh rate the profile and
+/// the game's switch defaults take. Null (the Android and turbo mode callers): the profile's
+/// refresh rate is 0, and the switch defaults take the primary display's, where the host says it.
+/// on_capabilities gets the profile too. start_out, when given, receives the profile.
+Device CreateDevice(
+    const vk::Instance& instance, const vk::InstanceDispatch& dld, VkSurfaceKHR surface,
+    const std::function<void(const Device&, const DeviceStartProfile&)>& on_capabilities = {},
+    void* window = nullptr, DeviceStartProfile* start_out = nullptr);
 
 class RendererVulkan final : public VideoCore::RendererBase {
 public:
@@ -249,6 +273,9 @@ private:
     vk::DebugUtilsMessenger debug_messenger;
 
     vk::SurfaceKHR surface;
+
+    /// Read once, before the device (CreateDevice fills it).
+    DeviceStartProfile start_profile;
 
     Device device;
     MemoryAllocator memory_allocator;
