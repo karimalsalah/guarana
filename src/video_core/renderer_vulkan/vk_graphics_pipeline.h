@@ -646,6 +646,9 @@ private:
     vk::Pipeline fragment_output_library;
     vk::DescriptorSetLayout fallback_empty_set_layout;
     std::atomic_bool linked{};
+    /// The render pass the libraries were linked with, for an optimized link a draw queues
+    /// (EDEN_NX2_GPL_OPTIMIZE_CACHED). Written by the build, read by the GPU thread after IsBuilt().
+    VkRenderPass library_render_pass{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;

@@ -152,7 +152,9 @@ class AgentsWorkflowTests(unittest.TestCase):
         pins = dict(PINNED.findall(self.text))
         self.assertEqual(set(pins), {"actions/checkout", "anthropics/claude-code-action",
                                      "google-github-actions/run-gemini-cli"})
-        self.assertEqual(pins["actions/checkout"], "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09")  # as build-check.yml
+        # The same commit as build-check.yml, read from it so a dependabot bump of both stays green.
+        self.assertIn(f"uses: actions/checkout@{pins['actions/checkout']}\n",
+                      read(".github", "workflows", "build-check.yml"))
         uses = [step["uses"] for _, step in steps(self.doc) if "uses" in step]
         self.assertEqual(len(uses), 4)
         for use in uses:
