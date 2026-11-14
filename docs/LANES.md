@@ -88,6 +88,8 @@ To merge it:
 
 ### When the sync stops
 
+A failed scheduled run opens one issue, "upstream-sync is blocked", with the run's link. A later failure comments on it only when upstream has moved, and the next run that succeeds closes it. The run's log names the cause:
+
 - **"GitHub refused the push because upstream changed .github/workflows"**: the repository's token may not push commits that change workflow files. Push the mirror yourself:
 
   ```sh
@@ -113,7 +115,7 @@ To merge it:
 - `triage.yml` labels new issues by game, GPU and symptom, asks once for a log when a crash or bug report has none, and adds `agent-ready` to agent tasks whose acceptance test is checkable. It never closes, locks or removes anything.
 - `promo-render.yml` renders the 20-second promo in `site/promo/` to MP4 and GIF artifacts.
 - Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) opens one pull request a week per ecosystem with the minor and patch updates of the workflows' actions, the launcher's crates and its npm packages, and one per major update, each at least a week after its release. `launcher.yml` builds the installer for pull requests that change `launcher/`.
-- No workflow closes or marks issues as stale.
+- No workflow marks issues as stale or closes an issue someone opened; `upstream-sync.yml` closes only its own "upstream-sync is blocked" issue.
 
 ## Repository settings these need
 

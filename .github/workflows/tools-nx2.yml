@@ -1,0 +1,44 @@
+name: tools-nx2
+
+# The Python tests of tools/nx2 that need no build: bundle and shader archive readers, pipeline
+# statistics, the shader sweep, GPU trace replay and the offline RADV checks. build-check also runs
+# test_trace_replay.py and radv_offline/test_checks.py, after its Linux build; the rest ran nowhere.
+# scripts/run-tests.ps1 and scripts/run-tests.sh run the same list locally.
+#
+# It runs the pull request's own code, so it is triggered by pull_request only, with a read-only
+# token, no secrets and a checkout that keeps no credentials.
+on:
+  pull_request:
+    paths:
+      - "tools/nx2/**"
+      - ".github/workflows/tools-nx2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-nx2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test tools/nx2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Each suite runs even when the one before failed, so the log gives every failure at once.
+      - name: Run the tools/nx2 tests
+        run: |
+          status=0
+          for test in test_bundle_index test_pipeline_stats test_shader_archive test_shader_containers \
+              test_shader_static test_shader_sweep test_trace_replay radv_offline/test_checks; do
+            echo "::group::$test"
+            python3 "tools/nx2/$test.py" || { status=1; echo "::error::tools/nx2/$test.py failed"; }
+            echo "::endgroup::"
+          done
+          exit $status
