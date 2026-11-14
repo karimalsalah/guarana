@@ -25,7 +25,7 @@ Add query parameters to the URL, for example `http://localhost:5173/?mock=ready&
 
 | Parameter | Values | Default |
 |---|---|---|
-| `mock` | `first-run` (Arc 140T laptop, Ocarina of Time on disk, keys missing), `ready` (everything set up), `no-oot`, `failure` (launch, install, update check and report fail) | `first-run` |
+| `mock` | `first-run` (Arc 140T laptop, Ocarina of Time on disk, keys missing), `ready` (everything set up), `no-oot`, `failure` (launch, install, update check and report fail), `contaminated` (`ready`, and the doctor's settings-hygiene rows find something) | `first-run` |
 | `keys`, `update`, `first` | `0` or `1`: keys imported, update available, first run | from `mock` |
 | `pad` | `playstation`, `xbox`, `switch`, `generic`, `none`, `late` (connects after 3.5 s) | `playstation` |
 | `crash` | `1`: the game exits with 0xC0000005 right after it starts | off |

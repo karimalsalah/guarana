@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::state::{self, AppState};
 use crate::types::{Check, CheckStatus, Progress, SystemInfo, Vendor};
 use crate::util::{self, CmdResult};
-use crate::{install, locate, paths, system};
+use crate::{hygiene, install, locate, paths, system};
 
 pub const EVENT: &str = "doctor://progress";
 
@@ -24,7 +24,9 @@ const VC_REDIST_PAGE: &str = "https://learn.microsoft.com/cpp/windows/latest-sup
 const HDR_HELP_PAGE: &str = "https://support.microsoft.com/windows/hdr-settings-in-windows-2d767185-38ec-7fdc-6f97-bbc6c5ef24e6";
 
 /// In report order. `emulator_version` asks GitHub, so it runs alongside the others.
-const CHECKS: [(&str, &str); 21] = [
+/// `switch_file`, `settings_file`, `cache_files` and `user_folder` (issue #125, `hygiene.rs`) only
+/// report: they have no fix yet.
+const CHECKS: [(&str, &str); 25] = [
     ("emulator_version", "Guarana is up to date"),
     ("gpu_driver", "GPU driver"),
     ("vulkan", "Vulkan driver"),
@@ -41,6 +43,10 @@ const CHECKS: [(&str, &str); 21] = [
     ("displays", "Displays on the integrated GPU"),
     ("defender", "Microsoft Defender and the shader cache"),
     ("shader_tmp", "Shader cache temporary files"),
+    ("switch_file", "Switch file"),
+    ("settings_file", "Settings"),
+    ("cache_files", "Shader cache files"),
+    ("user_folder", "Settings folder"),
     ("keys", "Keys"),
     ("firmware", "Firmware"),
     ("game_folder", "Game folder"),
@@ -547,6 +553,28 @@ fn shader_tmp() -> Check {
     .with_fix("delete_shader_tmp", "Delete them")
 }
 
+/// One hygiene row (`hygiene.rs`) from what its rules found: `ok` when they found nothing, else
+/// each finding's sentences under the worst status among them. No fix id: these rows only report.
+fn hygiene_row(id: &str, found: &[hygiene::Finding], ok: &str) -> Check {
+    if found.is_empty() {
+        return check(id, CheckStatus::Ok, ok);
+    }
+    let status = found.iter().fold(CheckStatus::Info, |s, f| worse(s, f.status));
+    let rules: Vec<&str> = found.iter().map(|f| f.rule).collect();
+    log::info!("Doctor {id}: {}", rules.join(", "));
+    let detail: Vec<&str> = found.iter().map(|f| f.text.as_str()).collect();
+    check(id, status, detail.join(" "))
+}
+
+fn cache_files(sys: &SystemInfo) -> Check {
+    let (found, format) = hygiene::cache_files_now(sys);
+    let ok = match format {
+        Some(f) => format!("Every shader cache log is in format {f}, the one the installed Guarana writes, and no marker or leftover needs attention."),
+        None => "No shader cache marker or leftover needs attention. The installed Guarana does not say which cache format it writes (it has no build-facts.json), so the formats are not compared.".to_string(),
+    };
+    hygiene_row("cache_files", &found, &ok)
+}
+
 fn keys() -> Check {
     if state::keys_present() {
         check("keys", CheckStatus::Ok, format!("prod.keys is in {}.", paths::keys_dir().display()))
@@ -640,6 +668,22 @@ fn blocking_check(app: &AppHandle, id: &str, sys: &SystemInfo) -> Check {
         }
         "defender" => defender(),
         "shader_tmp" => shader_tmp(),
+        "switch_file" => hygiene_row(
+            "switch_file",
+            &hygiene::switch_file_now(&app.state::<AppState>().load(), sys),
+            "nx2_switches.txt reads as Guarana expects, the launcher's block is what this launcher writes, and no EDEN_NX2_ variable is set in Windows.",
+        ),
+        "settings_file" => hygiene_row(
+            "settings_file",
+            &hygiene::settings_file_now(&app.state::<AppState>().load()),
+            "The shader cache settings are on, and the launcher's saved settings are all ones it knows.",
+        ),
+        "cache_files" => cache_files(sys),
+        "user_folder" => hygiene_row(
+            "user_folder",
+            &hygiene::user_folder_now(),
+            "Nothing was left behind in %APPDATA%\\lichii.",
+        ),
         "keys" => keys(),
         "firmware" => firmware(),
         "game_folder" => game_folder(app),
@@ -859,5 +903,28 @@ mod tests {
         for (_, c) in FIXES {
             assert!(CHECKS.iter().any(|(id, _)| *id == c), "{c}");
         }
+    }
+
+    #[test]
+    fn hygiene_rows_follow_shader_tmp_and_only_report() {
+        let ids: Vec<&str> = CHECKS.iter().map(|(id, _)| *id).collect();
+        let at = ids.iter().position(|id| *id == "shader_tmp").unwrap();
+        assert_eq!(ids[at + 1..at + 5], ["switch_file", "settings_file", "cache_files", "user_folder"]);
+        for id in ["switch_file", "settings_file", "cache_files", "user_folder"] {
+            assert!(FIXES.iter().all(|(_, c)| *c != id), "{id} has a fix");
+        }
+    }
+
+    #[test]
+    fn a_hygiene_row_takes_the_worst_finding() {
+        let f = |status, text: &str| hygiene::Finding { rule: "C1", status, text: text.to_string() };
+        let ok = hygiene_row("switch_file", &[], "Fine.");
+        assert_eq!((ok.status, ok.detail.as_str()), (CheckStatus::Ok, "Fine."));
+        let info = hygiene_row("switch_file", &[f(CheckStatus::Info, "A.")], "Fine.");
+        assert_eq!(info.status, CheckStatus::Info);
+        let warn = hygiene_row("switch_file", &[f(CheckStatus::Info, "A."), f(CheckStatus::Warn, "B.")], "Fine.");
+        assert_eq!((warn.status, warn.detail.as_str()), (CheckStatus::Warn, "A. B."));
+        assert!(warn.fix_id.is_none());
+        assert_eq!(warn.title, "Switch file");
     }
 }

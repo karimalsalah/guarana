@@ -417,6 +417,38 @@ Time preset paces frames to 60, warns when the main display's rate is not a mult
 display offers one, naming the nearest; fix opens Advanced display; on a dedicated GPU it is info
 only), displays on the integrated GPU (`displays`: warns when the game's GPU is integrated and
 drives two or more active displays; fix opens Display settings).
+Settings hygiene (issue #125; `hygiene.rs`), four rows after `shader_tmp` that only report (no
+fix id yet; the status is the worst of what each found, `ok` when nothing). They read Guarana's
+own settings files only (`nx2_switches.txt`, `config\qt-config.ini`, `config\custom\*.ini`, the same
+two files in `%APPDATA%\lichii`), the names, sizes and first bytes of shader-cache files, the
+installed build's `build-facts.json` when it has one, and the names and values of `EDEN_NX2_*`
+environment variables in the registry; never anything under `keys`, `nand`, `sdmc`, `load` or
+`dump`, firmware, game files or saves. `switch_file`: the launcher's block differs from what this
+launcher writes for the saved profile and overrides on this PC (`profiles::block_switches`; warn,
+e.g. an `EDEN_NX2_EXTRAPOLATE=1` from a launcher before #122 on an Intel integrated GPU); the block
+sets `EDEN_NX2_FLUID=1` while Ocarina of Time is in the library and an Intel or AMD integrated GPU
+is present (info: it wins over the game's measured `FLUID=2`); the launcher's block and the
+settings page's block (`# >>> Guarana mode`) set the same switch (warn); a line the emulator's
+loader reads wrongly: a byte-order mark (warn when line 1 is a switch, else info), an unquoted
+` # note` after a number or single word, or, with the build's switch registry, after a switch of
+type `number` or `word` (warn; `EDEN_NX2_PIPELINE_STATS=C:\runs #2` is a folder, not a note), and,
+with the registry only, an `EDEN_NX2_*` name it does not list (info); `EDEN_NX2_*` variables kept
+for the user (`HKCU\Environment`) or the system (warn); a block in Custom mode without a saved
+profile this launcher knows, which nobody rewrites (warn); a portable install (`<version>\user`),
+whose files the launcher does not write (warn). `settings_file`: `use_disk_shader_cache` or
+`use_vulkan_driver_pipeline_cache` off in `qt-config.ini` (with `\default=false`) or in a game's
+`custom\<id>.ini` that does not follow the global value (warn); saved overrides that name a toggle
+this launcher does not have (warn). `cache_files`, per title folder in `cache\shader`: a
+`lichii-cache.v2.bin` whose header format is older (warn) or newer (info, used again after an
+update) than the build's `build-facts.json` `shader_cache_format` (not compared without it);
+precache markers (`precache-graphics*.bin`, `warm-compute.done`) whose device is an Intel GPU of
+this PC while the newest `vulkan_pipelines.fork-v<N>.bin` is missing or header-only and
+`use_vulkan_driver_pipeline_cache` is on (warn, issue #106; NVIDIA and AMD keep their own driver
+cache, so their markers are right); `*.migrating` files older than an hour (info). `user_folder`:
+`%APPDATA%\guarana` exists while `%APPDATA%\lichii`'s `qt-config.ini` holds settings changed from
+their defaults (not the first-run seeds or the launcher's own keys) and Guarana's holds none, or
+lichii's `nx2_switches.txt` has lines of the player's and Guarana's none (warn, issue #107); it
+says whether `lichii\nand` or `lichii\sdmc` exist and never looks inside them.
 `Gpu.family` names the Intel integrated GPU family whose PCI ids match the Intel rows of
 `FamilyRows` in #78's `src/common/device_profile.cpp` (Meteor Lake 7D55, Arrow Lake-H 7D51/7DD1,
 Lunar Lake 64A0/64B0, Panther Lake B080-B087, B090, B0A0). Auto (`recommend`, the community class)
@@ -427,8 +459,9 @@ inside Guarana's own folders.
 
 Check ids, in the order `run_doctor` returns them: `emulator_version`, `gpu_driver`, `vulkan`,
 `vc_redist`, `avx2`, `memory`, `memory_now`, `disk`, `power`, `hags`, `intel_shared_memory`,
-`windows_hdr`, `refresh_rate`, `displays`, `defender`, `shader_tmp`, `keys`, `firmware`,
-`game_folder`, `ocarina`, `controller`.
+`windows_hdr`, `refresh_rate`, `displays`, `defender`, `shader_tmp`, `switch_file`,
+`settings_file`, `cache_files`, `user_folder`, `keys`, `firmware`, `game_folder`, `ocarina`,
+`controller`.
 Fix ids: `install_update`, `open_driver_page`, `open_vulkan_driver_page`, `open_vc_redist`,
 `install_vc_redist` (runs the `vc_redist.x64.exe` shipped in the installed Guarana folder with
 `/install /quiet /norestart` after the click; Windows' own permission prompt appears, nothing is
