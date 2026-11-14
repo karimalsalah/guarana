@@ -42,6 +42,17 @@ DEFAULT_PORT = 6545
 THUMB = (32, 18)
 OPTIONAL_METHODS = ("power", "memory", "gpu_costs")
 WINDOWED_SETTINGS = {"UI": {"fullscreen": False}}
+FULLSCREEN_SETTINGS = {"UI": {"fullscreen": True}}
+# Set only for --pacing runs (or a variant's "pacing": true): the presenter then logs the pacing
+# lines the row's "pacing" is read from. It is more than logging: with FLUID it also adds GPU
+# timestamps to every presenter copy, so it changes the measured path and is off by default.
+SHOWN_STATS_ENV = "EDEN_NX2_SHOWN_STATS"
+# [Renderer] fullscreen_mode values (common/settings_enums.h FullscreenMode).
+FULLSCREEN_MODES = {"0": "borderless", "1": "exclusive"}
+# The picture check: a screenshot is black when this share of its 32x18 cells is near black.
+PICTURE_DARK_PCT = 85
+# The cells of the 32x18 grid the check looks at: columns 6-25, rows 4-13, where a HUD does not draw.
+PICTURE_CENTER = (range(6, 26), range(4, 14))
 BASELINE_VARIANT = {"name": "baseline", "settings": {}, "env": {}}
 IS_WINDOWS = sys.platform == "win32"
 
@@ -142,6 +153,21 @@ def ini_apply_text(text, settings, addons=None):
     if addons is not None:
         lines = ini_set_addons(lines, *addons)
     return newline.join(lines)
+
+
+def ini_value(text, section, key):
+    """The value of key in [section] of ini text; None when it is missing or marked default."""
+    lines = text.splitlines()
+    bounds = ini_section_bounds(lines, section)
+    if bounds is None:
+        return None
+    value = None
+    for line in lines[bounds[0] + 1:bounds[1]]:
+        if line.strip() == f"{key}\\default=true":
+            return None
+        if line.startswith(f"{key}="):
+            value = line[len(key) + 1:].strip()
+    return value
 
 
 def merge_settings(*layers):
@@ -311,6 +337,37 @@ def image_diff(png_a, png_b):
     """Mean absolute difference (0-255) of two PNGs, both shrunk to 32x18."""
     a, b = thumbnail(png_a), thumbnail(png_b)
     return round(sum(abs(x - y) for x, y in zip(a, b)) / len(a), 1)
+
+
+def picture_limits(scene_threshold, dark_pct=PICTURE_DARK_PCT):
+    """The picture check's limits, from the scene check's own arithmetic.
+
+    The scene check calls two 32x18 downscales different scenes when their mean absolute
+    difference reaches scene_threshold. Against an all-black frame that difference is the
+    picture's mean: a picture with a mean under scene_threshold is, by that measure, a black
+    screen. A cell is near black when even its brightest channel is under half that limit."""
+    return {"dark_level": round(scene_threshold / 2, 1), "dark_pct": dark_pct, "mean": scene_threshold}
+
+
+def picture_stats(png, limits):
+    """Mean and spread (standard deviation) of the cell brightness of a 32x18 downscale, the
+    share of near-black cells, and whether the picture is black by the limits.
+
+    The verdict uses only the central cells (PICTURE_CENTER): at this downscale every HUD edge
+    lights a whole cell, so a full-size HUD over a black frame lights a fifth of the whole grid
+    but none of its centre."""
+    values = thumbnail(png)
+    cells = [values[index:index + 3] for index in range(0, len(values), 3)]
+    brightness = [sum(cell) / 3 for cell in cells]
+    mean = sum(brightness) / len(brightness)
+    spread = math.sqrt(sum((value - mean) ** 2 for value in brightness) / len(brightness))
+    dark = sum(1 for cell in cells if max(cell) < limits["dark_level"]) * 100 / len(cells)
+    center = [row * THUMB[0] + column for row in PICTURE_CENTER[1] for column in PICTURE_CENTER[0]]
+    center_dark = sum(1 for index in center if max(cells[index]) < limits["dark_level"]) * 100 / len(center)
+    center_mean = sum(brightness[index] for index in center) / len(center)
+    return {"mean": round(mean, 1), "spread": round(spread, 1), "dark_pct": round(dark, 1),
+            "center_dark_pct": round(center_dark, 1), "center_mean": round(center_mean, 1),
+            "black": center_dark >= limits["dark_pct"] and center_mean < limits["mean"]}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -970,6 +1027,85 @@ def collect_log(source, target):
 
 
 # ---------------------------------------------------------------------------------------------
+# Presenter lines in the emulator log (EDEN_NX2_SHOWN_STATS=1; formats from
+# video_core/renderer_vulkan/vk_present_manager.cpp and vk_swapchain.cpp)
+
+NUMBER_TEXT = r"(\d+(?:\.\d+)?)"
+# FluidLogStats, first of its four lines every 10 s.
+FLUID_HEAD = re.compile(r"Fluid presenter \(10 s, (.+?) at " + NUMBER_TEXT + r" Hz, a slot every (\d+) "
+                        r"refreshes\): (\d+) slots, (\d+) shown on their slot, (\d+) missed")
+# Its second line.
+FLUID_RECEIVED = re.compile(r"Fluid presenter \(10 s\): .*; (\d+) frames received, (\d+) dropped unshown")
+# NoteShownFrame, every 10 s, with or without the FLUID presenter.
+SHOWN_FRAMES = re.compile(r"Shown frames: " + NUMBER_TEXT + r" per second, interval p5 " + NUMBER_TEXT
+                          + r" p50 " + NUMBER_TEXT + r" p95 " + NUMBER_TEXT + r" p99 " + NUMBER_TEXT
+                          + r" max " + NUMBER_TEXT + r" ms, (\d+)% within 2 ms of the median")
+# Swapchain::Create, at every (re)creation.
+SWAPCHAIN = re.compile(r"Swapchain: (\S+), (\d+) images \([^)]*\), (\d+)x(\d+) ")
+# The log line's prefix (common/logging.cpp): seconds since the emulator started.
+LOG_TIME = re.compile(r"\[\s*(\d+\.\d+)\]")
+
+
+def _number(text):
+    return float(text) if "." in text else int(text)
+
+
+def _log_time(line):
+    """Seconds since the emulator started, from the log line's "[  123.456789]" prefix; None without one."""
+    match = LOG_TIME.match(line)
+    return float(match[1]) if match else None
+
+
+def parse_presenter(lines):
+    """(pacing, swapchain) of a log: the last FLUID presenter report and the last "Shown frames"
+    line, and the swapchain that was in effect at the last of those reports (the last swapchain
+    creation when there is no report: the window can shrink while the emulator shuts down, and
+    the swapchain made then is not the one that was measured). Each is None when the log has no
+    such line. pacing's head_at_s and shown_at_s say when each report was logged."""
+    head = received = shown = current = reported = None
+    head_at = shown_at = None
+    for line in lines:
+        if "Fluid presenter (10 s" in line:
+            match = FLUID_HEAD.search(line)
+            if match:
+                head, received, head_at, reported = match, None, _log_time(line), current
+            elif head is not None:
+                received = FLUID_RECEIVED.search(line) or received
+        elif "Shown frames: " in line:
+            match = SHOWN_FRAMES.search(line)
+            if match:
+                shown, shown_at, reported = match, _log_time(line), current
+        elif "Swapchain: " in line:
+            current = SWAPCHAIN.search(line) or current
+    swapchain = reported or current
+    pacing = {}
+    if head:
+        pacing.update({"clock": head[1], "display_hz": float(head[2]), "slot_refreshes": int(head[3]),
+                       "slots": int(head[4]), "on_slot": int(head[5]), "missed": int(head[6])})
+        if head_at is not None:
+            pacing["head_at_s"] = head_at
+        if received:
+            pacing.update({"real_received": int(received[1]), "dropped_unshown": int(received[2])})
+    if shown:
+        keys = ("shown_fps", "interval_p5_ms", "interval_p50_ms", "interval_p95_ms", "interval_p99_ms",
+                "interval_max_ms", "within_2ms_pct")
+        pacing.update({key: _number(value) for key, value in zip(keys, shown.groups())})
+        if shown_at is not None:
+            pacing["shown_at_s"] = shown_at
+    if swapchain:
+        swapchain = {"present_mode": swapchain[1], "images": int(swapchain[2]),
+                     "size": f"{swapchain[3]}x{swapchain[4]}"}
+    return pacing or None, swapchain
+
+
+def read_presenter(path):
+    if not path or not os.path.isfile(path):
+        return None, None
+    with open(path, encoding="utf-8", errors="replace") as file:
+        return parse_presenter(file)
+
+
+# ---------------------------------------------------------------------------------------------
 # Hardware description
 
 WINDOWS_HW_SCRIPT = r"""
@@ -1199,6 +1335,44 @@ ROW_FIELDS = {
     "process_memory": ((dict, OPTIONAL), False),
     "log": ((str, OPTIONAL), False),
     "trace": ((dict, OPTIONAL), False),
+    "fullscreen": ((bool, OPTIONAL), False),
+    "fullscreen_requested": ((bool, OPTIONAL), False),
+    "shown_stats": ((bool, OPTIONAL), False),
+    "output": ((dict, OPTIONAL), False),
+    "pacing": ((dict, OPTIONAL), False),
+    "picture": ((dict, OPTIONAL), False),
+}
+OUTPUT_FIELDS = {
+    "size": ((str, OPTIONAL), True),
+    "size_from": ((str, OPTIONAL), True),
+    "present_mode": ((str, OPTIONAL), False),
+    "images": ((int, OPTIONAL), False),
+    "fullscreen_mode": ((str, OPTIONAL), False),
+    "fullscreen_mode_from": ((str, OPTIONAL), False),
+}
+PACING_FIELDS = {
+    "head_at_s": (NUMBER, False),
+    "shown_at_s": (NUMBER, False),
+    "clock": ((str,), False),
+    "display_hz": (NUMBER, False),
+    "slot_refreshes": ((int,), False),
+    "slots": ((int,), False),
+    "on_slot": ((int,), False),
+    "missed": ((int,), False),
+    "real_received": ((int,), False),
+    "dropped_unshown": ((int,), False),
+    "shown_fps": (NUMBER, False),
+    "interval_p5_ms": (NUMBER, False),
+    "interval_p50_ms": (NUMBER, False),
+    "interval_p95_ms": (NUMBER, False),
+    "interval_p99_ms": (NUMBER, False),
+    "interval_max_ms": (NUMBER, False),
+    "within_2ms_pct": (NUMBER, False),
+}
+PICTURE_FIELDS = {
+    "limits": ((dict,), True),
+    "shots": ((list,), True),
+    "black": ((bool,), True),
 }
 HARDWARE_FIELDS = {
     "cpu": ((str,), True),
@@ -1293,6 +1467,23 @@ def validate_row(row):
         errors.append("reject holds 16-digit lower-case hex hashes")
     if row.get("log") and re.search(r"[\\/]", row["log"].replace("logs/", "", 1)):
         errors.append("log is a name under logs/, not a path")
+    if row.get("output") is not None:
+        _check_fields(row["output"], OUTPUT_FIELDS, "output", errors)
+        size = row["output"].get("size")
+        if isinstance(size, str) and not re.fullmatch(r"\d+x\d+", size):
+            errors.append("output: size is WxH")
+        if row["output"].get("size_from") not in (None, "swapchain", "window"):
+            errors.append("output: size_from is swapchain or window")
+    # A fullscreen row measures another path than a windowed one (the screen output step runs at
+    # the display's size): it is only comparable when it says what size that was.
+    if row["valid"] and row.get("fullscreen") and not (row.get("output") or {}).get("size"):
+        errors.append("a valid fullscreen row needs output.size")
+    if row.get("pacing") is not None:
+        _check_fields(row["pacing"], PACING_FIELDS, "pacing", errors)
+    if row.get("picture") is not None:
+        _check_fields(row["picture"], PICTURE_FIELDS, "picture", errors)
+        if row["picture"].get("black") is True and "black_picture" not in row["invalid_reasons"]:
+            errors.append("a black picture requires the black_picture reason")
     errors += [f"{where}: looks like a home directory path" for where in private_strings(row)]
     return errors
 
@@ -1384,12 +1575,17 @@ def default_state_dir():
     return os.path.join(base, "lichii-bench")
 
 
-def check_variant(variant, cli_mods, cli_policy):
-    """The variant with its lists checked and the command line's mods and power policy filled in."""
+def check_variant(variant, cli_mods, cli_policy, cli_fullscreen=False, cli_pacing=False):
+    """The variant with its lists checked and the command line's mods, power policy,
+    fullscreen and pacing choices filled in."""
     variant = dict(variant)
     name = str(variant.get("name", ""))
     if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
         raise BenchError("every variant needs a name of letters, digits, '.', '_' or '-'")
+    for key, cli_value in (("fullscreen", cli_fullscreen), ("pacing", cli_pacing)):
+        variant.setdefault(key, bool(cli_value))
+        if not isinstance(variant[key], bool):
+            raise BenchError(f"variant {name}: {key} is true or false")
     for key in ("mods", "addons_off", "reject", "live"):
         if variant.get(key) is not None and not isinstance(variant[key], list):
             raise BenchError(f"variant {name}: {key} is a list")
@@ -1434,7 +1630,8 @@ class Plan:
         if variants is None:
             variants = [load_json(expand(path), "variant") for path in args.variant or []]
         cli_policy = parse_power_policy(args.power_policy)
-        self.variants = [check_variant(variant, args.mod, cli_policy) for variant in variants or [BASELINE_VARIANT]]
+        self.variants = [check_variant(variant, args.mod, cli_policy, args.fullscreen, getattr(args, "pacing", False))
+                         for variant in variants or [BASELINE_VARIANT]]
         if len({variant["name"] for variant in self.variants}) != len(self.variants):
             raise BenchError("variant names must differ")
         self.base_ini = expand(args.base_ini)
@@ -1457,6 +1654,7 @@ class Plan:
         self.reference = expand(reference)
         self.record_reference = args.record_reference
         self.threshold = float(scene.get("scene_threshold", 30))
+        self.picture_limits = picture_limits(self.threshold, float(scene.get("picture_dark_pct", PICTURE_DARK_PCT)))
         boot = scene.get("boot") or {}
         self.min_presents = int(boot.get("min_presents", 30))
         self.server_timeout_s = float(boot.get("server_timeout_s", 120))
@@ -1475,6 +1673,10 @@ class Plan:
             raise BenchError("measurement windows are between 0 and 60 s")
 
     def settings(self, variant):
+        """Windowed unless the variant runs fullscreen; then [UI] fullscreen is turned on, unless the
+        scene's or the variant's own settings turn it off."""
+        if variant["fullscreen"]:
+            return merge_settings(FULLSCREEN_SETTINGS, self.scene.get("settings"), variant.get("settings"))
         return merge_settings(WINDOWED_SETTINGS, self.scene.get("settings"), variant.get("settings"),
                               WINDOWED_SETTINGS)
 
@@ -1547,8 +1749,11 @@ class Plan:
         if variant["power_policy"]:
             steps.append("powercfg (AC, restored afterwards): "
                          + " ".join(f"{name}={value}" for name, value in variant["power_policy"].items()))
-        env = {DEBUG_ENV: f"127.0.0.1:{self.port}", **(variant.get("env") or {})}
-        steps.append("start the emulator windowed with " + " ".join(f"{key}={value}" for key, value in env.items()))
+        env = {DEBUG_ENV: f"127.0.0.1:{self.port}", **({SHOWN_STATS_ENV: "1"} if variant["pacing"] else {}),
+               **(variant.get("env") or {})}
+        steps.append("start the emulator " + ("fullscreen ([UI] fullscreen on unless the scene's or the variant's "
+                                              "settings turn it off)" if variant["fullscreen"] else "windowed")
+                     + " with " + " ".join(f"{key}={value}" for key, value in env.items()))
         steps.append(f"wait for the debug server ({self.server_timeout_s:g} s) and {self.min_presents} presents "
                      f"({self.presents_timeout_s:g} s)")
         for item in self.scene["input"]:
@@ -1556,7 +1761,10 @@ class Plan:
             steps.append(f"wait {item.get('wait_s', 0):g} s" + (f", hold {held} for {item.get('frames', 6)} frames"
                                                                 if held else ""))
         steps.append(f"settle {self.settle_s:g} s")
-        steps.append(f"screenshot, compare with the reference (limit {self.threshold:g})")
+        limits = self.picture_limits
+        steps.append(f"screenshot, compare with the reference (limit {self.threshold:g}); refuse a black picture "
+                     f"({limits['dark_pct']:g}% of its centre under {limits['dark_level']:g} and a centre mean under "
+                     f"{limits['mean']:g})")
         for call in variant["live"]:
             steps.append(f"call {call['method']} {json.dumps(call.get('params') or {})}")
         if variant["reject"]:
@@ -1576,7 +1784,7 @@ class Plan:
         steps.append("stop the emulator; once it is gone restore the settings file"
                      + (", the mod folders" if variant["mods"] is not None else "")
                      + (", the power settings" if variant["power_policy"] else "")
-                     + "; copy the log, append the row")
+                     + "; copy the log, read its pacing and swapchain lines, append the row")
         return steps
 
 
@@ -1714,6 +1922,9 @@ def new_row(plan, variant, hardware):
         "power_policy": None,
         "gpu_mhz": None, "gpu_limited_by": None, "gpu_telemetry_w": None,
         "late": None, "window": None, "process_memory": None, "log": None, "trace": None,
+        "fullscreen": None, "fullscreen_requested": variant["fullscreen"], "shown_stats": None,
+        "output": None, "pacing": None,
+        "picture": {"limits": dict(plan.picture_limits), "shots": [], "black": False},
     }
 
 
@@ -1725,6 +1936,25 @@ def check_scene(row, plan, png, reference):
     row["scene_diff"] = diff if row["scene_diff"] is None else max(row["scene_diff"], diff)
     row["scene_ok"] = row["scene_diff"] < plan.threshold
     return row["scene_ok"]
+
+
+def check_picture(row, png):
+    """Adds one screenshot to the row's picture check, which needs no reference; False when the
+    picture is black: near black almost everywhere, at most a HUD drawn."""
+    picture = row["picture"]
+    stats = picture_stats(png, picture["limits"])
+    black = stats.pop("black")
+    picture["shots"].append(stats)
+    picture["black"] = picture["black"] or black
+    return not black
+
+
+def black_message(row):
+    stats = row["picture"]["shots"][-1]
+    drawn = round(100 - stats["dark_pct"], 1)
+    return (f"black picture: {stats['center_dark_pct']:g}% of its centre near black, centre mean "
+            f"{stats['center_mean']:g}" + (f"; only {drawn:g}% of the whole is drawn, as a HUD would be"
+                                            if drawn else "; nothing is drawn"))
 
 
 def run_each(*actions):
@@ -1765,13 +1995,32 @@ def run_variant(plan, variant, hardware, deps, row_id):
             mods.apply(variant["mods"])
         addons = None if variant.get("addons_off") is None else (plan.scene["title_id"], variant["addons_off"])
         guard.apply(plan.settings(variant), plan.base_ini, addons)
+        with open(plan.ini, encoding="utf-8", errors="replace") as file:
+            ini = file.read()
+        row["fullscreen"] = ini_value(ini, "UI", "fullscreen") == "true"
+        if row["fullscreen"]:
+            mode = ini_value(ini, "Renderer", "fullscreen_mode")
+            # The default is Borderless on Windows and Exclusive elsewhere (common/settings.h).
+            # A per-game config can still override the mode; the bench does not read those.
+            row["output"] = {"size": None, "size_from": None,
+                             "fullscreen_mode": (("borderless" if IS_WINDOWS else "exclusive") if mode is None
+                                                 else FULLSCREEN_MODES.get(mode, mode)),
+                             "fullscreen_mode_from": "default" if mode is None else "settings"}
+        elif variant["fullscreen"]:
+            row["warnings"].append("fullscreen_off_in_settings")
+            deps.log("    fullscreen asked for, but the scene's or the variant's settings turn [UI] fullscreen off: "
+                     "the run is windowed")
         if policy.values:
             row["power_policy"] = policy.apply()
             if row["power_policy"]["skipped"]:
                 row["warnings"].append("power_policy_partial")
         env = dict(os.environ)
         env[DEBUG_ENV] = f"127.0.0.1:{plan.port}"
+        if variant["pacing"]:
+            env[SHOWN_STATS_ENV] = "1"
         env.update({key: str(value) for key, value in (variant.get("env") or {}).items()})
+        # The switch adds GPU timestamps to FLUID presenter copies: rows say whether it was on.
+        row["shown_stats"] = env.get(SHOWN_STATS_ENV, "") not in ("", "0")
         process = deps.launch(plan.exe, plan.game, env)
 
         deadline = time.monotonic() + plan.server_timeout_s
@@ -1810,6 +2059,13 @@ def run_variant(plan, variant, hardware, deps, row_id):
 
         reference = None
         first_shot = take_screenshot(client, plan.shot_height)
+        if not check_picture(row, first_shot):
+            # Also when recording: a black reference would let every broken run pass the scene check.
+            with open(shot_path, "wb") as file:
+                file.write(first_shot)
+            row["screenshot"] = shot_path
+            raise BenchError(black_message(row) + ": not measured"
+                             + (", no reference written" if plan.record_reference else ""))
         if plan.record_reference:
             os.makedirs(os.path.dirname(plan.reference), exist_ok=True)
             with open(plan.reference, "wb") as file:
@@ -1875,6 +2131,8 @@ def run_variant(plan, variant, hardware, deps, row_id):
         row["screenshot"] = shot_path
         if not variant["reject"]:
             check_scene(row, plan, last_shot, reference)
+            if not check_picture(row, last_shot):
+                deps.log("    " + black_message(row))
     except Exception as error:  # every failure becomes an invalid row
         row["error"] = str(error) or type(error).__name__
     finally:
@@ -1893,8 +2151,21 @@ def run_variant(plan, variant, hardware, deps, row_id):
 
     if process is not None:
         log_name = f"logs/{row_id}.log.txt"
-        copied, row["trace"] = collect_log(plan.log_file, os.path.join(plan.out, *log_name.split("/")))
+        log_copy = os.path.join(plan.out, *log_name.split("/"))
+        copied, row["trace"] = collect_log(plan.log_file, log_copy)
         row["log"] = log_name if copied else None
+        row["pacing"], swapchain = read_presenter(log_copy) if copied else (None, None)
+        output = row["output"] or {"size": None, "size_from": None}
+        if swapchain:
+            output.update(swapchain, size_from="swapchain")
+            # The window size was read while the game ran; a fullscreen window should match it.
+            if row["fullscreen"] and row["window"] and swapchain["size"] != row["window"]:
+                row["warnings"].append("output_size_not_window_size")
+        elif row["window"]:
+            output.update(size=row["window"], size_from="window")
+        row["output"] = output if output["size"] or row["output"] else None
+    if row["fullscreen"] and row["fps"] is not None and not (row["output"] or {}).get("size"):
+        reasons.append("output_size_unknown")
     if watchdog is not None:
         if watchdog.lowest is not None:
             row["system"]["ram_free_min_gb"] = round(watchdog.lowest, 1)
@@ -1914,6 +2185,8 @@ def run_variant(plan, variant, hardware, deps, row_id):
         row["warnings"].append("background_cpu_not_measured")
     if row["scene_ok"] is False:
         reasons.append("wrong_scene")
+    if row["picture"]["black"]:
+        reasons.append("black_picture")
     if row["error"] is not None:
         reasons.append("error")
     if hardware.get("power_source") == "battery":
@@ -2063,24 +2336,31 @@ def load_suite(path, args, defaults):
 def render_suite(rows, compare_to):
     """Markdown table of one suite run: every variant against its baseline."""
     by_key = {(row["scene"], row["variant"]): row for row in rows}
-    lines = ["| scene | variant | fps | vs baseline | p50 ms | p99 ms | watts | GPU MHz | limited by | "
+    display, pacing = optional_columns(rows)
+    lines = ["| scene | variant | " + ("display | " if display else "") + "fps | vs baseline | p50 ms | p99 ms | "
+             + ("shown fps | within 2 ms of p50 | " if pacing else "") + "watts | GPU MHz | limited by | "
              "late fps | valid |",
-             "|---|---|---:|---:|---:|---:|---:|---:|---|---:|---|"]
+             "|---|---|" + ("---|" if display else "") + "---:|---:|---:|---:|" + ("---:|---:|" if pacing else "")
+             + "---:|---:|---|---:|---|"]
     for key, row in by_key.items():
         target = compare_to.get(key)
         base = by_key.get((key[0], target))
         delta = "-"
         if target == key[1]:
             delta = "baseline"
+        elif base and display_mode(base) != display_mode(row):
+            delta = f"not compared: {target} ran {display_mode(base)}"
         elif base and base["valid"] and row["valid"] and base["fps"] and row["fps"]:
             delta = f"{(row['fps'] / base['fps'] - 1) * 100:+.1f}% vs {target}"
-        lines.append("| " + " | ".join([
-            _cell(key[0]), _cell(key[1]), _cell(row["fps"]), delta, _cell(row["p50_ms"]), _cell(row["p99_ms"]),
-            _cell(row["watts"]), _cell(row.get("gpu_mhz")), _cell(row.get("gpu_limited_by")),
-            _cell((row.get("late") or {}).get("fps")),
-            _status(row) + (" (probe)" if row.get("probe") else "")]) + " |")
+        lines.append("| " + " | ".join(
+            [_cell(key[0]), _cell(key[1])] + ([_display(row)] if display else [])
+            + [_cell(row["fps"]), delta, _cell(row["p50_ms"]), _cell(row["p99_ms"])]
+            + ([_cell(_pacing(row, "shown_fps")), _pct(_pacing(row, "within_2ms_pct"))] if pacing else [])
+            + [_cell(row["watts"]), _cell(row.get("gpu_mhz")), _cell(row.get("gpu_limited_by")),
+               _cell((row.get("late") or {}).get("fps")),
+               _status(row) + (" (probe)" if row.get("probe") else "")]) + " |")
     lines += ["", "A percentage is given only when both rows are valid. Traced variants are compared "
-              "with the traced baseline: tracing itself costs time."]
+              "with the traced baseline: tracing itself costs time."] + ([MIXED_NOTE] if display else [])
     return "\n".join(lines) + "\n"
 
 
@@ -2116,11 +2396,53 @@ def _status(row):
     return "yes" if row.get("valid") else "INVALID: " + ", ".join(row.get("invalid_reasons") or ["?"])
 
 
+def display_mode(row):
+    """'fullscreen' or 'windowed'. Rows from before the fullscreen option ran windowed; a row that
+    failed before the settings were read says what was asked for."""
+    fullscreen = row.get("fullscreen")
+    return "fullscreen" if (row.get("fullscreen_requested") if fullscreen is None else fullscreen) else "windowed"
+
+
+def _display(row):
+    size = (row.get("output") or {}).get("size")
+    return display_mode(row) + (f" {size}" if size else "")
+
+
+def _pacing(row, key):
+    return (row.get("pacing") or {}).get(key)
+
+
+def _on_slot(row):
+    slots = _pacing(row, "slots")
+    return f"{_pacing(row, 'on_slot')} / {slots}" if slots is not None else "-"
+
+
+def _pct(value):
+    return "-" if value is None else f"{_cell(value)}%"
+
+
+PACING_COLUMNS = (
+    ("shown fps", lambda row: _cell(_pacing(row, "shown_fps"))),
+    ("shown interval p50 / p99 ms",
+     lambda row: f"{_cell(_pacing(row, 'interval_p50_ms'))} / {_cell(_pacing(row, 'interval_p99_ms'))}"),
+    ("within 2 ms of p50", lambda row: _pct(_pacing(row, "within_2ms_pct"))),
+    ("on their slot", _on_slot),
+)
+MIXED_NOTE = ("Windowed and fullscreen rows measure different paths (fullscreen adds the scaling and frame "
+              "generation at the display's size): they are listed apart and never compared with each other.")
+
+
+def optional_columns(rows):
+    """(display column shown, pacing columns shown): each only when some row has it, so pages of
+    rows without them stay as they were."""
+    return (any(display_mode(row) == "fullscreen" for row in rows), any(row.get("pacing") for row in rows))
+
+
 def latest_rows(rows):
-    """One row per (scene, variant): the newest valid one, else the newest."""
+    """One row per (scene, variant, display mode): the newest valid one, else the newest."""
     chosen = {}
     for row in sorted(rows, key=lambda item: item.get("timestamp_utc", "")):
-        key = (row.get("scene"), row.get("variant"))
+        key = (row.get("scene"), row.get("variant"), display_mode(row))
         if key not in chosen or row.get("valid") or not chosen[key].get("valid"):
             chosen[key] = row
     return chosen
@@ -2143,6 +2465,16 @@ TABLE_HEADER = ("| scene | variant | fps | p50 ms | p99 ms | sustained min / avg
 TABLE_COMMAND = "python -I tools/bench/bench.py table tools/bench/results --out tools/bench/RESULTS.md"
 
 
+def table_header(display=False, pacing=False):
+    """TABLE_HEADER, with the display column and the pacing columns when asked for."""
+    names = ["scene", "variant"] + (["display"] if display else []) + [
+        "fps", "p50 ms", "p99 ms", "sustained min / avg fps", "watts"] + (
+        [name for name, _ in PACING_COLUMNS] if pacing else []) + ["scene_ok", "valid", "date"]
+    rule = ["---" if name in ("scene", "variant", "display", "scene_ok", "valid", "date") else "---:"
+            for name in names]
+    return "| " + " | ".join(names) + " |\n|" + "|".join(rule) + "|"
+
+
 def render_table(directory, every=False):
     lines = ["# Guarana benchmark results", "",
              f"Generated by `{TABLE_COMMAND}`; do not edit by hand.",
@@ -2153,18 +2485,28 @@ def render_table(directory, every=False):
         for row in load_rows(path):
             if not row.get("probe"):  # rows with rejected shaders are experiments, not benchmarks
                 machines.setdefault(row.get("machine_id", "?"), []).append(row)
+    display, pacing = optional_columns([row for rows in machines.values() for row in rows])
+    if display:
+        lines[4:4] = ["", MIXED_NOTE]
+    if pacing:
+        lines[-1:-1] = ["", "The shown-frame columns come from the emulator's own log (`bench.py run --pacing`, "
+                        "`EDEN_NX2_SHOWN_STATS`), generated frames included: the last complete 10 s report in "
+                        "the copied log; it is not aligned with the measurement windows and can include the steps "
+                        "after them. Compare them only with rows that also ran with `--pacing`."]
+    header = table_header(display, pacing)
     if not machines:
-        lines += ["No rows yet. See [README.md](README.md) for how to add yours.", "", TABLE_HEADER]
+        lines += ["No rows yet. See [README.md](README.md) for how to add yours.", "", header]
     for machine, rows in sorted(machines.items()):
         rows.sort(key=lambda row: row.get("timestamp_utc", ""))
-        lines += [f"## Machine `{machine}`", "", hardware_line(rows[-1].get("hardware") or {}), "", TABLE_HEADER]
+        lines += [f"## Machine `{machine}`", "", hardware_line(rows[-1].get("hardware") or {}), "", header]
         shown = rows if every else sorted(latest_rows(rows).values(),
-                                          key=lambda row: (row.get("scene"), row.get("variant")))
+                                          key=lambda row: (row.get("scene"), row.get("variant"), display_mode(row)))
         for row in shown:
-            lines.append("| " + " | ".join([
-                _cell(row.get("scene")), _cell(row.get("variant")), _cell(row.get("fps")), _cell(row.get("p50_ms")),
-                _cell(row.get("p99_ms")), _sustained(row), _cell(row.get("watts")), _cell(row.get("scene_ok")),
-                _status(row), _cell((row.get("timestamp_utc") or "")[:10])]) + " |")
+            lines.append("| " + " | ".join(
+                [_cell(row.get("scene")), _cell(row.get("variant"))] + ([_display(row)] if display else [])
+                + [_cell(row.get("fps")), _cell(row.get("p50_ms")), _cell(row.get("p99_ms")), _sustained(row),
+                   _cell(row.get("watts"))] + ([column(row) for _, column in PACING_COLUMNS] if pacing else [])
+                + [_cell(row.get("scene_ok")), _status(row), _cell((row.get("timestamp_utc") or "")[:10])]) + " |")
         lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
@@ -2186,22 +2528,29 @@ def render_compare(path_a, path_b):
         first = next(iter(rows.values()), {})
         lines.append(f"- **{label}**: `{os.path.basename(path)}`, machine `{first.get('machine_id', '?')}`: "
                      f"{hardware_line(first.get('hardware') or {})}")
+    # Rows are matched by scene, variant and display mode: a windowed row never meets a fullscreen one.
+    display, pacing = optional_columns(list(sides[0].values()) + list(sides[1].values()))
     lines += ["",
-              "| scene | variant | fps A | fps B | B vs A | p50 ms A / B | p99 ms A / B | "
-              "sustained min / avg fps A | sustained min / avg fps B | watts A / B | scene_ok A / B |",
-              "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
+              "| scene | variant | " + ("display | " if display else "") + "fps A | fps B | B vs A | p50 ms A / B | "
+              "p99 ms A / B | sustained min / avg fps A | sustained min / avg fps B | watts A / B | "
+              + ("shown fps A / B | within 2 ms of p50 A / B | " if pacing else "") + "scene_ok A / B |",
+              "|---|---|" + ("---|" if display else "") + "---:|---:|---:|---:|---:|---:|---:|---:|"
+              + ("---:|---:|" if pacing else "") + "---|"]
     for key in sorted(set(sides[0]) | set(sides[1]), key=lambda item: tuple(map(str, item))):
         a, b = sides[0].get(key, {}), sides[1].get(key, {})
         delta = "-"
         if a.get("valid") and b.get("valid") and a.get("fps") and b.get("fps"):
             delta = f"{(b['fps'] / a['fps'] - 1) * 100:+.1f}%"
-        lines.append("| " + " | ".join([
-            _cell(key[0]), _cell(key[1]), _cell(a.get("fps")), _cell(b.get("fps")), delta,
-            f"{_cell(a.get('p50_ms'))} / {_cell(b.get('p50_ms'))}",
-            f"{_cell(a.get('p99_ms'))} / {_cell(b.get('p99_ms'))}",
-            _sustained(a), _sustained(b), f"{_cell(a.get('watts'))} / {_cell(b.get('watts'))}",
-            f"{_cell(a.get('scene_ok'))} / {_cell(b.get('scene_ok'))}"]) + " |")
-    lines += ["", "B vs A is given only when both rows are valid."]
+        lines.append("| " + " | ".join(
+            [_cell(key[0]), _cell(key[1])] + ([key[2]] if display else [])
+            + [_cell(a.get("fps")), _cell(b.get("fps")), delta,
+               f"{_cell(a.get('p50_ms'))} / {_cell(b.get('p50_ms'))}",
+               f"{_cell(a.get('p99_ms'))} / {_cell(b.get('p99_ms'))}",
+               _sustained(a), _sustained(b), f"{_cell(a.get('watts'))} / {_cell(b.get('watts'))}"]
+            + ([f"{_cell(_pacing(a, 'shown_fps'))} / {_cell(_pacing(b, 'shown_fps'))}",
+                f"{_pct(_pacing(a, 'within_2ms_pct'))} / {_pct(_pacing(b, 'within_2ms_pct'))}"] if pacing else [])
+            + [f"{_cell(a.get('scene_ok'))} / {_cell(b.get('scene_ok'))}"]) + " |")
+    lines += ["", "B vs A is given only when both rows are valid."] + ([MIXED_NOTE] if display else [])
     return "\n".join(lines) + "\n"
 
 
@@ -2238,6 +2587,14 @@ def add_run_arguments(run):
     run.add_argument("--ram-floor-gb", type=float, default=2.0)
     run.add_argument("--max-other-cpu-pct", type=float, default=10.0,
                      help="rows are invalid when other processes use more of the machine's CPU than this")
+    run.add_argument("--fullscreen", action="store_true",
+                     help="run fullscreen, as the player plays, for variants without a 'fullscreen' field: [UI] "
+                     "fullscreen is turned on unless the scene's or the variant's settings turn it off. Rows "
+                     "record the mode and output size; table and compare keep them apart from windowed rows")
+    run.add_argument("--pacing", action="store_true",
+                     help="set EDEN_NX2_SHOWN_STATS=1 for variants without a 'pacing' field and record the "
+                     "presenter's pacing from the log in the row. Off by default: with FLUID the switch also adds "
+                     "GPU timestamps to every presenter copy, so it changes the measured path")
     run.add_argument("--dry-run", action="store_true", help="print the plan and touch nothing")
 
 
