@@ -1,0 +1,1 @@
+- Benchmark: add explicit GM=11, GM=0 and GM=3 variants and traced twins to the iGPU switch suite.

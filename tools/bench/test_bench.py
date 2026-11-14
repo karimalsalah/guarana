@@ -1673,6 +1673,12 @@ class SuiteTest(RunCase):
         vrs = {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}
         self.assertEqual(env, {
             "baseline": {}, "baseline-trace": trace,
+            "gm11": {"EDEN_NX2_GM": "11"},
+            "gm11-trace": {"EDEN_NX2_GM": "11", **trace},
+            "gm-off": {"EDEN_NX2_GM": "0"},
+            "gm-off-trace": {"EDEN_NX2_GM": "0", **trace},
+            "gm3": {"EDEN_NX2_GM": "3"},
+            "gm3-trace": {"EDEN_NX2_GM": "3", **trace},
             "vrs-2x2": vrs, "vrs-2x2-trace": {**vrs, **trace},
             "spin-scale-0.25": {"EDEN_NX2_SPIN_SCALE": "0.25"},
             "eco-background": {"EDEN_NX2_ECO_BACKGROUND": "1"},
