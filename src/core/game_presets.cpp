@@ -98,7 +98,44 @@ constexpr std::array OCARINA_INTEL_IGPU_120_SWITCHES{
     SwitchValue{"EDEN_NX2_BUDGET_CEILING", "1"},
     SwitchValue{"EDEN_NX2_GPL", "1"},
 };
-constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
+// A display at about 144 Hz: frames paced to every refresh on the vblank clock (91.5 of 144 shown
+// a second in the one run), the in-between frames interpolated, real frames held to 24 a second
+// (CADENCE_DIVISOR=6: six slots per real frame at a shown rate of 144; the divisor is read only
+// with CADENCE set, and CADENCE=3 alone would give 6 too, but only because 144/60 rounds to 2),
+// the time-critical present thread. Exactly the setup
+// measured: the 60 Hz Intel set with EXTRAPOLATE=0, FLUID_INTERP=1, FLUID_RT=1, SHOWN_RATE=144
+// and CADENCE_DIVISOR=6, so no BUDGET_CEILING (the 120 Hz set has it; these runs did not).
+// One device, single runs, Ocarina of Time in Kokiri Forest by Link's house: Panther Lake laptop,
+// "Intel(R) Graphics" 8086:B0A0, 4 Xe3 cores, driver 32.0.101.8724, 2880x1800 at 144 Hz.
+//   the 60 Hz set:           20.0 real fps, 50.5 shown a second, shown frames held one slot 0%
+//                            (held 2 or 4+ refreshes), real frame age 57.0 ms
+//   this set:                24.0 real fps, 91.5 shown a second, 917 of 1069 slots on their slot,
+//                            84% held one slot, real frame age 89.9 ms
+//   with CADENCE_DIVISOR=7:  20.6 real fps, 84.1 shown a second, 847 of 1048 slots, 90%, 108.1 ms
+//   EXTRAPOLATE=1 (shipped nx2_switches.txt), divisor 7: 15.5 real fps, 58.5 shown a second,
+//                            573 of 1439 slots, 56%, 75.5 ms, 655 of 1238 frames dropped unshown
+// A scripted walk outdoors with this set held 17.6 to 24.1 real frames a second. The real frame
+// shown is older: 89.9 ms against 57.0 ms. A paired A-B-A-B of the first
+// two rows held in both pairs (79-83 shown a second against 44-51, 24 real against 20-22, real
+// frame age 74-87 ms against 53-57 ms; one session, 14 November). With EDEN_NX2_EXTRAPOLATE=1
+// set (the shipped nx2_switches.txt sets it, and a switch already set stays as set) the presenter
+// extrapolates and FLUID_INTERP does nothing: that combination is the last row, not this one, and
+// ApplySwitchDefaults says so in its log line.
+constexpr std::array OCARINA_INTEL_IGPU_144_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_FLUID_INTERP", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_RT", "1"},
+    SwitchValue{"EDEN_NX2_SHOWN_RATE", "144"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_CADENCE_DIVISOR", "6"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
 
 #ifdef _WIN32
 /// The primary display's refresh rate in Hz, 0 when Windows does not say.
@@ -112,6 +149,15 @@ constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
 }
 #endif
 #endif
+constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
+
+// The display rates each locked set is chosen at, in Hz (both ends included). Each was measured at
+// one rate only: 120 and 144.
+constexpr u32 LOCKED_120_MIN_HZ = 115;
+constexpr u32 LOCKED_120_MAX_HZ = 125;
+constexpr u32 LOCKED_144_MIN_HZ = 140;
+constexpr u32 LOCKED_144_MAX_HZ = 148;
+
 constexpr std::array<std::string_view, 1> OCARINA_SOFTWARE_TENSOR_ADDONS{
     "Max Resolution (built-in)",
 };
@@ -208,7 +254,10 @@ std::span<const Preset> Presets() {
 bool Matches(const GpuMatch& match, const GpuInfo& gpu) {
     return (match.vendor == GameSettings::GPUVendor::Unknown || match.vendor == gpu.vendor) &&
            (!match.integrated || gpu.integrated) &&
-           (!match.software_tensor_math || gpu.software_tensor_math);
+           (!match.software_tensor_math || gpu.software_tensor_math) &&
+           (match.device_class == Common::DeviceClass::Unknown ||
+            match.device_class == gpu.device_class) &&
+           (match.gpu_family == Common::GpuFamily::None || match.gpu_family == gpu.gpu_family);
 }
 
 const Preset* Find(std::span<const Preset> presets, u64 title_id, const GpuInfo& gpu) {
@@ -253,37 +302,105 @@ std::string Apply(u64 title_id, const GpuInfo& gpu) {
     return summary;
 }
 
-std::span<const SwitchValue> SwitchDefaults([[maybe_unused]] u64 title_id,
-                                            [[maybe_unused]] const GpuInfo& gpu) {
-#ifdef _WIN32
-    if (title_id == OCARINA_TITLE_ID && gpu.integrated) {
-        if (gpu.vendor == GameSettings::GPUVendor::Intel) {
-            // Measured at 120 Hz only: other high refresh rates keep the 60 Hz configuration.
-            const u32 refresh = PrimaryDisplayRefreshHz();
-            if (refresh >= 115 && refresh <= 125) {
-                return OCARINA_INTEL_IGPU_120_SWITCHES;
-            }
-            return OCARINA_INTEL_IGPU_SWITCHES;
-        }
-        if (gpu.vendor == GameSettings::GPUVendor::AMD) {
-            return OCARINA_IGPU_SWITCHES;
-        }
+PacingSet ChoosePacingSet(u64 title_id, const GpuInfo& gpu, u32 refresh_hz) {
+    if (title_id != OCARINA_TITLE_ID || !gpu.integrated) {
+        return PacingSet::None;
+    }
+    if (gpu.vendor == GameSettings::GPUVendor::AMD) {
+        return PacingSet::Hz60;
+    }
+    if (gpu.vendor != GameSettings::GPUVendor::Intel) {
+        return PacingSet::None;
+    }
+    // Measured at 120 and 144 Hz only: other refresh rates, and an unknown one, keep the 60 Hz set.
+    if (refresh_hz >= LOCKED_120_MIN_HZ && refresh_hz <= LOCKED_120_MAX_HZ) {
+        return PacingSet::Hz120;
+    }
+    if (refresh_hz >= LOCKED_144_MIN_HZ && refresh_hz <= LOCKED_144_MAX_HZ) {
+        return PacingSet::Hz144;
     }
 #endif
-    // TODO(measure): defaults by device class (gpu.device_class) go here, and settings presets by
-    // class with a device_class in GpuMatch. Each needs a paired run on a verified scene of that
-    // class first (AGENTS.md, rule 1); until then the class changes nothing.
+    // TODO(measure): defaults by device class or GPU family (gpu.device_class, gpu.gpu_family) go
+    // here; settings presets by class or family set GpuMatch's device_class or gpu_family. Each
+    // needs a paired run on a verified scene of that class or family first (AGENTS.md, rule 1);
+    // until then neither changes anything.
+    return PacingSet::Hz60;
+}
+
+std::string DescribePacingChoice(const GpuInfo& gpu, u32 refresh_hz, PacingSet set) {
+    const std::string display = refresh_hz == 0
+                                    ? std::string{"primary display rate unknown"}
+                                    : fmt::format("primary display at {} Hz", refresh_hz);
+    switch (set) {
+    case PacingSet::None:
+        return fmt::format("{}, no pacing set for this game and GPU", display);
+    case PacingSet::Hz60:
+        if (gpu.vendor != GameSettings::GPUVendor::Intel) {
+            return fmt::format(
+                "{}, the 60 Hz set (the only set given for this GPU vendor; measured on Intel)",
+                display);
+        }
+        return fmt::format("{}, the 60 Hz set (the locked sets are chosen at {} to {} and {} "
+                           "to {} Hz only)",
+                           display, LOCKED_120_MIN_HZ, LOCKED_120_MAX_HZ, LOCKED_144_MIN_HZ,
+                           LOCKED_144_MAX_HZ);
+    case PacingSet::Hz120:
+        return fmt::format("{}, the 120 Hz set (chosen at {} to {} Hz, measured at 120)", display,
+                           LOCKED_120_MIN_HZ, LOCKED_120_MAX_HZ);
+    case PacingSet::Hz144:
+        return fmt::format("{}, the 144 Hz set (chosen at {} to {} Hz, measured at 144)", display,
+                           LOCKED_144_MIN_HZ, LOCKED_144_MAX_HZ);
+    }
+    return display;
+}
+
+std::span<const SwitchValue> PacingSwitches([[maybe_unused]] PacingSet set,
+                                            [[maybe_unused]] const GpuInfo& gpu) {
+#ifdef _WIN32
+    switch (set) {
+    case PacingSet::None:
+        return {};
+    case PacingSet::Hz60:
+        if (gpu.vendor == GameSettings::GPUVendor::Intel) {
+            return OCARINA_INTEL_IGPU_SWITCHES;
+        }
+        return OCARINA_IGPU_SWITCHES;
+    case PacingSet::Hz120:
+        return OCARINA_INTEL_IGPU_120_SWITCHES;
+    case PacingSet::Hz144:
+        return OCARINA_INTEL_IGPU_144_SWITCHES;
+    }
+#else
+    // The sets are measured on Windows only.
+#endif
     return {};
 }
 
+std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu) {
+#ifdef _WIN32
+    return PacingSwitches(ChoosePacingSet(title_id, gpu, PrimaryDisplayRefreshHz()), gpu);
+#else
+    return PacingSwitches(ChoosePacingSet(title_id, gpu, 0), gpu);
+#endif
+}
+
 std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
-    const std::span<const SwitchValue> defaults = SwitchDefaults(title_id, gpu);
+#ifdef _WIN32
+    const u32 refresh_hz = PrimaryDisplayRefreshHz();
+#else
+    const u32 refresh_hz = 0;
+#endif
+    const PacingSet pacing = ChoosePacingSet(title_id, gpu, refresh_hz);
+    const std::span<const SwitchValue> defaults = PacingSwitches(pacing, gpu);
     if (defaults.empty()) {
         return {};
     }
+    const std::string why = DescribePacingChoice(gpu, refresh_hz, pacing);
     if (!Enabled()) {
-        LOG_INFO(Core, "Switch defaults for this game and GPU: not used, automatic presets are off");
-        return "switch defaults not used, automatic presets are off";
+        LOG_INFO(Core,
+                 "Switch defaults for this game and GPU ({}): not used, automatic presets are off",
+                 why);
+        return fmt::format("switch defaults ({}) not used, automatic presets are off", why);
     }
     std::string set;
     std::string kept;
@@ -301,11 +418,26 @@ std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
 #endif
         set += fmt::format(" {}={}", name, value);
     }
-    LOG_INFO(Core, "Switch defaults for this game and GPU:{}{}",
+    // The locked sets leave EXTRAPOLATE out, so the loop above never names it; set elsewhere (the
+    // shipped nx2_switches.txt, the launcher) it wins over FLUID_INTERP (ExtrapolationRequested).
+    std::string extrapolating;
+    if (pacing == PacingSet::Hz120 || pacing == PacingSet::Hz144) {
+        if (const char* extrapolate = std::getenv("EDEN_NX2_EXTRAPOLATE");
+            extrapolate != nullptr && *extrapolate != '\0' && *extrapolate != '0') {
+            extrapolating = fmt::format(
+                "; EDEN_NX2_EXTRAPOLATE={} is set, so frames are extrapolated and FLUID_INTERP "
+                "does nothing",
+                extrapolate);
+        }
+    }
+    LOG_INFO(Core, "Switch defaults for this game and GPU ({}):{}{}{}", why,
              set.empty() ? std::string{" none needed"} : set,
-             kept.empty() ? std::string{} : fmt::format("; set by the user:{}", kept));
-    return fmt::format("switch defaults:{}{}", set.empty() ? std::string{" none needed"} : set,
-                       kept.empty() ? std::string{} : fmt::format(" (user set:{})", kept));
+             kept.empty() ? std::string{} : fmt::format("; set by the user:{}", kept),
+             extrapolating);
+    return fmt::format("switch defaults ({}):{}{}{}", why,
+                       set.empty() ? std::string{" none needed"} : set,
+                       kept.empty() ? std::string{} : fmt::format(" (user set:{})", kept),
+                       extrapolating);
 }
 
 bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {

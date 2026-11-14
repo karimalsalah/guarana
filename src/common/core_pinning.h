@@ -42,9 +42,16 @@ struct GpuThreadPinning {
 /// interrupts, so the GPU threads get the next two.
 [[nodiscard]] GpuThreadPinning PlanGpuThreadPinning(std::span<const LogicalProcessor> processors);
 
-/// Physical performance cores needed before EDEN_NX2_HYBRID places threads: the six guest cores,
-/// the GPU front and back and the helpers crowd fewer.
-constexpr std::size_t MinHybridPerformanceCores = 6;
+/// Physical performance cores needed before EDEN_NX2_HYBRID places threads. With fewer (2P+8E
+/// parts such as the i5-1235U) the GPU front, back and Vulkan worker alone would fill the
+/// performance cores, so the CPU is left to Windows.
+constexpr std::size_t MinHybridPerformanceCores = 4;
+
+/// Physical performance cores from which the guest cores and every latency thread keep to the
+/// performance cores (the six-P layout): the six guest cores, the GPU front and back and the
+/// helpers crowd fewer. Below it the four-P layout keeps only the GPU front, back and Vulkan
+/// worker there.
+constexpr std::size_t SixPHybridPerformanceCores = 6;
 
 /// How a hybrid CPU's processors are shared out (EDEN_NX2_HYBRID). Every list holds host
 /// processor ids and is empty when `active` is false.
@@ -52,16 +59,24 @@ struct HybridPlan {
     /// False on CPUs that are not hybrid and on those with fewer than MinHybridPerformanceCores
     /// physical performance cores.
     bool active = false;
+    /// The four-P layout: fewer than SixPHybridPerformanceCores physical performance cores.
+    bool four_p = false;
     std::size_t performance_cores = 0;
     /// Every processor of the fastest class.
     std::vector<u32> performance;
-    /// Latency-critical threads other than the GPU front and back (guest cores, Vulkan worker,
-    /// present, fencing, timing): the performance processors, less the two cores of the GPU
-    /// threads when `pin_gpu_threads` is set.
+    /// Latency-critical threads other than the GPU front, back and Vulkan worker (guest cores,
+    /// present, fencing, timing, vsync, snapshot). Six-P: the performance processors, less the two
+    /// cores of the GPU threads when `pin_gpu_threads` is set. Four-P: the performance and
+    /// efficiency processors.
     std::vector<u32> latency;
+    /// The threads each frame waits on in turn: GPU front, GPU back and Vulkan worker. Six-P: as
+    /// `latency` (PinCurrentThread then narrows the front and back). Four-P: the performance
+    /// processors.
+    std::vector<u32> render;
     std::vector<u32> front;
     std::vector<u32> back;
-    /// Efficiency cores behind the performance cores' last level cache: background pools.
+    /// Efficiency cores behind the performance cores' last level cache: background pools. Four-P
+    /// with none there (Lunar Lake): the island's cores, the CPU's only efficiency cores.
     std::vector<u32> efficiency;
     /// Low-power efficiency cores: any non-performance core behind a last level cache of its own,
     /// or the slowest class when there are three. No latency-critical thread runs here.

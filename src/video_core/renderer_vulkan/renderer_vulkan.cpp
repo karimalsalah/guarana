@@ -212,15 +212,24 @@ Common::GpuKind GpuKindOf(VkPhysicalDeviceType type) {
 
 // The machine as the device profile records it: the host's part, and the GPU as the physical
 // device reports it. The memory is read from the heaps, as the device collects its own figures
-// after its capability callback, and those are budgets. The driver version and the display are
-// left to the caller.
+// after its capability callback, and those are budgets. The driver ID is read as the device reads
+// it (the instance is Vulkan 1.1 or later). The driver version and the display are left to the
+// caller.
 Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     Common::DeviceProfile profile = Common::DetectHostProfile();
-    const VkPhysicalDeviceProperties properties = physical.GetProperties();
+    VkPhysicalDeviceDriverProperties driver{};
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties2.pNext = &driver;
+    physical.GetProperties2(properties2);
+    const VkPhysicalDeviceProperties& properties = properties2.properties;
     const VkPhysicalDeviceMemoryProperties memory =
         physical.GetMemoryProperties().memoryProperties;
     profile.gpu.vendor_id = properties.vendorID;
+    profile.gpu.device_id = properties.deviceID;
     profile.gpu.model = properties.deviceName;
+    profile.gpu.driver_id = static_cast<u32>(driver.driverID);
     profile.gpu.kind = GpuKindOf(properties.deviceType);
     u32 local_heaps = 0;
     for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
@@ -235,8 +244,8 @@ Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     return profile;
 }
 
-Common::DeviceClass DeviceClassOf(const vk::PhysicalDevice& physical) {
-    return Common::Classify(DeviceProfileOf(physical)).device_class;
+Common::DeviceClassification ClassificationOf(const vk::PhysicalDevice& physical) {
+    return Common::Classify(DeviceProfileOf(physical));
 }
 
 // The refresh rate of the display the window is on, where the host says (Windows); 0 elsewhere.
@@ -268,12 +277,14 @@ void ApplyGamePresets(const Device& device) {
         break;
     }
     const u64 program_id = Settings::GetCurrentProgramID();
+    const Common::DeviceClassification machine = ClassificationOf(device.GetPhysical());
     const Core::GamePresets::GpuInfo gpu{
         .vendor = vendor,
         .integrated = device.IsIntegrated(),
         .software_tensor_math =
             !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
-        .device_class = DeviceClassOf(device.GetPhysical()),
+        .device_class = machine.device_class,
+        .gpu_family = machine.gpu_family,
     };
     const std::string summary = Core::GamePresets::Apply(program_id, gpu);
     Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
@@ -302,11 +313,15 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
                                  : properties.vendorID == 0x1002 ? GPUVendor::AMD
                                  : properties.vendorID == 0x10DE ? GPUVendor::Nvidia
                                                                  : GPUVendor::Unknown;
+        // The class and the family are the ones ApplyGamePresets gets: DeviceProfileOf reads the
+        // driver ID from the physical device, so a family is known before the device is built.
+        const Common::DeviceClassification machine = ClassificationOf(physical_device);
         void(Core::GamePresets::ApplySwitchDefaults(
             Settings::GetCurrentProgramID(),
             {.vendor = vendor,
              .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
-             .device_class = DeviceClassOf(physical_device)}));
+             .device_class = machine.device_class,
+             .gpu_family = machine.gpu_family}));
     }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {

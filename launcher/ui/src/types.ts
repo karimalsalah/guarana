@@ -12,6 +12,8 @@ export interface Gpu {
   shared_mb: number;
   vulkan: boolean;
   arch_hint?: string;
+  /** The Intel integrated GPU family its PCI ids matched, e.g. "Panther Lake Intel Graphics"; null when none did. */
+  family: string | null;
 }
 
 export interface SystemInfo {

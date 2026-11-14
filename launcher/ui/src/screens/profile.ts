@@ -28,7 +28,6 @@ const screen: ScreenDef = {
   title: "Profile",
   chrome: () => (isSetup() ? "setup" : "full"),
   tab: "profile",
-  step: 2,
 
   render(ctx) {
     const setup = isSetup();

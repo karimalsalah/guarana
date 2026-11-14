@@ -39,9 +39,8 @@ export function mountShell(app: HTMLElement, onReport: () => void): Shell {
   );
   const tabs = h("nav", { class: "tabs", "aria-label": "Main" }, h("span", { class: "tab-hint" }, glyph("tabPrev")), tabList, h("span", { class: "tab-hint" }, glyph("tabNext")));
 
-  const stepLabel = h("span", { class: "sr-only" });
-  const steps = h("div", { class: "setup-steps", hidden: true }, h("span", { class: "steps-kicker", text: "Set up" }), stepLabel,
-    h("span", { class: "steps-dots", "aria-hidden": "true" }, h("i"), h("i")));
+  // First run is one screen (Scan, then Home in Auto mode), so the bar says "Set up" and counts nothing.
+  const steps = h("div", { class: "setup-steps", hidden: true }, h("span", { class: "steps-kicker", text: "Set up" }));
 
   const themeBtn = h("button", { class: "icon-btn theme-toggle", type: "button" });
   const syncThemeBtn = () => {
@@ -136,16 +135,12 @@ export function mountShell(app: HTMLElement, onReport: () => void): Shell {
   let lastTab: TabId | undefined;
   attachShell({
     outlet,
-    setChrome(chrome, tab, step) {
+    setChrome(chrome, tab) {
       lastChrome = chrome;
       lastTab = tab;
       document.documentElement.dataset.chrome = chrome;
       tabs.hidden = chrome !== "full";
       steps.hidden = chrome !== "setup";
-      if (chrome === "setup") {
-        stepLabel.textContent = step ? `Step ${step} of 2` : "";
-        steps.dataset.step = String(step ?? 1);
-      }
       requestAnimationFrame(() => moveIndicator(tab));
     },
     announce(text) {

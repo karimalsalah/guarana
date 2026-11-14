@@ -87,7 +87,7 @@ progress (`EDEN_NX2_FLUID=1`, experimental): see
 
 ### Which settings should I use?
 
-On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#get-it). On
+On an Intel Arc iGPU, start with the play config in the [quick start](../README.md#quick-start). On
 anything else, nobody knows yet: measure with and without each switch
 ([BENCHMARKING.md](BENCHMARKING.md)) and share the result.
 
@@ -190,6 +190,24 @@ Yes. Guarana keeps its data in `%APPDATA%\guarana` and upstream Lichii in `%APPD
 do not touch each other. A portable
 `user` folder next to the program keeps its settings, saves and caches apart too
 ([roadmap L3](../ROADMAP.md#l3-portable-mode-out-of-the-box)).
+
+### How do I make a portable install?
+
+A portable install keeps settings, saves, caches, logs and switches next to the program (for example
+on a handheld's SD card or a USB drive) and leaves `%APPDATA%\guarana` alone.
+
+1. Create a folder named `user` next to `guarana.exe`.
+2. To move an existing install, close the emulator, back up `%APPDATA%\guarana`, then copy its
+   contents into the new `user` folder.
+3. Switches go in `user\nx2_switches.txt`. It overrides the `nx2_switches.txt` next to
+   `guarana.exe`, and `%APPDATA%\guarana\nx2_switches.txt` is not read. Like the copy next to
+   `guarana.exe`, it can set only `EDEN_NX2_*` and the diagnostic switches listed in
+   [switches.md](switches.md); set any other variable in the environment instead. The mode chosen
+   on the Guarana settings page is saved there too.
+
+The log says `Portable mode: on` near the top when the `user` folder is in use, and
+`Portable mode: off` otherwise. Start `guarana.exe` itself: the launcher does not support portable
+installs yet and still writes its switches to `%APPDATA%\guarana`.
 
 ### It closes as soon as I start it
 

@@ -111,7 +111,9 @@ pub fn gpu_class(sys: &SystemInfo) -> &'static str {
     let n = g.name.to_ascii_lowercase();
     let laptop = matches!(sys.device.form, Form::Laptop | Form::Handheld);
     match (g.vendor, g.is_integrated) {
-        (Vendor::Intel, true) if n.contains("arc") => "intel-arc-igpu",
+        (Vendor::Intel, true) if n.contains("arc") || crate::system::intel_igpu_arc_class(g.vendor_id, g.device_id, &g.name) => {
+            "intel-arc-igpu"
+        }
         (Vendor::Amd, true) if ["780m", "760m", "880m", "890m", "z1", "z2"].iter().any(|t| n.contains(t)) => {
             "amd-rdna3-igpu"
         }

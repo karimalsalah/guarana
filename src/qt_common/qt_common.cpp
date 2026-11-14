@@ -251,6 +251,8 @@ void Init(QWidget* root) {
 
     // info logging
     LOG_INFO(Frontend, "Guarana Version: {}", lichii_build_version);
+    // Bug reports need to know where settings came from; the folder path itself is not logged.
+    LOG_INFO(Frontend, "Portable mode: {}", Common::FS::IsPortableMode() ? "on" : "off");
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;

@@ -293,6 +293,7 @@ timestamp back within a frame. `state` is what the last tick found:
 | `cooldown` | Headroom, but the next lower scale is below the one that last missed |
 | `no_effect` | Headroom, but eight lowers in a row left the frame time alone (the game is at its highest resolution, or does not follow the scale); they go on once frames are 8% slower |
 | `waiting` | Headroom, but the shading-rate governor gives its coarse rates back first |
+| `unanswered` | With `EDEN_NX2_BUDGET_UNANSWERED=1`: a miss, but nine missed ticks in a row (about 4.5 s; raises, or holds at the upper limit after one) left `work_ms` no 12% faster, three ticks in a row, than the fastest of the run's first three: the game does not follow the scale (a patch fixes its resolution, or the frame is not bound by it), so the scale is held. `unanswered_from` is the scale at the start of the run, or at its last answer. A tick without a miss, while the shading-rate governor holds no coarse rates and not under `EDEN_NX2_BUDGET_HOLD_RES`, lets the scale be tried again; under `EDEN_NX2_BUDGET_HOLD_RES` the scale stays held until the target changes |
 
 The scale at which a run of misses began is `miss_scale`: for `cooldown_ticks` more ticks
 (30, doubled up to 240 each time a lower made since brings a miss back) a lower stays one step
@@ -300,15 +301,17 @@ above it, so the scale does not go back and forth over a resolution step. It is 
 two cool-downs without a miss.
 
 With `EDEN_NX2_VRS_AUTO` on, the shading-rate governor takes the same target and its frame time
-without the pacing wait. It may coarsen only from a miss at the scale's upper limit until the
-scale leaves that limit (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
+without the pacing wait. It may coarsen only once the scale has nothing left to give, from a
+miss at the scale's upper limit until the scale leaves that limit or from `unanswered` until the
+scale may be tried again (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
 hold reason), and while it holds coarse rates the scale is not lowered.
 
 `target_fps` sets the target live (1 to 1000; 0 turns the controller off and puts the scale back
 to `manual_scale`). `scale` sets the scale by hand; with a target the controller goes on from
 it. The reply also has `target_ms`, `samples` (presents of the last tick), `scale`,
 `latched_scale` (the scale as the anchor keeps it, within 0.8%), `min_scale`, `max_scale`,
-`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers` and `last_change`. A change of the
+`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers`, `last_change` and `unanswered_from`
+(0 outside state `unanswered`). A change of the
 scale by more than 10% logs one `Frame budget:` line, at most one a second.
 
 **`autopilot`**. The autopilot (`EDEN_NX2_AUTOPILOT=1`, [../autopilot.md](../autopilot.md)), answered at once from its last 2 s window, also under `status.autopilot`: `running`, `windows`, `changes`, `real_fps`, `shown_p50_ms`, `shown_p95_ms`, `shown_even_percent`, `refresh_hz` and its `refresh_source`, `gpu_busy` (negative when not measured), `power` (`ac`, `battery`, `unknown`), `frame_gen_on`, `frame_gen_target`, `frame_gen_multiplier`, `gpu_time_scale` and its base, `resolution_available` (false while the frame budget has a target), `power_policy_available`, `power_policy_applied` and `last_change`. Without the switch `running` is false.
