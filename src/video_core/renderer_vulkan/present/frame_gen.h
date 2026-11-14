@@ -84,6 +84,11 @@ public:
 
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
 
+    /// EDEN_NX2_FLUID_INTERP: records the frame `blend` of the way from the last real frame to the
+    /// one Process was given into destination (FSR3 interpolation only). False when nothing was
+    /// recorded.
+    bool GenerateBlend(const Device& device, Frame* destination, f32 blend);
+
     [[nodiscard]] VideoCore::FrameGenStatus CurrentStatus() const {
         return {.state = state.load(std::memory_order_relaxed),
                 .generated_frames = generated_frames.load(std::memory_order_relaxed)};
