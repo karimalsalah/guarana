@@ -2,7 +2,7 @@
 // Inside Tauri it uses @tauri-apps/api v2; in a plain browser it loads the mock backend.
 
 import type {
-  AppliedProfile, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
+  AppliedProfile, BootProgress, Channel, Check, Controller, Found, Game, GameExited, ImportResult, InstallResult,
   LaunchArgs, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo, UpdateInfo,
   WarmProgress, WarmResult, AiService, AskAiResult, ModeId, ModeStatus, StopResult, Credits, ShareStatus, ShareLink,
   LaunchRequest, Notifications, BoosterStatus,
@@ -94,7 +94,7 @@ export const api = {
   runDoctor: () => call<Check[]>("run_doctor"),
   applyFix: (fixId: string) => call<Check>("apply_fix", { fix_id: fixId }),
   prefetchCaches: (titleId: string) => call<{ bytes_warmed: number }>("prefetch_caches", { title_id: titleId }),
-  launchGame: (a: LaunchArgs) => call<{ pid: number }>("launch_game", { ...a }),
+  launchGame: (a: LaunchArgs) => call<{ pid: number; follows_boot: boolean }>("launch_game", { ...a }),
   collectReport: (kind: ReportKind, note?: string) => call<Report>("collect_report", { kind, note: note || undefined }),
   openPath: (path: string) => call<void>("open_path", { path }),
   openUrl: (url: string) => {
@@ -145,6 +145,8 @@ export const events = {
   doctorProgress: (h: (p: Progress) => void, signal?: AbortSignal) => on<Progress>("doctor://progress", h, signal),
   installProgress: (h: (p: Progress) => void, signal?: AbortSignal) => on<Progress>("install://progress", h, signal),
   gameExited: (h: (p: GameExited) => void, signal?: AbortSignal) => on<GameExited>("game://exited", h, signal),
+  /** The game's boot, from launch_game until the game is on screen. */
+  gameBoot: (h: (p: BootProgress) => void, signal?: AbortSignal) => on<BootProgress>("game://boot", h, signal),
   /** Carries the new Controller[]; anything else makes the UI call list_controllers again. */
   controllersChanged: (h: (p: unknown) => void, signal?: AbortSignal) => on<unknown>("controller://changed", h, signal),
   warmProgress: (h: (p: WarmProgress) => void, signal?: AbortSignal) => on<WarmProgress>("warm://progress", h, signal),
