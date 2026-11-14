@@ -79,7 +79,7 @@ it is merged.
   `gh pr list -R karimalsalah/guarana --json number,headRefName,files --jq '.[] | select(any(.files[]; .path | startswith("src/video_core/renderer_vulkan/present"))) | "#\(.number) \(.headRefName)"'`.
   If an open pull request is there, comment on it before you start.
 - **Files that conflict most:**
-  - `CHANGELOG.md`: add one line under `[Unreleased]`; on a conflict, keep both lines.
+  - `CHANGELOG.md`: do not edit it for a new entry. Add one file `changelog.d/<slug>.<section>.md` (the entry as a line that starts with `- `; [changelog.d/README.md](../../changelog.d/README.md)), so two pull requests never touch the same line. `tools/ci/changelog_fragments.py check` fails a pull request that changes code and has neither a fragment nor a line under `[Unreleased]`. On an old conflict in `CHANGELOG.md`, keep both lines and move yours into a fragment.
   - `docs/switches.md` and `dist/nx2_switches.txt`: add rows, never reorder them.
   - `README.md`: one lane owns it at a time ([HANDOVER.md](../../HANDOVER.md)).
   - `src/video_core/renderer_vulkan/present/`: the pacing lane, pull requests #58 and #1 at the
@@ -107,7 +107,7 @@ it is merged.
   On Windows, the last one is `powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1 -PythonOnly`.
 - **The review** reads the [pull request template](../../.github/PULL_REQUEST_TEMPLATE.md): the
   measured result, switches, risk, upstream and checklist. It also wants an `Assisted-by:` trailer
-  on each commit an AI helped write, a `CHANGELOG.md` line, and a `docs/switches.md` row for every
+  on each commit an AI helped write, a changelog fragment (`changelog.d/`), and a `docs/switches.md` row for every
   switch.
 
 ## 5. Never commit

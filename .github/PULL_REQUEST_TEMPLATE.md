@@ -39,5 +39,5 @@
 - [ ] Tests added or updated, and they pass (`-DLICHII_TESTS=ON`, `ctest`; the Python tests for tools), or CI ran them because I cannot build here
 - [ ] Commit subjects are `area: change` in the imperative; measured numbers are in the commit body
 - [ ] Commits an AI tool helped write carry an `Assisted-by: <tool>` trailer (docs/AI_POLICY.md)
-- [ ] `CHANGELOG.md` has an entry under `[Unreleased]`
+- [ ] A changelog entry: a file `changelog.d/<slug>.<section>.md` (see `changelog.d/README.md`), not a line in `CHANGELOG.md`
 - [ ] Upstream checked (see above)

@@ -131,6 +131,7 @@ jobs:
           sparse-checkout: |
             tools/ci
             tools/ingest
+            changelog.d
 
       # Checked before anything is built: a tag without notes fails here, not after the builds.
       - name: Write the release notes
@@ -180,6 +181,11 @@ jobs:
                 printf '\n'
                 thanks=$(python3 -I tools/ci/thanks.py --repo "$GITHUB_REPOSITORY" --head "$SHA" --base "$previous") || thanks=
                 if [ -n "$thanks" ]; then printf '%s\n\n' "$thanks"; fi
+              fi
+              # [Unreleased] with the changelog.d fragments folded in (tools/ci/changelog_fragments.py).
+              entries=$(python3 -I tools/ci/changelog_fragments.py collect) || entries=
+              if [ -n "$(tr -d '[:space:]' <<< "$entries")" ]; then
+                printf '## Changelog entries not yet in a release\n%s\n' "$entries"
               fi
             } > notes/changes.md
           fi

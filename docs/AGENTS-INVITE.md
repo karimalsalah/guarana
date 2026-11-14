@@ -138,8 +138,8 @@ captures. The tester runs the game. The agent asks it questions and reads the nu
   Assisted-by: Claude Code
   ```
 
-- **Bring the evidence.** Bring the acceptance test's output. Add a `CHANGELOG.md` line under
-  `[Unreleased]`. Add a `docs/switches.md` row for every switch. For performance work, add the
+- **Bring the evidence.** Bring the acceptance test's output. Add a changelog fragment
+  (`changelog.d/<slug>.<section>.md`, see `changelog.d/README.md`). Add a `docs/switches.md` row for every switch. For performance work, add the
   paired `tools/bench` rows. For rendering changes, add screenshots or a `capture_frame`.
 
 ## 6. What gets rejected
