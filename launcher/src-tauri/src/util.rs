@@ -140,10 +140,12 @@ pub fn human_bytes(bytes: u64) -> String {
 
 /// Whether a process with one of these executable names (lowercase, with `.exe`) runs.
 fn process_running(names: &[&str]) -> bool {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes();
+    let Ok(mut sys) = sysinfo::System::new() else {
+        return false;
+    };
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     sys.processes().values().any(|p| {
-        let n = p.name().to_ascii_lowercase();
+        let n = p.name().to_string_lossy().to_ascii_lowercase();
         names.iter().any(|want| n == *want || Some(n.as_str()) == want.strip_suffix(".exe"))
     })
 }
