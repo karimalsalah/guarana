@@ -7,6 +7,7 @@
 
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "common/common_types.h"
@@ -63,6 +64,8 @@ public:
     void SetSemaphore(MasterSemaphore& semaphore_);
     /// Submissions whose counters were collected since the window started.
     [[nodiscard]] u64 FramesSampled() const;
+    /// Diagnostic: pending slot count, frames left, and the known GPU tick.
+    [[nodiscard]] std::tuple<u64, u64, u64> Diag() const;
 
 private:
     struct Counter {

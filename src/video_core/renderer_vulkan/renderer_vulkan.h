@@ -127,6 +127,9 @@ public:
     [[nodiscard]] u64 GpuPerfFramesSampled() const override {
         return scheduler.Perf().FramesSampled();
     }
+    [[nodiscard]] std::tuple<u64, u64, u64> GpuPerfDiag() const override {
+        return scheduler.Perf().Diag();
+    }
 
     [[nodiscard]] std::optional<VideoCore::RendererBase::PresentStatsView>
     GetPresentStats() const override {

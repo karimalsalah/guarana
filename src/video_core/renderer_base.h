@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -158,6 +159,10 @@ public:
     }
     [[nodiscard]] virtual u64 GpuPerfFramesSampled() const {
         return 0;
+    }
+    /// Diagnostic: {pending slots, frames left, known GPU tick}.
+    [[nodiscard]] virtual std::tuple<u64, u64, u64> GpuPerfDiag() const {
+        return {0, 0, 0};
     }
 
     /// The Vulkan present thread's counters (present_stats); null on other renderers.

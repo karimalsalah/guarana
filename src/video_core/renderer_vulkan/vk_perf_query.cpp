@@ -387,6 +387,12 @@ u64 PerfQuery::FramesSampled() const {
     return frames_sampled;
 }
 
+std::tuple<u64, u64, u64> PerfQuery::Diag() const {
+    std::scoped_lock lock{mutex};
+    const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
+    return {static_cast<u64>(pending_slots.size()), frames_left, gpu_tick};
+}
+
 void PerfQuery::ReleaseLock() {
     if (lock_held && vkReleaseProfilingLockKHR) {
         vkReleaseProfilingLockKHR(*device.GetLogical());
