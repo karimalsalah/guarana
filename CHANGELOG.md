@@ -36,6 +36,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - CI checks contributed benchmark rows. On pull requests that touch `tools/bench/`, a new `bench-rows` job validates the rows under `tools/bench/results`, fails when `RESULTS.md` is not regenerated from them, and runs the benchmark tool's tests (the Linux build job runs those tests too). `bench.py validate` accepts a folder and `bench.py table` gains `--check` ([#43](https://github.com/karimalsalah/guarana/issues/43)).
 
 - A borderless fullscreen Vulkan window covers the screen exactly, so it can get independent flip: no desktop composition, up to a refresh less latency. OpenGL keeps the extra row.
+- `EDEN_NX2_BUDGET_UNANSWERED=1` (experimental, off by default): the frame budget notices when the game does not follow its GPU time scale (for example Ocarina of Time with the Max Resolution add-on): after nine missed ticks (about 4.5 s) that leave the frame time alone it holds the scale, shows state `unanswered` on the debug server and says so once in the log; with `EDEN_NX2_VRS` and `EDEN_NX2_VRS_AUTO` (and a device with per-draw shading rates) the shading-rate governor may coarsen from there. Not measured; see [docs/autopilot.md](docs/autopilot.md#when-the-scale-does-not-answer).
 
 ### Fixed
 

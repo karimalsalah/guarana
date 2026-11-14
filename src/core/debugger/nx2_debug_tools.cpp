@@ -1031,7 +1031,8 @@ json FrameBudgetTool(ToolState&, const json& params) {
             {"fast_streak", status.fast_streak},
             {"blind_lowers", status.blind_lowers},
             {"shading_rate_allowed", status.shading_allowed},
-            {"last_change", status.last_change}};
+            {"last_change", status.last_change},
+            {"unanswered_from", status.unanswered_from}};
 }
 
 // The autopilot (EDEN_NX2_AUTOPILOT=1): what its last 2 s window measured and what it holds.
