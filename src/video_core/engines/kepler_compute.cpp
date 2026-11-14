@@ -1135,9 +1135,14 @@ namespace {
 /// EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...> and EDEN_NX2_OOT_BYPASS_SKIP=<hex,...> (native program
 /// keys or shader hashes), and scales the tonemapped image to a larger output.
 /// EDEN_NX2_OOT_FSR_ANY=1 knows the output pass the same way (IsOotOutputPass) and reads
-/// EDEN_NX2_OOT_BYPASS_OUTPUT too.
+/// EDEN_NX2_OOT_BYPASS_OUTPUT too. With EDEN_NX2_OOT_BYPASS_ANY only:
+/// EDEN_NX2_OOT_BYPASS_STEP_GUARD=1 skips the prepass and the network only while the tonemap is
+/// the one last replaced (oot_network.h, SkipAllowed), and EDEN_NX2_OOT_BYPASS_SHAPE=1 also knows
+/// the output pass by its shape when what it reads is the size of what the tonemap drew.
 struct OotBypassSwitches {
     bool any{};
+    bool step_guard{};
+    bool shape{};
     std::vector<u64> output;
     std::vector<u64> skip;
 };
@@ -1180,6 +1185,18 @@ const OotBypassSwitches& OotBypassEnvironment() {
                  "Ocarina of Time: EDEN_NX2_OOT_BYPASS_ANY is on, output passes [{:016x}], "
                  "skipped passes [{:016x}]",
                  fmt::join(result.output, ","), fmt::join(result.skip, ","));
+        const auto on = [](const char* name) {
+            const char* const value = std::getenv(name);
+            return value != nullptr && value[0] != '\0' && value[0] != '0';
+        };
+        result.step_guard = on("EDEN_NX2_OOT_BYPASS_STEP_GUARD");
+        result.shape = on("EDEN_NX2_OOT_BYPASS_SHAPE");
+        if (result.step_guard || result.shape) {
+            LOG_INFO(HW_GPU,
+                     "Ocarina of Time: EDEN_NX2_OOT_BYPASS_STEP_GUARD is {}, "
+                     "EDEN_NX2_OOT_BYPASS_SHAPE is {}",
+                     result.step_guard ? "on" : "off", result.shape ? "on" : "off");
+        }
         return result;
     }();
     return switches;
@@ -1212,10 +1229,17 @@ bool KeplerCompute::IsOotOutputPass(u64 native_key, u64 unique_hash) {
     }
     const auto scene = ConstBuffer0Image(handles.first.front());
     const auto output = ConstBuffer0Image(handles.second.front());
-    if (!scene || !output || scene->format.Value() != Texture::TextureFormat::E5B9G9R9 ||
-        output->format.Value() != Texture::TextureFormat::B10G11R11 || output->Address() == 0 ||
-        output->Address() == scene->Address() || output->Width() < scene->Width() ||
-        output->Height() < scene->Height()) {
+    if (!scene || !output ||
+        !IsOutputShape({
+            .scene_e5b9g9r9 = scene->format.Value() == Texture::TextureFormat::E5B9G9R9,
+            .output_b10g11r11 = output->format.Value() == Texture::TextureFormat::B10G11R11,
+            .scene_address = scene->Address(),
+            .output_address = output->Address(),
+            .scene_w = scene->Width(),
+            .scene_h = scene->Height(),
+            .output_w = output->Width(),
+            .output_h = output->Height(),
+        })) {
         return false;
     }
     static std::unordered_set<u64> noted;
@@ -1272,14 +1296,20 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     // pass is being replaced, so a failed replacement brings the whole network back next frame.
     Maxwell3D::Regs::RenderTargetConfig tonemapped;
     Area area{};
+    u64 replaced_address = 0;
+    Area replaced_area{};
     {
         std::scoped_lock lock{bypass->mutex};
         tonemapped = bypass->tonemapped;
         area = bypass->tonemapped_area;
+        replaced_address = bypass->replaced_address;
+        replaced_area = bypass->replaced_area;
     }
     if (tonemapped.Address() == 0) {
         return false;
     }
+    // What the tonemap drew, as tracked: the step guard and the shape test compare this one.
+    const Area raw_area = area;
     const OotBypassSwitches& extra = OotBypassEnvironment();
     // Without the switch the copy takes the whole target, as before.
     if (!extra.any || area.x0 >= area.x1 || area.y0 >= area.y1 || area.x1 > tonemapped.width ||
@@ -1331,18 +1361,83 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
         return std::find(keys.begin(), keys.end(), native_key) != keys.end() ||
                std::find(keys.begin(), keys.end(), unique_hash) != keys.end();
     };
-    const bool output_pass =
+    bool output_pass =
         native_key == OutputProgramKey || base_output ||
         (extra.any && IsListedOotOutputPass(extra, native_key, unique_hash));
     if (native_key == PrepassProgramKey || native_key == NetworkProgramKey ||
         (!output_pass && listed(extra.skip))) {
-        const bool skipped = bypass->output_replaced.load(std::memory_order_relaxed);
+        bool skipped = bypass->output_replaced.load(std::memory_order_relaxed);
+        // EDEN_NX2_OOT_BYPASS_STEP_GUARD: a replacement made for another image or drawn area (a
+        // resolution step ago) does not count: this frame's output pass may be one nobody takes.
+        if (skipped && extra.step_guard) {
+            skipped = SkipAllowed(skipped, replaced_address, replaced_area, tonemapped.Address(),
+                                  raw_area);
+            // Once per drawn area and image: a tonemap that moves to another image at the same
+            // step (not a step change) shows up here too, with both addresses.
+            static std::unordered_set<u64> steps;
+            const u64 step_id = ((u64{raw_area.x0} << 48) | (u64{raw_area.y0} << 32) |
+                                 (u64{raw_area.x1} << 16) | u64{raw_area.y1}) ^
+                                (tonemapped.Address() * 0x9e3779b97f4a7c15ULL);
+            if (!skipped && steps.size() < 64 && steps.insert(step_id).second) {
+                LOG_INFO(HW_GPU,
+                         "Ocarina of Time: step changed to {}x{}: the network runs this frame "
+                         "(drawn {},{} to {},{} of {:#x}, last replaced {},{} to {},{} of {:#x})",
+                         raw_area.x1 > raw_area.x0 ? raw_area.x1 - raw_area.x0 : 0U,
+                         raw_area.y1 > raw_area.y0 ? raw_area.y1 - raw_area.y0 : 0U, raw_area.x0,
+                         raw_area.y0, raw_area.x1, raw_area.y1, tonemapped.Address(),
+                         replaced_area.x0, replaced_area.y0, replaced_area.x1, replaced_area.y1,
+                         replaced_address);
+            }
+        }
         if (!skipped) {
             kept("network pass, output pass not replaced");
         }
         return skipped;
     }
+    // EDEN_NX2_OOT_BYPASS_SHAPE and EDEN_NX2_OOT_BYPASS_STEP_GUARD: a pass that reads one
+    // E5B9G9R9 image and stores one B10G11R11 image elsewhere, no smaller, has the output pass's
+    // shape (IsOotOutputPass's test). With SHAPE it is taken as the output pass when what it reads
+    // is the size of what the tonemap drew; its image is then its one store (below).
+    bool output_shape = false;
+    if (!output_pass && (extra.shape || extra.step_guard)) {
+        const auto handles = NativeImageHandles(regs.code_loc.Address());
+        if (handles.first.size() == 1 && handles.second.size() == 1) {
+            const auto scene = ConstBuffer0Image(handles.first.front());
+            const auto stored = ConstBuffer0Image(handles.second.front());
+            output_shape =
+                scene && stored &&
+                IsOutputShape({
+                    .scene_e5b9g9r9 = scene->format.Value() == Texture::TextureFormat::E5B9G9R9,
+                    .output_b10g11r11 =
+                        stored->format.Value() == Texture::TextureFormat::B10G11R11,
+                    .scene_address = scene->Address(),
+                    .output_address = stored->Address(),
+                    .scene_w = scene->Width(),
+                    .scene_h = scene->Height(),
+                    .output_w = stored->Width(),
+                    .output_h = stored->Height(),
+                });
+            if (output_shape && extra.shape &&
+                MatchesDrawnArea(scene->Width(), scene->Height(), raw_area)) {
+                output_pass = true;
+                static std::unordered_set<u64> noted;
+                if (noted.size() < 64 && noted.insert(unique_hash).second) {
+                    LOG_INFO(HW_GPU,
+                             "Ocarina of Time: output pass known by its shape (bypass): key "
+                             "{:016x} hash {:016x}, reads +{:#x} {}x{}, stores +{:#x} {}x{}, "
+                             "drawn {}x{}",
+                             native_key, unique_hash, handles.first.front(), scene->Width(),
+                             scene->Height(), handles.second.front(), stored->Width(),
+                             stored->Height(), source_width, source_height);
+                }
+            }
+        }
+    }
     if (!output_pass) {
+        if (output_shape && extra.step_guard) {
+            // An output pass the bypass does not take: the next frame runs the whole network.
+            bypass->output_replaced.store(false, std::memory_order_relaxed);
+        }
         kept("not a known pass");
         return false;
     }
@@ -1449,6 +1544,12 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
         .src_y1 = static_cast<s32>(area.y1),
     };
     const bool copied = rasterizer->AccelerateSurfaceCopy(source, destination, config);
+    if (copied && extra.step_guard) {
+        // What this replacement was made for; a failed copy leaves the last one.
+        std::scoped_lock lock{bypass->mutex};
+        bypass->replaced_address = tonemapped.Address();
+        bypass->replaced_area = raw_area;
+    }
     bypass->output_replaced.store(copied, std::memory_order_relaxed);
     const char* const result = copied ? "copy of the tonemapped image" : "copy failed";
     // Also logged for the first 16 pairs of sizes: dynamic resolution changes the source's.
