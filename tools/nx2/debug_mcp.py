@@ -235,6 +235,13 @@ TOOLS = [
         },
     },
     {
+        "name": "speed_limit",
+        "description": "Lifts (on=false) or restores (on=true) the speed limit live, so a test "
+                       "script can boot through the logos and menus unlimited. Returns the "
+                       "previous and current 'on' state; without 'on' it only reports it.",
+        "inputSchema": {"type": "object", "properties": {"on": {"type": "boolean"}}},
+    },
+    {
         "name": "read_memory",
         "description": "Reads up to 64 KiB of the game's guest virtual memory, read only and "
                        "while it runs. 'as' formats it: hex (default), u32, u64 (hex strings) or "
@@ -399,6 +406,16 @@ TOOLS = [
                 "scale": {"type": "number", "exclusiveMinimum": 0},
             },
         },
+    },
+    {
+        "name": "autopilot",
+        "description": "The autopilot (EDEN_NX2_AUTOPILOT=1, docs/autopilot.md) from its last 2 s "
+                       "window, answered at once (also under status.autopilot): running, windows, "
+                       "changes, real_fps, shown frame p50/p95 and even share, refresh_hz and its "
+                       "source, gpu_busy, power source, frame generation, the GPU time scale and "
+                       "its base, whether resolution and power policy are available, and "
+                       "last_change. Without the switch 'running' is false.",
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "memory",
