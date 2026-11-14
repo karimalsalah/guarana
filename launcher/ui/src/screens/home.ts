@@ -43,7 +43,8 @@ function warmResultText(r: WarmResult): { text: string; tone: Tone } {
     case "done":
       return { text: `Shaders ready: ${r.built.toLocaleString()} built in ${duration(r.seconds)}.`, tone: "ok" };
     case "nothing to do":
-      return { text: "Shaders were already prepared.", tone: "ok" };
+      // warm.rs says why: this build can't prepare shaders ahead, or the game has no cache yet.
+      return { text: r.message || "Shaders were already prepared.", tone: r.message ? "info" : "ok" };
     case "nothing built":
       return { text: "Nothing could be prepared ahead for this game. It builds shaders as you play.", tone: "info" };
     case "incomplete":
