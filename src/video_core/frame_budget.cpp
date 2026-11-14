@@ -37,6 +37,22 @@ double SanitizeFps(double fps) {
     return std::isfinite(fps) && fps >= 1.0 ? (std::min)(fps, 1000.0) : 0.0;
 }
 
+/// EDEN_NX2_BUDGET_UNANSWERED=1: nine missed ticks in a row that leave the frame time alone stop
+/// the raises (state "unanswered"), as the game does not follow the scale. Unset: raises go on to
+/// the upper limit, as before.
+[[nodiscard]] FrameBudgetController::Config ControllerConfig() {
+    FrameBudgetController::Config config;
+    const char* value = std::getenv("EDEN_NX2_BUDGET_UNANSWERED");
+    if (value != nullptr && std::strtoul(value, nullptr, 10) != 0) {
+        config.max_unanswered = 8;
+        LOG_INFO(HW_GPU,
+                 "EDEN_NX2_BUDGET_UNANSWERED: the GPU time scale is held once {} missed ticks in "
+                 "a row leave the frame time alone",
+                 config.max_unanswered + 1);
+    }
+    return config;
+}
+
 struct Session {
     Session() {
         if (const char* const text = std::getenv("EDEN_NX2_GPU_TIME_SCALE");
@@ -80,7 +96,7 @@ struct Session {
     f64 manual_scale{1.0};
     f64 logged_scale{1.0}; ///< The scale of the last log line
     TimePoint last_log{};
-    FrameBudgetController controller;
+    FrameBudgetController controller{ControllerConfig()};
     std::vector<double> interval_samples;
     std::vector<double> work_samples;
     TimePoint last_return{};  ///< When the last present returned to the game
@@ -95,6 +111,7 @@ struct Session {
     u64 raises{};
     u64 lowers{};
     std::string last_change;
+    bool told_unanswered{}; ///< The unanswered scale was logged, once until the target goes off
 };
 
 Session& Instance() {
@@ -216,14 +233,46 @@ void TickLocked(Session& session, double target_fps, TimePoint now) {
                                           session.work_ms);
     }
 
-    // The governor may coarsen from a miss at the upper limit until the scale leaves the limit.
+    if (decision.state == State::Unanswered && !session.told_unanswered) {
+        // Once a game: the scale is the only lever the budget has, so say plainly that it does
+        // nothing here.
+        session.told_unanswered = true;
+        const double from = session.controller.UnansweredFrom();
+        LOG_INFO(HW_GPU,
+                 "Frame budget: the GPU time scale {} over {} missed ticks and the frame is still "
+                 "{:.2f} ms without the pacing wait against a {:.2f} ms target: the game does "
+                 "not follow the scale (a patch such as Max Resolution fixes its resolution, or "
+                 "the frame is not bound by it). The scale stays where it is; {}",
+                 decision.scale > from * 1.001
+                     ? fmt::format("rose from {:.3f} to {:.3f}", from, decision.scale)
+                     : fmt::format("stayed at {:.3f}", decision.scale),
+                 session.controller.UnansweredTicks(), session.work_ms, target_ms,
+                 shading_fps > 0.0 ? "the shading-rate governor may coarsen from here"
+                                   : "nothing else is moved (EDEN_NX2_VRS with EDEN_NX2_VRS_AUTO "
+                                     "lets shading rates take over)");
+    }
+
+    // The governor may coarsen once the scale has nothing left to give (a miss at the upper
+    // limit, or raises that went unanswered) until the scale leaves the limit or may be tried
+    // again.
     bool allowed = was_allowed;
-    if (decision.state == State::Saturated) {
+    if (decision.scale_spent) {
         allowed = true;
     } else if (decision.state != State::Frozen && !decision.at_limit) {
         allowed = false;
     }
     if (!session.shading_allowed || *session.shading_allowed != allowed) {
+        if (shading_fps > 0.0 && allowed != was_allowed) {
+            LOG_INFO(HW_GPU,
+                     "Frame budget: shading rates {} ({}; frame {:.2f} ms without the pacing "
+                     "wait, target {:.2f} ms, GPU time scale {:.3f})",
+                     allowed ? "may coarsen" : "go back to full",
+                     allowed ? (decision.state == State::Saturated
+                                    ? "the GPU time scale is at its limit"
+                                    : "the GPU time scale does not answer")
+                             : "the GPU time scale has resolution to give",
+                     session.work_ms, target_ms, decision.scale);
+        }
         session.shading_allowed = allowed;
         AutoShadingRate::SetAllowed(allowed);
     }
@@ -274,6 +323,7 @@ void SetTargetFps(double fps) {
     session.target_fps.store(fps, std::memory_order_relaxed);
     LOG_INFO(HW_GPU, "Frame budget: target {:.1f} fps (was {:.1f})", fps, before);
     if (fps <= 0.0) {
+        session.told_unanswered = false; // The game's target ended: the next one is told again
         session.scale.store(session.manual_scale, std::memory_order_relaxed);
         if (session.shading_allowed) {
             session.shading_allowed.reset();
@@ -347,6 +397,7 @@ Status GetStatus() {
         .blind_lowers = session.controller.BlindLowers(),
         .shading_allowed = session.shading_allowed.value_or(true),
         .last_change = session.last_change,
+        .unanswered_from = session.controller.UnansweredFrom(),
     };
 }
 

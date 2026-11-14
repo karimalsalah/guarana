@@ -77,7 +77,8 @@ When the backend says no (the promise rejects with a sentence to show):
 ```ts
 type Vendor = "intel" | "amd" | "nvidia" | "other";
 interface Gpu { name: string; vendor: Vendor; driver_version: string; is_integrated: boolean;
-  dedicated_mb: number; shared_mb: number; vulkan: boolean; arch_hint?: string; }
+  dedicated_mb: number; shared_mb: number; vulkan: boolean; arch_hint?: string;
+  family: string | null; }   // Intel iGPU family matched by PCI id, e.g. "Panther Lake Intel Graphics"
 interface SystemInfo {
   os: { name: string; build: number; display_version: string };            // e.g. 26100, "24H2"
   cpu: { name: string; cores: number; threads: number; avx2: boolean; avx512: boolean; hybrid: boolean };
@@ -213,8 +214,8 @@ the output.
 |---|---|---|
 | `starting` | `frontend:`, `startup:` and `vulkan:` marks | Starting Guarana… |
 | `loading` | `boot:`, `core:`, `nup:`, `romfs:` marks | Loading the game… |
-| `shaders` | `shaders:` marks, `Boot progress: prepare` and `build` (done of total pipelines) | Loading shaders…, with the count and a bar |
-| `precache` | `Boot progress: warm` (done of total; the emulator's loading screen can skip it) | Preparing shaders ahead…, with the count and a bar |
+| `shaders` | `shaders:` marks, `Boot progress: prepare` and `build` (done of total pipelines) | Loading shaders…, with the count after it |
+| `precache` | `Boot progress: warm` (done of total; the emulator's loading screen can skip it) | Preparing shaders ahead…, with the count after it |
 | `launching` | `Boot progress: complete`, `guest:` marks | Starting the game… |
 | `first-frame` | the mark `frontend: first guest frame presented` (`GRenderWindow::OnFrameDisplayed`, after the first composite of a guest frame; the loading screen still covers it and fades out over 0.5 s) | |
 | `shown` | the mark `frontend: loading screen hidden, game shown` (the loading screen's fade is over and the render window is shown; also in the log of every session) | |
@@ -223,10 +224,10 @@ the output.
 Phases only move forward (a late `vulkan:` mark does not take `loading` back), `shaders` and
 `precache` can follow each other on progress lines only (a `shaders:` mark after the precache keeps
 `precache`), and an event is emitted only when the phase moves or the counts
-change. `done` and `total` are 0 outside `shaders` and `precache`; the bar is never shown without a
-real count.
+change. `done` and `total` are 0 outside `shaders` and `precache`; the count is never shown without a
+real one.
 
-The launch stage holds (`screens/launch.ts`) until the game is on screen, then shows "Playing":
+The launch stage holds (`screens/launch.ts`) until the game is on screen, then shows the title "is running":
 
 - at `shown` at once, and 1 s after `first-frame` if `shown` does not come;
 - at `window` it pauses its animations (the emulator's window covers it, and they would take GPU
@@ -377,7 +378,7 @@ shows the picker and, for each level, exactly what it changes and whether it nee
 
 ## Profiles (first set)
 
-`intel-arc-igpu` (Arc 130T/140T/140V, Meteor/Panther Lake Arc), `amd-igpu-handheld` (Radeon 780M/880M/890M, Z1/Z2),
+`intel-arc-igpu` (Arc 130T/140T/140V, Meteor/Panther Lake Arc, Arrow Lake-H Intel Graphics by PCI id), `amd-igpu-handheld` (Radeon 780M/880M/890M, Z1/Z2),
 `low-power-handheld` (any iGPU on battery: 30 fps cap, lower resolution), `desktop-dgpu`, `safe-defaults`.
 Toggles map to `%APPDATA%\guarana\nx2_switches.txt` lines and `qt-config.ini` keys, e.g.
 `frame_generation` → `[Renderer] frame_gen=true, frame_gen_multiplier=3, frame_gen_target_rate=60`,
@@ -399,18 +400,33 @@ never changed silently), stale shader-cache temp files (fix: delete `*.tmp`), ke
 firmware present, game folder present, Ocarina of Time found, emulator version up to date,
 controller connected (`controller`, info when none), Windows HDR (`windows_hdr`, info only: whether
 the primary display can do HDR and whether Windows HDR is on; fix "How to turn on HDR" opens
-Microsoft's HDR help page, never toggles it).
+Microsoft's HDR help page, never toggles it), memory free right now (`memory_now`: free RAM and
+the commit against its limit at check time; warns below 3 GB of free RAM and says what to close;
+below 6 GB of commit left it warns, with a fix that opens System > About for the page file, only
+when the page file is capped or absent, and with a system-managed page file is info only),
+display refresh rate (`refresh_rate`: when the game's GPU is integrated, where the Ocarina of
+Time preset paces frames to 60, warns when the main display's rate is not a multiple of 60 and the
+display offers one, naming the nearest; fix opens Advanced display; on a dedicated GPU it is info
+only), displays on the integrated GPU (`displays`: warns when the game's GPU is integrated and
+drives two or more active displays; fix opens Display settings).
+`Gpu.family` names the Intel integrated GPU family whose PCI ids match the Intel rows of
+`FamilyRows` in #78's `src/common/device_profile.cpp` (Meteor Lake 7D55, Arrow Lake-H 7D51/7DD1,
+Lunar Lake 64A0/64B0, Panther Lake B080-B087, B090, B0A0). Auto (`recommend`, the community class)
+treats a match like a GPU named "Arc", except Panther Lake's "Intel Graphics" (B090, B0A0), which
+stays on the low-power profile until a paired benchmark shows the Arc profile suits it.
 Fixes that change the system only ever open the official Windows/vendor page; file fixes act only
 inside Guarana's own folders.
 
 Check ids, in the order `run_doctor` returns them: `emulator_version`, `gpu_driver`, `vulkan`,
-`vc_redist`, `avx2`, `memory`, `disk`, `power`, `hags`, `intel_shared_memory`, `windows_hdr`,
-`defender`, `shader_tmp`, `keys`, `firmware`, `game_folder`, `ocarina`, `controller`.
+`vc_redist`, `avx2`, `memory`, `memory_now`, `disk`, `power`, `hags`, `intel_shared_memory`,
+`windows_hdr`, `refresh_rate`, `displays`, `defender`, `shader_tmp`, `keys`, `firmware`,
+`game_folder`, `ocarina`, `controller`.
 Fix ids: `install_update`, `open_driver_page`, `open_vulkan_driver_page`, `open_vc_redist`,
 `install_vc_redist` (runs the `vc_redist.x64.exe` shipped in the installed Guarana folder with
 `/install /quiet /norestart` after the click; Windows' own permission prompt appears, nothing is
 elevated silently; the check offers it only when the file is found, else `open_vc_redist`),
-`open_memory_settings`, `open_storage_settings`, `open_power_settings`, `open_graphics_settings`,
-`open_intel_graphics`, `open_hdr_help`, `open_windows_security`, `delete_shader_tmp`,
+`open_memory_settings`, `open_about_settings`, `open_storage_settings`, `open_power_settings`,
+`open_graphics_settings`, `open_intel_graphics`, `open_hdr_help`, `open_display_refresh`,
+`open_display_settings`, `open_windows_security`, `delete_shader_tmp`,
 `open_bluetooth_settings`. `apply_fix` returns the check run again; `install_update` streams
 `install://progress` like `install_version`.

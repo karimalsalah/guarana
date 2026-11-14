@@ -1011,7 +1011,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
     const VideoCommon::StutterTrace::ThreadScope stutter_thread{
         VideoCommon::StutterTrace::Thread::Worker};
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
-    Common::SetCurrentThreadToPerformanceCores();
+    Common::SetCurrentThreadToRenderCores();
 
     const auto TryPopQueue{[this](auto& work) -> bool {
         if (work_queue.empty()) {

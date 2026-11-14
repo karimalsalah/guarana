@@ -58,7 +58,7 @@ jobs:
       contents: read
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -84,7 +84,7 @@ jobs:
     steps:
       # The default branch's code only; the token stays in the checkout for the push.
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Only the parser's own tests: they pass whatever the data file holds, so a merged data
       # pull request or a new layout never blocks the run that rewrites it.
@@ -115,7 +115,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

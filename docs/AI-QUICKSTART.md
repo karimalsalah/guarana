@@ -43,7 +43,7 @@ checked against them on 2026-11-13, except where a note below says we could not.
 | Tool | Start it in the repository | What it picks up by itself |
 |---|---|---|
 | [Claude Code](https://code.claude.com/docs) | `claude "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` | `CLAUDE.md` imports `AGENTS.md`; `.mcp.json` registers the `emulator-debug` MCP server |
-| [OpenAI Codex CLI](https://github.com/openai/codex) | `npm install -g @openai/codex`, then `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` | `AGENTS.md` |
+| [OpenAI Codex CLI](https://github.com/openai/codex) | `npm install -g @openai/codex`, then `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` | `AGENTS.md`; `.codex/config.toml` once you trust the folder (see the note below) |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm install -g @google/gemini-cli`, then `gemini`, and paste the sentence | `GEMINI.md` imports `AGENTS.md` |
 | [Cursor](https://cursor.com/docs/cli/overview) | Editor: open the folder, then Agent mode. CLI: `agent "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` | `.cursor/rules/guarana.mdc` (always on) imports `AGENTS.md` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | Agent mode in your editor's Copilot chat, or the coding agent from your fork's Agents tab or by assigning it an issue; paste the sentence | `.github/copilot-instructions.md`, and `AGENTS.md` |
@@ -56,7 +56,15 @@ Notes on honesty, because tools change:
 - Claude Code asks you to approve the project's `.mcp.json` server the first time; run `claude` interactively once, or
   check it with `claude mcp list`. Details: [nx2/debug-mcp.md](nx2/debug-mcp.md).
 - `codex "..."` starts the interactive Codex with that first prompt; `codex exec "..."` is its
-  non-interactive mode. Gemini CLI's `-p` flag is its non-interactive mode; the interactive start
+  non-interactive mode. Codex reads only the first 32 KiB of `AGENTS.md` by default, and ours is
+  longer, so without help it silently drops the tail of the rules. The repository's
+  `.codex/config.toml` raises that limit (`project_doc_max_bytes`) and sets nothing else, but Codex
+  loads project config only for a folder you trust: say yes when Codex asks, or add `--trust` to a
+  `codex exec` run once (trust also lets a project's hooks and MCP servers run; this file defines
+  none). Until then Codex warns "Untrusted project-local configuration is disabled". If you do not
+  want to trust the folder, add the setting to the command instead:
+  `codex -c project_doc_max_bytes=65536 "..."`. Codex prints "Loaded only ... bytes" when it cuts
+  the file. Gemini CLI's `-p` flag is its non-interactive mode; the interactive start
   with a first prompt is not something we verified, so paste the sentence after `gemini` starts.
 - The Cursor CLI's executable is `agent`. Whether it applies `.cursor/rules` and `AGENTS.md` is
   not stated on the page we checked, so the sentence names `AGENTS.md` itself.

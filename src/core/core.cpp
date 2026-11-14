@@ -89,6 +89,7 @@
 #include "hid_core/hid_core.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
@@ -444,6 +445,21 @@ struct System::Impl {
         return SystemResultStatus::Success;
     }
 
+    SystemResultStatus InitializeForGpuReplay(System& system, Frontend::EmuWindow& emu_window,
+                                              u64 program_id) {
+        if (const auto result = InitializeKernel(system); result != SystemResultStatus::Success) {
+            return result;
+        }
+        host1x_core.emplace(system);
+        VideoCore::CreateGPU(gpu_core, emu_window, system);
+        if (!gpu_core) {
+            return SystemResultStatus::ErrorVideoCore;
+        }
+        is_powered_on = true;
+        perf_stats.emplace(program_id);
+        return SystemResultStatus::Success;
+    }
+
     SystemResultStatus SetupForApplicationProcess(System& system, Frontend::EmuWindow& emu_window) {
         Common::BootTiming::Mark("core: system setup started");
         host1x_core.emplace(system);
@@ -660,6 +676,7 @@ struct System::Impl {
             game_info.version = title_version;
             room_member->SendGameInfo(game_info);
         }
+        VideoCore::Nx2Debug::BeginSession();
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
         Common::PowerTuning::LogState();
@@ -675,6 +692,7 @@ struct System::Impl {
     void ShutdownMainProcess() {
         autopilot_session.reset();
         power_session.reset();
+        VideoCore::Nx2Debug::EndSession();
         debug_service.reset();
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
@@ -922,6 +940,11 @@ bool System::GetNVDECActive() {
 
 void System::InitializeDebugger() {
     impl->InitializeDebugger(*this, Settings::values.gdbstub_port.GetValue());
+}
+
+SystemResultStatus System::InitializeForGpuReplay(Frontend::EmuWindow& emu_window,
+                                                  u64 program_id) {
+    return impl->InitializeForGpuReplay(*this, emu_window, program_id);
 }
 
 SystemResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,

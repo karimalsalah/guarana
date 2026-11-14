@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -767,6 +770,35 @@ void PresentManager::PresentThread(std::stop_token token) {
 }
 
 bool PresentManager::FluidPresentThread(std::stop_token token) {
+#ifdef _WIN32
+    // EDEN_NX2_FLUID_RT=1: the vblank clock's thread wakes on time under a busy CPU: time-critical
+    // priority and the MMCSS "Games" task at high priority (avrt.dll, loaded at run time). Its
+    // work at each wake is short; it sleeps in between.
+    if (const char* rt = std::getenv("EDEN_NX2_FLUID_RT");
+        rt != nullptr && std::strtoul(rt, nullptr, 10) != 0) {
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+        bool mmcss = false;
+        if (const HMODULE avrt = LoadLibraryW(L"avrt.dll")) {
+            using SetCharacteristics = HANDLE(WINAPI*)(LPCWSTR, LPDWORD);
+            using SetPriority = BOOL(WINAPI*)(HANDLE, int);
+            const auto set_characteristics = reinterpret_cast<SetCharacteristics>(
+                reinterpret_cast<void*>(GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW")));
+            const auto set_priority = reinterpret_cast<SetPriority>(
+                reinterpret_cast<void*>(GetProcAddress(avrt, "AvSetMmThreadPriority")));
+            DWORD task_index = 0;
+            if (set_characteristics != nullptr) {
+                if (const HANDLE task = set_characteristics(L"Games", &task_index)) {
+                    mmcss = true;
+                    if (set_priority != nullptr) {
+                        set_priority(task, 1); // AVRT_PRIORITY_HIGH
+                    }
+                }
+            }
+        }
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_RT: present thread at time-critical priority{}",
+                 mmcss ? ", MMCSS Games task" : "");
+    }
+#endif
     Common::VblankClock vblank{render_window.GetWindowInfo().render_surface};
     auto source = vblank.CurrentSource();
     LOG_INFO(Render_Vulkan,

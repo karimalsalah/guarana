@@ -99,9 +99,8 @@ shutdown waits at most about 50 ms for a handler.
 
 Cost when unused: if `EDEN_NX2_DEBUG_SERVER` is unset, `MaybeStartService` returns at its first
 `getenv`. No thread, no socket, no log ring. The per-frame check is one relaxed atomic load,
-and each guest present checks one more relaxed flag: only a running server
-(`g_nx2_present_time_services`, counted by `Service`) makes it store a steady-clock timestamp in the 4096-entry ring
-`frame_times` reads. The runtime reject check in the lowering is one relaxed atomic load per lowered program. When the
+and each guest present stores a steady-clock timestamp in the 4096-entry ring that
+`frame_times` and the bug bundle read. The runtime reject check in the lowering is one relaxed atomic load per lowered program. When the
 server is on but idle, its thread sleeps in `epoll`/IOCP.
 
 ## Safety
@@ -136,6 +135,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 | `screenshot` | Owner takes and sends a screenshot | PNG of the next presented frame, as MCP image content | 1 |
 | `log_tail`, `log_filter` | Relaunch with a new filter, owner sends the log | Read new lines since the last call, change the filter live | 1 |
 | `capture_frame` | Relaunch with `EDEN_NX2_FRAME_DUMP`, owner touches `capture.now`, agent copies the dump | Capture the next frame now, sampled textures and bound buffers optional, get the manifest summary back; `capture_image` returns any pass PNG | 1 |
+| `capture_bundle` | Owner zips logs, settings and screenshots by hand | The Report a Bug bundle: logs, settings, screenshot, frame times and a frame capture with shaders, in one zip | 1 |
 | `reject_shaders` | Rebuild the env, relaunch, replay to the spot, once per bisection step | Reject or restore hashes live; bisection becomes a loop of reject, screenshot | 1 |
 | `pause`, `resume`, `step_frames` | Not possible | Freeze on the broken frame, capture it, step one present | 2 |
 | `input`, `input_sequence` (buttons, sticks, frame-timed sequences) | Owner plays to the spot | Agent walks to the spot itself and replays a repro (done) | 2 |
@@ -292,6 +292,7 @@ timestamp back within a frame. `state` is what the last tick found:
 | `cooldown` | Headroom, but the next lower scale is below the one that last missed |
 | `no_effect` | Headroom, but eight lowers in a row left the frame time alone (the game is at its highest resolution, or does not follow the scale); they go on once frames are 8% slower |
 | `waiting` | Headroom, but the shading-rate governor gives its coarse rates back first |
+| `unanswered` | With `EDEN_NX2_BUDGET_UNANSWERED=1`: a miss, but nine missed ticks in a row (about 4.5 s; raises, or holds at the upper limit after one) left `work_ms` no 12% faster, three ticks in a row, than the fastest of the run's first three: the game does not follow the scale (a patch fixes its resolution, or the frame is not bound by it), so the scale is held. `unanswered_from` is the scale at the start of the run, or at its last answer. A tick without a miss, while the shading-rate governor holds no coarse rates and not under `EDEN_NX2_BUDGET_HOLD_RES`, lets the scale be tried again; under `EDEN_NX2_BUDGET_HOLD_RES` the scale stays held until the target changes |
 
 The scale at which a run of misses began is `miss_scale`: for `cooldown_ticks` more ticks
 (30, doubled up to 240 each time a lower made since brings a miss back) a lower stays one step
@@ -299,15 +300,17 @@ above it, so the scale does not go back and forth over a resolution step. It is 
 two cool-downs without a miss.
 
 With `EDEN_NX2_VRS_AUTO` on, the shading-rate governor takes the same target and its frame time
-without the pacing wait. It may coarsen only from a miss at the scale's upper limit until the
-scale leaves that limit (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
+without the pacing wait. It may coarsen only once the scale has nothing left to give, from a
+miss at the scale's upper limit until the scale leaves that limit or from `unanswered` until the
+scale may be tried again (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
 hold reason), and while it holds coarse rates the scale is not lowered.
 
 `target_fps` sets the target live (1 to 1000; 0 turns the controller off and puts the scale back
 to `manual_scale`). `scale` sets the scale by hand; with a target the controller goes on from
 it. The reply also has `target_ms`, `samples` (presents of the last tick), `scale`,
 `latched_scale` (the scale as the anchor keeps it, within 0.8%), `min_scale`, `max_scale`,
-`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers` and `last_change`. A change of the
+`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers`, `last_change` and `unanswered_from`
+(0 outside state `unanswered`). A change of the
 scale by more than 10% logs one `Frame budget:` line, at most one a second.
 
 **`autopilot`**. The autopilot (`EDEN_NX2_AUTOPILOT=1`, [../autopilot.md](../autopilot.md)), answered at once from its last 2 s window, also under `status.autopilot`: `running`, `windows`, `changes`, `real_fps`, `shown_p50_ms`, `shown_p95_ms`, `shown_even_percent`, `refresh_hz` and its `refresh_source`, `gpu_busy` (negative when not measured), `power` (`ac`, `battery`, `unknown`), `frame_gen_on`, `frame_gen_target`, `frame_gen_multiplier`, `gpu_time_scale` and its base, `resolution_available` (false while the frame budget has a target), `power_policy_available`, `power_policy_applied` and `last_change`. Without the switch `running` is false.
@@ -387,6 +390,14 @@ against the texture cache thresholds, buffer cache, staging buffers, mesh arenas
 pipelines (entries, built, kept limit) and kept SPIR-V; pipeline figures refresh every 600 frames.
 `low_memory_mode` says whether `EDEN_NX2_LOW_MEMORY` or the host's RAM (20 GiB or less) turned
 the smaller cache limits on.
+**`capture_bundle`** `{description?, size_limit_mib?, timeout_s?}` (`index?` in the adapter). It
+writes the bug-report bundle that Help → Report a Bug writes ([bug-bundle.md](bug-bundle.md)):
+logs, system and settings, screenshot, the last 10 s of frame times, and the next frame captured
+with its shaders, SPIR-V and pipeline keys, zipped under `size_limit_mib` (default 19, 1 to 100)
+into `<log dir>/bug-reports`. It waits up to `timeout_s` (default 90) for the frame capture and
+returns `path`, `bytes`, `dropped`, `frame_error`, `manifest` (the bundle's `bundle.json`) and
+`index_command`. In the adapter, `index` runs `bundle_index.py` on the zip and returns its
+`index.html`.
 
 **`reject_shaders`** `{hashes?, reject?, timeout_s?}`. This is `EDEN_NX2_REJECT_HASH` at
 runtime: the same keys (native program key or shader hash) and the same effect. Pipeline

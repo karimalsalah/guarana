@@ -6,9 +6,9 @@ use std::path::Path;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1, IDXGIOutput6};
-use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS};
+use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE};
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
-use windows::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
+use windows::Win32::System::SystemInformation::{GetPhysicallyInstalledSystemMemory, GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
@@ -131,6 +131,28 @@ pub fn available_ram_bytes() -> u64 {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     sys.available_memory()
+}
+
+/// Memory at this moment, from `GlobalMemoryStatusEx`. All in bytes.
+pub struct MemoryNow {
+    /// RAM programs can have now without anything being paged out (free and standby pages).
+    pub free_ram: u64,
+    /// The commit limit: RAM plus the page file's current size.
+    pub commit_limit: u64,
+    /// Memory programs have been promised, page file included.
+    pub committed: u64,
+}
+
+pub fn memory_now() -> Option<MemoryNow> {
+    let mut m = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    // SAFETY: `m` is a valid MEMORYSTATUSEX with dwLength set, as GlobalMemoryStatusEx requires.
+    unsafe { GlobalMemoryStatusEx(&mut m) }.ok()?;
+    // ullAvailPageFile is what this process could still commit: the limit less what is committed.
+    (m.ullTotalPageFile > 0).then(|| MemoryNow {
+        free_ram: m.ullAvailPhys,
+        commit_limit: m.ullTotalPageFile,
+        committed: m.ullTotalPageFile.saturating_sub(m.ullAvailPageFile),
+    })
 }
 
 /// What the display class key says about one adapter.
@@ -280,6 +302,55 @@ fn arch_hint(vendor: Vendor, device_id: u32, name: &str) -> Option<String> {
     Some(hint.to_string())
 }
 
+/// Intel integrated GPU families by PCI device id: (device id, name part, family, Arc class). The
+/// ids, name parts and their sources are those of the `FamilyRows` table proposed for
+/// `src/common/device_profile.cpp` in #78 (feat/24-gpu-families): the Linux kernel's
+/// include/drm/intel/pciids.h and Intel's own listings of the GPUs its drivers support. Keep the
+/// two in step. A name part is set where the kernel lists an id that Intel does not name: the
+/// adapter's name must then contain it. Meteor Lake's 7DD5, 7D40 and 7D45 ("Intel Graphics") are
+/// in no family. Arc class: Auto gives the part the Arc integrated profile. Panther Lake's 4-core
+/// "Intel Graphics" (B090, B0A0) is not, until a paired tools/bench run shows that profile suits it.
+const INTEL_IGPU_FAMILIES: [(u32, &str, &str, bool); 17] = [
+    (0x7d55, "", "Meteor Lake Intel Arc Graphics", true),
+    (0x7d51, "", "Arrow Lake-H Intel Graphics", true),
+    (0x7dd1, "140T", "Arrow Lake-H Intel Graphics", true),
+    (0x7dd1, "130T", "Arrow Lake-H Intel Graphics", true),
+    (0x64a0, "", "Lunar Lake Intel Arc Graphics", true),
+    (0x64b0, "140V", "Lunar Lake Intel Arc Graphics", true),
+    (0x64b0, "130V", "Lunar Lake Intel Arc Graphics", true),
+    (0xb090, "", "Panther Lake Intel Graphics", false),
+    (0xb0a0, "", "Panther Lake Intel Graphics", false),
+    (0xb081, "", "Panther Lake Arc B370", true),
+    (0xb083, "", "Panther Lake Arc B370", true),
+    (0xb085, "", "Panther Lake Arc B370", true),
+    (0xb087, "", "Panther Lake Arc B370", true),
+    (0xb080, "", "Panther Lake Arc B390", true),
+    (0xb082, "", "Panther Lake Arc B390", true),
+    (0xb084, "", "Panther Lake Arc B390", true),
+    (0xb086, "", "Panther Lake Arc B390", true),
+];
+
+/// The family and Arc class of the row the adapter matches.
+fn intel_igpu_row(vendor_id: u32, device_id: u32, name: &str) -> Option<(&'static str, bool)> {
+    if vendor_id != 0x8086 {
+        return None;
+    }
+    INTEL_IGPU_FAMILIES
+        .iter()
+        .find(|(id, part, _, _)| *id == device_id && (part.is_empty() || name.contains(part)))
+        .map(|&(_, _, family, arc)| (family, arc))
+}
+
+/// The Intel integrated GPU family of an adapter, by PCI ids; None for any other adapter.
+pub fn intel_igpu_family(vendor_id: u32, device_id: u32, name: &str) -> Option<&'static str> {
+    intel_igpu_row(vendor_id, device_id, name).map(|(family, _)| family)
+}
+
+/// Whether Auto treats the adapter like an Intel GPU named "Arc", by PCI ids.
+pub fn intel_igpu_arc_class(vendor_id: u32, device_id: u32, name: &str) -> bool {
+    intel_igpu_row(vendor_id, device_id, name).is_some_and(|(_, arc)| arc)
+}
+
 /// The user-mode driver version DXGI reports, e.g. `32.0.101.6913`.
 fn format_umd(v: i64) -> String {
     let v = v as u64;
@@ -312,16 +383,19 @@ fn gpus() -> Vec<Gpu> {
             let reg = registry.iter().find(|r| r.vendor_id == desc.VendorId && r.device_id == desc.DeviceId);
             let vendor = vendor_of(desc.VendorId);
             let dedicated_mb = (desc.DedicatedVideoMemory as u64) >> 20;
+            let integrated = is_integrated(vendor, desc.DeviceId, &name, dedicated_mb);
+            let family = if integrated { intel_igpu_family(desc.VendorId, desc.DeviceId, &name) } else { None };
             let gpu = Gpu {
                 vendor,
                 driver_version: umd
                     .or_else(|| reg.and_then(|r| r.driver_version.clone()))
                     .unwrap_or_default(),
-                is_integrated: is_integrated(vendor, desc.DeviceId, &name, dedicated_mb),
+                is_integrated: integrated,
                 dedicated_mb,
                 shared_mb: (desc.SharedSystemMemory as u64) >> 20,
                 vulkan: reg.map(|r| r.vulkan).unwrap_or(false) || khronos,
                 arch_hint: arch_hint(vendor, desc.DeviceId, &name),
+                family: family.map(str::to_string),
                 vendor_id: desc.VendorId,
                 device_id: desc.DeviceId,
                 driver_date: reg.and_then(|r| r.driver_date.clone()),
@@ -336,7 +410,8 @@ fn gpus() -> Vec<Gpu> {
     out
 }
 
-fn display() -> DisplayInfo {
+/// The primary display now (the doctor reads it fresh; `detect` is cached).
+pub fn display() -> DisplayInfo {
     let mut dm = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
     // SAFETY: `dm` is a valid DEVMODEW with dmSize set, as EnumDisplaySettingsW requires.
     let ok = unsafe { EnumDisplaySettingsW(PCWSTR::null(), ENUM_CURRENT_SETTINGS, &mut dm) }.as_bool();
@@ -350,6 +425,53 @@ fn display() -> DisplayInfo {
         vrr: None,
         hdr: primary_display_hdr().map(|h| h.on),
     }
+}
+
+/// Refresh rates the primary display offers at `width` x `height`, ascending, no repeats.
+pub fn refresh_rates(width: u32, height: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    for i in 0..4096u32 {
+        let mut dm = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+        // SAFETY: as in `display`; mode numbers count up from 0 until the call fails.
+        if !unsafe { EnumDisplaySettingsW(PCWSTR::null(), ENUM_DISPLAY_SETTINGS_MODE(i), &mut dm) }.as_bool() {
+            break;
+        }
+        // 0 and 1 mean "the hardware's default rate", not a rate.
+        if dm.dmPelsWidth == width && dm.dmPelsHeight == height && dm.dmDisplayFrequency > 1 {
+            out.push(dm.dmDisplayFrequency);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// How many displays are on (attached to the desktop) through the adapter with these PCI ids.
+/// None when no adapter has them. An adapter listed twice (once per LUID) counts once.
+pub fn active_outputs(vendor_id: u32, device_id: u32) -> Option<u32> {
+    let mut found: Option<u32> = None;
+    // SAFETY: COM calls on interfaces this function owns.
+    unsafe {
+        let factory = CreateDXGIFactory1::<IDXGIFactory1>().ok()?;
+        for a in 0..16u32 {
+            let Ok(adapter) = factory.EnumAdapters1(a) else { break };
+            let Ok(desc) = adapter.GetDesc1() else { continue };
+            if desc.VendorId != vendor_id || desc.DeviceId != device_id {
+                continue;
+            }
+            let mut on = 0u32;
+            for o in 0..16u32 {
+                let Ok(output) = adapter.EnumOutputs(o) else { break };
+                let Ok(output6) = output.cast::<IDXGIOutput6>() else { continue };
+                let Ok(d) = output6.GetDesc1() else { continue };
+                if d.AttachedToDesktop.as_bool() {
+                    on += 1;
+                }
+            }
+            found = Some(found.map_or(on, |n| n.max(on)));
+        }
+    }
+    found
 }
 
 pub struct HdrInfo {
@@ -670,6 +792,25 @@ mod tests {
     }
 
     #[test]
+    fn intel_families_by_pci_id() {
+        // The first-session laptop: the name alone says nothing about the GPU.
+        assert_eq!(intel_igpu_family(0x8086, 0xb0a0, "Intel(R) Graphics"), Some("Panther Lake Intel Graphics"));
+        assert_eq!(intel_igpu_family(0x8086, 0x7d51, "Intel(R) Graphics"), Some("Arrow Lake-H Intel Graphics"));
+        assert_eq!(intel_igpu_family(0x8086, 0xb080, "Intel(R) Arc(TM) B390 GPU"), Some("Panther Lake Arc B390"));
+        // Panther Lake's 4-core part stays out of the Arc class until it is measured.
+        assert!(!intel_igpu_arc_class(0x8086, 0xb0a0, "Intel(R) Graphics"));
+        assert!(intel_igpu_arc_class(0x8086, 0x7d51, "Intel(R) Graphics"));
+        assert!(!intel_igpu_arc_class(0x8086, 0x7d45, "Intel(R) Graphics"));
+        // Ids Intel does not name go by the name.
+        assert_eq!(intel_igpu_family(0x8086, 0x7dd1, "Intel(R) Arc(TM) 140T GPU (16GB)"), Some("Arrow Lake-H Intel Graphics"));
+        assert_eq!(intel_igpu_family(0x8086, 0x7dd1, "Intel(R) Graphics"), None);
+        assert_eq!(intel_igpu_family(0x8086, 0x64b0, "Intel(R) Arc(TM) 140V GPU (16GB)"), Some("Lunar Lake Intel Arc Graphics"));
+        // Meteor Lake "Intel Graphics" parts are in no family; other vendors never are.
+        assert_eq!(intel_igpu_family(0x8086, 0x7d45, "Intel(R) Graphics"), None);
+        assert_eq!(intel_igpu_family(0x1002, 0xb0a0, "AMD Radeon(TM) Graphics"), None);
+    }
+
+    #[test]
     fn handhelds() {
         let claw = known_device("Micro-Star International Co., Ltd.", "Claw 8 AI+ A2VM", "");
         assert_eq!(claw, Some((Form::Handheld, "msi-claw-8-ai-plus")));
@@ -692,6 +833,11 @@ mod tests {
         let vc = vc_redist();
         println!("vc++: {} {:?}", vc.installed, vc.version);
         println!("power mode: {:?}, build {}", power_mode(sys.power.on_ac), os_build_full());
+        println!("memory now: {:?}", memory_now().map(|m| (m.free_ram, m.committed, m.commit_limit)));
+        println!("refresh rates: {:?}", refresh_rates(sys.display.width, sys.display.height));
+        if let Some(g) = sys.primary() {
+            println!("displays on the primary GPU: {:?}", active_outputs(g.vendor_id, g.device_id));
+        }
         assert!(sys.os.build > 0);
         assert!(sys.cpu.threads > 0);
     }

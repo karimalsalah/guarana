@@ -212,15 +212,24 @@ Common::GpuKind GpuKindOf(VkPhysicalDeviceType type) {
 
 // The machine as the device profile records it: the host's part, and the GPU as the physical
 // device reports it. The memory is read from the heaps, as the device collects its own figures
-// after its capability callback, and those are budgets. The driver version and the display are
-// left to the caller.
+// after its capability callback, and those are budgets. The driver ID is read as the device reads
+// it (the instance is Vulkan 1.1 or later). The driver version and the display are left to the
+// caller.
 Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     Common::DeviceProfile profile = Common::DetectHostProfile();
-    const VkPhysicalDeviceProperties properties = physical.GetProperties();
+    VkPhysicalDeviceDriverProperties driver{};
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties2.pNext = &driver;
+    physical.GetProperties2(properties2);
+    const VkPhysicalDeviceProperties& properties = properties2.properties;
     const VkPhysicalDeviceMemoryProperties memory =
         physical.GetMemoryProperties().memoryProperties;
     profile.gpu.vendor_id = properties.vendorID;
+    profile.gpu.device_id = properties.deviceID;
     profile.gpu.model = properties.deviceName;
+    profile.gpu.driver_id = static_cast<u32>(driver.driverID);
     profile.gpu.kind = GpuKindOf(properties.deviceType);
     u32 local_heaps = 0;
     for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
@@ -235,8 +244,8 @@ Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     return profile;
 }
 
-Common::DeviceClass DeviceClassOf(const vk::PhysicalDevice& physical) {
-    return Common::Classify(DeviceProfileOf(physical)).device_class;
+Common::DeviceClassification ClassificationOf(const vk::PhysicalDevice& physical) {
+    return Common::Classify(DeviceProfileOf(physical));
 }
 
 // The refresh rate of the display the window is on, where the host says (Windows); 0 elsewhere.
@@ -268,12 +277,14 @@ void ApplyGamePresets(const Device& device) {
         break;
     }
     const u64 program_id = Settings::GetCurrentProgramID();
+    const Common::DeviceClassification machine = ClassificationOf(device.GetPhysical());
     const Core::GamePresets::GpuInfo gpu{
         .vendor = vendor,
         .integrated = device.IsIntegrated(),
         .software_tensor_math =
             !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
-        .device_class = DeviceClassOf(device.GetPhysical()),
+        .device_class = machine.device_class,
+        .gpu_family = machine.gpu_family,
     };
     const std::string summary = Core::GamePresets::Apply(program_id, gpu);
     Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
@@ -302,11 +313,15 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
                                  : properties.vendorID == 0x1002 ? GPUVendor::AMD
                                  : properties.vendorID == 0x10DE ? GPUVendor::Nvidia
                                                                  : GPUVendor::Unknown;
+        // The class and the family are the ones ApplyGamePresets gets: DeviceProfileOf reads the
+        // driver ID from the physical device, so a family is known before the device is built.
+        const Common::DeviceClassification machine = ClassificationOf(physical_device);
         void(Core::GamePresets::ApplySwitchDefaults(
             Settings::GetCurrentProgramID(),
             {.vendor = vendor,
              .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
-             .device_class = DeviceClassOf(physical_device)}));
+             .device_class = machine.device_class,
+             .gpu_family = machine.gpu_family}));
     }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {
@@ -399,6 +414,34 @@ try
                       : std::string{},
         .api = "Vulkan",
         .integrated = device.IsIntegrated(),
+        .api_version = GetReadableVersion(device.ApiVersion()),
+        .device_local_memory = device.GetDeviceLocalMemory(),
+        .extensions = {device.GetAvailableExtensions().begin(),
+                       device.GetAvailableExtensions().end()},
+        .features =
+            {
+                {"geometry_shader", device.IsGeometryShaderSupported()},
+                {"tessellation", device.IsTessellationSupported()},
+                {"mesh_shader", device.IsExtMeshShaderSupported()},
+                {"descriptor_buffer", device.IsExtDescriptorBufferSupported()},
+                {"buffer_device_address", device.IsBufferDeviceAddressSupported()},
+                {"push_descriptor", device.IsKhrPushDescriptorSupported()},
+                {"vertex_input_dynamic_state", device.IsExtVertexInputDynamicStateSupported()},
+                {"extended_dynamic_state", device.IsExtExtendedDynamicStateSupported()},
+                {"transform_feedback", device.IsExtTransformFeedbackSupported()},
+                {"conservative_rasterization", device.IsExtConservativeRasterizationSupported()},
+                {"line_rasterization", device.IsExtLineRasterizationSupported()},
+                {"depth_clip_control", device.IsExtDepthClipControlSupported()},
+                {"shader_float_controls", device.IsKhrShaderFloatControlsSupported()},
+                {"subgroup_size_control", device.IsExtSubgroupSizeControlSupported()},
+                {"vulkan_memory_model", device.IsVulkanMemoryModelSupported()},
+                {"cooperative_hmma", device.IsCooperativeHmmaSupported()},
+                {"sparse_binding", device.IsSparseBindingSupported()},
+                {"optimal_astc", device.IsOptimalAstcSupported()},
+                {"optimal_bcn", device.IsOptimalBcnSupported()},
+                {"formatless_image_load", device.IsFormatlessImageLoadSupported()},
+                {"pipeline_binary", device.IsKhrPipelineBinarySupported()},
+            },
     };
     Report();
 } catch (const vk::Exception& exception) {
@@ -760,8 +803,30 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
                 std::clamp<s64>(error / 8, -1'000'000, 1'000'000), std::memory_order_relaxed);
         }
     }
+    // As many in-between frames as the time since the last real frame spans in slots, so a real
+    // frame that comes late stretches its batch rather than leaving slots empty, and each frame's
+    // blend is its slot's share of that interval. Batches follow on from the last real frame's slot.
+    size_t wanted = generations;
+    f64 span_slots = static_cast<f64>(generations + 1);
+    if (first != 0 && fluid_last_real_slot != 0 &&
+        fluid_last_real_recorded != std::chrono::steady_clock::time_point{}) {
+        const f64 slot_ns =
+            static_cast<f64>((slots.refresh * static_cast<s64>(slots.divisor)).count());
+        const f64 interval_ns = static_cast<f64>(
+            duration_cast<nanoseconds>(recorded - fluid_last_real_recorded).count());
+        const f64 slots_between = slot_ns > 0.0 ? interval_ns / slot_ns : 0.0;
+        if (slots_between >= 1.0 && slots_between <= 24.0) {
+            span_slots = (std::max)(1.0, std::round(slots_between));
+            wanted = static_cast<size_t>(span_slots) - 1;
+            // Right after the last real frame's slot when the batch is done in time for it.
+            first = (std::max)(first, fluid_last_real_slot + slots.divisor);
+        }
+    }
+    // At most two more than the cadence's share: each extra frame costs GPU time, and a game that
+    // slows down must not get still more frames to make (and so slow down further).
+    wanted = (std::min<size_t>)(wanted, (std::min<size_t>)(generations + 2, 11));
     size_t made = 0;
-    for (size_t generation = 0; generation < generations; ++generation) {
+    for (size_t generation = 0; generation < wanted; ++generation) {
         // Never waits: with no frame to spare the real frame comes sooner.
         Frame* const generated = present_manager.TryGetRenderFrame();
         if (generated == nullptr) {
@@ -769,7 +834,11 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
         }
         generated->color_space = output.color_space;
         blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
-        frame_gen.GenerateInto(device, generated, generation);
+        const f32 blend =
+            static_cast<f32>(static_cast<f64>(generation + 1) / (std::max)(span_slots, 1.0));
+        if (!frame_gen.GenerateBlend(device, generated, blend)) {
+            frame_gen.GenerateInto(device, generated, generation);
+        }
         generated->fluid_batch = frame->fluid_batch;
         generated->fluid_recorded = recorded;
         generated->fluid_slot = first != 0 ? first + generation * slots.divisor : 0;
@@ -777,8 +846,10 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
         ++made;
     }
     frame->fluid_slot = first != 0 ? first + made * slots.divisor : 0;
+    fluid_last_real_slot = frame->fluid_slot;
+    fluid_last_real_recorded = recorded;
     frame_gen.NoteFluidGenerated(made);
-    present_manager.NoteFluidBatch(true, made < generations, false);
+    present_manager.NoteFluidBatch(true, made < wanted, false);
 }
 #endif
 

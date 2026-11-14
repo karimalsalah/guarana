@@ -204,6 +204,15 @@ pre code { background: none; padding: 0; overflow-wrap: normal; }
 /* Figures */
 .stat-row { display: grid; gap: 16px; margin: 20px 0; }
 @media (min-width: 760px) { .stat-row { grid-template-columns: 1.4fr 1fr; } }
+/* Three figures: the first takes the whole row until there is room for all three side by side */
+@media (min-width: 760px) {
+  .stat-row-3 { grid-template-columns: 1fr 1fr; }
+  .stat-row-3 .stat-hero { grid-column: 1 / -1; }
+}
+@media (min-width: 1000px) {
+  .stat-row-3 { grid-template-columns: 1.3fr 1fr 1fr; }
+  .stat-row-3 .stat-hero { grid-column: auto; }
+}
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
 .stat-label { margin: 0 0 6px; color: var(--text-2); font-weight: 600; }
 .stat-value { margin: 0; font-size: clamp(2.25rem, 7vw, 3rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; }

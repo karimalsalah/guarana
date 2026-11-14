@@ -21,6 +21,15 @@ FORM_LABELS = (
     "Settings and switches", "Results", "tools/bench rows", "Screenshot", "Anything else", "Credit me as",
     # crash.yml, game_bug.yml, visual_bug.yml, ui_bug.yml
     "Regression", "Last known working build", "Steps to reproduce", "Log / crash dump",
+    # bug_report.yml (upstream consolidated form)
+    "Lichii build",
+    "What kind of problem is it?",
+    "Game name and version",
+    "GPU model and driver version",
+    "Settings you changed",
+    "What happened, and what you expected",
+    "Log file",
+    "Video or screenshot",
     # agent-task.yml
     "Goal", "Files", "Acceptance test", "Measurement", "Verifiable without the game?", "Size",
     "Constraints and links",

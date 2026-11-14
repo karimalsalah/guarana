@@ -2,7 +2,7 @@
 
 import { api, errorText, events } from "../api";
 import { h } from "../dom";
-import { gpuName, plural, scrub, v } from "../format";
+import { gpuFamily, gpuName, plural, scrub, v } from "../format";
 import { icon } from "../icons";
 import { settleFocus } from "../input";
 import { go, type ScreenDef } from "../router";
@@ -39,7 +39,7 @@ export function diagnosticsText(list: Check[], sys: SystemInfo | undefined, stat
     lines.push(`- Device: ${sys.device.manufacturer} ${sys.device.model} (${sys.device.form})`);
     lines.push(`- OS: ${sys.os.name} ${sys.os.display_version} (build ${sys.os.build})`);
     lines.push(`- CPU: ${sys.cpu.name}, ${sys.cpu.cores} cores / ${sys.cpu.threads} threads, AVX2 ${sys.cpu.avx2 ? "yes" : "no"}`);
-    if (gpu) lines.push(`- GPU: ${gpuName(gpu.name)}, driver ${gpu.driver_version}, ${gpu.is_integrated ? "integrated" : "dedicated"}, Vulkan ${gpu.vulkan ? "yes" : "no"}`);
+    if (gpu) lines.push(`- GPU: ${gpuName(gpu.name)}${gpuFamily(gpu) ? ` (${gpuFamily(gpu)})` : ""}, driver ${gpu.driver_version}, ${gpu.is_integrated ? "integrated" : "dedicated"}, Vulkan ${gpu.vulkan ? "yes" : "no"}`);
     lines.push(`- Memory: ${sys.ram_gb} GB RAM, page file ${sys.pagefile_gb} GB`);
     lines.push(`- Display: ${sys.display.width} x ${sys.display.height} at ${sys.display.refresh_hz} Hz, VRR ${sys.display.vrr ?? "?"}, HDR ${sys.display.hdr ?? "?"}`);
     lines.push(`- Power: ${sys.power.on_ac === null ? "?" : sys.power.on_ac ? "AC" : "battery"}, plan ${sys.power.plan ?? "?"}, HAGS ${sys.hags ?? "?"}`);
@@ -66,7 +66,9 @@ const screen: ScreenDef = {
     const copyFallback = h("div", { class: "copy-fallback", hidden: true });
     const listEl = h("ul", { class: "checks" }, skeleton([80, 70, 85, 60, 75], "skeleton-tall"));
     const rerun = button("Run again", { kind: "secondary", size: "md", icon: "refresh" });
-    const copy = button("Copy diagnostics", { kind: "primary", size: "md", icon: "copy", primary: true });
+    // Secondary in colour: the ember buttons on this screen are the fixes for failed checks. It stays
+    // the screen's main action for a pad's Menu / Options button.
+    const copy = button("Copy diagnostics", { kind: "secondary", size: "md", icon: "copy", primary: true });
 
     const el = h(
       "div",
