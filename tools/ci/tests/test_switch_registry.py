@@ -336,6 +336,9 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(job["steps"][0]["with"]["persist-credentials"], "false")
         check = job["steps"][-1]
         # Upstream's live names count too, so an upstream merge needs no regenerated list first.
+        # Read from upstream itself; the mirror branch, which can lag, is the fallback.
+        self.assertIn("if ! git fetch --no-tags --depth=1 https://github.com/zortos293/Lichii nx2; then\n",
+                      check["run"])
         self.assertIn("git fetch --no-tags --depth=1 origin upstream\n", check["run"])
         self.assertIn("python3 -I tools/ci/switch_registry.py --upstream-ref FETCH_HEAD", check["run"])
         self.assertNotIn("${{", check["run"])
