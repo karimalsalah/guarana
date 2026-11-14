@@ -106,6 +106,10 @@ private:
     u64 begin_reject_noframes{};
     u64 begin_reject_scopeopen{};
     u64 begin_reject_collision{};
+    u64 collect_calls{};
+    u64 collect_not_ready{};
+    int last_query_result{};
+    u64 last_pending_tick{};
     vk::QueryPool pool;
     static constexpr u32 MaxSlots = 8;
 };

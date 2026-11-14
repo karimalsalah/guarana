@@ -338,6 +338,7 @@ void PerfQuery::CollectLocked() {
     // IsFree reads the known GPU tick, which only advances on Refresh(); without this
     // the pending slots would never look complete from the debug thread.
     semaphore->Refresh();
+    ++collect_calls;
     // Only read once a submission's tick has completed on the GPU; the profiling lock
     // stays held until the window's last result is read (the spec requires the lock
     // while queried command buffers are pending).
@@ -348,6 +349,8 @@ void PerfQuery::CollectLocked() {
         const VkResult result = device.GetLogical().GetQueryResults(
             *pool, slot.index, 1, data.size(), data.data(), ResultStride, VK_QUERY_RESULT_64_BIT);
         if (result != VK_SUCCESS) {
+            ++collect_not_ready;
+            last_query_result = static_cast<int>(result);
             LOG_WARNING(Render_Vulkan, "gpu_perf: query result {}", static_cast<int>(result));
             continue;
         }
@@ -356,6 +359,9 @@ void PerfQuery::CollectLocked() {
         }
         ++collected;
         ++frames_sampled;
+    }
+    if (!pending_slots.empty()) {
+        last_pending_tick = pending_slots.front().tick;
     }
     if (frames_left == 0 && pending_slots.empty()) {
         ReleaseLock();
@@ -404,11 +410,12 @@ std::string PerfQuery::Diag() const {
     std::scoped_lock lock{mutex};
     const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
     return fmt::format(
-        "pending={} begin_calls={} opened={} rej_unsupported={} rej_noframes={} "
-        "rej_scopeopen={} rej_collision={} frames_left={} scope_open={} lock_held={} gpu_tick={}",
-        pending_slots.size(), begin_calls, begin_opened, begin_reject_unsupported,
-        begin_reject_noframes, begin_reject_scopeopen, begin_reject_collision, frames_left,
-        scope_open, lock_held, gpu_tick);
+        "pending={} begin_calls={} opened={} rej_noframes={} rej_collision={} "
+        "frames_left={} scope_open={} lock_held={} gpu_tick={} collect_calls={} "
+        "collect_not_ready={} last_qresult={} last_pending_tick={}",
+        pending_slots.size(), begin_calls, begin_opened, begin_reject_noframes,
+        begin_reject_collision, frames_left, scope_open, lock_held, gpu_tick, collect_calls,
+        collect_not_ready, last_query_result, last_pending_tick);
 }
 
 void PerfQuery::ReleaseLock() {
