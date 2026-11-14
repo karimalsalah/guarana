@@ -200,8 +200,6 @@ private:
     static constexpr size_t MAX_IMAGES = 48;
     static constexpr size_t MAX_IMAGE_VIEWS = MAX_TEXTURES + MAX_IMAGES;
 
-    static constexpr VkDeviceSize DEFAULT_BUFFER_SIZE = 4 * sizeof(float);
-
     /// IsGpuTickDone's rate limits (the GPU thread that polls suspended channels only).
     u64 poll_submit_requested_tick{};
     std::chrono::steady_clock::time_point poll_submit_requested_at{};
