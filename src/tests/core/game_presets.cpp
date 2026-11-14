@@ -202,6 +202,91 @@ TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches"
     CHECK(SwitchDefaults(0x0100152000022000, Arc140T).empty());
 }
 
+TEST_CASE("Ocarina of Time's pacing set follows the GPU and the display rate", "[core][game_presets]") {
+    const GpuInfo amd{.vendor = GPUVendor::AMD, .integrated = true};
+    for (const u32 hz : {59U, 60U, 75U, 100U, 114U, 126U, 139U, 149U, 165U, 240U, 0U}) {
+        CAPTURE(hz);
+        CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, hz) == PacingSet::Hz60);
+    }
+    for (const u32 hz : {115U, 120U, 125U}) {
+        CAPTURE(hz);
+        CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, hz) == PacingSet::Hz120);
+    }
+    for (const u32 hz : {140U, 144U, 148U}) {
+        CAPTURE(hz);
+        CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, hz) == PacingSet::Hz144);
+    }
+    // The locked sets are measured on Intel only; AMD integrated GPUs keep the 60 Hz set.
+    for (const u32 hz : {0U, 60U, 120U, 144U, 240U}) {
+        CAPTURE(hz);
+        CHECK(ChoosePacingSet(OcarinaTitleId, amd, hz) == PacingSet::Hz60);
+        // Discrete GPUs and other titles get no set at any rate.
+        CHECK(ChoosePacingSet(OcarinaTitleId, {.vendor = GPUVendor::Intel}, hz) == PacingSet::None);
+        CHECK(ChoosePacingSet(OcarinaTitleId, {.vendor = GPUVendor::AMD}, hz) == PacingSet::None);
+        CHECK(ChoosePacingSet(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}, hz) ==
+              PacingSet::None);
+        CHECK(ChoosePacingSet(OcarinaTitleId, {.vendor = GPUVendor::Nvidia, .integrated = true},
+                              hz) == PacingSet::None);
+        CHECK(ChoosePacingSet(0x0100152000022000, Arc140T, hz) == PacingSet::None);
+        CHECK(ChoosePacingSet(0x0100152000022000, amd, hz) == PacingSet::None);
+    }
+}
+
+TEST_CASE("The pacing choice names the display rate and the set", "[core][game_presets]") {
+    CHECK(DescribePacingChoice(Arc140T, 144, PacingSet::Hz144) ==
+          "primary display at 144 Hz, the 144 Hz set (chosen at 140 to 148 Hz, measured at 144)");
+    CHECK(DescribePacingChoice(Arc140T, 120, PacingSet::Hz120) ==
+          "primary display at 120 Hz, the 120 Hz set (chosen at 115 to 125 Hz, measured at 120)");
+    CHECK(DescribePacingChoice(Arc140T, 165, PacingSet::Hz60).starts_with(
+        "primary display at 165 Hz, the 60 Hz set"));
+    CHECK(DescribePacingChoice(Arc140T, 0, PacingSet::Hz60).starts_with(
+        "primary display rate unknown, the 60 Hz set"));
+    CHECK(DescribePacingChoice({.vendor = GPUVendor::AMD, .integrated = true}, 144,
+                               PacingSet::Hz60) ==
+          "primary display at 144 Hz, the 60 Hz set (the only set given for this GPU vendor; "
+          "measured on Intel)");
+}
+
+TEST_CASE("The pacing sets hold the switches measured", "[core][game_presets]") {
+    const auto names = [](std::span<const SwitchValue> items) {
+        std::string joined;
+        for (const SwitchValue& item : items) {
+            joined += std::string{item.name} + "=" + std::string{item.value} + " ";
+        }
+        return joined;
+    };
+    CHECK(PacingSwitches(PacingSet::None, Arc140T).empty());
+#ifdef _WIN32
+    const std::string hz144 = names(PacingSwitches(PacingSet::Hz144, Arc140T));
+    // Exactly as measured: the 60 Hz Intel set without EXTRAPOLATE, with FLUID_INTERP, FLUID_RT,
+    // SHOWN_RATE=144 and CADENCE_DIVISOR=6; no BUDGET_CEILING.
+    CHECK(hz144 == "EDEN_NX2_FLUID=2 EDEN_NX2_FLUID_INTERP=1 EDEN_NX2_FLUID_RT=1 "
+                   "EDEN_NX2_SHOWN_RATE=144 EDEN_NX2_CADENCE=3 EDEN_NX2_CADENCE_DIVISOR=6 "
+                   "EDEN_NX2_EARLY_SUBMIT=1 EDEN_NX2_EARLY_PAGES=256 EDEN_NX2_EARLY_AFTER=1 "
+                   "EDEN_NX2_FLUID_QUEUE=5 EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1 "
+                   "EDEN_NX2_BUDGET_HOLD_RES=1 EDEN_NX2_GPL=1 ");
+
+    const std::string hz120 = names(PacingSwitches(PacingSet::Hz120, Arc140T));
+    CHECK(hz120.find("EDEN_NX2_SHOWN_RATE=120 ") != std::string::npos);
+    CHECK(hz120.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
+    CHECK(hz120.find("EDEN_NX2_CADENCE_DIVISOR") == std::string::npos);
+    CHECK(hz120.find("EDEN_NX2_BUDGET_CEILING=1 ") != std::string::npos);
+
+    const std::string hz60 = names(PacingSwitches(PacingSet::Hz60, Arc140T));
+    CHECK(hz60.find("EDEN_NX2_EXTRAPOLATE=1 ") != std::string::npos);
+    CHECK(hz60.find("EDEN_NX2_SHOWN_RATE") == std::string::npos);
+    CHECK(hz60.find("EDEN_NX2_GPL=1 ") != std::string::npos);
+    const std::string amd60 =
+        names(PacingSwitches(PacingSet::Hz60, {.vendor = GPUVendor::AMD, .integrated = true}));
+    CHECK(amd60.find("EDEN_NX2_GPL") == std::string::npos);
+#else
+    // The sets exist on Windows only.
+    CHECK(names(PacingSwitches(PacingSet::Hz60, Arc140T)).empty());
+    CHECK(PacingSwitches(PacingSet::Hz120, Arc140T).empty());
+    CHECK(PacingSwitches(PacingSet::Hz144, Arc140T).empty());
+#endif
+}
+
 TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {
     using Common::DeviceClass;
     const Preset* const preset = Find(Presets(), OcarinaTitleId, Arc140T);
