@@ -367,6 +367,7 @@ add_library(video_core STATIC
     evicted_pointer_slots.h
     bounded_store.h
     shader_handle_program.h
+    shader_job_boost.h
     shader_jobs.cpp
     shader_jobs.h
     shader_notify.cpp

@@ -49,6 +49,7 @@
 
 #ifdef __linux__
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <algorithm>
 
 namespace {
@@ -694,19 +695,24 @@ void SetCurrentThreadAffinity(const std::vector<u32>& cpus) {
 
 namespace Common {
 
+#ifdef _WIN32
+namespace {
+int WindowsThreadPriority(ThreadPriority priority) {
+    switch (priority) {
+    case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
+    case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
+    case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
+    case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
+    case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
+    default: return THREAD_PRIORITY_NORMAL;
+    }
+}
+} // Anonymous namespace
+#endif
+
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
 #ifdef _WIN32
-    int windows_priority = [&]() {
-        switch (new_priority) {
-        case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
-        case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
-        case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
-        case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
-        case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
-        default: return THREAD_PRIORITY_NORMAL;
-        }
-    }();
-    SetThreadPriority(GetCurrentThread(), windows_priority);
+    SetThreadPriority(GetCurrentThread(), WindowsThreadPriority(new_priority));
 #elif defined(__HAIKU__)
     // TODO: We have priorities for 3D rendering applications - may help lavapipe?
     int priority = [&]() {
@@ -745,6 +751,44 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
             min_prio + static_cast<s32>(static_cast<u32>(max_prio - min_prio) * level) / 4;
         pthread_setschedparam(pthread_self(), SCHED_OTHER, &params);
     }
+#endif
+}
+
+ThreadPriorityToken OpenCurrentThreadPriorityToken() {
+#ifdef _WIN32
+    HANDLE handle{};
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle,
+                         THREAD_SET_LIMITED_INFORMATION, FALSE, 0)) {
+        return 0;
+    }
+    return reinterpret_cast<ThreadPriorityToken>(handle);
+#elif defined(__linux__) && !defined(__ANDROID__)
+    return static_cast<ThreadPriorityToken>(static_cast<pid_t>(::syscall(SYS_gettid)));
+#else
+    return 0;
+#endif
+}
+
+void CloseThreadPriorityToken([[maybe_unused]] ThreadPriorityToken token) {
+#ifdef _WIN32
+    if (token != 0) {
+        CloseHandle(reinterpret_cast<HANDLE>(token));
+    }
+#endif
+}
+
+bool SetThreadPriorityOf(ThreadPriorityToken token, [[maybe_unused]] ThreadPriority priority) {
+    if (token == 0) {
+        return false;
+    }
+#ifdef _WIN32
+    return SetThreadPriority(reinterpret_cast<HANDLE>(token), WindowsThreadPriority(priority)) !=
+           0;
+#elif defined(__linux__) && !defined(__ANDROID__)
+    return setpriority(PRIO_PROCESS, static_cast<id_t>(token), NiceValueForPriority(priority)) ==
+           0;
+#else
+    return false;
 #endif
 }
 
