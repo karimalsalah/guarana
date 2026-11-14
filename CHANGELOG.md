@@ -12,6 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
 - Launcher: the launch stage is quiet again while it follows the game's boot. 20.3.0 brought back the 240 px bar, with an endless sweep until shader counts arrived, and a separate count line, and dropped the spinner from the status line. Now the stage shows one status line with a small spinner: the boot phase in words and, while shaders load, the real shader count after it. Nothing loops except that spinner, which hides on a failure. See [launcher/CONTRACT.md](launcher/CONTRACT.md#boot-progress-and-the-hand-over).
 
 ## [20.3.0] - 2026-11-14
