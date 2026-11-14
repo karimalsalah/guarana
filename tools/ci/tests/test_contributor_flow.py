@@ -104,11 +104,13 @@ class MangledClaimTests(unittest.TestCase):
 
     def test_the_pattern_knows_a_rewritten_command_from_a_sentence(self):
         for body in ("C:/Program Files/Git/claim", "C:/Program Files/Git/unclaim", "D:/Tools/Git/claim",
-                     "c:/program files/git/CLAIM", "C:/Program Files/Git/claim please", "C:/claim"):
+                     "c:/program files/git/CLAIM", "C:/Program Files/Git/claim please", "C:/claim",
+                     "C:/Users/José/scoop/apps/git/current/claim", "C:/msys64/claim"):
             self.assertTrue(self.mangled.match(body), body)
         for body in ("/claim", "/unclaim", "I will claim this tomorrow", "C:/Program Files/Git/claimed",
                      "See https://example.com/claim", "Logs are in C:/temp, I will /claim later",
-                     "Path C:/x/claim"):
+                     "Path C:/x/claim", "C:/temp has the logs, I will /claim later",
+                     "C:/build failed; see the log, then /unclaim", "C:/Program Files/Git/claim-it"):
             self.assertFalse(self.mangled.match(body), body)
 
     def test_the_job_starts_for_a_rewritten_command(self):
@@ -143,7 +145,7 @@ class MangledClaimTests(unittest.TestCase):
 
     @unittest.skipUnless(NODE, "Node.js is not on the PATH")
     def test_other_comments_get_no_answer(self):
-        for body in ("I can take this, /claim soon", "Path C:/x/claim"):
+        for body in ("I can take this, /claim soon", "Path C:/x/claim", "C:/temp has the logs, I will /claim later"):
             payload = {"issue": {"number": 36}, "comment": {"body": body, "user": user(), "author_association": "NONE"}}
             self.assertEqual(run(self.script, payload, issue={"state": "open", "labels": [], "assignees": []}), [], body)
 
@@ -159,7 +161,8 @@ class WelcomeWorkflowTests(unittest.TestCase):
 
     def test_least_permissions_and_only_the_repositorys_token(self):
         self.assertEqual(self.doc["permissions"], {})
-        self.assertEqual(self.jobs["first-merge"]["permissions"], {"issues": "write", "pull-requests": "read"})
+        # Commenting on a pull request takes pull-requests: write, as pr-build-comment.yml has it.
+        self.assertEqual(self.jobs["first-merge"]["permissions"], {"issues": "read", "pull-requests": "write"})
         self.assertEqual(self.jobs["first-report"]["permissions"], {"issues": "write"})
         self.assertNotIn("secrets.", self.text)
 
@@ -207,6 +210,23 @@ class WelcomeWorkflowTests(unittest.TestCase):
             for needed in ("@newcomer", "first merged pull request", "legacy.html", "good%20first%20issue",
                            "`/claim`", "template=device-report.yml", "#55"):
                 self.assertIn(needed, body)
+
+    @unittest.skipUnless(NODE, "Node.js is not on the PATH")
+    def test_a_rerun_does_not_thank_twice(self):
+        bot = {"login": "github-actions[bot]", "type": "Bot"}
+        for script, payload, marker in (
+                (self.scripts["first-merge"], {"pull_request": {"number": 60, "user": user(), "merged": True}},
+                 "<!-- welcome-first-merge -->"),
+                (self.scripts["first-report"], {"issue": {"number": 90, "user": user()}},
+                 "<!-- welcome-first-report -->")):
+            first = named(run(script, payload), "createComment")
+            self.assertEqual(len(first), 1)
+            self.assertTrue(first[0]["body"].startswith(marker + "\n"), marker)
+            again = run(script, payload, listComments=[{"user": bot, "body": first[0]["body"]}])
+            self.assertEqual(named(again, "createComment"), [], marker)
+            # The marker typed by a person is not the bot's thank-you.
+            forged = run(script, payload, listComments=[{"user": user("someone"), "body": marker}])
+            self.assertEqual(len(named(forged, "createComment")), 1, marker)
 
     @unittest.skipUnless(NODE, "Node.js is not on the PATH")
     def test_a_second_merge_gets_nothing(self):

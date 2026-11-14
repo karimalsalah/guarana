@@ -12,7 +12,8 @@ name: welcome
 # pull_request_target runs this file from the default branch with a token that can comment, so
 # nothing here checks out or runs code from the pull request: the job reads the event payload and
 # calls the API, nothing else. It skips bots and the owner, and only runs in the main repository.
-# Text from the pull request or the issue never reaches the script through ${{ }}.
+# Text from the pull request or the issue never reaches the script through ${{ }}. Each thank-you
+# carries a hidden marker, and a re-run that finds it on the item posts nothing.
 on:
   pull_request_target:
     types: [closed]
@@ -31,15 +32,17 @@ jobs:
       github.repository_owner == 'karimalsalah'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # A comment on a pull request needs pull-requests: write; issues: read lists the author's items.
     permissions:
-      issues: write
-      pull-requests: read
+      issues: read
+      pull-requests: write
     steps:
       - name: Thank the author if this is their first merged pull request
         uses: actions/github-script@v9
         with:
           script: |
             const TESTERS = 55; // the pinned call for testers
+            const MARKER = "<!-- welcome-first-merge -->";
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
             const user = pr.user.login;
@@ -55,10 +58,18 @@ jobs:
               core.info(`${user} has ${earlier.length} earlier merged pull request(s); nothing to do.`);
               return;
             }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            if (comments.some((c) => c.user?.type === "Bot" && (c.body || "").includes(MARKER))) {
+              core.info("This pull request has its thank-you already; nothing to do.");
+              return;
+            }
 
             await github.rest.issues.createComment({
               owner, repo, issue_number: pr.number,
               body: [
+                MARKER,
                 `Thank you, @${user}: this is your first merged pull request in Guarana. Your name goes on the [Hall of fame](${site}/legacy.html) and in CONTRIBUTORS.md with the next Hall of fame update.`,
                 "",
                 "One next step, if you want one:",
@@ -85,6 +96,7 @@ jobs:
         with:
           script: |
             const TESTERS = 55; // the pinned call for testers
+            const MARKER = "<!-- welcome-first-report -->";
             const { owner, repo } = context.repo;
             const issue = context.payload.issue;
             const user = issue.user.login;
@@ -98,10 +110,18 @@ jobs:
               core.info(`${user} has ${earlier.length} earlier device report(s); nothing to do.`);
               return;
             }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: issue.number, per_page: 100,
+            });
+            if (comments.some((c) => c.user?.type === "Bot" && (c.body || "").includes(MARKER))) {
+              core.info("This report has its thank-you already; nothing to do.");
+              return;
+            }
 
             await github.rest.issues.createComment({
               owner, repo, issue_number: issue.number,
               body: [
+                MARKER,
                 `Thank you, @${user}: this is your first device report here. Numbers from hardware the maintainers do not have, even "it does not run", are what this project needs most. The bot's other comment on this issue shows the row it adds to the benchmarks page, or what to fix.`,
                 "",
                 "One next step, if you want one:",

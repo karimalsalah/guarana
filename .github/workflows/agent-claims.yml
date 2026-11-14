@@ -58,7 +58,9 @@ jobs:
             const BOT = "github-actions[bot]";
             const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
             // Git Bash turns the argument "/claim" into "C:/Program Files/Git/claim" before gh sees it.
-            const MANGLED = /^[A-Za-z]:(?:\/[^\n]*)?\/((?:un)?claim)\b/i;
+            // Folder names may hold single spaces but never end in one, so a sentence that starts
+            // with a path ("C:/temp has the logs, I will /claim later") is not taken for one.
+            const MANGLED = /^[A-Za-z]:\/(?:[^\s\/\\:*?"<>|]+(?: [^\s\/\\:*?"<>|]+)*\/)*((?:un)?claim)(?=\s|$)/i;
 
             const { owner, repo } = context.repo;
             const comment = context.payload.comment;
