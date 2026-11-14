@@ -80,7 +80,36 @@ static_assert(MAX_FRAMES_IN_FLIGHT <= LSFG_MAX_TARGETS);
 
 // Sleeps until the deadline, without spinning: it may pass by up to a timer tick (about 0.5 ms
 // on Windows), well within a refresh, and the next deadline counts from the actual present.
+//
+// EDEN_NX2_PRESENT_SPIN=1: sleep in ticks until the deadline is within 2 ms, then spin the last
+// stretch (YieldProcessor) so the wake lands on the deadline instead of up to a tick past it.
+// At 120 Hz a missed slot costs 8.33 ms, far more than the spin's CPU; this is the Ryujinx
+// frame-pacing fix. Default off keeps the tick loop, byte for byte the original behaviour.
+[[nodiscard]] bool PresentSpinEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_PRESENT_SPIN");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 void SleepUntil(std::chrono::steady_clock::time_point deadline) {
+#ifdef _WIN32
+    if (PresentSpinEnabled()) {
+        constexpr auto spin_threshold = std::chrono::milliseconds{2};
+        while (true) {
+            const auto left = deadline - std::chrono::steady_clock::now();
+            if (left <= std::chrono::steady_clock::duration::zero()) {
+                return;
+            }
+            if (left > spin_threshold) {
+                Common::Windows::SleepForOneTick();
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+#endif
     while (true) {
         const auto left = deadline - std::chrono::steady_clock::now();
         if (left <= std::chrono::steady_clock::duration::zero()) {
