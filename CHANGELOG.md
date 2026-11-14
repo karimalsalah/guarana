@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+- The build check can pass again: two steps that came from upstream looked for `eden-cli` and `lichii.exe`, which this fork builds as `guarana-cli` and `guarana.exe` (the GPU trace replay on Linux, the version resource check on Windows). The macOS release build no longer stops at a parameter in `core.cpp` that shadows a field.
 
 ## [20.3.0] - 2026-11-14
 
