@@ -42,6 +42,21 @@ class FakeEmulator:
             return {"result": {"frames": 2, "intervals_ms": [16.7, 33.3], "truncated": False}}
         if method == "screenshot":
             return {"result": {"width": 1280, "height": 720, "png_base64": PNG}}
+        if method == "shown_frames":
+            frames = [{"index": 0, "kind": "real", "slot": 960, "scheduled_us": 120,
+                       "presented_us": 0, "late_us": -120, "picture": True,
+                       "tile": {"x": 4, "y": 10, "width": 432, "height": 270},
+                       "png_base64": PNG},
+                      {"index": 1, "kind": "predicted", "slot": 961, "scheduled_us": 8453,
+                       "presented_us": 8330, "late_us": -123, "picture": True,
+                       "tile": {"x": 440, "y": 10, "width": 432, "height": 270}}]
+            if not request["params"].get("pictures", True):
+                for frame in frames:
+                    frame.pop("png_base64", None)
+                    frame["picture"] = False
+                return {"result": {"count": 2, "presenter": "fluid", "frames": frames}}
+            return {"result": {"count": 2, "presenter": "fluid", "frames": frames,
+                               "sheet_png_base64": PNG}}
         if method == "capture_frame":
             return {"result": {"directory": self.capture_dir, "entries_total": 1}}
         if method == "capture_bundle":
@@ -104,7 +119,8 @@ class AdapterTest(unittest.TestCase):
         self.assertIsNone(self.adapter.handle({"method": "notifications/initialized"}))
         names = [tool["name"] for tool in self.adapter.handle({"id": 2, "method": "tools/list"})
                  ["result"]["tools"]]
-        self.assertEqual(names, ["status", "frame_times", "screenshot", "log_tail", "log_filter", "capture_frame",
+        self.assertEqual(names, ["status", "frame_times", "screenshot", "shown_frames", "log_tail",
+                                 "log_filter", "capture_frame",
                                  "capture_image", "capture_bundle", "reject_shaders", "set_shading_rate",
                                  "set_prepass", "sample", "read_memory",
                                  "search_memory", "read_gpu_memory", "input",
@@ -166,6 +182,36 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(result["content"][0], {"type": "image", "data": PNG,
                                                 "mimeType": "image/png"})
         self.assertNotIn("png_base64", result["content"][1]["text"])
+
+    def test_shown_frames_become_one_contact_sheet(self):
+        arguments = {"count": 2, "height": 270}
+        result = self.call("shown_frames", arguments)
+        self.assertFalse(result["isError"])
+        self.assertEqual(self.fake.requests[-1]["params"], arguments)
+        self.assertEqual(result["content"][0], {"type": "image", "data": PNG,
+                                                "mimeType": "image/png"})
+        self.assertNotIn("png_base64", result["content"][1]["text"])
+        answer = json.loads(result["content"][1]["text"])
+        self.assertEqual([frame["kind"] for frame in answer["frames"]], ["real", "predicted"])
+        self.assertEqual(answer["frames"][1]["tile"]["x"], 440)
+        self.assertEqual(debug_mcp.default_timeout("shown_frames", {}), 10)
+        # Timing only: no image, only the text.
+        timing = self.call("shown_frames", {"pictures": False})
+        self.assertFalse(timing["isError"])
+        self.assertEqual(len(timing["content"]), 1)
+        self.assertEqual(json.loads(timing["content"][0]["text"])["frames"][0]["picture"], False)
+
+    def test_call_once_saves_the_contact_sheet(self):
+        out = os.path.join(self.temp.name, "sheet.png")
+        stdout = io.StringIO()
+        code = debug_mcp.call_once(self.adapter, '{"method":"shown_frames","params":{"count":2}}',
+                                   out, stdout)
+        self.assertEqual(code, 0)
+        with open(out, "rb") as file:
+            self.assertEqual(file.read(), PNG_BYTES)
+        result = json.loads(stdout.getvalue())
+        self.assertNotIn("sheet_png_base64", result)
+        self.assertEqual(result["count"], 2)
 
     def test_emulator_errors_are_tool_errors(self):
         result = self.call("log_filter", {"filter": "*:Debug"})
