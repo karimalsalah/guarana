@@ -22,6 +22,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Changed
 
 - The launcher build pins Node 22 (`actions/setup-node`), so a runner image change cannot move Node outside what the locked vite accepts.
+- Upstream Lichii sync (through `7a4fe8e0`): solid NSZ files play, with a bounded NCZ decoder and a private disk cache (#1675, #1734) and idle readers releasing their decoder for the memory budget (#1737); Mario Kart World gets a 60 FPS mode at normal game speed with a 30 FPS fallback (#1704, two new Advanced settings); command list pages are copied again after DMA copies and clears (#1736); on Intel only divergent barriers lose their execution barrier, uniform ones are kept (Mario Kart World ANV hang, #1377, #1677).
 
 ### Fixed
 
