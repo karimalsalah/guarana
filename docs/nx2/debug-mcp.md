@@ -113,7 +113,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
   debug build. Release packages are unchanged unless someone sets it.
 - **Writes only under the dump directory.** `EDEN_NX2_DEBUG_DIR`, by default
   `<log dir>/debug-server`. Clients never send paths. The server names every file itself:
-  `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`.
+  `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`, `shown-<session>-<n>.png`.
 - **Nothing the server returns comes from game files, keys or firmware.** It returns rendered
   pixels, log lines, frame-dump manifests and shader hashes, which the owner already sends today.
   The memory tools read only the application's guest virtual memory and GPU virtual memory,
@@ -134,6 +134,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 | `status` | Ask the owner what is on screen, read the log header | One call: title, program id, build, paused, presents, fps, renderer, rejected hashes | 1 |
 | `frame_times` | Frame trace and manual interval analysis | Guest-present interval statistics and VSync histogram over a timed window | 1 |
 | `screenshot` | Owner takes and sends a screenshot | PNG of the next presented frame, as MCP image content | 1 |
+| `shown_frames` | Nobody sees generated frames; the owner describes the motion | The next frames the presenter shows, generated ones included: kind, slot, the vblank it was due at and when the present call returned, and one contact sheet (done) | 3 |
 | `log_tail`, `log_filter` | Relaunch with a new filter, owner sends the log | Read new lines since the last call, change the filter live | 1 |
 | `capture_frame` | Relaunch with `EDEN_NX2_FRAME_DUMP`, owner touches `capture.now`, agent copies the dump | Capture the next frame now, sampled textures and bound buffers optional, get the manifest summary back; `capture_image` returns any pass PNG | 1 |
 | `reject_shaders` | Rebuild the env, relaunch, replay to the spot, once per bisection step | Reject or restore hashes live; bisection becomes a loop of reject, screenshot | 1 |
@@ -514,6 +515,82 @@ emulator's default timeout, so it does not drop a long sequence early.
 Use it when the owner has put the controller down: injected buttons add to whatever the owner
 presses. For an A/B test, run the same `input_sequence` from the same spot under each variant
 (for example with a `reject_shaders` change in between), then compare screenshots or captures.
+
+### Shown frames (implemented)
+
+`screenshot` returns the guest's frame, drawn again from the framebuffers, never a frame that
+frame generation made. **`shown_frames`** `{count?, height?, pictures?, each?, save?, timeout_s?}`
+returns what reached the screen: the next `count` (1 to 32, default 12) frames as the presenter
+sends them to the swapchain, after frame generation, with the timing the presenter knew.
+
+Per frame (`frames`): `kind` (`real`, `predicted` for EDEN_NX2_EXTRAPOLATE, `interpolated` for
+Lossless Scaling or EDEN_NX2_FLUID_INTERP), `presenter` (`fluid` for the EDEN_NX2_FLUID vblank
+clock, `present_thread` or `renderer_thread` for arrival order), `slot` (the vblank it was shown
+for; null in arrival order), `batch` (the real frame it is or derives from), and in microseconds,
+rounded, relative to the first frame's present: `scheduled_us` (when the slot's vblank was due),
+`presented_us` (taken just after the present call returned on the CPU: not the scanout, which
+the presenter does not observe), `late_us` (presented less scheduled; negative is early),
+`interval_us` (since the previous frame) and `age_us` (presented less when the real frame it
+derives from was recorded). `deferred_present` marks a frame that EDEN_NX2_FLUID_COPY_AHEAD
+presents at the next slot's wake, so its `presented_us` is the copy's submission (about a refresh
+early, also in the intervals next to it) and its `late_us` and `age_us` are null. Scheduled times,
+late and age exist only on the FLUID clock; the answer's `notes` say so otherwise. FLUID frames
+shown in arrival order (interpolated ones, or before the clock starts) also have a null `slot`
+and `scheduled_us`. The answer also counts `kinds`, counts the frames with a picture in
+`pictures` (a number, unlike the request's boolean), and gives `span_us`.
+
+Pictures: each shown frame is blitted (linear filter) to `height` lines (144 to 540, default 270)
+at the frame's aspect ratio, and the answer has one contact sheet, `sheet_png_base64`, with every
+frame in order, left to right and then down (rows of four, a near-square grid past 16 frames). A
+strip above each tile gives its kind: green real, orange predicted, blue interpolated; a grey tile
+had no picture. Each frame's `tile` is its rectangle in the sheet. `each: true` (socket only) also
+returns every frame as its own PNG, `save: true` writes the sheet to
+`shown-<session>-<n>.png` in the dump directory. The adapter returns the sheet as image content
+and `--call ... --out sheet.png` saves it. HDR output gives the encoded values cut to 8 bits, not
+tone-mapped (`hdr: true`).
+
+Where it hooks in (`src/video_core/nx2_shown_frames.h`, `renderer_vulkan/vk_shown_capture.cpp`):
+
+- The request goes through its own small mutex-guarded block with two relaxed flags, like
+  `nx2_debug_control.h`. The thread that presents takes it at the next present: the present
+  thread (`FluidShow`, or `PresentThread` in arrival order) or the renderer thread without one
+  (`PresentManager::Present`). It answers after `count` frames.
+- `Frame::shown_kind` is set where frames are generated (`RecordFluidFrames`,
+  `RecordFluidInterpolated` and the arrival-order generation loop in `renderer_vulkan.cpp`) and
+  reset to `real` with the frame.
+- The picture is recorded into the screen copy's own command buffer on the graphics queue
+  (`CopyToSwapchainImpl`), where the frame's image is already in `TRANSFER_SRC_OPTIMAL`: a blit
+  into one small image, a copy into that frame's part of a host-visible buffer, a barrier to host
+  reads. After the last frame the present thread waits for that frame's copy fence (at most
+  500 ms; every capture copy was submitted to the same queue before it) and reads the buffer
+  back. The frame is not given back for reuse before then, so the fence is still its own. A
+  presenter destroyed mid-capture (the game stops) answers with the frames it has, without
+  pictures, so the flags drop and the next capture is taken.
+- The dedicated copy queue (`EDEN_NX2_FLUID_QUEUE`) is a compute or transfer family that cannot
+  blit. While a capture with pictures waits or runs, every screen copy takes the graphics-queue
+  path, which that switch already uses for frames whose size or format differ from the
+  swapchain's. `pictures: false` leaves the copy where it is and gives the timing exactly as
+  played.
+
+Cost:
+
+- Idle: per shown frame, two relaxed loads of the two flags (one before the screen copy, one
+  after the present); no lock, no call.
+- Capturing with pictures: per frame one blit of the frame (for example 2880x1800 to 432x270)
+  and a copy of the small picture (466 KB at 432x270) on the graphics queue, not measured yet;
+  a mutex and a vector push on the presenting thread. Memory: one small image and a buffer of
+  `count * width * height * 4` bytes (5.6 MB at the defaults on a 16:10 screen, 60 MB at 32
+  frames of 540 lines), allocated at the first captured frame and freed after the answer. The
+  last frame's fence wait blocks the presenting thread (and `WaitPresent`, which takes the same
+  lock) until that frame's copy is done. With the dedicated queue the copies run behind the
+  game's rendering for the capture's duration, so slots can be missed that would not be missed
+  otherwise. The contact sheet at 32 frames of 540 lines is about 5200x3300 pixels on a 16:10 screen: ask for
+  fewer or smaller frames when the image goes to an agent.
+- Capturing without pictures: the mutex and the vector push only.
+
+A capture that does not see `count` frames within `timeout_s` (default 10, at most 60) fails and
+is withdrawn; frames still shown later finish it and the answer is dropped. One capture runs at a
+time.
 
 ### Phase 2: control and input (about 4 to 5 days)
 

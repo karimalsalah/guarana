@@ -520,6 +520,8 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                 Frame* generated = present_manager.GetRenderFrame();
                 generated->color_space = output.color_space;
                 generated->present_spacing = spacing;
+                generated->shown_kind = predict ? VideoCore::Nx2ShownFrames::Kind::Predicted
+                                                : VideoCore::Nx2ShownFrames::Kind::Interpolated;
                 blit_swapchain.PrepareFrame(device, generated,
                                             render_window.GetFramebufferLayout());
                 frame_gen.GenerateInto(device, generated, generation);
@@ -722,6 +724,7 @@ void RendererVulkan::RecordFluidFrames(Frame* frame, const HdrPresent& output,
         generated->fluid_batch = frame->fluid_batch;
         generated->fluid_recorded = recorded;
         generated->fluid_slot = FLUID_NOT_SHOWN;
+        generated->shown_kind = VideoCore::Nx2ShownFrames::Kind::Predicted;
         if (frame_gen.GenerateAt(device, generated,
                                  static_cast<f32>(std::clamp(advance, 0.0, FLUID_MAX_ADVANCE)))) {
             generated->fluid_slot = slot;
@@ -814,6 +817,7 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
         generated->fluid_batch = frame->fluid_batch;
         generated->fluid_recorded = recorded;
         generated->fluid_slot = first != 0 ? first + generation * slots.divisor : 0;
+        generated->shown_kind = VideoCore::Nx2ShownFrames::Kind::Interpolated;
         interpolated_frames.push_back(generated);
         ++made;
     }
