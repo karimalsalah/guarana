@@ -1,0 +1,49 @@
+name: labels
+
+# Creates the labels listed in .github/labels.yml and updates their colour and description.
+# Labels that are not in the file are left alone: nothing is deleted or renamed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync labels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the label list
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+
+      # yq (mikefarah) and jq come with the Ubuntu runner image.
+      - name: Create or update labels
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          yq -o=json '.' .github/labels.yml > labels.json
+          jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (.color | test("^[0-9a-fA-F]{6}$")))' \
+            labels.json > /dev/null || { echo "::error file=.github/labels.yml::every label needs a name and a 6-digit hex colour"; exit 1; }
+          jq -c '.[]' labels.json | while IFS= read -r label; do
+            name=$(jq -r '.name' <<< "$label")
+            color=$(jq -r '.color' <<< "$label")
+            description=$(jq -r '.description // ""' <<< "$label")
+            gh label create "$name" --color "$color" --description "$description" --force
+          done

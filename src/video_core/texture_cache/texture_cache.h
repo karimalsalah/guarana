@@ -799,6 +799,26 @@ void TextureCache<P>::TickFrame() {
             counters.staging_bytes.store(runtime.StagingBytes(), std::memory_order_relaxed);
         }
     }
+    // If we can obtain the memory info, use it instead of the estimate.
+    if (runtime.CanReportMemoryUsage()) {
+        total_used_memory = runtime.GetDeviceMemoryUsage();
+        // Images the collector deleted keep their memory for TICKS_TO_DESTROY frames: counting
+        // it kept the collector in aggressive mode, deleting 40+ images a frame for frames after
+        // it had freed enough (title 1: frames over 100 ms for seconds at a time).
+        for (const u64 bytes : sentenced_image_bytes) {
+            total_used_memory -= (std::min)(total_used_memory, bytes);
+        }
+        total_used_memory -= (std::min)(total_used_memory, gpu_sentenced_bytes);
+    }
+    {
+        auto& counters = Common::g_memory_counters;
+        counters.device_usage.store(total_used_memory, std::memory_order_relaxed);
+        counters.texture_expected.store(expected_memory, std::memory_order_relaxed);
+        counters.texture_critical.store(critical_memory, std::memory_order_relaxed);
+        if constexpr (requires { runtime.StagingBytes(); }) {
+            counters.staging_bytes.store(runtime.StagingBytes(), std::memory_order_relaxed);
+        }
+    }
     // EDEN_NX2_MEM_TRACE=1: every 2 s, what the cache holds next to what the process and the
     // driver report (memory climbs).
     static const bool mem_trace = std::getenv("EDEN_NX2_MEM_TRACE") != nullptr;

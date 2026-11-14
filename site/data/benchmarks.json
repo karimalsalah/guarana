@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "project": "Guarana",
+  "updated": "2026-11-13",
+  "metric": {
+    "game_fps": "Frames per second the game itself renders. Frames made by frame generation are never counted."
+  },
+  "groups": [
+    {
+      "id": "verified",
+      "title": "Verified scene",
+      "description": "The run's scene check passed: the benchmark confirmed the game was at the scene it claims before counting frames. The fix was measured off and on in the same scene."
+    },
+    {
+      "id": "play-config",
+      "title": "Play configuration (not an A/B)",
+      "description": "How the builds play with the settings a player would use, frame generation on. The two rows were measured at different spots, so they are not a comparison of the builds."
+    }
+  ],
+  "rows": [
+    {
+      "id": "arc140t-oot-hyrule-field-gm11",
+      "group": "verified",
+      "verified_scene": true,
+      "same_spot": true,
+      "source": "maintainers",
+      "machine": {
+        "cpu": "Intel Core Ultra 9 285H",
+        "gpu": "Intel Arc 140T",
+        "driver": "32.0.101.9175",
+        "os": "Windows 11"
+      },
+      "game": "The Legend of Zelda: Ocarina of Time",
+      "scene": "Hyrule Field",
+      "change": "EDEN_NX2_GM=11 (global-memory routing fix)",
+      "frame_generation": "Off",
+      "result": {
+        "game_fps": 22.83,
+        "approximate": false
+      },
+      "baseline": {
+        "label": "Same scene, fix off",
+        "game_fps": 14.75
+      },
+      "extra": [
+        {
+          "label": "Foliage draw (GPU time)",
+          "unit": "ms",
+          "value": 5.8,
+          "baseline": 15.7
+        }
+      ],
+      "caveat": "One laptop, one scene. Other games, scenes, drivers and machines may differ."
+    },
+    {
+      "id": "arc140t-oot-play-previous",
+      "group": "play-config",
+      "verified_scene": false,
+      "same_spot": false,
+      "source": "maintainers",
+      "machine": {
+        "cpu": "Intel Core Ultra 9 285H",
+        "gpu": "Intel Arc 140T",
+        "driver": "32.0.101.9175",
+        "os": "Windows 11"
+      },
+      "game": "The Legend of Zelda: Ocarina of Time",
+      "scene": "gameplay, a different spot from the v20 row",
+      "build": "Previous build",
+      "frame_generation": "On",
+      "result": {
+        "game_fps": 19.6,
+        "approximate": false
+      },
+      "caveat": "Not the same spot as the v20 row: not an A/B."
+    },
+    {
+      "id": "arc140t-oot-play-v20",
+      "group": "play-config",
+      "verified_scene": false,
+      "same_spot": false,
+      "source": "maintainers",
+      "machine": {
+        "cpu": "Intel Core Ultra 9 285H",
+        "gpu": "Intel Arc 140T",
+        "driver": "32.0.101.9175",
+        "os": "Windows 11"
+      },
+      "game": "The Legend of Zelda: Ocarina of Time",
+      "scene": "gameplay, a different spot from the previous-build row",
+      "build": "v20",
+      "frame_generation": "On",
+      "result": {
+        "game_fps": 26.7,
+        "approximate": true
+      },
+      "caveat": "Approximate. Not the same spot as the previous-build row: not an A/B."
+    }
+  ]
+}

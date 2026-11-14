@@ -1,0 +1,113 @@
+name: upstream-sync
+
+# Mirrors zortos293/Lichii nx2 into the upstream branch (fast-forward only) and, when main lacks
+# some of its commits, opens or updates the pull request upstream -> main. See docs/LANES.md.
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: zortos293/Lichii
+  UPSTREAM_BRANCH: nx2
+
+jobs:
+  sync:
+    name: Sync upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # UPSTREAM_SYNC_TOKEN is optional. Without it this repository's token pushes and opens the
+      # pull request, with two limits: GitHub refuses it a push of commits that change
+      # .github/workflows, and a pull request it opens starts no workflows (docs/LANES.md).
+      - name: Check out main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Fetch upstream and update the upstream branch
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags "https://github.com/$UPSTREAM_REPO.git" \
+            "+refs/heads/$UPSTREAM_BRANCH:refs/remotes/source/$UPSTREAM_BRANCH"
+          tip=$(git rev-parse "refs/remotes/source/$UPSTREAM_BRANCH")
+          mirror=$(git rev-parse --verify --quiet refs/remotes/origin/upstream) || mirror=
+          echo "tip=$tip" >> "$GITHUB_OUTPUT"
+          echo "$UPSTREAM_REPO $UPSTREAM_BRANCH is at $tip; upstream is at ${mirror:-(no branch yet)}"
+          if [ "$mirror" != "$tip" ]; then
+            # No --force: the mirror only moves forward. A rewritten upstream branch, or a commit
+            # someone added to the mirror, stops the sync here for a maintainer.
+            if ! git push origin "$tip:refs/heads/upstream" 2> push.log; then
+              cat push.log
+              if grep -qi workflow push.log; then
+                echo "::error::GitHub refused the push because upstream changed .github/workflows, which this repository's token may not push. Add the UPSTREAM_SYNC_TOKEN secret (contents, pull requests and workflows: write) or push the mirror yourself; docs/LANES.md has the commands."
+              else
+                echo "::error::The upstream branch did not fast-forward to $tip. See docs/LANES.md, \"When the sync stops\"."
+              fi
+              exit 1
+            fi
+          fi
+          behind=$(git rev-list --count "HEAD..$tip")
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "main lacks $behind upstream commit(s)"
+
+      - name: Open or update the merge pull request
+        if: steps.fetch.outputs.behind != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+          TIP: ${{ steps.fetch.outputs.tip }}
+          BEHIND: ${{ steps.fetch.outputs.behind }}
+        run: |
+          set -euo pipefail
+          short=${TIP::10}
+          # Upstream's "(#123)" names its own pull requests; written as zortos293/Lichii#123 they
+          # link there instead of to this repository's numbers.
+          {
+            echo "Merges $BEHIND commit(s) of [$UPSTREAM_REPO](https://github.com/$UPSTREAM_REPO/tree/$UPSTREAM_BRANCH) \`$UPSTREAM_BRANCH\`, up to [\`$short\`](https://github.com/$UPSTREAM_REPO/commit/$TIP), into \`main\`."
+            echo
+            echo "Opened by \`upstream-sync.yml\`, which updates this pull request every 6 hours while upstream moves. Do not commit to the \`upstream\` branch."
+            echo
+            echo "## Before merging"
+            echo
+            echo "- [ ] CI ran on the merge. A pull request opened by this workflow starts no workflows by itself (unless UPSTREAM_SYNC_TOKEN is set): close and reopen it to run build-check."
+            echo "- [ ] No conflicts, or they were resolved on a \`merge/upstream-<date>\` branch from \`main\` with its own pull request, keeping both sides; that pull request lists each resolution."
+            echo "- [ ] The switches in \`docs/switches.md\` still do what their rows say. Rerun the verified scene with \`tools/bench\` if upstream touched frame pacing, the shader recompiler or the Vulkan backend."
+            echo "- [ ] \`CHANGELOG.md\` \`[Unreleased]\` names the upstream range."
+            echo "- [ ] Merge with a merge commit, never squash or rebase, so later syncs share history with upstream."
+            echo
+            echo "## Upstream commits"
+            echo
+            if [ "$BEHIND" -gt 300 ]; then echo "The newest 300 of $BEHIND:"; echo; fi
+            git log --no-merges --max-count=300 --format='- %s (%h, %an)' "HEAD..$TIP" |
+              sed -E "s|([^/A-Za-z0-9])#([0-9]+)|\1$UPSTREAM_REPO#\2|g"
+          } > body.md
+          title="upstream: merge $UPSTREAM_REPO $UPSTREAM_BRANCH ($short)"
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head upstream --base main --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file body.md
+            echo "Updated #$number"
+            exit 0
+          fi
+          labels=()
+          if gh api "repos/$GITHUB_REPOSITORY/labels/upstream-port" > /dev/null 2>&1; then
+            labels=(--label upstream-port)
+          fi
+          if ! gh pr create --repo "$GITHUB_REPOSITORY" --head upstream --base main \
+            --title "$title" --body-file body.md "${labels[@]}"; then
+            echo "::error::Could not open the pull request. Allow GitHub Actions to create pull requests (Settings > Actions > General > Workflow permissions) or set UPSTREAM_SYNC_TOKEN."
+            exit 1
+          fi

@@ -2566,6 +2566,37 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             .left = warm_left,
         });
     }
+    if (async_boot) {
+        // The load is done submitting; the marker and lock go with the last build
+        LOG_INFO(Render_Vulkan,
+                 "Async boot: {} cached graphics pipelines build in the background while the "
+                 "game starts",
+                 async_graphics);
+        async_boot->Done();
+    }
+    Common::BootTiming::Mark("shaders: LoadPipelinesV2 done");
+    if (warm_only) {
+        // The process ends when this returns: wait for the background builds too (a stop cancels
+        // them) and save the driver's cache with them in it.
+        if (scheduled_prebuild) {
+            scheduled_prebuild->Batch().Wait();
+        }
+        if (!stop_loading.stop_requested()) {
+            serialization_thread.WaitForRequests();
+            if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
+                last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                                   vulkan_pipeline_cache,
+                                                                   CACHE_VERSION, true),
+                                      std::memory_order_relaxed);
+            }
+        }
+        ShaderWarm::ReportWarmOnly({
+            .built = build_at_boot,
+            .graphics_records = graphics_records,
+            .already_built = warm_already_built,
+            .left = warm_left,
+        });
+    }
 }
 
 namespace {
@@ -3132,6 +3163,44 @@ void PipelineCache::TickFrame() {
             prebuild_load_begin.reset();
         }
     }
+}
+
+void PipelineCache::DropPipelinesWithoutPrepass() {
+    std::vector<GraphicsPipelineCacheKey> drop;
+    for (const auto& [key, pipeline] : graphics_cache) {
+        if (pipeline != nullptr && pipeline->IsBuilt() && !pipeline->HasPrepassSplit() &&
+            key.unique_hashes[5] != 0 &&
+            VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5])) {
+            drop.push_back(key);
+        }
+    }
+    if (drop.empty()) {
+        return;
+    }
+    // As an eviction, but nothing is kept: the next draw translates the pipeline again.
+    const u64 tick = scheduler.CurrentTick();
+    for (const GraphicsPipelineCacheKey& key : drop) {
+        const auto it = graphics_cache.find(key);
+        if (it->second.get() == current_pipeline) {
+            current_pipeline = nullptr;
+        }
+        if (const auto used = used_this_session.find(it->second.get());
+            used != used_this_session.end()) {
+            used_and_evicted.try_emplace(it->first.Hash(), used->second);
+            used_this_session.erase(used);
+        }
+        evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
+        evicted_pipelines.emplace_back(tick, std::move(it->second));
+        graphics_cache.erase(it);
+    }
+    for (auto& [key, pipeline] : graphics_cache) {
+        if (pipeline) {
+            pipeline->ClearTransitions();
+        }
+    }
+    LOG_INFO(Render_Vulkan,
+             "Prepass split: {} graphics pipelines of the listed fragment shaders are made again",
+             drop.size());
 }
 
 void PipelineCache::DropPipelinesWithoutPrepass() {

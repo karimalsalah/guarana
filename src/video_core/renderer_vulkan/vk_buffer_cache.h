@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <array>
 #include <chrono>
 #include <limits>

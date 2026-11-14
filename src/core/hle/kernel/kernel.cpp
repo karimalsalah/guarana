@@ -1046,6 +1046,7 @@ void KernelCore::RunServer(std::unique_ptr<Service::ServerManager>&& server_mana
     {
         std::scoped_lock lk{impl->server_lock};
         if (impl->is_shutting_down || impl->services_closed) {
+            impl->refused_servers.emplace_back(std::move(server_manager));
             refused = true;
         } else {
             impl->server_managers.emplace_back(std::move(server_manager));

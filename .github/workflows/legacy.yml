@@ -1,0 +1,94 @@
+name: legacy
+
+# The Hall of fame: rebuilds CONTRIBUTORS.md, site/data/legacy.json (the data of site/legacy.html)
+# and the avatars between the markers in README.md from the commits of the default branch and
+# their Co-authored-by trailers (tools/ci/legacy.py). Bots and AI tools are listed apart, as tools.
+#
+# publish: daily and on demand. Writes the changed files as one commit on top of the default branch
+#   to bot/legacy and opens, updates or closes its pull request, like ingest-reports.yml does for
+#   the leaderboard. It commits nothing when the output is already on the default branch. A pull
+#   request opened with the repository's token starts no workflows by itself: close and reopen it
+#   to run build-check. Needs Settings > Actions > General > Workflow permissions > "Allow GitHub
+#   Actions to create and approve pull requests".
+# test: the tests of tools/ci on pull requests that change them, the workflows or the agent kit they check.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build the output and print what would change, without pushing or touching the pull request
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "tools/ci/legacy.py"
+      - "tools/ci/build_llms_full.py"
+      - "tools/ci/llms-site-facts.txt"
+      - "tools/ci/tests/**"
+      - "tools/ingest/github_api.py"
+      - "tools/ingest/ingest.py"
+      - "site/legacy.html"
+      - "site/data/legacy.json"
+      - ".github/workflows/legacy.yml"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/release-binaries.yml"
+      - ".github/workflows/launcher.yml"
+      - ".github/workflows/nightly.yml"
+      - ".github/CODEOWNERS"
+      - ".github/dependabot.yml"
+      # The agent kit that tools/ci/tests/test_agent_kit.py checks.
+      - ".github/workflows/agent-claims.yml"
+      - ".github/workflows/agents.yml"
+      - ".github/workflows/copilot-setup-steps.yml"
+      - ".github/copilot-instructions.md"
+      - ".github/labels.yml"
+      - "tools/nx2/server.json"
+      - "tools/nx2/mcpb_pack.py"
+      - "tools/nx2/debug_mcp.py"
+      - "docs/agents/**"
+      - "HANDOVER.md"
+
+permissions: {}
+
+jobs:
+  test:
+    name: Test tools/ci
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run the tools/ci tests
+        run: python3 -I -m unittest discover -s tools/ci/tests -t tools/ci/tests -v
+
+  publish:
+    name: Update the Hall of fame pull request
+    if: github.event_name != 'pull_request' && github.repository_owner == 'karimalsalah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: legacy-publish
+      cancel-in-progress: false
+    steps:
+      # The default branch's code only; the token stays in the checkout for the push.
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Test the builder
+        run: python3 -I tools/ci/tests/test_legacy.py
+
+      - name: Rebuild the Hall of fame and update the pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python3 -I tools/ci/legacy.py publish

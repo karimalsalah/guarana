@@ -1,0 +1,67 @@
+# Guarana
+
+> Guarana is a free, open-source (GPL-3.0-or-later) Nintendo Switch 2 emulator fork tuned for integrated GPUs: Intel Arc iGPU laptops and handhelds first, AMD Radeon iGPU handhelds next. It focuses on frame pacing, frame generation by extrapolation and GPU fixes measured on real hardware. It ships no keys, firmware or games and is not affiliated with Nintendo.
+
+Key facts:
+
+- Lineage: Guarana <- Lichii <- Eglantine <- Eden <- yuzu.
+- Tested platform: Windows 11 x64. Every measurement so far comes from one laptop: Intel Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175.
+- Measured: the global-memory routing fix (EDEN_NX2_GM=11) took The Legend of Zelda: Ocarina of Time, Hyrule Field, from 14.75 to 22.83 game fps with frame generation off; the foliage draw fell from 15.7 to 5.8 ms of GPU time. One laptop, one scene.
+- Play configuration (frame generation on): previous build 19.6 game fps, v20 about 26.7. Measured at different spots: not an A/B comparison.
+- "Game fps" counts only frames the game renders, never generated frames.
+- Frame generation extrapolates new frames forward from the game's motion vectors, so it adds no latency; the HUD is handled separately. Motion data is wired up for Ocarina of Time only so far.
+- Release builds use ThinLTO and profile-guided optimization (PGO).
+- Known issues: pacing micro-stutter (fix in progress: vblank-locked 16.67 ms presenter); first-visit shader compilation hitches; Intel driver cache race (fix in progress).
+- Third-party reports, not verified by us: about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Ryzen Z2 Extreme, Radeon 890M-class GPU; Lichii issue #1433); Arc 140V 22-24 fps in gameplay (AlfaDev23's build).
+- No handheld has been measured by the maintainers yet. Device statuses: Tested (measured by maintainers), Community reports (others, other builds), Untested.
+- Official download: https://github.com/karimalsalah/guarana/releases/latest (GitHub Releases only).
+
+## Pages
+
+- [Home](https://karimalsalah.github.io/guarana/): what it is, measured results, how pacing and frame generation work, setup
+- [Play Ocarina of Time on PC](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html): Play the Switch 2 Ocarina of Time on a PC, laptop or handheld: the 5-minute path with your own keys, firmware and game, settings, frame generation and measured speed
+- [Fix stutter](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html): Fix stutter: shader warm-up, frame pacing presenter, read-back and power settings, with before and after numbers
+- [Intel Arc](https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html): Intel Arc iGPU laptops: what is tested (Arc 140T), what is only reported, driver, power and settings
+- [Handhelds](https://karimalsalah.github.io/guarana/switch-2-emulator-handheld.html): ROG Ally, Legion Go, MSI Claw and Steam Deck: status per device, memory and power advice, send a device report
+- [Controller setup](https://karimalsalah.github.io/guarana/controller-setup.html): Controller setup: Xbox, DualSense, Switch Pro and 8BitDo pads, profiles, known upstream issues
+- [Devices](https://karimalsalah.github.io/guarana/devices/): status, specs and starting settings per GPU class and handheld
+- [Benchmarks](https://karimalsalah.github.io/guarana/benchmarks.html): every measured row with its caveats
+- [FAQ](https://karimalsalah.github.io/guarana/faq.html): requirements, latency, pacing, legality, drivers, platforms
+- [Contribute](https://karimalsalah.github.io/guarana/contribute.html): device reports, agent-ready issues, CI, debug MCP server, bench harness
+- [Legal](https://karimalsalah.github.io/guarana/legal.html): no keys/firmware/games, not affiliated with Nintendo, GPL-3.0-or-later, takedowns
+
+## Data
+
+- [benchmarks.json](https://karimalsalah.github.io/guarana/data/benchmarks.json): machine-readable benchmark rows (game fps, verified-scene flag, same-spot flag, caveats)
+
+## Repository
+
+- [Source code](https://github.com/karimalsalah/guarana): GPL-3.0-or-later
+- [Latest release](https://github.com/karimalsalah/guarana/releases/latest): the only official download
+- [Device report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml): how to report results for any device
+- [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md): rules for AI coding agents
+- [Testing protocol](https://github.com/karimalsalah/guarana/blob/HEAD/docs/TESTING.md): the 10-minute path for testers: install, stand in Hyrule Field, send a device report (the launcher can prefill it)
+- [AI quickstart](https://github.com/karimalsalah/guarana/blob/HEAD/docs/AI-QUICKSTART.md): from zero to a pull request, one command per tool (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline) and a paste-in prompt for web chats
+- [Discord](https://discord.gg/urz7vMdRM): chat, setup help and real-time help from contributors (bugs and device reports stay on GitHub)
+- [Open wins](https://karimalsalah.github.io/guarana/wins.html): measurable open problems with the scene, today's number, the target and where to look; data in [wins.json](https://karimalsalah.github.io/guarana/data/wins.json)
+- [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html): everyone credited for good, rebuilt daily from the git history; data in [legacy.json](https://karimalsalah.github.io/guarana/data/legacy.json)
+- [Debug MCP server](https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md): lets an agent read status, frame times, screenshots and logs from a running game and send input
+- [Bench harness](https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md): runs a scene the same way on any machine and writes JSON rows
+
+## Optional
+
+- [Full text for LLMs](https://karimalsalah.github.io/guarana/llms-full.txt): the project in one file for a web chat: the rules (AGENTS.md), repository map, build and test commands, the switch overview, CONTRIBUTING, a legal summary and every fact on this site; rebuilt from the repository on every deploy
+- [Intel Arc 140T](https://karimalsalah.github.io/guarana/devices/arc-140t.html): Tested. 14.75 → 22.83 game fps in Hyrule Field (GM=11, frame generation off).
+- [Intel Arc 140V](https://karimalsalah.github.io/guarana/devices/arc-140v.html): Community reports. Third-party report: 22–24 fps in gameplay, on another build.
+- [Intel Arc (Meteor Lake)](https://karimalsalah.github.io/guarana/devices/meteor-lake-arc.html): Untested. Xe-LPG, up to 8 Xe-cores. No reports yet.
+- [Intel Arc B390 (Panther Lake)](https://karimalsalah.github.io/guarana/devices/panther-lake-arc-b390.html): Untested. Xe3, 12 Xe3-cores. No reports yet.
+- [AMD Radeon 780M](https://karimalsalah.github.io/guarana/devices/radeon-780m.html): Untested. RDNA 3, 12 CUs (also in Z1 Extreme and Z2). No reports yet.
+- [AMD Radeon 890M](https://karimalsalah.github.io/guarana/devices/radeon-890m.html): Community reports. Third-party report: about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Lichii #1433).
+- [AMD Radeon 8060S](https://karimalsalah.github.io/guarana/devices/radeon-8060s.html): Untested. RDNA 3.5, 40 CUs, 256-bit memory. No reports yet.
+- [MSI Claw 8 AI+](https://karimalsalah.github.io/guarana/devices/msi-claw-8-ai-plus.html): Untested. Arc 140V, 32 GB. No reports yet.
+- [MSI Claw A1M](https://karimalsalah.github.io/guarana/devices/msi-claw-a1m.html): Untested. Meteor Lake Arc, 16 GB. No reports yet.
+- [ASUS ROG Ally X](https://karimalsalah.github.io/guarana/devices/rog-ally-x.html): Untested. Z1 Extreme (780M class), 24 GB. No reports yet.
+- [ASUS ROG Xbox Ally X](https://karimalsalah.github.io/guarana/devices/rog-xbox-ally-x.html): Community reports. Third-party report: about 30 fps in Ocarina of Time (Lichii #1433).
+- [Lenovo Legion Go 2](https://karimalsalah.github.io/guarana/devices/legion-go-2.html): Untested. Z2 Extreme or Z2, up to 32 GB. No reports yet.
+- [Steam Deck](https://karimalsalah.github.io/guarana/devices/steam-deck.html): Untested. RDNA 2, 8 CUs, 4–15 W, SteamOS. No reports yet.
+- [AI agents welcome](https://karimalsalah.github.io/guarana/agents.html): how autonomous coding agents contribute; rules, entry points, labels and contact for machines in [agents.json](https://karimalsalah.github.io/guarana/agents.json)

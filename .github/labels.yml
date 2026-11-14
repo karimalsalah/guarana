@@ -1,0 +1,151 @@
+# Labels of this repository. .github/workflows/labels.yml creates them and keeps their colour
+# and description in step with this file on every push to main that changes it. It never deletes
+# or renames a label: to rename one, rename it in the GitHub UI, then here.
+# Colours are 6 hex digits without "#", quoted so YAML keeps them as text. Descriptions: 100
+# characters at most.
+
+# Work and contribution
+- name: agent-ready
+  color: "5319e7"
+  description: "Scoped for an AI agent (or anyone): goal, files, acceptance test and measurement are in the issue"
+- name: good first issue
+  color: "7057ff"
+  description: "Small and well defined: a good first contribution"
+- name: help wanted
+  color: "008672"
+  description: "Maintainers would welcome a pull request for this"
+- name: needs-triage
+  color: "ededed"
+  description: "Not looked at by a maintainer yet"
+- name: claimed
+  color: "bfdadc"
+  description: "Someone is on it: /claim and /unclaim (docs/agents/README.md); released after 72 h without a PR"
+- name: needs-device-data
+  color: "fbca04"
+  description: "Needs measurements from hardware the maintainers do not have"
+- name: device-report
+  color: "c5def5"
+  description: "How a build runs on one device: fps, frame times, settings"
+
+# Topics
+- name: perf
+  color: "d93f0b"
+  description: "Performance: fps, GPU or CPU time"
+- name: stutter
+  color: "e99695"
+  description: "Hitches and frame time spikes"
+- name: frame-pacing
+  color: "f9d0c4"
+  description: "Uneven frame times, cadence, frame generation pacing"
+- name: shader-cache
+  color: "bfd4f2"
+  description: "Shader and pipeline compilation, caches, warm-up"
+- name: boot-time
+  color: "d4c5f9"
+  description: "Time from launch to gameplay"
+
+# Hardware
+- name: intel-arc
+  color: "0071c5"
+  description: "Intel Arc GPUs; integrated first: 140T, 140V, Meteor Lake, Panther Lake"
+- name: amd-igpu
+  color: "b8001f"
+  description: "AMD Radeon integrated GPUs: 780M, 880M, 890M, Z1 and Z2 handhelds"
+- name: handheld
+  color: "1d76db"
+  description: "Handheld PCs: power limits, battery, small screens"
+
+# Lanes and kinds of change
+- name: upstream-port
+  color: "0e8a16"
+  description: "A port from or to zortos293/Lichii; credit the original author"
+- name: hotfix
+  color: "b60205"
+  description: "Fix for a release branch (hotfix/*), forward-ported to main"
+- name: experiment
+  color: "fef2c0"
+  description: "Behind a default-off EDEN_NX2_* switch; no verified gain yet"
+- name: docs
+  color: "0075ca"
+  description: "Documentation"
+- name: ci
+  color: "a2eeef"
+  description: "Workflows, builds and release packaging"
+- name: dependencies
+  color: "0366d6"
+  description: "Dependency updates, most of them from Dependabot (.github/dependabot.yml)"
+- name: legal
+  color: "000000"
+  description: "Licensing, trademarks, takedown requests, prohibited content"
+
+# Used by the issue forms inherited from upstream Lichii and by label-issues.yml. A form can only
+# apply a label that exists, so these are kept here too.
+- name: Crash
+  color: "b60205"
+  description: "The emulator or a game crashed"
+- name: game-bug
+  color: "d73a4a"
+  description: "A game does not work properly"
+- name: visual-bug
+  color: "d876e3"
+  description: "A game does not render properly"
+- name: bug
+  color: "d73a4a"
+  description: "Something does not work as it should"
+- name: ui
+  color: "c2e0c6"
+  description: "The emulator's own interface"
+- name: enhancement
+  color: "84b6eb"
+  description: "A new feature or an improvement"
+- name: regression
+  color: "b60205"
+  description: "It worked in an older build"
+- name: needs-bisect
+  color: "fbca04"
+  description: "Find the first build where it broke"
+- name: needs-info
+  color: "fbca04"
+  description: "Waiting for a log, a screenshot or other details"
+- name: NVIDIA
+  color: "76b900"
+  description: "NVIDIA GPUs"
+- name: AMD
+  color: "ed1c24"
+  description: "AMD GPUs"
+- name: INTEL
+  color: "0068b5"
+  description: "Intel GPUs"
+- name: windows
+  color: "0078d6"
+  description: "Windows"
+- name: linux
+  color: "fcc624"
+  description: "Linux"
+- name: MacOS
+  color: "999999"
+  description: "macOS"
+- name: Ocarina of Time
+  color: "c5def5"
+  description: "The Legend of Zelda: Ocarina of Time"
+- name: Mario Kart
+  color: "c5def5"
+  description: "Mario Kart World"
+- name: DKB
+  color: "c5def5"
+  description: "Donkey Kong Bananza"
+- name: Fire Emblem
+  color: "c5def5"
+  description: "Fire Emblem: Fortune's Weave"
+- name: Splatoon Raiders
+  color: "c5def5"
+  description: "Splatoon Raiders"
+- name: Pokopia
+  color: "c5def5"
+  description: "Pokémon Pokopia"
+- name: Hyrule Warriors
+  color: "c5def5"
+  description: "Hyrule Warriors: Age of Imprisonment"
+- name: Welcome Tour
+  color: "c5def5"
+  description: "Nintendo Switch 2 Welcome Tour"

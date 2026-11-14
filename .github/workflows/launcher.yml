@@ -1,0 +1,405 @@
+name: launcher
+
+# Builds the Guarana Launcher (launcher/, Tauri 2): the per-user NSIS installer
+# Guarana-Setup-<version>.exe, with the current Windows emulator build bundled as
+# launcher/src-tauri/resources/emulator.zip so the first run works offline.
+# - push to main or feat/** touching launcher/**, and pull requests that touch it (Dependabot's
+#   included): workflow artifact only;
+# - by hand: workflow artifact; with release_tag (or run on a tag) also attached to that release;
+# - workflow_call (after the release is published): attached to the caller's tag, or to
+#   release_tag, with its SHA-256 added to the release's SHA256SUMS.txt. The calling job must
+#   grant `contents: write`, `id-token: write` and `attestations: write`, and pass the signing
+#   secrets (`secrets: inherit`).
+# An installer for a release is Authenticode-signed when the signing secrets are set, and the
+# attach job attests it and the SHA256SUMS.txt that lists it (docs/SIGNING.md).
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+    paths:
+      - "launcher/**"
+      - .github/workflows/launcher.yml
+  pull_request:
+    paths:
+      - "launcher/**"
+      - .github/workflows/launcher.yml
+  workflow_dispatch:
+    inputs:
+      emulator_zip_url:
+        description: Windows zip to bundle; empty takes the release's (or the latest release's)
+        type: string
+        default: ""
+      release_tag:
+        description: Release to attach the installer to (vX.Y.Z or nightly); empty attaches nowhere
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      emulator_zip_url:
+        description: Windows zip to bundle; empty takes the release's (or the latest release's)
+        type: string
+        required: false
+        default: ""
+      release_tag:
+        description: Release to attach the installer to; empty uses the tag the caller runs on, if any
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: launcher-${{ github.ref }}-${{ inputs.release_tag || 'none' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build the installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      setup_name: ${{ steps.package.outputs.setup_name }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Decide the release
+        id: plan
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release to attach to: ${tag:-none}"
+
+      # Only the crate downloads: a cached target/ is gigabytes against the repo's 10 GB cache quota,
+      # which the emulator builds need more.
+      - name: Restore the Cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: launcher-cargo-${{ runner.os }}-${{ hashFiles('launcher/src-tauri/Cargo.lock') }}
+          restore-keys: launcher-cargo-${{ runner.os }}-
+
+      - name: Show the toolchain
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          node --version
+          npm --version
+
+      - name: Install the launcher's npm tools
+        working-directory: launcher
+        run: npm ci --no-audit --no-fund
+
+      - name: Install the UI's packages
+        working-directory: launcher
+        run: npm run ui:install
+
+      # assets/brand/logo-mark.svg -> 1024 px PNG (resvg) -> every icon size (tauri icon).
+      - name: Render the icons
+        working-directory: launcher
+        run: npm run icons
+
+      - name: Unit tests
+        working-directory: launcher/src-tauri
+        run: cargo test --locked
+
+      - name: Bundle the emulator build
+        shell: pwsh
+        env:
+          INPUT_URL: ${{ inputs.emulator_zip_url }}
+          RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $res = Join-Path $env:GITHUB_WORKSPACE 'launcher/src-tauri/resources'
+          function Get-Api([string]$path) {
+            $out = gh api $path 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+            return ($out | Out-String | ConvertFrom-Json)
+          }
+          function Get-WindowsAsset($release) {
+            $v = $release.tag_name -replace '^v', ''
+            foreach ($name in @("guarana-$v-windows-x86_64-pgo.zip", "guarana-$v-windows-x86_64.zip")) {
+              $a = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+              if ($a) { return $a }
+            }
+            return $null
+          }
+          # The launcher's own version label (src-tauri/src/install.rs, `label`): the tag without
+          # its v, or nightly-<YYYYMMDD>-<commit> for the rolling nightly.
+          function Get-Label($release) {
+            if ($release.tag_name -ne 'nightly') { return ($release.tag_name -replace '^v', '') }
+            $label = 'nightly'
+            # ConvertFrom-Json turns ISO dates into [datetime]; the launcher uses the UTC date.
+            $p = $release.published_at
+            $date = if ($p -is [datetime]) { $p.ToUniversalTime().ToString('yyyyMMdd') } else { ([string]$p) -replace '^(\d{4})-(\d{2})-(\d{2}).*$', '$1$2$3' }
+            if ($date -match '^\d{8}$') { $label += "-$date" }
+            $sha = [string]$release.target_commitish
+            if ($sha -match '^[0-9a-fA-F]{7,}$') { $label += '-' + $sha.Substring(0, 7).ToLowerInvariant() }
+            return $label
+          }
+
+          $url = $env:INPUT_URL
+          $release = $null
+          if ($url) {
+            if ($url -match '/releases/download/([^/]+)/([^/?#]+)$') {
+              $release = Get-Api "repos/$env:GH_REPO/releases/tags/$($Matches[1])"
+            }
+          } else {
+            if ($env:RELEASE_TAG) {
+              # The release this installer is for; its files may still be uploading.
+              for ($i = 0; $i -lt 10; $i++) {
+                $release = Get-Api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG"
+                if ($release -and (Get-WindowsAsset $release)) { break }
+                Start-Sleep -Seconds 30
+              }
+              if (-not $release -or -not (Get-WindowsAsset $release)) {
+                Write-Output "::warning::Release $env:RELEASE_TAG has no Windows build; bundling the latest release's instead"
+                $release = $null
+              }
+            }
+            if (-not $release) {
+              $list = Get-Api "repos/$env:GH_REPO/releases?per_page=30"
+              $release = $list | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -ne 'nightly' -and (Get-WindowsAsset $_) } | Select-Object -First 1
+            }
+            if (-not $release) {
+              Write-Output '::warning::No release with a Windows build yet: the installer will download Guarana on first run.'
+              exit 0
+            }
+            $url = (Get-WindowsAsset $release).browser_download_url
+          }
+
+          $name = [System.Uri]::UnescapeDataString(($url -split '/')[-1])
+          $zip = Join-Path $res 'emulator.zip'
+          Write-Output "Bundling $name from $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+
+          $listed = $null
+          if ($release) {
+            $sums = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1
+            if ($sums) {
+              $text = (Invoke-WebRequest -Uri $sums.browser_download_url).Content
+              if ($text -is [byte[]]) { $text = [System.Text.Encoding]::UTF8.GetString($text) }
+              foreach ($line in ($text -split "`n")) {
+                $parts = $line.Trim() -split '\s+'
+                if ($parts.Count -ge 2 -and $parts[1].TrimStart('*') -eq $name) { $listed = $parts[0].ToLowerInvariant() }
+              }
+            }
+          }
+          if ($listed -and $listed -ne $sha) {
+            throw "Checksum mismatch for ${name}: SHA256SUMS.txt lists $listed, the download is $sha"
+          }
+          if (-not $listed) { Write-Output "::warning::$name is not in a SHA256SUMS.txt; bundling it with its own hash" }
+
+          if ($release) {
+            $label = Get-Label $release
+            $channel = if ($release.tag_name -eq 'nightly') { 'nightly' } else { 'stable' }
+          } else {
+            $label = $name -replace '^guarana-', '' -replace '-windows-x86_64(-pgo)?\.zip$', ''
+            $channel = if ($label -like 'nightly*') { 'nightly' } else { 'stable' }
+          }
+          $meta = [ordered]@{ version = $label; channel = $channel; sha256 = $sha; asset = $name }
+          $meta | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $res 'emulator.json')
+          Get-Content (Join-Path $res 'emulator.json')
+          Get-ChildItem $res | Format-Table Name, Length
+
+      # Windows shows this version in Installed apps, and winget matches upgrades on it: a release's
+      # installer carries the release version (X.Y.Z; a pre-release suffix is dropped for the bundle).
+      - name: Stamp the release version
+        if: steps.plan.outputs.release_tag != '' && steps.plan.outputs.release_tag != 'nightly'
+        working-directory: launcher/src-tauri
+        shell: pwsh
+        env:
+          TAG: ${{ steps.plan.outputs.release_tag }}
+        run: |
+          $version = $env:TAG.TrimStart('v') -replace '-.*$', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "release tag $env:TAG is not vX.Y.Z" }
+          $config = Get-Content tauri.conf.json -Raw | ConvertFrom-Json
+          $config | Add-Member -NotePropertyName version -NotePropertyValue $version -Force
+          $config | ConvertTo-Json -Depth 64 | Set-Content tauri.conf.json -Encoding utf8NoBOM
+          "installer version: $version"
+
+      - name: Build the installer
+        working-directory: launcher
+        run: npx tauri build
+
+      - name: Save the Cargo cache
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: launcher-cargo-${{ runner.os }}-${{ hashFiles('launcher/src-tauri/Cargo.lock') }}
+
+      - name: Name the installer
+        id: package
+        shell: bash
+        env:
+          TAG: ${{ steps.plan.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          built=(launcher/src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if [ "${#built[@]}" -ne 1 ]; then
+            echo "::error::Expected one NSIS installer, found ${#built[@]}"
+            exit 1
+          fi
+          if [ -n "$TAG" ]; then
+            version="${TAG#v}"
+          else
+            launcher=$(sed -n 's/^version = "\(.*\)"/\1/p' launcher/src-tauri/Cargo.toml | head -n 1)
+            version="launcher-${launcher}-${GITHUB_SHA::7}"
+          fi
+          name="Guarana-Setup-${version}.exe"
+          mkdir -p dist
+          cp "${built[0]}" "dist/$name"
+          (cd dist && sha256sum -- "$name")
+          echo "setup_name=$name" >> "$GITHUB_OUTPUT"
+
+      # Authenticode signing of an installer that goes to a release (docs/SIGNING.md), before the
+      # attach job adds its SHA-256 and attests it. It needs all six signing secrets: with none set
+      # it is skipped with a notice, with only some set it is skipped with a warning.
+      - name: Check the signing secrets
+        id: signing
+        if: steps.plan.outputs.release_tag != ''
+        shell: pwsh
+        env:
+          # Whether each secret is set; the values themselves never reach this step.
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_ARTIFACT_SIGNING_PROFILE: ${{ secrets.ARTIFACT_SIGNING_PROFILE != '' }}
+          SETUP: ${{ steps.package.outputs.setup_name }}
+        run: |
+          $names = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE'
+          $missing = @($names | Where-Object { [Environment]::GetEnvironmentVariable("HAS_$_") -ne 'true' })
+          if ($missing.Count -eq $names.Count) {
+            Write-Output '::notice::Authenticode signing is off: no signing secrets are set (docs/SIGNING.md)'
+            exit 0
+          }
+          if ($missing.Count -gt 0) {
+            Write-Output "::warning::Authenticode signing is off: $($missing -join ', ') not set (docs/SIGNING.md)"
+            exit 0
+          }
+          $file = (Resolve-Path "dist/$env:SETUP").Path
+          'enabled=true' | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "files=$file" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # Azure Artifact Signing, formerly Trusted Signing: this action was azure/trusted-signing-action.
+      # Pinned to a commit, and the only step that gets the secrets.
+      - name: Sign the installer
+        if: steps.signing.outputs.enabled == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.signing.outputs.files }}
+          description: Guarana Setup
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+
+      - name: Check the signature
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          FILES: ${{ steps.signing.outputs.files }}
+        run: |
+          foreach ($file in $env:FILES -split ',') {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            Write-Output "$($signature.Status)  $sha  $file"
+            if ($signature.Status -ne 'Valid') { throw "$file is not validly signed: $($signature.StatusMessage)" }
+          }
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: Guarana-Setup
+          path: dist/Guarana-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  attach:
+    name: Attach to the release
+    needs: build
+    if: needs.build.outputs.release_tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      # Build provenance (docs/SIGNING.md): the run's Sigstore certificate and the attestation.
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.build.outputs.release_tag }}
+      SETUP: ${{ needs.build.outputs.setup_name }}
+    steps:
+      - name: Download the installer
+        uses: actions/download-artifact@v7
+        with:
+          name: Guarana-Setup
+          path: dist
+
+      - name: Add its checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The caller may still be publishing the release.
+          for _ in $(seq 1 30); do
+            if gh release view "$TAG" > /dev/null 2>&1; then break; fi
+            sleep 20
+          done
+          gh release view "$TAG" > /dev/null
+          cd dist
+          test -f "$SETUP"
+          if ! gh release download "$TAG" --pattern SHA256SUMS.txt --clobber; then
+            : > SHA256SUMS.txt
+          fi
+          grep -v -F "  $SETUP" SHA256SUMS.txt > SHA256SUMS.new || true
+          sha256sum -- "$SETUP" >> SHA256SUMS.new
+          mv SHA256SUMS.new SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # The installer, and SHA256SUMS.txt now that it lists the installer.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/${{ needs.build.outputs.setup_name }}
+            dist/SHA256SUMS.txt
+
+      - name: Upload it and its checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          gh release upload "$TAG" "$SETUP" SHA256SUMS.txt --clobber

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "repo": "karimalsalah/guarana",
+  "since": "2026-11-13",
+  "as_of": "2026-11-13",
+  "commits": 27,
+  "people": [
+    {
+      "login": "cerroverb",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "danieljesus",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "jpkto",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": null,
+      "name": "Julius Bairaktaris",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "karimalsalah",
+      "name": null,
+      "commits": 16,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "Nanoc6",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "PantACRO4life",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "zortos293",
+      "name": null,
+      "commits": 11,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    }
+  ],
+  "tools": [
+    {
+      "name": "Claude",
+      "commits": 17
+    },
+    {
+      "name": "Capy",
+      "commits": 7
+    }
+  ]
+}

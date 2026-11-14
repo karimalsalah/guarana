@@ -1,0 +1,75 @@
+name: Performance idea
+description: "A hypothesis about where frame time goes, where in the code, and how to measure a fix"
+title: "[Perf] "
+labels: ["perf", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A change ships only with a measured gain on a verified scene, so this form asks how to measure before it asks for the fix. Useful evidence: `frame_times` and `gpu_costs` from the debug server ([docs/nx2/debug-mcp.md](https://github.com/karimalsalah/guarana/blob/main/docs/nx2/debug-mcp.md)), `EDEN_NX2_GPU_PROFILE` or `EDEN_NX2_STUTTER_TRACE` log lines, `EDEN_NX2_PIPELINE_STATS` output, tools/bench rows. Several of the obvious ideas were already measured: check [docs/switches.md](https://github.com/karimalsalah/guarana/blob/main/docs/switches.md) first.
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: What costs the time, and why you think so
+      placeholder: "e.g. Most of the foliage draw's instructions are the run-time global memory search, repeated for every access"
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Where in the code
+      description: Files, functions, and the shader hashes or passes involved
+      placeholder: "e.g. src/shader_recompiler/backend/spirv/spirv_emit_context.cpp; fragment shader 0123456789abcdef"
+    validations:
+      required: true
+
+  - type: textarea
+    id: measure
+    attributes:
+      label: How to measure
+      description: The scene and device, the metric (fps, p99 frame time, one draw's GPU ms, watts), the baseline, and how many paired runs. A tools/bench scene and suite if one fits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: gain
+    attributes:
+      label: Expected gain
+      description: How much, in which scenes and on which GPUs, and what result would show the idea is wrong
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: Graphics card
+      description: The GPU the idea is about
+      options:
+        - Any GPU
+        - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc (Meteor Lake)
+        - Intel Arc (Panther Lake)
+        - Other Intel integrated (Iris Xe, UHD)
+        - AMD Radeon 780M / 760M
+        - AMD Radeon 880M / 890M
+        - AMD Ryzen Z1 / Z2 (handheld)
+        - Other AMD integrated
+        - Intel Arc discrete (A or B series)
+        - NVIDIA
+        - AMD discrete
+        - Other
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence so far
+      description: Optional. Profiles, traces, debug server replies, earlier attempts and their numbers. No game files, dumps or captures.
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk
+      description: Optional. What could render or behave differently, and the default-off EDEN_NX2_* switch that would gate it

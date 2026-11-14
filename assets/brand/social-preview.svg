@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="sp-title sp-desc">
+  <title id="sp-title">Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds</title>
+  <desc id="sp-desc">The Guarana mark beside the project name, a tagline, five feature chips and the repository address.</desc>
+  <style>
+    .sans { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .name { fill: #F4F5F7; font-size: 104px; font-weight: 800; letter-spacing: -2px; }
+    .tag { fill: #C9CED6; font-size: 42px; font-weight: 500; }
+    .chip { fill: #1A1E26; stroke: #2C323D; stroke-width: 2; }
+    .chip-text { fill: #E3E6EB; font-size: 24px; font-weight: 600; }
+    .url { fill: #FFC94A; font-size: 24px; font-weight: 600; }
+    .fine { fill: #8C93A0; font-size: 19px; }
+  </style>
+  <defs>
+    <radialGradient id="sp-glow" cx="230" cy="310" r="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB020" stop-opacity=".20"/>
+      <stop offset="1" stop-color="#FFB020" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sp-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC94A"/>
+      <stop offset="1" stop-color="#F2851A"/>
+    </linearGradient>
+    <mask id="sp-streaks" maskUnits="userSpaceOnUse" x="-8" y="-8" width="100" height="80">
+      <rect x="-8" y="-8" width="100" height="80" fill="#fff"/>
+      <path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
+    </mask>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0F1218"/>
+  <rect width="1280" height="640" fill="url(#sp-glow)"/>
+
+  <!-- Mark at 4x, with two extra fading echo arcs (predicted frames). -->
+  <g transform="translate(93 186) scale(4)">
+    <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#sp-fill)" mask="url(#sp-streaks)"/>
+    <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#3CCF7E"/>
+    <g fill="none" stroke="#F59E0B" stroke-width="3" stroke-linecap="round">
+      <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" stroke-opacity=".6"/>
+      <path d="M60.93 22.98A17 17 0 0 1 60.93 49.02" stroke-opacity=".3"/>
+      <path d="M67.93 22.98A17 17 0 0 1 67.93 49.02" stroke-opacity=".14"/>
+    </g>
+  </g>
+
+  <text class="sans name" x="420" y="232">Guarana</text>
+  <text class="sans tag" x="420" y="302">Switch 2 emulation tuned for</text>
+  <text class="sans tag" x="420" y="354">integrated GPUs and handhelds</text>
+
+  <g class="sans">
+    <rect class="chip" x="420" y="392" width="304" height="44" rx="22"/>
+    <text class="chip-text" x="572" y="422" text-anchor="middle">Intel Arc iGPU first</text>
+    <rect class="chip" x="738" y="392" width="370" height="44" rx="22"/>
+    <text class="chip-text" x="923" y="422" text-anchor="middle">AMD Radeon handhelds next</text>
+    <rect class="chip" x="420" y="452" width="198" height="44" rx="22"/>
+    <text class="chip-text" x="519" y="482" text-anchor="middle">Frame pacing</text>
+    <rect class="chip" x="632" y="452" width="251" height="44" rx="22"/>
+    <text class="chip-text" x="757.5" y="482" text-anchor="middle">Frame generation</text>
+    <rect class="chip" x="897" y="452" width="185" height="44" rx="22"/>
+    <text class="chip-text" x="989.5" y="482" text-anchor="middle">Open source</text>
+  </g>
+
+  <path d="M80 548H1200" stroke="#222731" stroke-width="2"/>
+  <text class="sans url" x="80" y="592">github.com/karimalsalah/guarana</text>
+  <text class="sans fine" x="1200" y="592" text-anchor="end">No keys, firmware or games included &#183; Not affiliated with Nintendo</text>
+</svg>

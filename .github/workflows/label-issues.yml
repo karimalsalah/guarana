@@ -28,6 +28,7 @@ jobs:
 
             const gameLabels = {
               "The Legend of Zelda: Ocarina of Time": "Ocarina of Time",
+              "Ocarina of Time": "Ocarina of Time",
               "Mario Kart World": "Mario Kart",
               "Donkey Kong Bananza": "DKB",
               "Kirby Air Riders": "Kirby Air Riders",

@@ -1,0 +1,201 @@
+name: Device report
+description: "How Guarana runs on your machine: fps, frame times and settings in a known scene"
+title: "[Device] "
+labels: ["device-report", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers from a known scene help more than impressions. `tools/bench` measures a scene the same way on every machine and checks that the game was where you say it was: see [tools/bench/CONTRIBUTING-bench.md](https://github.com/karimalsalah/guarana/blob/main/tools/bench/CONTRIBUTING-bench.md). A careful manual measurement is welcome too: let the scene settle, measure for at least 15 seconds, and measure the build without your changes the same way.
+
+        Do not attach keys, firmware, game files, saves, shader caches, or logs with your user name or folder paths in them.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: My game, keys and firmware are dumped from hardware I own
+          required: true
+        - label: Nothing I attach contains personal data (user name, folder paths, serial numbers)
+          required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Maker and model
+      placeholder: "e.g. ASUS Zenbook S 14 (UX5406), ASUS ROG Ally X, a desktop"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: form_factor
+    attributes:
+      label: Form factor
+      options:
+        - Laptop
+        - Handheld
+        - Mini PC
+        - Desktop
+    validations:
+      required: true
+
+  - type: input
+    id: cpu
+    attributes:
+      label: CPU
+      placeholder: "e.g. Intel Core Ultra 9 285H, AMD Ryzen Z2 Extreme"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: Graphics card
+      description: The GPU the emulator ran on
+      options:
+        - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc (Meteor Lake)
+        - Intel Arc (Panther Lake)
+        - Other Intel integrated (Iris Xe, UHD)
+        - AMD Radeon 780M / 760M
+        - AMD Radeon 880M / 890M
+        - AMD Ryzen Z1 / Z2 (handheld)
+        - Other AMD integrated
+        - Intel Arc discrete (A or B series)
+        - NVIDIA RTX 50 series
+        - NVIDIA RTX 40 series
+        - NVIDIA RTX 30 series or older
+        - AMD RX 9000 series
+        - AMD RX 7000 series
+        - AMD RX 6000 series or older
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: GPU driver
+      description: The full version. Windows, Device Manager > Display adapters > Driver; Linux, the Mesa version.
+      placeholder: "e.g. Intel 32.0.101.xxxx, AMD Adrenalin 25.x.x, Mesa 25.x"
+    validations:
+      required: true
+
+  - type: input
+    id: ram
+    attributes:
+      label: RAM
+      description: Size and type, and the memory reserved for the GPU if you know it
+      placeholder: "e.g. 32 GB LPDDR5X-8400, 512 MB reserved for graphics"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Windows 11 24H2 (26100.xxxx), SteamOS 3.x, Fedora 43"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: power_source
+    attributes:
+      label: Power source
+      options:
+        - Plugged in
+        - On battery
+    validations:
+      required: true
+
+  - type: input
+    id: power_mode
+    attributes:
+      label: Power mode
+      description: The Windows power mode, the maker's performance mode, and the power limit (TDP) if you set one
+      placeholder: "e.g. Best performance, Turbo, 28 W"
+    validations:
+      required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: Emulator build
+      description: The version in Help > About, or the first line of the log
+      placeholder: "e.g. v0.2.0, nightly 2026-11-20 (1a2b3c4), or a pull request's test build"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - Ocarina of Time
+        - Mario Kart World
+        - Donkey Kong Bananza
+        - Fire Emblem
+        - Splatoon Raiders
+        - Pokopia
+        - Hyrule Warriors
+        - Welcome Tour
+        - Other / not listed
+    validations:
+      required: true
+
+  - type: textarea
+    id: scene
+    attributes:
+      label: Scene
+      description: The game's version and title if not listed above, where in the game and how you got there, docked or handheld mode, windowed or fullscreen and the size. The tools/bench scene, if you used one.
+      placeholder: "e.g. Hyrule Field, the tools/bench scene oot-hyrule-field; docked; 1280x720 window"
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings and switches
+      description: Every setting and add-on you changed from the defaults, and every EDEN_NX2_* switch you set (or "none")
+      placeholder: "e.g. Resolution 1x, frame generation off. EDEN_NX2_GM=11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Measured after the scene settled. Average fps, p50 and p99 frame time in ms, how long you measured and with what. Write "see the rows below" if you paste tools/bench rows.
+      placeholder: "e.g. Baseline 14.8 fps, p99 96 ms. With EDEN_NX2_GM=11: 22.8 fps, p99 51 ms. Three 15 s windows each, tools/bench."
+    validations:
+      required: true
+
+  - type: textarea
+    id: bench
+    attributes:
+      label: tools/bench rows
+      description: Optional. The lines of your tools/bench/results/<date>-<machine-id>.jsonl, one JSON object per line. They hold no user names or paths.
+      render: json
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: The scene you measured, so it can be verified. Drag the image here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Background programs, temperatures or throttling, an external display, what you compared with
+
+  - type: input
+    id: credit
+    attributes:
+      label: Credit me as
+      description: Optional. Your GitHub handle, to be named on the Records board of the benchmarks page when your row is the best for its GPU and scene. It must be the account that opens this report. Leave it empty to stay anonymous; nothing else about you is published.
+      placeholder: "e.g. your-github-handle"

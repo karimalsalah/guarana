@@ -1,0 +1,64 @@
+name: nightly
+
+# Builds main once a day when it moved since the last nightly and publishes it as the rolling
+# "nightly" pre-release: release-binaries.yml builds every platform and replaces the previous
+# nightly's files and tag. Scheduled runs use the workflow file on main.
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if main has not changed since the last nightly
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check for changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - name: Compare main with the last nightly
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          last=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2> /dev/null) || last=
+          build=true
+          if [ "$sha" = "$last" ] && [ "$FORCE" != true ]; then
+            build=false
+            echo "main is still at $sha, the commit of the last nightly"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build and publish
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    # A called workflow gets no more than this: contents to publish, id-token and attestations for
+    # the build provenance, and the signing secrets (docs/SIGNING.md).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-binaries.yml
+    secrets: inherit
+    with:
+      channel: nightly
+      ref: ${{ needs.check.outputs.sha }}

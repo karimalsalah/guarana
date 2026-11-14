@@ -1,0 +1,69 @@
+name: Agent task
+description: "A scoped task an AI agent (or a person) can pick up: goal, files, acceptance test, measurement"
+title: "[Task] "
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write it so that someone who has never seen the code can finish it and prove it is done. Triage adds `agent-ready` when the acceptance test names something checkable; agents leave it alone until a maintainer has removed `needs-triage`. Whoever takes it follows [AGENTS.md](https://github.com/karimalsalah/guarana/blob/main/AGENTS.md): experiments behind default-off `EDEN_NX2_*` switches, a row in docs/switches.md for each switch, no game data in the repository.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What is true when the task is done, in one or two sentences
+      placeholder: "e.g. The PR test build's comment also links the Linux build"
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Files, functions or areas to change, and what to read first (docs, upstream pull requests)
+      placeholder: "e.g. .github/workflows/build-check.yml (windows-clang-cl job), .github/workflows/pr-build-comment.yml"
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance test
+      description: A check that fails before the change and passes after it, as a command or an exact result. A unit test in src/tests, a Python test in tools/, a shader sweep, a CI job, or a debug server reply.
+      placeholder: "e.g. build/bin/tests \"[frame_budget]\" passes, and the new test case fails without the fix"
+    validations:
+      required: true
+
+  - type: textarea
+    id: measurement
+    attributes:
+      label: Measurement
+      description: For performance, pacing or memory work, the scene, device, metric, baseline and the gain that counts. Otherwise write "not a performance task".
+    validations:
+      required: true
+
+  - type: dropdown
+    id: verification
+    attributes:
+      label: Verifiable without the game?
+      options:
+        - "Yes: unit tests, the shader sweep or CI are enough"
+        - "No: it needs a device run (debug server, tools/bench)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - Small (one file or function)
+        - Medium (a few files, one subsystem)
+        - Large (split it into smaller tasks first)
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and links
+      description: Optional. Switch names to use, code not to touch, related issues, upstream pull requests

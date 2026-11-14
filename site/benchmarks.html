@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switch 2 Emulator Benchmarks on Intel Arc iGPU | Guarana</title>
+<meta name="description" content="Measured game fps with full context: 14.75 → 22.83 in Ocarina of Time&#x27;s Hyrule Field on Arc 140T (driver 32.0.101.9175). One laptop, one scene, caveats included.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/benchmarks.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Switch 2 Emulator Benchmarks on Intel Arc iGPU | Guarana">
+<meta property="og:description" content="Measured game fps with full context: 14.75 → 22.83 in Ocarina of Time&#x27;s Hyrule Field on Arc 140T (driver 32.0.101.9175). One laptop, one scene, caveats included.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/benchmarks.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Switch 2 Emulator Benchmarks on Intel Arc iGPU | Guarana">
+<meta name="twitter:description" content="Measured game fps with full context: 14.75 → 22.83 in Ocarina of Time&#x27;s Hyrule Field on Arc 140T (driver 32.0.101.9175). One laptop, one scene, caveats included.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#webpage",
+      "url": "https://karimalsalah.github.io/guarana/benchmarks.html",
+      "name": "Switch 2 Emulator Benchmarks on Intel Arc iGPU | Guarana",
+      "description": "Measured game fps with full context: 14.75 → 22.83 in Ocarina of Time's Hyrule Field on Arc 140T (driver 32.0.101.9175). One laptop, one scene, caveats included.",
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://karimalsalah.github.io/guarana/#website"
+      },
+      "dateModified": "2026-11-13",
+      "breadcrumb": {
+        "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#breadcrumb"
+      },
+      "mainEntity": {
+        "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#dataset"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Benchmarks",
+          "item": "https://karimalsalah.github.io/guarana/benchmarks.html"
+        }
+      ]
+    },
+    {
+      "@type": "Dataset",
+      "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#dataset",
+      "name": "Guarana benchmark results",
+      "description": "Game fps measured with Guarana on an Intel Core Ultra 9 285H laptop with Arc 140T (driver 32.0.101.9175): one verified-scene row for the global-memory routing fix in Ocarina of Time's Hyrule Field, plus two play-configuration rows that are not an A/B comparison.",
+      "url": "https://karimalsalah.github.io/guarana/benchmarks.html",
+      "creator": {
+        "@id": "https://karimalsalah.github.io/guarana/#organization"
+      },
+      "dateModified": "2026-11-13",
+      "isAccessibleForFree": true,
+      "variableMeasured": [
+        "Game fps",
+        "Foliage draw GPU time (ms)"
+      ],
+      "measurementTechnique": "Benchmark runs with a scene check against a reference screenshot",
+      "distribution": [
+        {
+          "@type": "DataDownload",
+          "encodingFormat": "application/json",
+          "contentUrl": "https://karimalsalah.github.io/guarana/data/benchmarks.json"
+        }
+      ]
+    },
+    {
+      "@type": "Dataset",
+      "@id": "https://karimalsalah.github.io/guarana/benchmarks.html#community-dataset",
+      "name": "Guarana community device reports",
+      "description": "Game fps, frame times, device, GPU, driver, build and settings that testers reported through the device-report issue form, one record per issue. Records from a tools/bench row whose scene check passed have scene_ok true. Not measured by the maintainers.",
+      "url": "https://karimalsalah.github.io/guarana/benchmarks.html#community",
+      "isAccessibleForFree": true,
+      "variableMeasured": [
+        "Game fps",
+        "Frame time p50 (ms)",
+        "Frame time p99 (ms)"
+      ],
+      "distribution": [
+        {
+          "@type": "DataDownload",
+          "encodingFormat": "application/json",
+          "contentUrl": "https://karimalsalah.github.io/guarana/data/community.json"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<style>
+/* Community leaderboard (rendered by the script at the end of the page). */
+.lb-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; margin: 20px 0 8px; }
+.lb-filters label { display: grid; gap: 4px; color: var(--text-2); font-size: 0.875rem; font-weight: 600; }
+.lb-filters select { min-height: 40px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 0.9375rem; }
+.lb-filters .lb-check { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+.lb-filters input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.lb-count { margin: 8px 0 0; color: var(--muted); font-size: 0.9375rem; }
+.lb-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.lb-sort::after { content: "\2195"; opacity: 0.45; }
+th[aria-sort="ascending"] .lb-sort::after { content: "\2191"; opacity: 1; }
+th[aria-sort="descending"] .lb-sort::after { content: "\2193"; opacity: 1; }
+.lb-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 0.8125rem; }
+.lb-table td.num .badge { margin-top: 6px; }
+@media (max-width: 759.98px) { .lb-table td.num .badge { margin-top: 2px; } }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="devices/">Devices</a></li>
+        <li><a href="benchmarks.html" aria-current="page">Benchmarks</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="./">Home</a></li><li><span aria-current="page">Benchmarks</span></li></ol></nav>
+  <h1>Benchmarks</h1>
+  <p class="lede">What we measured, on what, and what it does not prove. Every row the maintainers measured so far comes from one laptop: Intel Core Ultra 9 285H with Arc 140T, Intel driver 32.0.101.9175, Windows 11. Testers' reports from other machines are in the <a href="#community">community leaderboard</a>.</p>
+</div>
+<div class="wrap">
+<section class="section" aria-labelledby="headline">
+  <h2 id="headline">Headline result</h2>
+  <div class="stat-row">
+    <div class="stat stat-hero">
+      <p class="stat-label">Game fps, Hyrule Field, fix on</p>
+      <p class="stat-value">22.83</p>
+      <p class="stat-from">14.75 with the fix off, same scene, frame generation off</p>
+    </div>
+    <div class="stat">
+      <p class="stat-label">Foliage draw, GPU time</p>
+      <p class="stat-value">5.8<span class="stat-unit">ms</span></p>
+      <p class="stat-from">15.7 ms with the fix off</p>
+    </div>
+  </div>
+  <h3>How to read these numbers</h3>
+  <ul>
+    <li><strong>Game fps</strong> is how many frames the game itself renders each second. Frames made by frame generation never count.</li>
+    <li><strong>Verified scene</strong> means the run's scene check passed: the benchmark confirmed the game was where it claims before counting frames. A run in the wrong place is not a result, whatever its fps.</li>
+    <li><strong>One laptop, one scene.</strong> Other games, scenes, drivers, power limits and machines will give other numbers.</li>
+  </ul>
+</section>
+<div id="bench-app" data-src="data/benchmarks.json">
+<section class="bench-group" aria-labelledby="group-verified">
+  <h2 id="group-verified">Verified scene</h2>
+  <p class="section-intro">The run&#x27;s scene check passed: the benchmark confirmed the game was at the scene it claims before counting frames. The fix was measured off and on in the same scene.</p>
+  <div class="table-wrap">
+    <table class="stack">
+      <caption class="visually-hidden">Verified scene</caption>
+      <thead><tr><th scope="col">Machine</th><th scope="col">Driver</th><th scope="col">Game and scene</th><th scope="col">Build or change</th><th scope="col">Frame generation</th><th scope="col" class="num">Game fps</th><th scope="col">Notes</th></tr></thead>
+      <tbody>
+        <tr id="arc140t-oot-hyrule-field-gm11"><td data-label="Machine">Intel Core Ultra 9 285H · Intel Arc 140T</td><td data-label="Driver">32.0.101.9175</td><td data-label="Game and scene">The Legend of Zelda: Ocarina of Time, Hyrule Field</td><td data-label="Build or change">EDEN_NX2_GM=11 (global-memory routing fix)</td><td data-label="Frame generation">Off</td><td data-label="Game fps" class="num">14.75 → 22.83</td><td data-label="Notes">Foliage draw (GPU time): 15.7 → 5.8 ms. One laptop, one scene. Other games, scenes, drivers and machines may differ.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section class="bench-group" aria-labelledby="group-play-config">
+  <h2 id="group-play-config">Play configuration (not an A/B)</h2>
+  <p class="section-intro">How the builds play with the settings a player would use, frame generation on. The two rows were measured at different spots, so they are not a comparison of the builds.</p>
+  <div class="table-wrap">
+    <table class="stack">
+      <caption class="visually-hidden">Play configuration (not an A/B)</caption>
+      <thead><tr><th scope="col">Machine</th><th scope="col">Driver</th><th scope="col">Game and scene</th><th scope="col">Build or change</th><th scope="col">Frame generation</th><th scope="col" class="num">Game fps</th><th scope="col">Notes</th></tr></thead>
+      <tbody>
+        <tr id="arc140t-oot-play-previous"><td data-label="Machine">Intel Core Ultra 9 285H · Intel Arc 140T</td><td data-label="Driver">32.0.101.9175</td><td data-label="Game and scene">The Legend of Zelda: Ocarina of Time, gameplay, a different spot from the v20 row</td><td data-label="Build or change">Previous build</td><td data-label="Frame generation">On</td><td data-label="Game fps" class="num">19.6</td><td data-label="Notes">Not the same spot as the v20 row: not an A/B.</td></tr>
+        <tr id="arc140t-oot-play-v20"><td data-label="Machine">Intel Core Ultra 9 285H · Intel Arc 140T</td><td data-label="Driver">32.0.101.9175</td><td data-label="Game and scene">The Legend of Zelda: Ocarina of Time, gameplay, a different spot from the previous-build row</td><td data-label="Build or change">v20</td><td data-label="Frame generation">On</td><td data-label="Game fps" class="num">~26.7</td><td data-label="Notes">Approximate. Not the same spot as the previous-build row: not an A/B.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<p class="fine">Static copy of <a href="data/benchmarks.json">data/benchmarks.json</a> (updated 2026-11-13).</p>
+</div>
+<section class="section" id="records" aria-labelledby="records-title">
+  <h2 id="records-title">Records</h2>
+  <p class="section-intro">The best result for each GPU class and scene: the highest game fps among the reports whose <code>tools/bench</code> row is valid and passed its scene check. A name is shown only when the tester asked for it in the report form ("Credit me as"). Think you can do better? Send a report with a higher number on the same scene.</p>
+  <div id="records-app" data-src="data/community.json" data-form="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml" data-issues="https://github.com/karimalsalah/guarana/issues/">
+    <p class="fine">The records load from <a href="data/community.json">data/community.json</a>.</p>
+    <noscript><p class="fine">They need JavaScript to show; the records are the <code>records</code> list in the data file.</p></noscript>
+  </div>
+</section>
+<section class="section" id="community" aria-labelledby="community-title">
+  <h2 id="community-title">Community leaderboard</h2>
+  <p class="section-intro">One row per <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20label%3Adevice-report">device report</a>, as the tester reported it, once a maintainer merged it. <strong>Verified scene</strong> marks numbers from a <code>tools/bench</code> row whose scene check passed against the tester's reference screenshot; the other rows are the tester's own measurement. The maintainers did not measure these, and builds, settings and scenes differ from row to row.</p>
+  <div id="community-app" data-src="data/community.json" data-issues="https://github.com/karimalsalah/guarana/issues/">
+    <p class="fine">The leaderboard loads from <a href="data/community.json">data/community.json</a>.</p>
+    <noscript><p class="fine">It needs JavaScript to show; every row is in the data file.</p></noscript>
+  </div>
+</section>
+<section class="section" aria-labelledby="others">
+  <h2 id="others">Reports from others</h2>
+  <p class="section-intro">Third-party numbers, on other builds. We list them because they help people with these GPUs, not as benchmarks of Guarana.</p>
+  <div class="table-wrap">
+    <table class="stack">
+      <caption class="visually-hidden">Third-party reports</caption>
+      <thead><tr><th scope="col">GPU</th><th scope="col">Reported</th><th scope="col">Where</th><th scope="col">Verified by us</th></tr></thead>
+      <tbody>
+        <tr><td data-label="GPU"><a href="devices/radeon-890m.html">AMD Radeon 890M class</a>, on a <a href="devices/rog-xbox-ally-x.html">ROG Xbox Ally X</a></td><td data-label="Reported">About 30 fps in Ocarina of Time</td><td data-label="Where"><a href="https://github.com/zortos293/Lichii/issues/1433">Lichii issue #1433</a> (upstream tracker)</td><td data-label="Verified by us">No</td></tr>
+        <tr><td data-label="GPU"><a href="devices/arc-140v.html">Intel Arc 140V</a></td><td data-label="Reported">22&ndash;24 fps during gameplay</td><td data-label="Where">AlfaDev23's community build</td><td data-label="Verified by us">No</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section class="section prose" aria-labelledby="method">
+  <h2 id="method">How new results are measured</h2>
+  <p>New rows come from the benchmark harness in <a href="https://github.com/karimalsalah/guarana/tree/HEAD/tools/bench"><code>tools/bench</code></a>. It runs one game scene the same way on any machine and writes one JSON row per run: it drives the emulator through its debug server, restores the same save for every run, plays the scene's timed inputs, checks the scene against your reference screenshot and refuses to count a run in the wrong place. It needs Python 3.9 or newer and nothing else.</p>
+  <p>Baseline and change run back to back on the same machine, at least two windows each. A change that doesn't beat run-to-run spread is not a gain.</p>
+</section>
+<section class="section" aria-labelledby="add">
+  <div class="cta-box">
+    <h2 id="add">Add your numbers</h2>
+    <p>Run the harness with <a href="https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/CONTRIBUTING-bench.md">the benchmark contribution guide</a>, or send a quick <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> with your game fps. Untested devices need it most. A bot reads the report, comments the row it would add or what is missing, and the row joins the <a href="#community">community leaderboard</a> once a maintainer merges it.</p>
+    <p><a class="btn" href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Send a device report</a></p>
+  </div>
+</section>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+        <li><a href="https://discord.gg/urz7vMdRM">Discord: discord.gg/urz7vMdRM</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="devices/">Devices</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contribute.html">Contribute</a></li>
+        <li><a href="blog/">Blog</a></li>
+        <li><a href="agents.html">Agents</a></li>
+        <li><a href="wins.html">Open wins</a></li>
+        <li><a href="legacy.html">Hall of fame</a></li>
+        <li><a href="legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="llms.txt">llms.txt</a></li>
+        <li><a href="llms-full.txt">llms-full.txt</a></li>
+        <li><a href="sitemap.xml">sitemap.xml</a></li>
+        <li><a href="data/benchmarks.json">benchmarks.json</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+<script src="assets/bench.js" defer></script>
+<script>
+/* Community leaderboard: renders data/community.json, which tools/ingest/ingest.py writes from the
+   device-report issues, into #community-app. Data reaches the page as text only, and report links
+   are built from the issue number. Without JavaScript the data file is linked instead. */
+(function () {
+  "use strict";
+  var app = document.getElementById("community-app");
+  if (!app || !window.fetch || !Array.prototype.forEach || !Object.keys) return;
+  var issueBase = app.getAttribute("data-issues");
+  var dataUrl = app.getAttribute("data-src");
+  var VENDORS = [["", "All"], ["intel", "Intel"], ["amd", "AMD"], ["nvidia", "NVIDIA"], ["other", "Other"]];
+  var FORMS = ["Laptop", "Handheld", "Mini PC", "Desktop"];
+  var SORTS = [
+    ["fps:desc", "Game fps, high to low"], ["fps:asc", "Game fps, low to high"],
+    ["p99:asc", "p99 frame time, low to high"], ["p99:desc", "p99 frame time, high to low"],
+    ["submitted:desc", "Newest report"], ["submitted:asc", "Oldest report"],
+    ["device:asc", "Device, A to Z"], ["device:desc", "Device, Z to A"]
+  ];
+  var FIRST_DIRECTION = { fps: "desc", p99: "asc", submitted: "desc", device: "asc" };
+  var state = { vendor: "", form: "", game: "", verified: false, key: "fps", dir: "desc" };
+  var records = [];
+  var ui = { heads: {} };
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+      }
+    }
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function svg(tag, attrs) {
+    var node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var key in attrs) {
+      if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+    }
+    return node;
+  }
+
+  function str(value) { return typeof value === "string" ? value : ""; }
+  function num(value) { return typeof value === "number" && isFinite(value) ? value : null; }
+  function fmt(value) { return String(Math.round(value * 100) / 100); }
+  function strings(list) {
+    return Array.isArray(list) ? list.filter(function (item) { return typeof item === "string" && item; }) : [];
+  }
+
+  function fpsText(r) {
+    var fps = num(r.fps);
+    if (fps === null) return "n/a";
+    var text = (r.fps_approximate === true ? "~" : "") + fmt(fps);
+    var base = r.baseline && typeof r.baseline === "object" ? num(r.baseline.fps) : null;
+    return base === null ? text : fmt(base) + " → " + text;
+  }
+
+  function timesText(r) {
+    var p50 = num(r.p50_ms), p99 = num(r.p99_ms);
+    if (p50 === null && p99 === null) return "n/a";
+    return (p50 === null ? "–" : fmt(p50)) + " / " + (p99 === null ? "–" : fmt(p99)) + " ms";
+  }
+
+  function verifiedBadge() {
+    var badge = el("span", { "class": "badge badge-tested" });
+    var icon = svg("svg", { viewBox: "0 0 16 16", "aria-hidden": "true", focusable: "false" });
+    icon.appendChild(svg("circle", { cx: "8", cy: "8", r: "6.8", fill: "none", stroke: "currentColor", "stroke-width": "1.6" }));
+    icon.appendChild(svg("path", { d: "M4.9 8.3l2.1 2.1 4.2-4.5", fill: "none", stroke: "currentColor", "stroke-width": "1.8",
+                                   "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    badge.appendChild(icon);
+    badge.appendChild(document.createTextNode("Verified scene"));
+    return badge;
+  }
+
+  function cell(label, main, sub, cls) {
+    var td = el("td", { "data-label": label });
+    if (cls) td.className = cls;
+    td.appendChild(document.createTextNode(main));
+    if (sub) td.appendChild(el("span", { "class": "lb-sub" }, sub));
+    return td;
+  }
+
+  function row(r) {
+    var tr = el("tr");
+    tr.appendChild(cell("Device", str(r.device) || "n/a", str(r.form_factor)));
+    tr.appendChild(cell("GPU and driver", str(r.gpu) || "n/a", str(r.driver) ? "Driver " + str(r.driver) : ""));
+    tr.appendChild(cell("Game and scene", str(r.game) || "n/a", str(r.scene)));
+    var settings = strings(r.switches).join(", ");
+    if (r.frame_generation === "on" || r.frame_generation === "off") {
+      settings += (settings ? "; " : "") + "frame generation " + r.frame_generation;
+    }
+    tr.appendChild(cell("Build and settings", str(r.build) || "n/a", settings));
+    var fps = cell("Game fps", fpsText(r), "", "num");
+    if (r.scene_ok === true) {
+      fps.appendChild(el("br"));
+      fps.appendChild(verifiedBadge());
+    }
+    tr.appendChild(fps);
+    tr.appendChild(cell("p50 / p99", timesText(r), "", "num"));
+    var report = el("td", { "data-label": "Report" });
+    var number = Number(r.issue);
+    if (number > 0 && Math.floor(number) === number) report.appendChild(el("a", { href: issueBase + number }, "#" + number));
+    var details = [str(r.submitted), r.source === "tools/bench" ? "tools/bench" : "own measurement"].concat(strings(r.notes));
+    report.appendChild(el("span", { "class": "lb-sub" }, details.filter(Boolean).join(" · ")));
+    tr.appendChild(report);
+    return tr;
+  }
+
+  function sortValue(r, key) {
+    if (key === "fps") return num(r.fps);
+    if (key === "p99") return num(r.p99_ms);
+    if (key === "submitted") return str(r.submitted) || null;
+    return str(r.device).toLowerCase() || null;
+  }
+
+  function compare(a, b) {
+    var x = sortValue(a, state.key), y = sortValue(b, state.key);
+    var tie = (Number(a.issue) || 0) - (Number(b.issue) || 0);
+    if (x === null || y === null) return x === y ? tie : (x === null ? 1 : -1);  /* unknown values last */
+    var order = x < y ? -1 : (x > y ? 1 : 0);
+    return (state.dir === "desc" ? -order : order) || tie;
+  }
+
+  function shown(r) {
+    return (!state.vendor || r.gpu_vendor === state.vendor) && (!state.form || r.form_factor === state.form) &&
+      (!state.game || r.game === state.game) && (!state.verified || r.scene_ok === true);
+  }
+
+  function render() {
+    var rows = records.filter(shown).sort(compare);
+    while (ui.body.firstChild) ui.body.removeChild(ui.body.firstChild);
+    rows.forEach(function (r) { ui.body.appendChild(row(r)); });
+    ui.table.hidden = rows.length === 0;
+    ui.none.hidden = rows.length !== 0;
+    ui.count.textContent = "Showing " + rows.length + " of " + records.length + (records.length === 1 ? " report." : " reports.");
+    Object.keys(ui.heads).forEach(function (key) {
+      if (key === state.key) ui.heads[key].setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
+      else ui.heads[key].removeAttribute("aria-sort");
+    });
+    ui.sort.value = state.key + ":" + state.dir;
+  }
+
+  function picker(id, label, options, onChange) {
+    var wrap = el("label", { "for": id });
+    wrap.appendChild(document.createTextNode(label));
+    var select = el("select", { id: id });
+    options.forEach(function (option) { select.appendChild(el("option", { value: option[0] }, option[1])); });
+    select.addEventListener("change", function () { onChange(select.value); render(); });
+    wrap.appendChild(select);
+    return { wrap: wrap, select: select };
+  }
+
+  function dataLink(before, after) {
+    var p = el("p", { "class": "fine" });
+    p.appendChild(document.createTextNode(before));
+    p.appendChild(el("a", { href: dataUrl }, "data/community.json"));
+    p.appendChild(document.createTextNode(after));
+    return p;
+  }
+
+  function show(frag) {
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(frag);
+    app.setAttribute("data-rendered", "client");
+  }
+
+  function build(data) {
+    var frag = document.createDocumentFragment();
+    var updated = /^\d{4}-\d\d-\d\d$/.test(str(data.updated)) ? " (updated " + data.updated + ")." : ".";
+    if (!records.length) {
+      var first = el("p");
+      first.appendChild(document.createTextNode("No community reports yet. "));
+      first.appendChild(el("a", { href: "https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml" },
+                           "Send the first device report"));
+      first.appendChild(document.createTextNode(": a bot checks it and comments the row it would add."));
+      frag.appendChild(first);
+      frag.appendChild(dataLink("Rendered from ", updated));
+      show(frag);
+      return;
+    }
+    var games = [];
+    records.forEach(function (r) { if (str(r.game) && games.indexOf(r.game) < 0) games.push(r.game); });
+    games.sort();
+    var bar = el("div", { "class": "lb-filters", role: "group", "aria-label": "Filter and sort the leaderboard" });
+    var pickers = [
+      picker("lb-vendor", "GPU vendor", VENDORS, function (value) { state.vendor = value; }),
+      picker("lb-form", "Form factor", [["", "All"]].concat(FORMS.map(function (f) { return [f, f]; })),
+             function (value) { state.form = value; }),
+      picker("lb-game", "Game", [["", "All"]].concat(games.map(function (g) { return [g, g]; })),
+             function (value) { state.game = value; }),
+      picker("lb-sort", "Sort by", SORTS, function (value) {
+        var parts = value.split(":");
+        state.key = parts[0];
+        state.dir = parts[1];
+      })
+    ];
+    pickers.forEach(function (p) { bar.appendChild(p.wrap); });
+    ui.sort = pickers[3].select;
+    var check = el("label", { "class": "lb-check" });
+    var box = el("input", { type: "checkbox", id: "lb-verified" });
+    box.addEventListener("change", function () { state.verified = box.checked; render(); });
+    check.appendChild(box);
+    check.appendChild(document.createTextNode("Verified scene only"));
+    bar.appendChild(check);
+    frag.appendChild(bar);
+    ui.count = el("p", { "class": "lb-count", "aria-live": "polite" });
+    frag.appendChild(ui.count);
+
+    ui.table = el("div", { "class": "table-wrap" });
+    var table = el("table", { "class": "stack lb-table" });
+    table.appendChild(el("caption", { "class": "visually-hidden" }, "Community leaderboard"));
+    var head = el("tr");
+    [["Device", "device"], ["GPU and driver"], ["Game and scene"], ["Build and settings"],
+     ["Game fps", "fps", "num"], ["Frame time p50 / p99", "p99", "num"], ["Report", "submitted"]].forEach(function (column) {
+      var th = el("th", { scope: "col" });
+      if (column[2]) th.className = column[2];
+      if (column[1]) {
+        var button = el("button", { type: "button", "class": "lb-sort" }, column[0]);
+        button.addEventListener("click", function () {
+          if (state.key === column[1]) state.dir = state.dir === "asc" ? "desc" : "asc";
+          else { state.key = column[1]; state.dir = FIRST_DIRECTION[column[1]]; }
+          render();
+        });
+        th.appendChild(button);
+        ui.heads[column[1]] = th;
+      } else {
+        th.textContent = column[0];
+      }
+      head.appendChild(th);
+    });
+    var thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    ui.body = el("tbody");
+    table.appendChild(ui.body);
+    ui.table.appendChild(table);
+    frag.appendChild(ui.table);
+    ui.none = el("p", { "class": "fine" }, "No report matches these filters.");
+    frag.appendChild(ui.none);
+    frag.appendChild(dataLink("Rendered from ", updated));
+    show(frag);
+    render();
+  }
+
+  fetch(dataUrl, { cache: "no-cache" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      var reports = data && data.reports && typeof data.reports === "object" ? data.reports : {};
+      records = Object.keys(reports).map(function (key) { return reports[key]; })
+        .filter(function (r) { return r && typeof r === "object"; });
+      build(data || {});
+    })
+    .catch(function () {
+      var frag = document.createDocumentFragment();
+      frag.appendChild(dataLink("The leaderboard could not be loaded here. Every row is in ", "."));
+      show(frag);
+    });
+})();
+</script>
+<script>
+/* Records board: renders the "records" list of data/community.json (tools/ingest/ingest.py picks the
+   best validated row per GPU class and scene) into #records-app. Data reaches the page as text only;
+   a handle becomes a link only when it looks like a GitHub login, and report links are built from the
+   issue number. */
+(function () {
+  "use strict";
+  var app = document.getElementById("records-app");
+  if (!app || !window.fetch || !Array.prototype.forEach) return;
+  var formUrl = app.getAttribute("data-form");
+  var issueBase = app.getAttribute("data-issues");
+  var dataUrl = app.getAttribute("data-src");
+  var LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, attrs[key]);
+      }
+    }
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function str(value) { return typeof value === "string" ? value : ""; }
+  function num(value) { return typeof value === "number" && isFinite(value) ? value : null; }
+  function fmt(value) { return String(Math.round(value * 100) / 100); }
+
+  function cell(label, main, sub, cls) {
+    var td = el("td", { "data-label": label });
+    if (cls) td.className = cls;
+    td.appendChild(document.createTextNode(main));
+    if (sub) td.appendChild(el("span", { "class": "lb-sub" }, sub));
+    return td;
+  }
+
+  function beatIt(r) {
+    var td = el("td", { "data-label": "Beat it" });
+    var label = "Beat it: " + (str(r.gpu) || "this GPU class") + ", " + (str(r.scene) || "this scene");
+    td.appendChild(el("a", { "class": "btn btn-small", href: formUrl, "aria-label": label }, "Beat it"));
+    return td;
+  }
+
+  function row(r) {
+    var tr = el("tr");
+    tr.appendChild(cell("GPU class", str(r.gpu) || "n/a", ""));
+    tr.appendChild(cell("Game and scene", str(r.game) || "n/a", str(r.scene)));
+    var fps = num(r.fps), p99 = num(r.p99_ms);
+    tr.appendChild(cell("Record", fps === null ? "n/a" : fmt(fps) + " fps", p99 === null ? "" : "p99 " + fmt(p99) + " ms", "num"));
+    var holder = el("td", { "data-label": "Held by" });
+    var handle = str(r.credit);
+    if (LOGIN.test(handle)) holder.appendChild(el("a", { href: "https://github.com/" + handle }, "@" + handle));
+    else holder.appendChild(document.createTextNode("Anonymous"));
+    var detail = [str(r.device), str(r.driver) ? "driver " + str(r.driver) : "", str(r.measured)].filter(Boolean).join(" · ");
+    if (detail) holder.appendChild(el("span", { "class": "lb-sub" }, detail));
+    tr.appendChild(holder);
+    var report = el("td", { "data-label": "Report" });
+    var number = Number(r.issue);
+    if (number > 0 && Math.floor(number) === number) report.appendChild(el("a", { href: issueBase + number }, "#" + number));
+    tr.appendChild(report);
+    tr.appendChild(beatIt(r));
+    return tr;
+  }
+
+  function show(node) {
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(node);
+    app.setAttribute("data-rendered", "client");
+  }
+
+  function empty() {
+    var box = document.createDocumentFragment();
+    box.appendChild(el("p", null, "No record yet: the first verified-scene report sets it."));
+    var p = el("p");
+    p.appendChild(el("a", { "class": "btn", href: formUrl }, "Set the first record"));
+    box.appendChild(p);
+    show(box);
+  }
+
+  function build(list) {
+    var box = document.createDocumentFragment();
+    var wrap = el("div", { "class": "table-wrap" });
+    var table = el("table", { "class": "stack lb-table" });
+    table.appendChild(el("caption", { "class": "visually-hidden" }, "Records per GPU class and scene"));
+    var head = el("tr");
+    ["GPU class", "Game and scene", "Record", "Held by", "Report", "Beat it"].forEach(function (name) {
+      var th = el("th", { scope: "col" }, name);
+      if (name === "Record") th.className = "num";
+      head.appendChild(th);
+    });
+    var thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    var body = el("tbody");
+    list.forEach(function (r) { body.appendChild(row(r)); });
+    table.appendChild(body);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+    show(box);
+  }
+
+  fetch(dataUrl, { cache: "no-cache" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      var list = data && Array.isArray(data.records) ? data.records.filter(function (r) { return r && typeof r === "object"; }) : [];
+      if (list.length) build(list); else empty();
+    })
+    .catch(function () {
+      var p = el("p", { "class": "fine" });
+      p.appendChild(document.createTextNode("The records could not be loaded here. They are in "));
+      p.appendChild(el("a", { href: dataUrl }, "data/community.json"));
+      p.appendChild(document.createTextNode("."));
+      show(p);
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Favicon: the mark without its echo arc, on a dark tile so it reads on light and dark tab bars.
+       Streak gaps are wider than in logo-mark.svg so they survive at 16 px. -->
+  <defs>
+    <linearGradient id="fav-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC94A"/>
+      <stop offset="1" stop-color="#F2851A"/>
+    </linearGradient>
+    <mask id="fav-streaks" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80">
+      <rect x="-8" y="-8" width="80" height="80" fill="#fff"/>
+      <path d="M-4 28.8H29.5M-4 43.2H29.5" stroke="#000" stroke-width="4.4" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#14171D"/>
+  <g transform="translate(3.5 1)">
+    <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#fav-fill)" mask="url(#fav-streaks)"/>
+    <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#3CCF7E"/>
+  </g>
+</svg>
