@@ -35,6 +35,13 @@ Without an issue number:
 Read AGENTS.md, then list the open agent-ready issues without needs-triage and nobody assigned, pick the smallest one, say you are taking it, and fix it.
 ```
 
+"Say you are taking it" means a `/claim` comment on the issue
+([docs/agents/README.md](agents/README.md#2-claim-it)). From a terminal, use the form that works
+in every shell: `echo /claim | gh issue comment <n> -R karimalsalah/guarana --body-file -`. An
+agent in Git Bash on Windows that runs `gh issue comment <n> --body "/claim"` posts
+a path such as `.../Program Files/Git/claim` instead, because Git Bash rewrites an argument that starts with a
+slash; `MSYS_NO_PATHCONV=1` in front of the command stops that.
+
 ## One command per tool
 
 Install steps and flags change; the linked official pages are the authority. The commands here were

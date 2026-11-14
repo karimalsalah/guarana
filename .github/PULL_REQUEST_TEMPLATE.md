@@ -1,3 +1,6 @@
+<!-- First pull request here? A section that does not apply gets one line ("Not a performance change",
+     "None", "Not applicable"). You do not need a compiler: CI builds and tests code changes. -->
+
 ## What and why
 
 <!-- What changes, and the problem it solves. Link the issue: "Closes #123". -->
@@ -33,7 +36,8 @@
 - [ ] No keys, firmware, game files or assets, dumps, shader caches, saves, or logs with personal paths
 - [ ] New behaviour that has no verified gain yet is behind an `EDEN_NX2_*` switch that is off by default
 - [ ] `docs/switches.md` is updated for every switch added, changed or removed
-- [ ] Tests added or updated, and they pass (`-DLICHII_TESTS=ON`, `ctest`; the Python tests for tools)
+- [ ] Tests added or updated, and they pass (`-DLICHII_TESTS=ON`, `ctest`; the Python tests for tools), or CI ran them because I cannot build here
 - [ ] Commit subjects are `area: change` in the imperative; measured numbers are in the commit body
+- [ ] Commits an AI tool helped write carry an `Assisted-by: <tool>` trailer (docs/AI_POLICY.md)
 - [ ] `CHANGELOG.md` has an entry under `[Unreleased]`
 - [ ] Upstream checked (see above)

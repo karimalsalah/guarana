@@ -14,6 +14,9 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 - `EDEN_NX2_GPL_OPTIMIZE_CACHED=1` (experiment, off by default): with `EDEN_NX2_GPL=1`, pipelines loaded from the shader cache get the optimized link in the background at their first draw, as pipelines built during play do, instead of drawing fast-linked until they are evicted and rebuilt (issue #103). The `Nx2Perf gpl` line now counts fast-linked draws with no optimized link coming and the links queued at a first draw. Not measured; plan in [docs/switches.md](docs/switches.md).
 - `tools/bench/suites/presenter-and-locks.json`: one command measures the default-off pacing, pipeline link, lock and thread placement switches (`EDEN_NX2_PRESENT_SPIN`, `EDEN_NX2_GPL_OPTIMIZE_CACHED`, `EDEN_NX2_SCHED_PAUSE`, `EDEN_NX2_SYNCPOINT_SPLIT`, `EDEN_NX2_HYBRID`, `EDEN_NX2_IDLE_SPIN_US=0`) against the baseline, fullscreen with the pacing counters, in the Kokiri Forest scene or any scene given with `--scene`.
+- Welcome: a person's first merged pull request and first device report get one thank-you comment with one next step ([welcome.yml](.github/workflows/welcome.yml)).
+- Agent kit: [docs/agents/README.md](docs/agents/README.md#what-costs-nothing-today) lists the agent tiers that cost nothing today, with the vendors' stated limits.
+- Pull request template: a note for a first pull request, a tests item for contributors who cannot build (CI runs the tests), and an `Assisted-by:` trailer item; CONTRIBUTING.md says why a first-time contributor's checks may wait for approval.
 
 ### Fixed
 
@@ -29,6 +32,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Shader precache markers no longer say "built" for pipelines the driver's cache file does not hold ([#106](https://github.com/karimalsalah/guarana/issues/106)): the lists of precached graphics pipelines carry the build variant (the precache marker's variant, which holds the SPIR-V emission stamp, the resolution scale and the loop safety, bloom and debug settings, plus the `EDEN_NX2_*` switches known to change the SPIR-V or the cached link), the lists and `warm-compute.done` are written only after a save of the driver cache succeeded (on Intel's Windows driver the precache is now saved on the loading screen instead of only at exit), and they are removed when that file is missing, empty or deleted at load. Not measured.
 - The build check can pass again: two steps that came from upstream looked for `eden-cli` and `lichii.exe`, which this fork builds as `guarana-cli` and `guarana.exe` (the GPU trace replay on Linux, the version resource check on Windows). The macOS release build no longer stops at a parameter in `core.cpp` that shadows a field.
 - The switch registry check no longer breaks after an upstream merge: CI reads upstream's switch names from upstream itself (the mirror branch had stopped following, because `upstream-sync` cannot push upstream's workflow changes without the `UPSTREAM_SYNC_TOKEN` secret), and the checked-in upstream list is regenerated from upstream `fec99576`, which adds `EDEN_NX2_TC_TRACE`.
+- Claims from Git Bash: a `/claim` that Git Bash rewrote into a Windows path now gets a one-line reply on how to claim; the docs give `echo /claim | gh issue comment <n> -R karimalsalah/guarana --body-file -`.
 
 ## [20.3.0] - 2026-11-14
 
