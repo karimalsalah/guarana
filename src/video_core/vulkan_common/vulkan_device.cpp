@@ -135,6 +135,9 @@ constexpr std::array B10G11R11_UFLOAT_PACK32{
 
 } // namespace Alternatives
 
+// VK_ENABLE_BETA_EXTENSIONS is not defined, so vulkan_core.h leaves this value out.
+constexpr auto PORTABILITY_SUBSET_FEATURES_STYPE = static_cast<VkStructureType>(1000163000);
+
 template <typename T>
 void SetNext(void**& next, T& data) {
     *next = &data;
@@ -1585,6 +1588,11 @@ bool Device::GetSuitability(bool requires_swapchain) {
         performance_query_requested = false;
     }
 
+    // The spec requires enabling VK_KHR_portability_subset on devices that expose it.
+    if (supported_extensions.contains(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+        loaded_extensions.insert(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    }
+
     extensions.depth_stencil_resolve =
         extensions.depth_stencil_resolve &&
         (instance_version >= VK_API_VERSION_1_2 || extensions.create_renderpass2);
@@ -1728,6 +1736,12 @@ bool Device::GetSuitability(bool requires_swapchain) {
         performance_query_features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR;
         SetNext(next, performance_query_features);
+    }
+
+    // The features the driver reports are enabled through the same chain at device creation.
+    if (loaded_extensions.contains(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+        portability_subset_features.sType = PORTABILITY_SUBSET_FEATURES_STYPE;
+        SetNext(next, portability_subset_features);
     }
 
     // Perform the feature test.
