@@ -1254,6 +1254,16 @@ bool BootAsyncRequested() {
     return requested;
 }
 
+/// EDEN_NX2_CACHE_MMAP=1: the boot load maps the shader cache log instead of copying it, and
+/// decodes its Program records on the shader job workers
+bool CacheMapRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_CACHE_MMAP");
+        return value != nullptr && value[0] == '1';
+    }();
+    return requested;
+}
+
 /// Why a draw or dispatch built its pipeline at run time
 enum class RuntimeBuild : size_t {
     Recorded, ///< Graphics, recorded on disk but not built at boot: translated from live state
@@ -1685,12 +1695,20 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     Common::BootTiming::Mark("shaders: reading the shader cache log");
     // Without the lock: another emulator's appends are complete records or a cut-off tail.
     // The payload hashes are checked on the shader job workers.
-    auto log_v2 = std::make_shared<CacheV2::LogFile>(CacheV2::ReadLogFile(
-        pipeline_cache_filename, [this](size_t count, const std::function<void(size_t)>& task) {
-            VideoCommon::ParallelFor(*shader_jobs, count, task);
-        }));
+    const CacheV2::ForEach on_shader_jobs = [this](size_t count,
+                                                   const std::function<void(size_t)>& task) {
+        VideoCommon::ParallelFor(*shader_jobs, count, task);
+    };
+    const bool map_log = CacheMapRequested();
+    if (map_log) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_CACHE_MMAP: the shader cache log is mapped, its "
+                                "programs decoded on the shader job workers");
+    }
+    auto log_v2 = std::make_shared<CacheV2::LogFile>(
+        map_log ? CacheV2::MapLogFile(pipeline_cache_filename, on_shader_jobs)
+                : CacheV2::ReadLogFile(pipeline_cache_filename, on_shader_jobs));
     Common::BootTiming::Mark("shaders: shader cache log read and checked");
-    cache_v2->LoadPrograms(log_v2->parsed.live);
+    cache_v2->LoadPrograms(log_v2->parsed.live, map_log ? on_shader_jobs : CacheV2::ForEach{});
     const CacheV2::LogStats& stats = log_v2->parsed.stats;
     LOG_INFO(Render_Vulkan,
              "Shader cache v2: {} bytes, {} live records, {} superseded, {} tombstones, {} "

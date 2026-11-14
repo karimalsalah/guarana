@@ -76,6 +76,8 @@ add_library(
     fs/fs_util.h
     fs/data_dir_migration.cpp
     fs/data_dir_migration.h
+    fs/mapped_file.cpp
+    fs/mapped_file.h
     fs/path_util.cpp
     fs/path_util.h
     fs/profile_migration.cpp
