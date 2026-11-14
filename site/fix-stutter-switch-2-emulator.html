@@ -57,7 +57,7 @@
           "name": "Why does my Switch 2 emulator stutter the first time I enter an area?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The graphics driver is compiling the shaders that area needs, about 0.4 to 1 s per pipeline on Intel's driver. Compiled pipelines are cached, so the second visit is smoother. A headless warm-up compiled 4,515 pipelines in 155 s on our laptop, and it ships in the next release."
+            "text": "The graphics driver is compiling the shaders that area needs, about 0.4 to 1 s per pipeline on Intel's driver. Compiled pipelines are cached, so the second visit is smoother. A headless warm-up compiled 4,515 pipelines in 155 s on our laptop; it shipped in v20.1."
           }
         },
         {
@@ -65,7 +65,7 @@
           "name": "Why is motion uneven even when the fps number looks fine?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Average fps hides uneven frame times. With frame generation, each shown frame should stay up for the same 16.7 ms slot on a 60 Hz screen. The old presenter spaced frames on the CPU clock. The vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before. It ships in the next release."
+            "text": "Average fps hides uneven frame times. With frame generation, each shown frame should stay up for the same 16.7 ms slot on a 60 Hz screen. The old presenter spaced frames on the CPU clock. The vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before. It shipped in v20.1, and is the default for Ocarina of Time on Windows iGPUs since v20.2."
           }
         },
         {
@@ -185,9 +185,9 @@
       <tbody>
         <tr><td data-label="What">Hyrule Field, one shader fix (<code>EDEN_NX2_GM=11</code>), frame generation off</td><td data-label="Before">14.8 game fps</td><td data-label="After"><strong>22.8 game fps</strong></td><td data-label="Status">Shipped in v20; on by default for Ocarina of Time only</td></tr>
         <tr><td data-label="What">Foliage mesh draw, same runs</td><td data-label="Before">15.7 ms GPU</td><td data-label="After"><strong>5.8 ms GPU</strong></td><td data-label="Status">Shipped in v20</td></tr>
-        <tr><td data-label="What">Frame pacing, title screen: frames within 2 ms of the median interval</td><td data-label="Before">n/a</td><td data-label="After"><strong>100%</strong></td><td data-label="Status">Next release</td></tr>
-        <tr><td data-label="What">Same measure, Hyrule Field</td><td data-label="Before">33-54%</td><td data-label="After"><strong>75%</strong></td><td data-label="Status">Next release</td></tr>
-        <tr><td data-label="What">Headless shader warm-up</td><td data-label="Before">n/a</td><td data-label="After"><strong>4,515 pipelines in 155 s</strong></td><td data-label="Status">Next release</td></tr>
+        <tr><td data-label="What">Frame pacing, title screen: frames within 2 ms of the median interval</td><td data-label="Before">n/a</td><td data-label="After"><strong>100%</strong></td><td data-label="Status">In v20.1, opt-in; default for Ocarina of Time on Windows iGPUs since v20.2</td></tr>
+        <tr><td data-label="What">Same measure, Hyrule Field</td><td data-label="Before">33-54%</td><td data-label="After"><strong>75%</strong></td><td data-label="Status">In v20.1, opt-in; default for Ocarina of Time on Windows iGPUs since v20.2</td></tr>
+        <tr><td data-label="What">Headless shader warm-up</td><td data-label="Before">n/a</td><td data-label="After"><strong>4,515 pipelines in 155 s</strong></td><td data-label="Status">Since v20.1 (<code>guarana-cli --warm-pipelines</code>)</td></tr>
         <tr><td data-label="What">Stutters (intervals over twice the median) per 30 s, same scene</td><td data-label="Before">37-92 on the old setup</td><td data-label="After"><strong>19</strong> with v21</td><td data-label="Status">v21 is a development build, not released</td></tr>
         <tr><td data-label="What">Boot to first frame, with the startup check skipped</td><td data-label="Before">n/a</td><td data-label="After"><strong>19.6 s</strong></td><td data-label="Status">Development build, not released</td></tr>
       </tbody>
@@ -198,7 +198,7 @@
 <section class="section" aria-labelledby="fixes">
   <h2 id="fixes">What helps, in order</h2>
 <ol class="steps">
-<li><h3>Give shaders time to compile</h3><p>The first visit to an area hitches once; the cache keeps the result. Do not delete the shader cache between sessions. Shader warm-up (compiling ahead of play, headless: 4,515 pipelines in 155 s on the Arc 140T) is in the next release.</p></li>
+<li><h3>Give shaders time to compile</h3><p>The first visit to an area hitches once; the cache keeps the result. Do not delete the shader cache between sessions. Shader warm-up (compiling ahead of play, headless: 4,515 pipelines in 155 s on the Arc 140T) is in Guarana since v20.1.</p></li>
 <li><h3>Use the frame pacing presenter</h3><p>The vblank-locked presenter (<code>EDEN_NX2_FLUID=1</code>, experimental) puts every shown frame on a 16.7 ms slot. To measure your own pacing, set <code>EDEN_NX2_SHOWN_STATS=1</code>: every 10 s the log reports the share of intervals within 2 ms of the median. <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/switches.md">All switches</a>.</p></li>
 <li><h3>Leave the read-back switches alone</h3><p>Guest reads of GPU-written memory (read-backs) are a known cost and an <a href="wins.html">open win</a>. Do not force buffer downloads on (<code>EDEN_NX2_BUFFER_DOWNLOADS=1</code>): the note in the shipped switches file says it costs about 38-63% of fps. <code>EDEN_NX2_NO_REACTIVE=1</code> is opt-in and its note says it can reduce fps from 29 to 24 in another game.</p></li>
 <li><h3>Power</h3><p>Plug in. Our numbers are with the charger connected. Use your device&rsquo;s highest performance mode, and close other programs, because the GPU shares memory and a power budget with the CPU. <code>EDEN_NX2_POWER_POLICY=igpu</code> (Windows, integrated GPUs) shifts the power budget from CPU boost to the GPU and restores it at exit. Leave it off for Ocarina of Time: the game is CPU-bound on these laptops, and the old setup that used it stuttered more (37-92 stutters per 30 s against 19 without it, together with the other changes on this page).</p></li>
@@ -218,11 +218,11 @@
   <h2 id="questions">Questions people ask</h2>
 <div class="faq-item">
   <h3>Why does my Switch 2 emulator stutter the first time I enter an area?</h3>
-  <p>The graphics driver is compiling the shaders that area needs, about 0.4 to 1 s per pipeline on Intel's driver. Compiled pipelines are cached, so the second visit is smoother. A headless warm-up compiled 4,515 pipelines in 155 s on our laptop, and it ships in the next release.</p>
+  <p>The graphics driver is compiling the shaders that area needs, about 0.4 to 1 s per pipeline on Intel's driver. Compiled pipelines are cached, so the second visit is smoother. A headless warm-up compiled 4,515 pipelines in 155 s on our laptop; it shipped in v20.1.</p>
 </div>
 <div class="faq-item">
   <h3>Why is motion uneven even when the fps number looks fine?</h3>
-  <p>Average fps hides uneven frame times. With frame generation, each shown frame should stay up for the same 16.7 ms slot on a 60 Hz screen. The old presenter spaced frames on the CPU clock. The vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before. It ships in the next release.</p>
+  <p>Average fps hides uneven frame times. With frame generation, each shown frame should stay up for the same 16.7 ms slot on a 60 Hz screen. The old presenter spaced frames on the CPU clock. The vblank-locked presenter put 100% of frames within 2 ms of the median on the title screen and 75% in Hyrule Field, against 33-54% before. It shipped in v20.1, and is the default for Ocarina of Time on Windows iGPUs since v20.2.</p>
 </div>
 <div class="faq-item">
   <h3>How many stutters did the fixes remove?</h3>
