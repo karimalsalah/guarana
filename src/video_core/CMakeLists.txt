@@ -214,6 +214,7 @@ add_library(video_core STATIC
     renderer_vulkan/blit_image.h
     renderer_vulkan/fixed_pipeline_state.cpp
     renderer_vulkan/fixed_pipeline_state.h
+    renderer_vulkan/fluid_slot_math.h
     renderer_vulkan/framebuffer_clear_layers.h
     renderer_vulkan/framebuffer_limits.h
     renderer_vulkan/maxwell_to_vk.cpp
