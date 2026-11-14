@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -325,6 +326,103 @@ TEST_CASE("Ocarina of Time's pacing set follows the GPU and the display rate", "
         CHECK(ChoosePacingSet(0x0100152000022000, Arc140T, hz) == PacingSet::None);
         CHECK(ChoosePacingSet(0x0100152000022000, amd, hz) == PacingSet::None);
     }
+}
+
+TEST_CASE("The GPU vendor is read from the PCI vendor ID", "[core][game_presets]") {
+    CHECK(VendorOfPciId(0x8086) == GPUVendor::Intel);
+    CHECK(VendorOfPciId(0x1002) == GPUVendor::AMD);
+    CHECK(VendorOfPciId(0x10DE) == GPUVendor::Nvidia);
+    // Other vendors (Qualcomm, Arm, Apple, Mesa's software renderers) and no ID are unknown.
+    for (const u32 id : {0U, 0x5143U, 0x13B5U, 0x106BU, 0x10005U, 0x1AE0U}) {
+        CAPTURE(id);
+        CHECK(VendorOfPciId(id) == GPUVendor::Unknown);
+    }
+}
+
+TEST_CASE("The window's display rate decides the pacing set", "[core][game_presets]") {
+    const GpuInfo amd{.vendor = GPUVendor::AMD, .integrated = true};
+    // The window's display's rate is rounded to a whole Hz, and used where the host reported one.
+    CHECK(ChooseRefreshHz(144.0, 60) == 144U);
+    CHECK(ChooseRefreshHz(143.98, 0) == 144U);
+    CHECK(ChooseRefreshHz(119.88, 0) == 120U);
+    CHECK(ChooseRefreshHz(59.94, 0) == 60U);
+    CHECK(ChooseRefreshHz(60.0, 144) == 60U);
+    CHECK(ChooseRefreshHz(1.5, 144) == 2U);
+    // Not reported (0), not a rate (NaN, below 1.5 Hz, absurdly high): the primary display's.
+    CHECK(ChooseRefreshHz(0.0, 144) == 144U);
+    CHECK(ChooseRefreshHz(0.0, 0) == 0U);
+    CHECK(ChooseRefreshHz(1.0, 120) == 120U);
+    CHECK(ChooseRefreshHz(-60.0, 120) == 120U);
+    CHECK(ChooseRefreshHz(std::numeric_limits<double>::quiet_NaN(), 120) == 120U);
+    CHECK(ChooseRefreshHz(std::numeric_limits<double>::infinity(), 120) == 120U);
+    CHECK(ChooseRefreshHz(1.0e9, 120) == 120U);
+
+    // Two displays: the set follows the display the window is on, the primary one is not asked.
+    CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, ChooseRefreshHz(144.0, 60)) == PacingSet::Hz144);
+    CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, ChooseRefreshHz(60.0, 144)) == PacingSet::Hz60);
+    CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, ChooseRefreshHz(120.0, 144)) ==
+          PacingSet::Hz120);
+    // The host did not report the window's display: the primary display's rate, as before.
+    CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, ChooseRefreshHz(0.0, 144)) == PacingSet::Hz144);
+    CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T, ChooseRefreshHz(0.0, 0)) == PacingSet::Hz60);
+
+    // One display: the window's display is the primary one, so a rate that its path reports as a
+    // fraction (143.98, 119.88) and Windows' whole-Hz mode of it (either rounding) pick the same
+    // set as the whole-Hz rate alone. Nothing changes for a machine with one display.
+    struct Rates {
+        double window_hz;
+        u32 primary_hz;
+    };
+    for (const Rates rates :
+         {Rates{59.94, 59}, Rates{59.94, 60}, Rates{60.0, 60}, Rates{74.97, 75}, Rates{100.0, 100},
+          Rates{119.88, 119}, Rates{119.88, 120}, Rates{120.0, 120}, Rates{143.98, 143},
+          Rates{143.98, 144}, Rates{144.0, 144}, Rates{164.83, 165}, Rates{239.76, 240}}) {
+        CAPTURE(rates.window_hz, rates.primary_hz);
+        CHECK(ChoosePacingSet(OcarinaTitleId, Arc140T,
+                              ChooseRefreshHz(rates.window_hz, rates.primary_hz)) ==
+              ChoosePacingSet(OcarinaTitleId, Arc140T, rates.primary_hz));
+        CHECK(ChoosePacingSet(OcarinaTitleId, amd,
+                              ChooseRefreshHz(rates.window_hz, rates.primary_hz)) ==
+              ChoosePacingSet(OcarinaTitleId, amd, rates.primary_hz));
+    }
+
+    // SwitchDefaults takes the window's display where it has a rate.
+    const auto same = [](std::span<const SwitchValue> a, std::span<const SwitchValue> b) {
+        return a.data() == b.data() && a.size() == b.size();
+    };
+    CHECK(same(SwitchDefaults(OcarinaTitleId, Arc140T, {.refresh_hz = 144.0}),
+               PacingSwitches(PacingSet::Hz144, Arc140T)));
+    CHECK(same(SwitchDefaults(OcarinaTitleId, Arc140T, {.refresh_hz = 120.0}),
+               PacingSwitches(PacingSet::Hz120, Arc140T)));
+    CHECK(same(SwitchDefaults(OcarinaTitleId, Arc140T, {.refresh_hz = 60.0}),
+               PacingSwitches(PacingSet::Hz60, Arc140T)));
+}
+
+TEST_CASE("The pacing choice names the display and its rate", "[core][game_presets]") {
+    const DisplayInfo primary{.refresh_hz = 144.0, .name = R"(\\.\DISPLAY1)", .primary = true};
+    const DisplayInfo second{.refresh_hz = 60.0, .name = R"(\\.\DISPLAY2)", .primary = false};
+    CHECK(DescribeDisplay(primary, 144) == R"(display \\.\DISPLAY1 (primary) at 144 Hz)");
+    CHECK(DescribeDisplay(second, 60) ==
+          R"(display \\.\DISPLAY2 (not the primary display) at 60 Hz)");
+    CHECK(DescribeDisplay({.refresh_hz = 120.0}, 120) == "the window's display at 120 Hz");
+    // The window's display's rate was not reported: the primary display's rate is the one used.
+    CHECK(DescribeDisplay({}, 144) == "primary display at 144 Hz");
+    CHECK(DescribeDisplay({}, 0) == "primary display rate unknown");
+    CHECK(DescribeDisplay({.name = R"(\\.\DISPLAY2)"}, 60) == "primary display at 60 Hz");
+    // An implausible rate is not used by ChooseRefreshHz, so the line does not name the display
+    // for it either.
+    CHECK(DescribeDisplay({.refresh_hz = 1.0e9, .name = R"(\\.\DISPLAY2)", .primary = false},
+                          144) == "primary display at 144 Hz");
+
+    CHECK(DescribePacingChoice(Arc140T, 144, PacingSet::Hz144, DescribeDisplay(primary, 144)) ==
+          R"(display \\.\DISPLAY1 (primary) at 144 Hz, the 144 Hz set (chosen at 140 to 148 Hz, )"
+          "measured at 144)");
+    CHECK(DescribePacingChoice(Arc140T, 60, PacingSet::Hz60, DescribeDisplay(second, 60))
+              .starts_with(R"(display \\.\DISPLAY2 (not the primary display) at 60 Hz, the 60 Hz )"
+                           "set"));
+    // No display text: the primary display, as before.
+    CHECK(DescribePacingChoice(Arc140T, 144, PacingSet::Hz144) ==
+          DescribePacingChoice(Arc140T, 144, PacingSet::Hz144, DescribeDisplay({}, 144)));
 }
 
 TEST_CASE("The pacing choice names the display rate and the set", "[core][game_presets]") {

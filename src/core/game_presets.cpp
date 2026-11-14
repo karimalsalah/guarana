@@ -150,7 +150,8 @@ constexpr std::array OCARINA_INTEL_IGPU_144_SWITCHES{
 };
 
 #ifdef _WIN32
-/// The primary display's refresh rate in Hz, 0 when Windows does not say.
+/// The primary display's refresh rate in Hz, 0 when Windows does not say. The fallback for a
+/// window whose display's rate the host did not report (ChooseRefreshHz).
 [[nodiscard]] u32 PrimaryDisplayRefreshHz() {
     DEVMODEW mode{};
     mode.dmSize = sizeof(mode);
@@ -314,6 +315,53 @@ std::string Apply(u64 title_id, const GpuInfo& gpu) {
     return summary;
 }
 
+GameSettings::GPUVendor VendorOfPciId(u32 vendor_id) {
+    switch (vendor_id) {
+    case 0x8086:
+        return GameSettings::GPUVendor::Intel;
+    case 0x1002:
+        return GameSettings::GPUVendor::AMD;
+    case 0x10DE:
+        return GameSettings::GPUVendor::Nvidia;
+    default:
+        return GameSettings::GPUVendor::Unknown;
+    }
+}
+
+namespace {
+
+// Whether the host reported a usable rate for the window's display. At least 1.5 Hz rounds to 2 or
+// more, as the primary display's rate counts only above 1 Hz. Written so that NaN is "not
+// reported", and an implausible rate is too.
+bool WindowRateReported(double window_hz) {
+    return window_hz >= 1.5 && window_hz < 10000.0;
+}
+
+std::string PrimaryDisplayText(u32 refresh_hz) {
+    return refresh_hz == 0 ? std::string{"primary display rate unknown"}
+                           : fmt::format("primary display at {} Hz", refresh_hz);
+}
+
+} // Anonymous namespace
+
+u32 ChooseRefreshHz(double window_hz, u32 primary_hz) {
+    if (WindowRateReported(window_hz)) {
+        return static_cast<u32>(window_hz + 0.5);
+    }
+    return primary_hz;
+}
+
+std::string DescribeDisplay(const DisplayInfo& display, u32 refresh_hz) {
+    if (!WindowRateReported(display.refresh_hz)) {
+        return PrimaryDisplayText(refresh_hz);
+    }
+    if (display.name.empty()) {
+        return fmt::format("the window's display at {} Hz", refresh_hz);
+    }
+    return fmt::format("display {} ({}) at {} Hz", display.name,
+                       display.primary ? "primary" : "not the primary display", refresh_hz);
+}
+
 PacingSet ChoosePacingSet(u64 title_id, const GpuInfo& gpu, u32 refresh_hz) {
     if (title_id != OCARINA_TITLE_ID || !gpu.integrated) {
         return PacingSet::None;
@@ -338,10 +386,10 @@ PacingSet ChoosePacingSet(u64 title_id, const GpuInfo& gpu, u32 refresh_hz) {
     return PacingSet::Hz60;
 }
 
-std::string DescribePacingChoice(const GpuInfo& gpu, u32 refresh_hz, PacingSet set) {
-    const std::string display = refresh_hz == 0
-                                    ? std::string{"primary display rate unknown"}
-                                    : fmt::format("primary display at {} Hz", refresh_hz);
+std::string DescribePacingChoice(const GpuInfo& gpu, u32 refresh_hz, PacingSet set,
+                                 std::string_view display_text) {
+    const std::string display =
+        display_text.empty() ? PrimaryDisplayText(refresh_hz) : std::string{display_text};
     switch (set) {
     case PacingSet::None:
         return fmt::format("{}, no pacing set for this game and GPU", display);
@@ -387,12 +435,15 @@ std::span<const SwitchValue> PacingSwitches([[maybe_unused]] PacingSet set,
     return {};
 }
 
-std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu) {
+std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu,
+                                            const DisplayInfo& display) {
 #ifdef _WIN32
-    return PacingSwitches(ChoosePacingSet(title_id, gpu, PrimaryDisplayRefreshHz()), gpu);
+    const u32 primary_hz = PrimaryDisplayRefreshHz();
 #else
-    return PacingSwitches(ChoosePacingSet(title_id, gpu, 0), gpu);
+    const u32 primary_hz = 0;
 #endif
+    return PacingSwitches(
+        ChoosePacingSet(title_id, gpu, ChooseRefreshHz(display.refresh_hz, primary_hz)), gpu);
 }
 
 SwitchDecision DecideSwitch(std::optional<std::string_view> current,
@@ -444,7 +495,7 @@ void SetSwitchInEnvironment(const std::string& name, const std::optional<std::st
 
 } // Anonymous namespace
 
-std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
+std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu, const DisplayInfo& display) {
     AppliedDefaults& applied = TheAppliedDefaults();
     const std::scoped_lock lock{applied.mutex};
     // A game started earlier in this process: put back what its defaults set, where the value is
@@ -460,16 +511,18 @@ std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu) {
     const bool first_start = applied.calls == 0;
     ++applied.calls;
 #ifdef _WIN32
-    const u32 refresh_hz = PrimaryDisplayRefreshHz();
+    const u32 primary_hz = PrimaryDisplayRefreshHz();
 #else
-    const u32 refresh_hz = 0;
+    const u32 primary_hz = 0;
 #endif
+    const u32 refresh_hz = ChooseRefreshHz(display.refresh_hz, primary_hz);
     const PacingSet pacing = ChoosePacingSet(title_id, gpu, refresh_hz);
     const std::span<const SwitchValue> defaults = PacingSwitches(pacing, gpu);
     if (defaults.empty()) {
         return {};
     }
-    const std::string why = DescribePacingChoice(gpu, refresh_hz, pacing);
+    const std::string why =
+        DescribePacingChoice(gpu, refresh_hz, pacing, DescribeDisplay(display, refresh_hz));
     if (!Enabled()) {
         LOG_INFO(Core,
                  "Switch defaults for this game and GPU ({}): not used, automatic presets are off",
