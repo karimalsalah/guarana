@@ -238,12 +238,12 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'ccache.zip'
-          Invoke-WebRequest -OutFile $zip https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-windows-x86_64.zip
-          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne '6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84') {
+          Invoke-WebRequest -OutFile $zip https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-windows-x86_64.zip
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne 'c845c3d65be81954c75659145a522a793a27586bf940c5dcfe18af33fa1a67dd') {
               throw 'ccache checksum mismatch'
           }
           Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
-          Join-Path $env:RUNNER_TEMP 'ccache-4.14.2-windows-x86_64' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          Join-Path $env:RUNNER_TEMP 'ccache-4.14.3-windows-x86_64' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Install Vulkan SDK
         shell: pwsh
