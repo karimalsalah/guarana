@@ -422,7 +422,9 @@ fn outputs(values: &BTreeMap<String, ToggleValue>, gpus: &[Gpu]) -> Outputs {
     if flag("igpu_power_policy") {
         switches.push(("EDEN_NX2_POWER_POLICY".to_string(), "igpu".to_string()));
     }
-    if flag("fluid_presenter") {
+    // Intel iGPU: Ocarina's measured set is FLUID=2. A 1 in the player's file wins over it
+    // and turns that set off, the same way EXTRAPOLATE=1 does (issue #119). Leave the line out.
+    if flag("fluid_presenter") && !has_intel_igpu(gpus) {
         switches.push(("EDEN_NX2_FLUID".to_string(), "1".to_string()));
     }
 
@@ -747,7 +749,7 @@ mod tests {
     #[test]
     fn block_switches_are_what_the_block_gets() {
         let intel = block_switches("intel-arc-igpu", &BTreeMap::new(), &[ptl()]).unwrap();
-        assert_eq!(intel, vec![("EDEN_NX2_FLUID".to_string(), "1".to_string())]);
+        assert!(intel.is_empty());
         let dgpu = block_switches("intel-arc-igpu", &BTreeMap::new(), &[rtx()]).unwrap();
         assert!(dgpu.contains(&(EXTRAPOLATE.to_string(), "1".to_string())));
         assert!(block_switches("no-such-profile", &BTreeMap::new(), &[]).is_err());
