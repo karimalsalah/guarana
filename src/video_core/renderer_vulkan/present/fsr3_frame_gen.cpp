@@ -13,6 +13,8 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 
 #include "video_core/host_shaders/fsr3_frame_interpolation_comp_spv.h"
+#include "video_core/host_shaders/fsr3_frame_interpolation_median_comp_spv.h"
+#include "video_core/host_shaders/fsr3_motion_median_comp_spv.h"
 #include "video_core/host_shaders/fsr3_optical_flow_comp_spv.h"
 
 namespace Vulkan {
@@ -157,6 +159,20 @@ bool PingPongRequested() {
     return requested;
 }
 
+// EDEN_NX2_FG_MEDIAN_ONCE=<n>, n not 0: read as EDEN_NX2_FG_PINGPONG is. Read once per process,
+// logged once when on.
+bool MedianOnceRequested() {
+    static const bool requested = [] {
+        const bool on = Fsr3MedianOnce::Enabled(std::getenv("EDEN_NX2_FG_MEDIAN_ONCE"));
+        if (on) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FG_MEDIAN_ONCE: FSR3 frame generation computes the "
+                                    "motion median once per real frame");
+        }
+        return on;
+    }();
+    return requested;
+}
+
 } // anonymous namespace
 
 struct FlowPushConstants {
@@ -183,6 +199,7 @@ Fsr3FrameGen::Fsr3FrameGen(const Device& device, MemoryAllocator& memory_allocat
       m_flow_extent{(std::max)(1u, extent.width / 2), (std::max)(1u, extent.height / 2)},
       m_format{format} {
     m_pingpong = PingPongRequested();
+    m_median_once = MedianOnceRequested();
     CreateResources(device);
     CreateShaders(device);
     CreatePipelines(device);
@@ -218,15 +235,24 @@ void Fsr3FrameGen::CreateResources(const Device& device) {
     m_motion_image = CreateWrappedImage(m_allocator, m_flow_extent, VK_FORMAT_R16G16_SFLOAT);
     m_motion_view = CreateWrappedImageView(device, m_motion_image, VK_FORMAT_R16G16_SFLOAT);
 
-    // One optical flow set, or one per parity of the image roles with EDEN_NX2_FG_PINGPONG.
+    // Same size as the motion image: the median of its 3x3 neighbourhoods.
+    if (m_median_once) {
+        m_median_image = CreateWrappedImage(m_allocator, m_flow_extent, VK_FORMAT_R16G16_SFLOAT);
+        m_median_view = CreateWrappedImageView(device, m_median_image, VK_FORMAT_R16G16_SFLOAT);
+    }
+
+    // One optical flow set, or one per parity of the image roles with EDEN_NX2_FG_PINGPONG, and
+    // one median set (a sampled image and a storage image) with EDEN_NX2_FG_MEDIAN_ONCE.
     const u32 flow_sets = m_pingpong ? 2U : 1U;
+    const u32 median_sets = m_median_once ? 1U : 0U;
     const std::array pool_sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2U * flow_sets},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, flow_sets},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                             2U * flow_sets + median_sets},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, flow_sets + median_sets},
     };
     m_desc_pool = device.GetLogical().CreateDescriptorPool(VkDescriptorPoolCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = flow_sets,
+        .maxSets = flow_sets + median_sets,
         .poolSizeCount = static_cast<u32>(pool_sizes.size()),
         .pPoolSizes = pool_sizes.data(),
     });
@@ -235,6 +261,10 @@ void Fsr3FrameGen::CreateResources(const Device& device) {
 void Fsr3FrameGen::CreateShaders(const Device& device) {
     m_flow_shader = BuildShader(device, FSR3_OPTICAL_FLOW_COMP_SPV);
     m_interp_shader = BuildShader(device, FSR3_FRAME_INTERPOLATION_COMP_SPV);
+    if (m_median_once) {
+        m_median_shader = BuildShader(device, FSR3_MOTION_MEDIAN_COMP_SPV);
+        m_interp_median_shader = BuildShader(device, FSR3_FRAME_INTERPOLATION_MEDIAN_COMP_SPV);
+    }
 }
 
 void Fsr3FrameGen::CreatePipelines(const Device& device) {
@@ -323,6 +353,94 @@ void Fsr3FrameGen::CreatePipelines(const Device& device) {
     } else {
         m_flow_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, {*m_flow_desc_layout});
     }
+
+    if (!m_median_once) {
+        return;
+    }
+
+    // -- Motion median (EDEN_NX2_FG_MEDIAN_ONCE) ---------------------------------
+    // Reads the motion image, writes the median image; no push constants: both sizes come from
+    // the images. The interpolation variant has the first interpolation's layout, and reads the
+    // median image at binding 2 where that one reads the motion image.
+    const std::array median_bindings{
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+
+    m_median_desc_layout = device.GetLogical().CreateDescriptorSetLayout(VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = static_cast<u32>(median_bindings.size()),
+        .pBindings = median_bindings.data(),
+    });
+
+    m_median_pipe_layout = device.GetLogical().CreatePipelineLayout(VkPipelineLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = m_median_desc_layout.address(),
+    });
+
+    m_median_pipeline = device.GetLogical().CreateComputePipeline(VkComputePipelineCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = *m_median_shader,
+            .pName = "main",
+        },
+        .layout = *m_median_pipe_layout,
+    });
+
+    m_interp_median_pipeline = device.GetLogical().CreateComputePipeline(VkComputePipelineCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = *m_interp_median_shader,
+            .pName = "main",
+        },
+        .layout = *m_interp_pipe_layout,
+    });
+
+    // The motion and median images never change: write the set once.
+    m_median_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, {*m_median_desc_layout});
+    std::vector<VkDescriptorImageInfo> image_infos;
+    image_infos.reserve(2);
+    const VkDescriptorImageInfo median_store_info{
+        .imageView = *m_median_view,
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    std::vector<VkWriteDescriptorSet> updates{
+        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_motion_view,
+                                 m_median_desc_sets[0], 0),
+    };
+    updates.push_back(VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = m_median_desc_sets[0],
+        .dstBinding = 1,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        .pImageInfo = &median_store_info,
+    });
+    device.GetLogical().UpdateDescriptorSets(updates, {});
+}
+
+// EDEN_NX2_FG_MEDIAN_ONCE: the 3x3 median of the motion field, once per real frame. Recorded
+// after the optical flow's dispatch and its write-to-read barrier on the motion image.
+void Fsr3FrameGen::RecordMedianPass(vk::CommandBuffer cmdbuf) {
+    const auto barrier = MakeBarrier(*m_median_image,
+                                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                                     VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_IMAGE_LAYOUT_GENERAL);
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, barrier);
+
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_median_pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_median_pipe_layout, 0,
+                              m_median_desc_sets[0], {});
+    cmdbuf.Dispatch(Fsr3MedianOnce::GroupCount(m_flow_extent.width),
+                    Fsr3MedianOnce::GroupCount(m_flow_extent.height), 1);
+
+    BarrierComputeWriteToRead(cmdbuf, *m_median_image);
 }
 
 void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
@@ -340,6 +458,9 @@ void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage c
         scheduler.Record([this, current_frame](vk::CommandBuffer cmdbuf) {
             CopyImageToTwo(cmdbuf, current_frame, *m_history_image, *m_current_image, m_extent);
             DiscardForComputeWrite(cmdbuf, *m_motion_image);
+            if (m_median_once) {
+                DiscardForComputeWrite(cmdbuf, *m_median_image);
+            }
         });
         m_has_history = true;
         m_last_frame_count = frame_count;
@@ -407,6 +528,9 @@ void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage c
         cmdbuf.Dispatch((flow_w + 15) / 16, (flow_h + 15) / 16, 1);
 
         BarrierComputeWriteToRead(cmdbuf, *m_motion_image);
+        if (m_median_once) {
+            RecordMedianPass(cmdbuf);
+        }
     });
 
     m_flow_valid = true;
@@ -423,6 +547,9 @@ void Fsr3FrameGen::ProcessPingPong(const Device& device, Scheduler& scheduler,
                           current = *m_current_image](vk::CommandBuffer cmdbuf) {
             CopyImageToTwo(cmdbuf, current_frame, history, current, m_extent);
             DiscardForComputeWrite(cmdbuf, *m_motion_image);
+            if (m_median_once) {
+                DiscardForComputeWrite(cmdbuf, *m_median_image);
+            }
         });
         m_has_history = true;
         m_last_frame_count = frame_count;
@@ -508,6 +635,9 @@ void Fsr3FrameGen::ProcessPingPong(const Device& device, Scheduler& scheduler,
         cmdbuf.Dispatch((flow_w + 15) / 16, (flow_h + 15) / 16, 1);
 
         BarrierComputeWriteToRead(cmdbuf, motion);
+        if (m_median_once) {
+            RecordMedianPass(cmdbuf);
+        }
     });
 
     m_flow_valid = true;
@@ -532,7 +662,8 @@ void Fsr3FrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
     std::vector<VkWriteDescriptorSet> updates{
         CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_current_view, set, 0),
         CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_history_view, set, 1),
-        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_motion_view, set, 2),
+        CreateWriteDescriptorSet(image_infos, *m_linear_sampler,
+                                 m_median_once ? *m_median_view : *m_motion_view, set, 2),
     };
 
     const VkDescriptorImageInfo dest_info{
@@ -561,9 +692,12 @@ void Fsr3FrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
         .flow_scale = flow_scale,
     };
 
-    scheduler.Record([this, constants, out_w, out_h, set, destination](vk::CommandBuffer cmdbuf) {
+    const VkPipeline pipeline = m_median_once ? *m_interp_median_pipeline : *m_interp_pipeline;
+
+    scheduler.Record([this, constants, out_w, out_h, set, destination,
+                      pipeline](vk::CommandBuffer cmdbuf) {
         DiscardForComputeWrite(cmdbuf, destination);
-        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_interp_pipeline);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_interp_pipe_layout, 0,
                                   set, {});
         cmdbuf.PushConstants(*m_interp_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, constants);

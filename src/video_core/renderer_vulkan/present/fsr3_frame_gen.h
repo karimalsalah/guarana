@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
@@ -50,6 +51,23 @@ struct Fsr3PingPong {
     u32 parity{};
 };
 
+/// EDEN_NX2_FG_MEDIAN_ONCE: the 3x3 median of the motion field is computed once per real frame, at
+/// flow resolution, instead of once per output pixel in each interpolation dispatch.
+struct Fsr3MedianOnce {
+    /// Workgroup edge, local_size_x and local_size_y of fsr3_motion_median.comp.
+    static constexpr u32 kGroupSize = 16;
+
+    /// The switch's value: a number other than 0 is on; unset, empty, `0` and `false` are off.
+    [[nodiscard]] static bool Enabled(const char* value) noexcept {
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }
+
+    /// Workgroups that cover `extent` invocations along one axis.
+    [[nodiscard]] static constexpr u32 GroupCount(u32 extent) noexcept {
+        return (extent + kGroupSize - 1U) / kGroupSize;
+    }
+};
+
 /// AMD FidelityFX Super Resolution 3 (FSR 3) Frame Generation pipeline.
 /// Uses compute-based optical flow and bilateral frame interpolation
 /// to synthesize intermediate frames without requiring engine motion vectors.
@@ -83,6 +101,7 @@ private:
     void CreatePipelines(const Device& device);
     void ProcessPingPong(const Device& device, Scheduler& scheduler, VkImage current_frame,
                          u64 frame_count);
+    void RecordMedianPass(vk::CommandBuffer cmdbuf);
 
     MemoryAllocator& m_allocator;
     VkExtent2D m_extent;
@@ -130,6 +149,20 @@ private:
     // descriptor sets are tied to the parity of the swaps since the images were created.
     bool m_pingpong{};
     Fsr3PingPong m_roles{};
+
+    // EDEN_NX2_FG_MEDIAN_ONCE, read once at construction. None of these exist with it off. The
+    // median image has the motion image's size and is written once per real frame by the median
+    // pass; the second interpolation pipeline reads it where the first reads the motion image.
+    bool m_median_once{};
+    vk::ShaderModule m_median_shader;
+    vk::ShaderModule m_interp_median_shader;
+    vk::DescriptorSetLayout m_median_desc_layout;
+    vk::PipelineLayout m_median_pipe_layout;
+    vk::Pipeline m_median_pipeline;
+    vk::Pipeline m_interp_median_pipeline;
+    vk::DescriptorSets m_median_desc_sets;
+    vk::Image m_median_image;
+    vk::ImageView m_median_view;
 };
 
 } // namespace Vulkan
