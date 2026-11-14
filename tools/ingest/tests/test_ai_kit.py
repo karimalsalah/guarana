@@ -187,12 +187,17 @@ class ReadmeTests(unittest.TestCase):
         self.text = read("README.md")
 
     def test_first_screen_sells_the_mission_with_the_measured_numbers(self):
+        # The top carries the headline numbers with their machine; "Measured wins" carries every number.
         head = self.text[:self.text.index("## Get it")]
-        for needed in ("14.8", "22.8", "15.7", "5.8", "16.7", "100%", "75%", "33-54%", "16.4", "4,515", "155 s",
-                       "Core Ultra 9 285H", "Arc 140T", "32.0.101.9175", "120 Hz OLED", "GPL-3.0-or-later",
-                       "599 of 600", "best run", "531-599", "two paired rounds", "0 late flips", "99.5%", "45-47%",
-                       "about 200", "24 ms", "20 Hz"):
+        for needed in ("14.8", "22.8", "4,515", "155 s", "Core Ultra 9 285H", "Arc 140T", "32.0.101.9175",
+                       "120 Hz OLED", "GPL-3.0-or-later", "599 of 600", "best run", "0 late flips", "99.5%"):
             self.assertIn(needed, head)
+        wins = self.text.split("\n## Measured wins\n")[1].split("\n## ")[0]
+        for needed in ("14.8", "22.8", "15.7", "5.8", "16.7", "100%", "75%", "33-54%", "16.4", "4,515", "155 s",
+                       "Core Ultra 9 285H", "Arc 140T", "32.0.101.9175", "120 Hz OLED", "599 of 600", "best run",
+                       "531-599", "two paired rounds", "0 late flips", "99.5%", "45-47%", "about 200", "24 ms",
+                       "20 Hz"):
+            self.assertIn(needed, wins)
 
     def test_sections_and_honesty_markers(self):
         for heading in ("## Measured wins", "## Get it", "## Built for AI agents", "## Why contribute now",
