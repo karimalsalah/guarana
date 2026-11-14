@@ -385,11 +385,14 @@ void PerfQuery::CollectLocked() {
             std::memcpy(&available, slot_data + (stride - 4), sizeof(available));
             if (available != 0) {
                 sums[i] += ReadValue(slot_data, counters[i].storage);
+                ++avail_yes;
             } else {
                 all_available = false;
+                ++avail_no;
             }
             offset += stride;
         }
+        ++drained;
         if (all_available) {
             ++collected;
             ++frames_sampled;
@@ -445,13 +448,10 @@ std::string PerfQuery::Diag() const {
     std::scoped_lock lock{mutex};
     const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
     return fmt::format(
-        "pending={} begin_calls={} opened={} rej_noframes={} rej_collision={} "
-        "end_calls={} end_closed={} end_noscope={} frames_left={} scope_open={} lock_held={} "
-        "gpu_tick={} collect_calls={} collect_not_ready={} last_qresult={} last_pending_tick={}",
-        pending_slots.size(), begin_calls, begin_opened, begin_reject_noframes,
-        begin_reject_collision, end_calls, end_closed, end_reject_noscope, frames_left,
-        scope_open, lock_held, gpu_tick, collect_calls, collect_not_ready, last_query_result,
-        last_pending_tick);
+        "pending={} opened={} end_closed={} frames_left={} gpu_tick={} collect_calls={} "
+        "drained={} avail_yes={} avail_no={} not_ready={} last_qresult={} last_pending_tick={}",
+        pending_slots.size(), begin_opened, end_closed, frames_left, gpu_tick, collect_calls,
+        drained, avail_yes, avail_no, collect_not_ready, last_query_result, last_pending_tick);
 }
 
 void PerfQuery::ReleaseLock() {

@@ -111,6 +111,9 @@ private:
     u64 end_calls{};
     u64 end_closed{};
     u64 end_reject_noscope{};
+    u64 drained{};
+    u64 avail_yes{};
+    u64 avail_no{};
     int last_query_result{};
     u64 last_pending_tick{};
     vk::QueryPool pool;
