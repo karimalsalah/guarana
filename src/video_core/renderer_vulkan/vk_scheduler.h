@@ -346,7 +346,8 @@ public:
     /// Send work to a separate thread.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
-    void RecordWithUploadBuffer(T&& command) {
+    void RecordWithUploadBuffer(T&& command,
+                                std::source_location location = std::source_location::current()) {
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
@@ -355,6 +356,9 @@ public:
             FlushUploads();
         }
         ++record_serial;
+        if (Common::DkbFrameTrace::Enabled()) {
+            RecordSiteMarker(location);
+        }
         if (chunk->Record(command)) {
             return;
         }
@@ -362,13 +366,15 @@ public:
         (void)chunk->Record(command);
     }
 
+    /// Send work to a separate thread; `location` labels it in EDEN_DKB_FRAME_TRACE's gpu_site log.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer>
-    void Record(T&& c) {
+    void Record(T&& c, std::source_location location = std::source_location::current()) {
         this->RecordWithUploadBuffer(
             [command = std::move(c)](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
                 command(cmdbuf);
-            });
+            },
+            location);
     }
 
     /// Whether anything was recorded since the last Flush or Finish, or waits to be: batched
@@ -620,6 +626,16 @@ private:
     [[nodiscard]] bool TraceCostsWanted() const {
         return Common::DkbFrameTrace::Enabled() || cost_sampling.load(std::memory_order_relaxed);
     }
+    /// EDEN_DKB_FRAME_TRACE: before each recorded command, a marker that timestamps it in
+    /// sampled submissions, so the frame's GPU time can be split by the code that recorded it.
+    void RecordSiteMarker(std::source_location location);
+    /// Worker thread, run by a marker: writes its timestamp while a sampled submission records.
+    /// (Named TraceSiteStamp: TraceSite is the flush/pass-end location struct below.)
+    void TraceSiteStamp(vk::CommandBuffer cmdbuf, const char* file, u32 line);
+    /// Logs the sampled frame's GPU time by recording site (the 25 most expensive), given each
+    /// submission's begin and end timestamps.
+    void ReportSiteTimes(const std::vector<u64>& submission_begin,
+                         const std::vector<u64>& submission_end);
     void TraceShader(u64 hash, u32 stage);
 
     /// Where a flush or a render pass end was asked from (static strings; null when unknown).
@@ -755,6 +771,16 @@ private:
     u32 trace_pass_dropped{};
     u32 trace_pass_open{TraceNoPass};
     bool trace_pass_begun{}; ///< Recording thread: the open render pass recorded TracePassBegin
+    static constexpr u32 TraceMaxSites = 32768;
+    struct SiteTrace {
+        const char* file{};
+        u32 line{};
+        u32 submission{};
+    };
+    vk::QueryPool trace_site_pool;
+    std::vector<SiteTrace> trace_site_items;
+    u32 trace_site_count{};
+
     Common::DkbFrameTrace::RateLimit trace_gpu_rate;
     u64 trace_gpu_tick{};
     u64 trace_frame_end{};
