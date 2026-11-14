@@ -2029,7 +2029,10 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     // (the watchdog fell back, the swapchain lost its storage views, its descriptors cannot be
     // written) is blitted to the swapchain like any frame of another size; where the device cannot
     // blit, it is dropped, as a copy would cut it.
-    bool use_compose = UseCompose(frame) && ComposeSyncSets(frame);
+    // While the debug server wants pictures, a frame drawn for the pass (one in flight when the
+    // capture was armed) is blitted on the graphics queue, which can take them.
+    bool use_compose = !VideoCore::Nx2ShownFrames::PicturesArmed() && UseCompose(frame) &&
+                       ComposeSyncSets(frame);
     if (!use_compose && frame->target_width != 0 && transfer_mode != TransferMode::Blit &&
         (frame->width != frame->target_width || frame->height != frame->target_height)) {
         DiscardFrame(frame);
@@ -2067,7 +2070,8 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();
     // The debug server's shown_frames needs a blit for its pictures, which the dedicated queue's
     // family cannot do: while it captures them the copy runs on the graphics queue.
-    if ((use_compose || UseFluidQueue(frame, extent)) && !VideoCore::Nx2ShownFrames::PicturesArmed()) {
+    if (use_compose ||
+        (UseFluidQueue(frame, extent) && !VideoCore::Nx2ShownFrames::PicturesArmed())) {
         if (use_compose) {
             SubmitFluidCompose(frame, extent, render_semaphore);
         } else {
