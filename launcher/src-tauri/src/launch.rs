@@ -164,22 +164,42 @@ pub fn launch(
     warm::make_way_for(app, tid.as_deref())?;
 
     // A mode (Auto by default) decides the settings at every start: power source, community data
-    // and the autopilot's last adjustments are read now. A hand-made profile (custom) is left as is.
+    // and the autopilot's last adjustments are read now. A hand-made profile (custom) keeps its values;
+    // only the launcher's block in nx2_switches.txt is rewritten from them (below).
     let mode = modes::current(&persisted);
     if mode != modes::CUSTOM {
         if let Err(e) = modes::apply_current(app) {
             log::warn!("Settings for mode {mode} not written before the start: {e}");
         }
-    } else if let Some(pid) = profile_id.filter(|p| !p.is_empty()) {
-        if persisted.profile_id.as_deref() != Some(pid.as_str()) {
-            if !profiles::is_known(&pid) {
-                return Err(format!("Unknown profile {pid}"));
+    } else {
+        let mut applied = false;
+        if let Some(pid) = profile_id.filter(|p| !p.is_empty()) {
+            if persisted.profile_id.as_deref() != Some(pid.as_str()) {
+                if !profiles::is_known(&pid) {
+                    return Err(format!("Unknown profile {pid}"));
+                }
+                profiles::apply(&pid, &BTreeMap::new(), &st.system())?;
+                st.update(|s| {
+                    s.profile_id = Some(pid.clone());
+                    s.overrides.clear();
+                })?;
+                applied = true;
             }
-            profiles::apply(&pid, &BTreeMap::new())?;
-            st.update(|s| {
-                s.profile_id = Some(pid.clone());
-                s.overrides.clear();
-            })?;
+        }
+        // The hand-made profile's qt-config.ini stays as the player left it, but the block in
+        // nx2_switches.txt is the launcher's: rewrite it from the saved profile so it follows the
+        // launcher's rules now, not the ones it was written under (an EDEN_NX2_EXTRAPOLATE=1 from
+        // an older launcher defeats the emulator's locked 120 and 144 Hz sets, issue #119).
+        if !applied {
+            if let Some(pid) = persisted.profile_id.as_deref().filter(|p| profiles::is_known(p)) {
+                match profiles::write_switches(pid, &persisted.overrides, &st.system()) {
+                    Ok(changed) if !changed.is_empty() => {
+                        log::info!("nx2_switches.txt block of profile {pid} rewritten before the start: {}", changed.join("; "))
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("nx2_switches.txt block of profile {pid} not rewritten before the start: {e}"),
+                }
+            }
         }
     }
 

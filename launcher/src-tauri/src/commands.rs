@@ -161,7 +161,7 @@ pub async fn apply_profile(
 ) -> CmdResult<AppliedProfile> {
     blocking(&app, move |app| {
         let overrides = overrides.unwrap_or_default();
-        let applied = profiles::apply(&profile_id, &overrides)?;
+        let applied = profiles::apply(&profile_id, &overrides, &app.state::<AppState>().system())?;
         // A hand-made profile: the modes and the autopilot leave it alone until a mode is picked.
         app.state::<AppState>().update(|s| {
             s.profile_id = Some(profile_id.clone());
