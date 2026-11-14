@@ -118,6 +118,14 @@ the baseline; the ones that change GPU work are paired with a traced twin
 (`EDEN_DKB_FRAME_TRACE=1`). Tracing costs time, so traced rows are compared with
 `baseline-trace` only.
 
+`presenter-and-locks.json` measures the default-off switches that touch frame pacing, pipeline
+links, lock contention and thread placement (`EDEN_NX2_PRESENT_SPIN`, `EDEN_NX2_GPL_OPTIMIZE_CACHED`,
+`EDEN_NX2_SCHED_PAUSE`, `EDEN_NX2_SYNCPOINT_SPLIT`, `EDEN_NX2_HYBRID`, `EDEN_NX2_IDLE_SPIN_US=0`)
+against the baseline, fullscreen and with the pacing counters, inside Link's house in Kokiri
+Forest. `--scene tools/bench/scenes/oot-hyrule-field.json` runs the same variants in the heavier
+scene. Most of these switches have no measured result in `docs/switches.md` yet; rows from this
+suite are how they get one.
+
 ### Power
 
 `--power-policy NAME=VALUE` (repeatable) and a variant's `power_policy` set processor power
