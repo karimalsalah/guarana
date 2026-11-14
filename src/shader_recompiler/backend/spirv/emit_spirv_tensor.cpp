@@ -283,7 +283,16 @@ bool UsesCooperativeHmma(const Profile& profile, const IR::Program& program) {
     return false;
 }
 
-std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Program& program) {
+namespace {
+// Where the 16x16x16 or 8x16x16 path puts its scratch in shared memory, in bytes, and the size
+// the program's shared memory then has. Empty when the program keeps the emulation.
+struct CooperativeHmmaScratchLayout {
+    u32 offset;
+    u32 total;
+};
+
+std::optional<CooperativeHmmaScratchLayout> FindCooperativeHmmaScratch(
+    const Profile& profile, const IR::Program& program) {
     if ((!profile.support_cooperative_hmma_16x16x16 && !profile.support_cooperative_hmma_8x16x16) ||
         !SupportsCooperativeHmma(program)) {
         return std::nullopt;
@@ -307,8 +316,23 @@ std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Pro
         total > profile.max_compute_shared_memory_size) {
         return std::nullopt;
     }
-    program.shared_memory_size = total;
-    return scratch_offset / 4U;
+    return CooperativeHmmaScratchLayout{.offset = scratch_offset, .total = total};
+}
+} // Anonymous namespace
+
+std::optional<u32> ReserveCooperativeHmmaScratch(const Profile& profile, IR::Program& program) {
+    const std::optional<CooperativeHmmaScratchLayout> layout{
+        FindCooperativeHmmaScratch(profile, program)};
+    if (!layout) {
+        return std::nullopt;
+    }
+    program.shared_memory_size = layout->total;
+    return layout->offset / 4U;
+}
+
+bool UsesCooperativeMatrix(const Profile& profile, const IR::Program& program) {
+    return UsesCooperativeHmma(profile, program) ||
+           FindCooperativeHmmaScratch(profile, program).has_value();
 }
 
 bool UsesSoftwareMatrixSharedMemory(const Profile& profile, const IR::Program& program) {

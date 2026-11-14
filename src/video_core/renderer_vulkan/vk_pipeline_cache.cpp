@@ -492,6 +492,16 @@ bool PrepassInvariantPosition() {
     return invariant;
 }
 
+/// EDEN_NX2_HMMA_FULL_SUBGROUPS=1, read once: a compute pipeline whose HMMA runs on cooperative
+/// matrices is created with full subgroups also when its SPIR-V is emitted by a deferred job.
+bool HmmaFullSubgroupsEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_HMMA_FULL_SUBGROUPS");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return enabled;
+}
+
 /// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
 /// what the driver gets for a precache build. Resolution scaling bakes the scale into the
 /// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
@@ -4482,6 +4492,13 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                  key.unique_hash, program.workgroup_size[0], program.workgroup_size[1],
                  program.workgroup_size[2], program.shared_memory_size,
                  program.info.uses_subgroup_shared_scratch ? "on" : "off");
+    }
+    // EDEN_NX2_HMMA_FULL_SUBGROUPS: the same for cooperative matrices, which only EmitSPIRV sets
+    // otherwise, after a deferred job's pipeline copied the info. Before any emission, as the
+    // answer reads the shared memory size that the 16x16x16 path grows.
+    if (HmmaFullSubgroupsEnabled()) {
+        program.info.uses_cooperative_matrix =
+            Shader::Backend::SPIRV::UsesCooperativeMatrix(profile, program);
     }
     std::unique_ptr<ComputePipeline> pipeline;
     const u64 ir_bytes = emit_pools ? IrBytes(std::span(&program, 1)) : 0;

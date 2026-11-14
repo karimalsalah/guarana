@@ -1134,3 +1134,69 @@ TEST_CASE("Native matrix lowering selects compact software helpers without legac
     code[0].words[0] += 1U << 24;
     REQUIRE_FALSE(static_cast<bool>(Ampere::LowerToMaxwell(code, false, true)));
 }
+
+TEST_CASE("Cooperative matrix use is known before the SPIR-V is emitted",
+          "[video_core][tensor][ampere]") {
+    // What a deferred compute pipeline needs: its Info is copied before EmitSPIRV runs, so the
+    // answer for the pipeline's flags has to come from the program as it is, and match what
+    // EmitSPIRV stores afterwards.
+    const auto compare_with_emission = [](TensorProgram& fixture, bool expected) {
+        const u32 shared_memory_size{fixture.program.shared_memory_size};
+        REQUIRE(Shader::Backend::SPIRV::UsesCooperativeMatrix(fixture.profile, fixture.program) ==
+                expected);
+        REQUIRE(fixture.program.shared_memory_size == shared_memory_size);
+        REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+        fixture.Emit();
+        REQUIRE(fixture.program.info.uses_cooperative_matrix == expected);
+    };
+    SECTION("16x8x16 matrices for the K16 form") {
+        TensorProgram fixture{3, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        compare_with_emission(fixture, true);
+    }
+    SECTION("16x16x16 matrices for the K16 form") {
+        TensorProgram fixture{3, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, true);
+        REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
+    }
+    SECTION("16x16x16 matrices for the K8 form") {
+        TensorProgram fixture{3, 8};
+        fixture.profile.supported_spirv = 0x00010600;
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, true);
+    }
+    SECTION("no cooperative matrix support in the profile") {
+        TensorProgram fixture{1, 16};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x8x16 matrices do not take the K8 form") {
+        TensorProgram fixture{1, 8};
+        fixture.profile.support_cooperative_hmma = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("a workgroup that leaves a warp unfilled") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        fixture.program.workgroup_size = {48, 1, 1};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("a workgroup row that leaves a warp unfilled") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.workgroup_size = {16, 2, 1};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("coherent memory") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        fixture.program.info.requires_coherent_global_memory = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x16x16 scratch past the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.profile.max_compute_shared_memory_size = 2 * 384 * 4 - 4;
+        compare_with_emission(fixture, false);
+    }
+}
