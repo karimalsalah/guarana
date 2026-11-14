@@ -70,7 +70,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [DesignOverview.md](DesignOverview.md) | High-level design of the emulator |
 | [HosKernel.md](HosKernel.md) | The HOS kernel |
 | [lifecycle.md](lifecycle.md) | What Guarana and its launcher store (switch files, settings, launcher state, caches), and when each is flushed, loaded and preloaded |
-| [design/settings-hygiene.md](design/settings-hygiene.md) | Proposal, not yet built (#125): record who wrote each setting, reset what the player did not choose, and let the doctor run on its own |
+| [design/settings-hygiene.md](design/settings-hygiene.md) | Proposal, not yet built ([#125](https://github.com/karimalsalah/guarana/issues/125)): record who wrote each setting, reset what the player did not choose, and let the doctor run on its own |
 | [Settings.md](Settings.md) | How settings are defined and stored |
 | [NvidiaGpu.md](NvidiaGpu.md) | The NVIDIA SM86 GPU instruction set that Switch 2 shaders target |
 | [DriverBugs.md](DriverBugs.md) | Known GPU driver bugs and workarounds |

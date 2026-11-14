@@ -1,6 +1,8 @@
-**This is a proposal, tracked in [#125][125], and not yet built.** Nothing below describes what the code does today unless it says "today" and cites a line. For what the code does now, see [lifecycle.md](../lifecycle.md).
-
 # Design: settings hygiene, the flush and the automatic doctor
+
+**This is a proposal, tracked in [#125][125], and not yet built.** Nothing below describes what the
+code does today unless it says "today", "already" or "as today", or cites a line as the current
+state. For what the code does now, see [lifecycle.md](../lifecycle.md).
 
 Guarana's settings come from many writers: the shipped switch file, the launcher's modes and
 profiles, the first-run seed, imports from other emulators, the copy from the old `lichii` folder,
@@ -21,12 +23,12 @@ of the commit that added this page.
 
 Two merged pull requests already fixed part of the problem:
 
-- **#122** (`profiles.rs:30-56`, `launch.rs:169-204`): with any Intel integrated GPU in the
+- **[#122][122]** (`profiles.rs:30-56`, `launch.rs:169-204`): with any Intel integrated GPU in the
   machine, prediction on (`ocarina_extrapolation`) leaves `EDEN_NX2_EXTRAPOLATE` out of the
   launcher block at every refresh rate; prediction off still writes `=0`. Custom mode now rewrites
   the launcher block (only the block, not `qt-config.ini`) from the saved profile at every start,
   so a line an older launcher wrote goes away at the next launch.
-- **#121** records which switches only the shipped `nx2_switches.txt` set
+- **[#121][121]** records which switches only the shipped `nx2_switches.txt` set
   (`src/common/switch_origin.h`). A game's switch defaults may replace those values
   (`DecideSwitch`, `src/core/game_presets.cpp:398-408`). It takes back an earlier game's switch
   defaults at the next start in the same process (`game_presets.cpp:447-459`), and leaves this
@@ -35,7 +37,7 @@ Two merged pull requests already fixed part of the problem:
 What is left:
 
 - **The launcher block sits inside the player's file**, so every line in it counts as the
-  player's. Issue #119 is fixed for launcher users on Intel integrated GPUs only when the launcher
+  player's. Issue [#119][119] is fixed for launcher users on Intel integrated GPUs only when the launcher
   runs before the game. A block an older launcher wrote stays until the next launch through the
   launcher: starting `guarana.exe` from its own shortcut keeps it. Custom mode with no known
   profile rewrites nothing (`launch.rs:193-194`).
@@ -46,8 +48,8 @@ What is left:
   with the shipped file) fixes it without costing the other games.
 - **Settings files keep no record of who wrote a value** (`src/frontend_common/config.cpp:984-993`):
   the first-run seed, the launcher, an import, a status-bar click and the player all look the same.
-- **Nothing runs checks on its own** except the warm-up after a GPU driver change
-  (`warm.rs:431-483`), and the doctor has no check for settings, switch files or cache formats
+- **Nothing runs checks on its own** except the automatic warm-up, after a GPU driver change or at
+  the first start that finds caches on disk (`warm.rs:431-483`), and the doctor has no check for settings, switch files or cache formats
   (`doctor.rs:27-49`).
 
 ## 1. What "contaminated" means
@@ -67,7 +69,7 @@ doctor acts (section 4): **A** fixes on its own, **B** asks first, **C** only re
 
 | Id | Rule | Evidence | Effect | Class |
 |---|---|---|---|---|
-| C1 | The launcher block differs from what this launcher would write now for the saved mode, profile and overrides. Typically an `EDEN_NX2_EXTRAPOLATE=1` from a launcher older than #122, on a machine with an Intel integrated GPU. Separately: the block sets `EDEN_NX2_FLUID=1` while Ocarina of Time is in the library and an Intel or AMD integrated GPU is present | `rewrite_block` (`profiles.rs:545`) run on the file without writing; the detected GPUs. No refresh rate is read, as #122 decided (the rate can change after the check) | At 144 Hz: 58.5 shown frames a second and 655 of 1238 frames dropped, against 91.5 with the measured set ([switches.md](../switches.md), 144 Hz row; issue #119). `FLUID=1` against Ocarina's measured `FLUID=2` at every rate | Stale block: A (rewrite it, as every launch already does). `FLUID`: C until S3; after S3 nothing to do, the game default wins |
+| C1 | The launcher block differs from what this launcher would write now for the saved mode, profile and overrides. Typically an `EDEN_NX2_EXTRAPOLATE=1` from a launcher older than [#122][122], on a machine with an Intel integrated GPU. Separately: the block sets `EDEN_NX2_FLUID=1` while Ocarina of Time is in the library and an Intel or AMD integrated GPU is present | `rewrite_block` (`profiles.rs:545`) run on the file without writing; the detected GPUs. No refresh rate is read, as [#122][122] decided (the rate can change after the check) | At 144 Hz: 58.5 shown frames a second and 655 of 1238 frames dropped, against 91.5 with the measured set ([switches.md](../switches.md), 144 Hz row; issue [#119][119]). `FLUID=1` against Ocarina's measured `FLUID=2` at every rate | Stale block: A (rewrite it, as every launch already does). `FLUID`: C until S3; after S3 nothing to do, the game default wins |
 | C2 | Both managed blocks in one file name the same switch | The markers (`src/common/guarana_modes.cpp:9-10`, `profiles.rs:21-22`) | The settings page shows Smooth (`FLUID=2`) while the launcher block's `FLUID=1` wins | C |
 | C3 | A switch-file line the loader reads wrongly: a byte-order mark, an unquoted ` # note` after the value, or a name the installed build does not know or has retired | The file's bytes; the installed emulator's switch list from its `build-facts.json` (S3), not the launcher's own copy, which can be of another version | The switch silently does nothing (`POWER_POLICY=igpu # x` fails its compare) | C. The loader also learns to accept the first two (S3); it strips ` # note` only from switches whose value is a number or a fixed word, so a folder value such as `EDEN_NX2_PIPELINE_STATS=C:\runs #2` keeps its text |
 | C4 | A persistent `EDEN_NX2_*` variable in the user or system environment | `HKCU\Environment` and the system environment, read only | Wins over every file and every launcher choice (`nx2_switches.h:164-167`) | User scope: B. The fix removes it, tells Windows the environment changed, and leaves it out of the environment the launcher gives the emulator until the launcher restarts (its own environment still holds the old value). System scope: C |
@@ -78,10 +80,10 @@ doctor acts (section 4): **A** fixes on its own, **B** asks first, **C** only re
 | C9 | A value stamped `statusbar`, for the filter, anti-aliasing, frame generation, GPU accuracy or renderer chips. Not docked mode: its hotkey is a deliberate, frequent switch | `\origin=statusbar <value>` (S4) | One click on the filter chip costs 3.5 ms per shown frame against 1.7 for the default filter, in every game, for good | B, ticked |
 | C10 | A value stamped `import:<emulator>` in `Renderer`, `Cpu` or `Core` | `\origin=import:*` (S4) | Another fork's renderer and accuracy settings, and presets skipped because the value counts as the player's | B |
 | C11 | `use_disk_shader_cache=false` or `use_vulkan_driver_pipeline_cache=false` | The two keys (`src/common/settings.h:681-686`) | Every boot compiles from nothing; the warm-up refuses to run | B, ticked when stamped `import:*`. Not A: a player may have turned a cache off on purpose to work around a driver bug |
-| C12 | The rename copy did not happen, or happened into an empty folder (issue #107): `lichii\config\qt-config.ini` exists, and `guarana\config\qt-config.ini` is missing or holds only seed values and keys equal to their defaults; or the same for `nx2_switches.txt` | Whether the files exist; a key-by-key comparison of the two files | The player's settings are missing | B: merge the settings keys of `qt-config.ini`, `custom\*.ini` and `nx2_switches.txt` from `lichii`, stamping each copied non-default key `import:lichii`. `[Data Storage]` (`config.cpp:300-322`: `nand_directory`, `sdmc_directory`, which decide where saves are read) and every path key are kept from `guarana` and never copied. When `lichii\nand` or `lichii\sdmc` exist and the `guarana` ones are empty, the row says so and points to Guarana's own migration: the doctor checks only that they exist and copies no save |
-| C13 | Ocarina of Time's built-in `Max Resolution` add-on is enabled by the preset, which matches every Intel integrated GPU without matrix cores (`game_presets.cpp:177-186`), and not disabled in Add-Ons, on a GPU that matches the rule but is not the Arc 140T it was measured on (by PCI device id) | `[DisabledAddOns]` (only whether a disable exists); the GPU device ids; the preset rule, mirrored in the launcher | Full-scale rendering that a small integrated GPU (a 4-core Xe3) cannot hold | C, with "Turn it off in Guarana: Properties > Add-Ons". Only disables are stored, so "on by choice" cannot be told from "on by default". The real fix is a narrower preset rule, not part of #125 |
+| C12 | The rename copy did not happen, or happened into an empty folder (the copy never runs once `guarana` exists, `data_dir_migration.h:33-38`; [#107][107] lists what else it leaves behind): `lichii\config\qt-config.ini` exists, and `guarana\config\qt-config.ini` is missing or holds only seed values and keys equal to their defaults; or the same for `nx2_switches.txt` | Whether the files exist; a key-by-key comparison of the two files | The player's settings are missing | B: merge the settings keys of `qt-config.ini`, `custom\*.ini` and `nx2_switches.txt` from `lichii`, stamping each copied non-default key `import:lichii`. `[Data Storage]` (`config.cpp:300-322`: `nand_directory`, `sdmc_directory`, which decide where saves are read) and every path key are kept from `guarana` and never copied. When `lichii\nand` or `lichii\sdmc` exist and the `guarana` ones are empty, the row says so and points to Guarana's own migration: the doctor checks only that they exist and copies no save |
+| C13 | Ocarina of Time's built-in `Max Resolution` add-on is enabled by the preset, which matches every Intel integrated GPU without matrix cores (`game_presets.cpp:177-186`), and not disabled in Add-Ons, on a GPU that matches the rule but is not the Arc 140T it was measured on (by PCI device id) | `[DisabledAddOns]` (only whether a disable exists); the GPU device ids; the preset rule, mirrored in the launcher | Full-scale rendering that a small integrated GPU (a 4-core Xe3) cannot hold | C, with "Turn it off in Guarana: Properties > Add-Ons". Only disables are stored, so "on by choice" cannot be told from "on by default". The real fix is a narrower preset rule, not part of [#125][125] |
 | C14 | A shader cache log whose header has a format version older than the one the installed emulator writes | The first 28 bytes: magic `LXSHCACH`, a CRC, and a 32-bit version at offset 8 (`src/video_core/shader_cache_v2/cache_format.cpp:216-220`); the installed build's version from `build-facts.json` (S3). A newer version means a rollback: left alone, reported as C ("made by a newer Guarana; it is used again after an update") | Every boot of that title is a cold boot, for good (`cache_writer.cpp:137-141`) | A: rename it to `lichii-cache.v2.bin.format<N>`, never delete it. When the installed build writes format N again and no current log exists, the `.format<N>` file is renamed back (A). Without `build-facts.json`: C |
-| C15 | Precache markers present while the driver cache file is missing or holds only a header, and only where the emulator keeps that file: the markers' device is an Intel GPU and `use_vulkan_driver_pipeline_cache` is on (after S8, the marker says so itself). NVIDIA, AMD's own driver and RADV keep their own cache (`vulkan_device.cpp:1404-1411`); there the file never exists and the markers are right | File sizes, as the emulator's own check (`vk_pipeline_cache.cpp:1833-1843`, which runs only where the emulator keeps the file, `:868-869`) | The warm-up says it is done, but the first play compiles (issue #106) | A: remove the two lists and `warm-compute.done`, as the emulator's own load does (`shader_warm_builder.cpp:498-512`). Elsewhere: nothing |
+| C15 | Precache markers present while the driver cache file is missing or holds only a header, and only where the emulator keeps that file: the markers' device is an Intel GPU and `use_vulkan_driver_pipeline_cache` is on (after S8, the marker says so itself). NVIDIA, AMD's own driver and RADV (while Mesa's disk cache is on) keep their own cache (`vulkan_device.cpp:1404-1411`); there the file never exists and the markers are right | File sizes, as the emulator's own check (`vk_pipeline_cache.cpp:1833-1843`, which runs only where the emulator keeps the file, `:868-869`) | The warm-up says it is done, but the first play compiles (issue [#106][106]) | A: remove the two lists and `warm-compute.done`, as the emulator's own load does (`shader_warm_builder.cpp:498-512`). Elsewhere: nothing |
 | C16 | `.migrating` or `.tmp` files older than an hour whose cache lock is free (`cache_file.cpp:248-256`), with no emulator or warm-up running | Names, times, the lock | Disk space; an interrupted migration (the source log stays, so the temporary file holds nothing else) | B, as the `shader_tmp` check today. Not backed up: the snapshot lists them as deleted, not restorable |
 | C17 | Launcher overrides that name a toggle that does not exist | The overrides (`profiles.rs:537`) | The whole apply fails with "Unknown setting" | A: left out of the values applied, with a log line, and kept in `launcher-state.json`, so a newer launcher still has them after a launcher rollback |
 | C18 | A global value with a measured cost above the default's on this GPU class, whoever wrote it (values saved before S4 have no stamp) | A short table of measured costs shipped with the launcher (first row: the scaling filter, 3.5 against 1.7 ms per shown frame) | The filter chip clicked before S4 | B, not ticked: "costs about 1.8 ms more per shown frame than the default" |
@@ -158,7 +160,7 @@ class A. Instead:
   shipped copy, so `DecideSwitch` replaces them with a game's measured value, and its log line says
   `over the launcher's profile default` (S3). A player's own line, or a Custom override, still wins.
 - Out-of-range enum values are logged with key, raw value and origin at load (S4).
-- Not in #125: making the preset decision treat an explicit `player` choice of the default value as
+- Not in [#125][125]: making the preset decision treat an explicit `player` choice of the default value as
   the player's (open question 2).
 
 ## 3. The flush: "Reset to known-good"
@@ -324,7 +326,7 @@ Each slice is one pull request. The full list, with files and tests, is in [#125
 | S5 | The launcher keeps a journal of what it writes and hands keys back | Yes: the launcher stops overwriting values changed in the emulator |
 | S6 | Reset to known-good, with undo | No (only on request) |
 | S7 | The doctor runs on its own | Yes (automatic class A fixes) |
-| S8 | Precache markers say "built" only when the driver cache holds it (#106) | Yes (one extra warm-up after updating) |
+| S8 | Precache markers say "built" only when the driver cache holds it ([#106][106]) | Yes (one extra warm-up after updating) |
 
 ## 9. Project text that disagrees with the code
 
@@ -343,7 +345,8 @@ These are fixed within the slices named.
   covers launcher-block lines. S3.
 - `docs/warm-up.md`, "Command line" and "When the launcher calls it": the warm-up does not load
   `custom\<id>.ini`, the launcher passes the global file (`warm.rs:221,286-287`), and the launcher runs
-  it on its own only after a GPU driver change. A follow-up, not part of #125.
+  it on its own only after a GPU driver change or at the first start that finds caches on disk
+  (`warm.rs:431-433`), not after an install, import or update. A follow-up, not part of [#125][125].
 
 ## Open questions
 
@@ -356,4 +359,9 @@ These are fixed within the slices named.
 4. Should the uninstaller remove the launcher block? The installer hook would need a launcher
    command for it.
 
+[106]: https://github.com/karimalsalah/guarana/issues/106
+[107]: https://github.com/karimalsalah/guarana/issues/107
+[119]: https://github.com/karimalsalah/guarana/issues/119
+[121]: https://github.com/karimalsalah/guarana/pull/121
+[122]: https://github.com/karimalsalah/guarana/pull/122
 [125]: https://github.com/karimalsalah/guarana/issues/125
