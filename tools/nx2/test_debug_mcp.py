@@ -126,7 +126,8 @@ class AdapterTest(unittest.TestCase):
                                  "search_memory", "read_gpu_memory", "input",
                                  "input_sequence", "host_timing", "power", "power_set",
                                  "gpu_costs", "frame_budget", "memory", "trace_record",
-                                 "trace_stop", "trace_status"])
+                                 "trace_stop", "trace_status", "thread_stats", "present_stats",
+                                 "cache_stats", "boot_timing"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)
 
     def test_frame_times_is_forwarded(self):

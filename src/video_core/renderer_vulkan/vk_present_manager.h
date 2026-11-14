@@ -175,6 +175,55 @@ public:
     [[nodiscard]] std::size_t SwapchainImageCount() const { return swapchain_image_count; }
     [[nodiscard]] VkFormat SwapchainImageFormat() const { return swapchain_image_format; }
 
+    /// The FLUID presenter's counters for the debug server's present_stats tool: a copy of
+    /// fluid_stats (EDEN_NX2_SHOWN_STATS fills it; zero without it) plus the vblank clock and
+    /// the present queue's depth. Any thread.
+    struct PresentStats {
+        bool fluid{};          ///< The present thread shows frames on the vblank clock
+        bool fallback{};       ///< Its watchdog fell back to arrival order
+        bool shown_stats{};    ///< EDEN_NX2_SHOWN_STATS: the counters below fill
+        u64 slots{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 not_done{};
+        u64 uncovered{};
+        u64 rolled{};
+        u64 spare{};
+        u64 stale{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{}; ///< Frames shown for 1, 2, 3 and 4+ refreshes
+        double age_ms{};           ///< Sum of real-frame ages at display (divide by hits)
+        double latency_ms{};       ///< Sum of record-to-GPU-done times (divide by samples)
+        u64 latency_samples{};
+        u64 presents{};
+        double acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        double copy_wait_ms{}, copy_wait_max_ms{};
+        double lock_ms{}, lock_max_ms{};
+        double call_ms{}, call_max_ms{};
+        double margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        u64 copy_gpu_samples{};
+        double copy_gpu_ms{}, copy_gpu_max_ms{};
+        /// The vblank clock as of the present thread's last wake (zero until it counted one).
+        double refresh_hz{};
+        u64 vblank_index{};
+        u64 divisor{};
+        double lead_ms{};
+        double clock_latency_ms{};
+        /// Frames handed to the present thread and not shown yet.
+        std::size_t queued_frames{};
+        std::size_t free_frames{};
+        std::size_t frame_count{};
+        std::size_t swapchain_images{};
+    };
+    [[nodiscard]] PresentStats GetPresentStats() const;
+
 private:
     enum class TransferMode { Unsupported, Copy, Blit };
 

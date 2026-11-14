@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -125,6 +127,53 @@ public:
     /// none was sampled
     [[nodiscard]] virtual GpuCostSnapshot GetGpuCosts() const {
         return {};
+    }
+
+    /// The Vulkan present thread's counters (present_stats); null on other renderers.
+    struct PresentStatsView {
+        bool fluid{};
+        bool fallback{};
+        bool shown_stats{};
+        u64 slots{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 not_done{};
+        u64 uncovered{};
+        u64 rolled{};
+        u64 spare{};
+        u64 stale{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{};
+        double age_ms{};
+        double latency_ms{};
+        u64 latency_samples{};
+        u64 presents{};
+        double acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        double copy_wait_ms{}, copy_wait_max_ms{};
+        double lock_ms{}, lock_max_ms{};
+        double call_ms{}, call_max_ms{};
+        double margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        u64 copy_gpu_samples{};
+        double copy_gpu_ms{}, copy_gpu_max_ms{};
+        double refresh_hz{};
+        u64 vblank_index{};
+        u64 divisor{};
+        double lead_ms{};
+        double clock_latency_ms{};
+        std::size_t queued_frames{};
+        std::size_t free_frames{};
+        std::size_t frame_count{};
+        std::size_t swapchain_images{};
+    };
+    [[nodiscard]] virtual std::optional<PresentStatsView> GetPresentStats() const {
+        return std::nullopt;
     }
 
     [[nodiscard]] const RendererDeviceInfo& GetDeviceInfo() const {
