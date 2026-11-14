@@ -1138,8 +1138,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         std::scoped_lock swapchain_lock{swapchain_mutex};
         fluid_ahead_pending = false;
         fluid_ahead_frame = nullptr;
-        present_operation = "presenting copy-ahead image";
-        swapchain.Present(fluid_ahead_semaphore);
+        PresentCopyAhead();
     }
     // Nothing is presented from here on: answer WaitPresent.
     {
@@ -1385,18 +1384,7 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
         if (drain != 0 && fluid_ahead_pending) {
             fluid_ahead_pending = false;
             fluid_ahead_frame = nullptr;
-            try {
-                swapchain.Present(fluid_ahead_semaphore);
-            } catch (const vk::Exception& except) {
-                force_swapchain_recreation = true;
-                const VkResult result = except.GetResult();
-                if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
-                    result != VK_ERROR_OUT_OF_DATE_KHR &&
-                    result != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT &&
-                    result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
-                    throw;
-                }
-            }
+            PresentCopyAhead();
         }
         std::erase_if(fluid.pending, [this, drain](Frame* frame) {
             if (drain == 0 && frame->fluid_slot != FLUID_NOT_SHOWN) {
@@ -1670,8 +1658,7 @@ void PresentManager::FluidPresentAhead() {
     }
     fluid_ahead_pending = false;
     fluid_ahead_frame = nullptr;
-    present_operation = "presenting copy-ahead image";
-    swapchain.Present(fluid_ahead_semaphore);
+    PresentCopyAhead();
     if (shown_stats) {
         const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
         const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
@@ -1686,6 +1673,22 @@ void PresentManager::FluidPresentAhead() {
         FluidNoteCopyTime(fluid.showing);
         ReturnFrame(fluid.showing);
         fluid.showing = nullptr;
+    }
+}
+
+void PresentManager::PresentCopyAhead() {
+    present_operation = "presenting copy-ahead image";
+    try {
+        swapchain.Present(fluid_ahead_semaphore);
+    } catch (const vk::Exception& except) {
+        force_swapchain_recreation = true;
+        const VkResult result = except.GetResult();
+        if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
+            result != VK_ERROR_OUT_OF_DATE_KHR &&
+            result != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT &&
+            result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+            throw;
+        }
     }
 }
 

@@ -310,6 +310,9 @@ private:
     /// EDEN_NX2_FLUID_COPY_AHEAD: presents the frame copied at the last slot's wake, if any.
     void FluidPresentAhead();
 
+    /// Presents an already submitted copy under swapchain_mutex after clearing its pending state.
+    void PresentCopyAhead();
+
     /// Frees a frame that is not shown. Holds swapchain_mutex.
     void FluidDiscard(Frame* frame);
 
