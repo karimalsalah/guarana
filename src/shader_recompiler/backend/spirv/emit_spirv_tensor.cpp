@@ -19,8 +19,6 @@ namespace {
 constexpr u32 GUEST_WARP_LANES = 32;
 constexpr u32 LayoutRowMajor = 0;
 constexpr u32 LayoutColumnMajor = 1;
-// Subgroup scope, acquire-release on workgroup memory.
-constexpr u32 SubgroupBarrierSemantics = 0x8 | 0x100;
 // Scratch of the software helpers that gather from shared memory, per 32-lane subgroup. A row r
 // is the eight words (k / 2) at 16 * (r % 8) + 8 * (r / 8), which puts a lane's rows g and g + 8
 // together; B column n is the eight words at 128 + 8n. A lane reads 16 consecutive words of each.
