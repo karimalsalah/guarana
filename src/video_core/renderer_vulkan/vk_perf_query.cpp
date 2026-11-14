@@ -155,26 +155,50 @@ PerfQuery::PerfQuery(const Device& device_) : device{device_} {
         reason = "performance counter enumeration failed";
         return;
     }
-    for (const std::string_view wanted : WantedCounters) {
+    // Collect every wanted counter the driver exposes, in priority order.
+    std::vector<Counter> wanted;
+    for (const std::string_view name_wanted : WantedCounters) {
         for (u32 i = 0; i < count; ++i) {
             const std::string_view name{descriptions[i].name};
-            if (name == wanted) {
-                counters.push_back({std::string{name}, i, all[i].unit, all[i].storage});
+            if (name == name_wanted) {
+                wanted.push_back({std::string{name}, i, all[i].unit, all[i].storage});
                 break;
             }
         }
     }
-    if (counters.empty()) {
+    if (wanted.empty()) {
         reason = "none of the wanted counters (GpuBusy, XveStall, XveThreadOccupancy, "
                  "SamplerBottleneck, AvgGpuCoreFrequencyMHz) is exposed";
         return;
     }
 
-    // One pass for the chosen counters; multi-pass configurations are not sampled.
+    // The hardware groups counters into passes; a query pool may only span one pass.
+    // Greedily keep the largest priority-ordered subset that fits a single pass, so a
+    // multi-pass wishlist still samples its most important counters instead of nothing.
+    const auto passes_for = [&](const std::vector<u32>& idx) -> u32 {
+        const VkQueryPoolPerformanceCreateInfoKHR ci{
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_PERFORMANCE_CREATE_INFO_KHR,
+            .pNext = nullptr,
+            .queueFamilyIndex = family,
+            .counterIndexCount = static_cast<u32>(idx.size()),
+            .pCounterIndices = idx.data(),
+        };
+        u32 n = 0;
+        get_passes(device.GetPhysical(), &ci, &n);
+        return n;
+    };
     std::vector<u32> indices;
-    indices.reserve(counters.size());
-    for (const Counter& counter : counters) {
+    for (const Counter& counter : wanted) {
         indices.push_back(counter.index);
+        if (passes_for(indices) != 1) {
+            indices.pop_back(); // this counter would force a second pass: skip it
+        } else {
+            counters.push_back(counter);
+        }
+    }
+    if (counters.empty()) {
+        reason = "no single-pass subset of the wanted counters is available";
+        return;
     }
     const VkQueryPoolPerformanceCreateInfoKHR performance_ci{
         .sType = VK_STRUCTURE_TYPE_QUERY_POOL_PERFORMANCE_CREATE_INFO_KHR,
@@ -183,13 +207,6 @@ PerfQuery::PerfQuery(const Device& device_) : device{device_} {
         .counterIndexCount = static_cast<u32>(indices.size()),
         .pCounterIndices = indices.data(),
     };
-    u32 passes = 0;
-    get_passes(device.GetPhysical(), &performance_ci, &passes);
-    if (passes != 1) {
-        reason = "the chosen counters need more than one pass";
-        counters.clear();
-        return;
-    }
 
     try {
         pool = device.GetLogical().CreateQueryPool({
