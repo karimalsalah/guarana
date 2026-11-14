@@ -2,6 +2,10 @@ name: build-check
 
 on:
   pull_request:
+  # GitHub's merge queue, once it is turned on, runs these checks on the queued merge commit
+  # (docs/LANES.md, "Merging"). The jobs below need no change for it: with no pull request
+  # number every build runs, as for a push.
+  merge_group:
   push:
     branches:
       - main

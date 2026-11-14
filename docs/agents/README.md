@@ -93,6 +93,13 @@ it is merged.
   unit tests and the Python tool tests. Pull requests that change only documentation, the site,
   issue forms, the label list or benchmark rows skip the builds. **pr-build-comment** links the
   Windows test build (`guarana-pr<N>-<commit>-windows-x86_64`, kept 14 days) on the pull request.
+- **Merging** (the resolver, or anyone who merges): `python -I tools/ci/pr_gate.py <number>` says
+  `ready` or `not-ready` with the reasons (`--json` for a machine-readable answer, exit status 0 or
+  1). Not ready: a draft; a required `build-check` job failing or still running on the head;
+  `main` red while the pull request lacks the `fixes-main` label; a conflict outside the union
+  files `CHANGELOG.md`, `docs/switches.md` and `dist/nx2_switches.txt`, whose conflicts are settled by
+  keeping both sides. Merge one at a time and ask again after each. `build-check` also runs on
+  `merge_group`, so GitHub's merge queue can be turned on later. Details: [LANES.md](../LANES.md#merging).
 - **legacy** runs the `tools/ci` tests, and **ingest-reports** the `tools/ingest` tests, when a
   pull request touches them.
 - **A first pull request** from a new account waits for a maintainer to approve its workflow run.
