@@ -8,7 +8,7 @@ GPU traces (`.lxtrace`, see `docs/nx2/gpu-trace.md`) replay a scene without the 
 Check the corpus (CI runs this on lavapipe with the generated traces):
 
 ```sh
-python3 -I tools/nx2/trace_replay.py check --cli build/bin/eden-cli \
+python3 -I tools/nx2/trace_replay.py check --cli build/bin/guarana-cli \
   --corpus tests/gpu_traces/corpus.json --traces <directory with the private traces>
 ```
 
