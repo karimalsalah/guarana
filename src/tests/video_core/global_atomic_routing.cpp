@@ -56,7 +56,7 @@ std::vector<std::vector<u32>> Instructions(const std::vector<u32>& code, u32 opc
 
 // A compute program whose atomic address comes from global memory, so the storage buffer pass
 // tracks the load but not the atomic.
-std::vector<u32> EmitUntrackedAtomic(IR::Opcode opcode) {
+std::vector<u32> EmitUntrackedAtomic(IR::Opcode opcode, bool native_f32_add = false) {
     ObjectPool<IR::Inst> pool;
     IR::Block block{pool};
     IR::IREmitter ir{block};
@@ -95,6 +95,7 @@ std::vector<u32> EmitUntrackedAtomic(IR::Opcode opcode) {
     profile.supported_spirv = 0x00010300;
     profile.support_int64 = true;
     profile.support_descriptor_aliasing = true;
+    profile.support_float32_atomic_add = native_f32_add;
     profile.unified_descriptor_binding = true;
     profile.min_ssbo_alignment = 16;
     return Backend::SPIRV::EmitSPIRV(profile, program);
@@ -127,5 +128,34 @@ TEST_CASE("Untracked 32-bit global atomics route to their storage buffer",
         REQUIRE_NOTHROW(code = EmitUntrackedAtomic(opcode));
         CHECK_FALSE(Instructions(code, atomic).empty());
         CHECK_FALSE(Instructions(code, OpFunctionCall).empty());
+    }
+}
+
+TEST_CASE("An untracked global F32 atomic add calls a defined function with native float adds",
+          "[shader_recompiler][global_memory]") {
+    // Issue #105: with hardware float adds (Intel: support_float32_atomic_add and descriptor
+    // aliasing), only storage atomics take OpAtomicFAddEXT. The routed global AddF32 function
+    // still calls the storage buffer CAS loop, which must then be defined.
+    constexpr u32 OpFunction = 54;
+    constexpr u32 OpFunctionCall = 57;
+    constexpr u32 OpAtomicCompareExchange = 230;
+    for (const bool native : {false, true}) {
+        CAPTURE(native);
+        std::vector<u32> code;
+        REQUIRE_NOTHROW(code = EmitUntrackedAtomic(IR::Opcode::GlobalAtomicAddF32, native));
+        std::vector<u32> functions;
+        for (const auto& function : Instructions(code, OpFunction)) {
+            REQUIRE(function.size() >= 2);
+            functions.push_back(function[1]); // result id
+        }
+        const auto calls = Instructions(code, OpFunctionCall);
+        REQUIRE_FALSE(calls.empty());
+        for (const auto& call : calls) {
+            REQUIRE(call.size() >= 3);
+            CAPTURE(call[2]);
+            CHECK(call[2] != 0); // the callee
+            CHECK(std::ranges::find(functions, call[2]) != functions.end());
+        }
+        CHECK_FALSE(Instructions(code, OpAtomicCompareExchange).empty());
     }
 }
