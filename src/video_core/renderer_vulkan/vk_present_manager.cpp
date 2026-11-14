@@ -37,6 +37,7 @@
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
+#include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -953,6 +954,9 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         }
         const auto period = FluidCountVblanks(wake, vblank.ReportedPeriod());
         VideoCore::AutopilotFeed::SetRefreshPeriod(period);
+        if (VideoCore::ShownGovernor::Enabled()) {
+            FluidGovern(wake, period);
+        }
         const auto offset = (std::min)(FluidPresentOffsetFor(), period * 42 / 100);
         // A screen copy wait from this wake ends in time for the next slot's wake.
         fluid.copy_wait_due = wake + FluidSlots::CopyWaitDue(period, fluid.vblank, fluid.divisor);
@@ -1006,9 +1010,12 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         }
         if (FluidStalled(now)) {
             FluidFallBack(now);
+            VideoCore::ShownGovernor::SetRate(0);
             return false;
         }
     }
+    // Nothing governs the shown rate once the presenter has gone.
+    VideoCore::ShownGovernor::SetRate(0);
     if (fluid_ahead_pending) {
         std::scoped_lock swapchain_lock{swapchain_mutex};
         fluid_ahead_pending = false;
@@ -1115,13 +1122,93 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
     fluid.last_wake = wake;
     // Slots of the frame generation target rate (16.7 ms at 60, a refresh each at 120 on a 120 Hz
     // display): every round(refresh / rate) vblanks, or of the shown rate the autopilot steers
-    // towards (EDEN_NX2_AUTOPILOT).
-    const f64 slot_rate = VideoCore::AutopilotFeed::SlotRate();
+    // towards (EDEN_NX2_AUTOPILOT), which the shown rate EDEN_NX2_SHOWN_GOVERNOR chose bounds.
+    const f64 slot_rate = VideoCore::ShownGovernor::BoundSlotRate(
+        VideoCore::AutopilotFeed::SlotRate(), static_cast<f64>(VideoCore::ShownGovernor::Rate()));
     const f64 per_slot = 1.0e9 / ((slot_rate > 0.0 ? slot_rate : FluidShownRate()) *
                                   static_cast<f64>(period.count()));
     fluid.divisor =
         static_cast<u64>(std::clamp<s64>(static_cast<s64>(std::llround(per_slot)), 1, 8));
     return period;
+}
+
+void PresentManager::FluidGovern(std::chrono::steady_clock::time_point now,
+                                 std::chrono::nanoseconds period) {
+    namespace Governor = VideoCore::ShownGovernor;
+    auto& window = governor;
+    if (window.window_start == std::chrono::steady_clock::time_point{}) {
+        window.window_start = now;
+        window.busy_asked = now;
+        scheduler.RequestGpuBusySample();
+        return;
+    }
+    // One host GPU timestamp sample of a real frame every half second, asked for at one wake and
+    // read at a later one.
+    if (now - window.busy_asked >= std::chrono::milliseconds{500}) {
+        if (const auto busy = scheduler.GpuBusyMs()) {
+            window.busy_ms.push_back(*busy);
+        }
+        scheduler.RequestGpuBusySample();
+        window.busy_asked = now;
+    }
+    const f64 seconds = std::chrono::duration<f64>(now - window.window_start).count();
+    if (seconds < Governor::WindowSeconds) {
+        return;
+    }
+    Governor::WindowStats stats{};
+    stats.slots = window.slots;
+    stats.hits = window.hits;
+    stats.real_fps = static_cast<f64>(window.real) / seconds;
+    stats.target_fps = Governor::RealTarget();
+    if (!window.busy_ms.empty() && stats.real_fps > 0.0) {
+        const auto middle =
+            window.busy_ms.begin() + static_cast<std::ptrdiff_t>(window.busy_ms.size() / 2);
+        std::nth_element(window.busy_ms.begin(), middle, window.busy_ms.end());
+        stats.gpu_busy = std::clamp(*middle / (1000.0 / stats.real_fps), 0.0, 1.0);
+    }
+    window.window_start = now;
+    window.slots = 0;
+    window.hits = 0;
+    window.real = 0;
+    window.busy_ms.clear();
+
+    const f64 refresh = period.count() > 0 ? 1.0e9 / static_cast<f64>(period.count()) : 0.0;
+    std::array<u32, Governor::MaxRungs> ladder{};
+    // The configured rate as the slots show it: every round(refresh / rate) vblanks, as in
+    // FluidCountVblanks (100 Hz configured on a 144 Hz display is 144 shown).
+    const f64 configured =
+        refresh > 0.0
+            ? refresh / static_cast<f64>(
+                            std::clamp<s64>(static_cast<s64>(std::llround(refresh / FluidShownRate())),
+                                            1, 8))
+            : 0.0;
+    const size_t rungs = Governor::BuildLadder(refresh, configured, stats.target_fps, ladder);
+    const u32 previous = Governor::Rate();
+    if (rungs == 0) {
+        if (previous != 0) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_SHOWN_GOVERNOR: no shown rate fits a display of {:.2f} Hz and real "
+                     "frames at {:.1f} fps; the configured rate is used",
+                     refresh, stats.target_fps);
+        }
+        window.state = {};
+        Governor::SetRate(0);
+        return;
+    }
+    const Governor::Decision decision =
+        Governor::Decide(window.state, std::span<const u32>{ladder.data(), rungs}, stats);
+    if (window.state.rate == previous) {
+        return;
+    }
+    Governor::SetRate(window.state.rate);
+    const std::string busy_text = stats.gpu_busy >= 0.0
+                                      ? fmt::format("{:.0f}%", stats.gpu_busy * 100.0)
+                                      : std::string{"unknown"};
+    LOG_INFO(Render_Vulkan,
+             "EDEN_NX2_SHOWN_GOVERNOR: shown rate {} -> {} Hz ({}; {} of {} slots on time, real "
+             "{:.1f} of {:.1f} fps, GPU busy {})",
+             previous, window.state.rate, Governor::ReasonText(decision.reason), stats.hits,
+             stats.slots, stats.real_fps, stats.target_fps, busy_text);
 }
 
 void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) {
@@ -1144,6 +1231,7 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
             continue;
         }
         fluid.watched_batch = frame->fluid_batch;
+        ++governor.real;
         fluid.newest_batch = (std::max)(fluid.newest_batch, frame->fluid_batch);
         if (fluid.watches.size() >= FluidWatches) {
             fluid.watches.erase(fluid.watches.begin());
@@ -1304,8 +1392,10 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
             const u64 skipped = (slot - after) / fluid.divisor - 1;
             fluid_stats.slots += skipped;
             fluid_stats.overslept += skipped;
+            governor.slots += skipped;
         }
         ++fluid_stats.slots;
+        ++governor.slots;
         FluidPredictHold(slot, after); // EDEN_NX2_PREDICT
         const auto newer = [](const Frame* frame, const Frame* than) {
             return than == nullptr || frame->fluid_batch > than->fluid_batch ||
@@ -1377,6 +1467,7 @@ void PresentManager::FluidPresentSlot(u64 slot, std::chrono::steady_clock::time_
         return;
     }
     ++fluid_stats.hits;
+    ++governor.hits;
     fluid_stats.spare += best->fluid_batch < fluid.newest_batch ? 1 : 0;
     fluid_stats.age_ms +=
         std::chrono::duration<f64, std::milli>(slot_time - best->fluid_recorded).count();
