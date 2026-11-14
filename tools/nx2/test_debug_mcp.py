@@ -297,6 +297,7 @@ class AdapterTest(unittest.TestCase):
                                 "params": {"name": "status", "arguments": {}}})
         self.assertTrue(reply["result"]["isError"])
         self.assertIn("EDEN_NX2_DEBUG_SERVER", reply["result"]["content"][0]["text"])
+        self.assertIn("Guarana (guarana.exe)", reply["result"]["content"][0]["text"])
 
     def test_stdio_framing(self):
         stdin = io.StringIO('{"jsonrpc":"2.0","id":1,"method":"ping"}\n\nnot json\n')
@@ -343,6 +344,26 @@ class AdapterTest(unittest.TestCase):
             stdout = io.StringIO()
             self.assertEqual(debug_mcp.call_once(self.adapter, request, None, stdout), 1, request)
             self.assertIn("error", json.loads(stdout.getvalue()), request)
+
+    def test_call_once_takes_a_bare_method_name(self):
+        # PowerShell drops the inner quotes of '{"method":"status"}' on its way to a native
+        # program; a bare method name has none to drop.
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, " status\n", None, stdout), 0,
+                         stdout.getvalue())
+        self.assertEqual(json.loads(stdout.getvalue()), {"title": "Test", "presents": 3})
+        self.assertEqual(self.fake.requests[-1]["method"], "status")
+        self.assertEqual(self.fake.requests[-1]["params"], {})
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, "{method:status}", None, stdout), 1)
+        error = json.loads(stdout.getvalue())["error"]
+        self.assertIn("double quotes", error)
+        self.assertIn("PowerShell", error)
+        self.assertIn("--call status", error)
+
+    def test_initialize_names_guarana(self):
+        reply = self.adapter.handle({"id": 0, "method": "initialize", "params": {}})
+        self.assertEqual(reply["result"]["serverInfo"]["name"], "guarana-debug")
 
     def test_call_runs_from_the_command_line(self):
         out = os.path.join(self.temp.name, "cli.png")

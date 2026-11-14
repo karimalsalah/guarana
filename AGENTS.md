@@ -74,7 +74,7 @@ Without the game, on any machine:
 
 With the game, on the owner's or a tester's machine:
 
-1. **Debug server.** The owner starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`. Agents never start or stop the emulator. Ask it questions with `python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"frame_times","params":{"seconds":10}}'` (also `status`, `screenshot`, `gpu_costs`, `reject_shaders`), or run the script without `--call` as an MCP server. The methods and their limits are in `docs/nx2/debug-mcp.md`; the etiquette is in "Live debug server" below.
+1. **Debug server.** The owner starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`. Agents never start or stop the emulator. Ask it questions with `python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"frame_times","params":{"seconds":10}}'` (also `status`, `screenshot`, `gpu_costs`, `reject_shaders`; a method without parameters can be named alone, `--call status`, which PowerShell passes intact where it drops the inner quotes of JSON), or run the script without `--call` as an MCP server. The methods and their limits are in `docs/nx2/debug-mcp.md`; the etiquette is in "Live debug server" below.
 2. **Benchmark.** `python -I tools/bench/bench.py run --variant tools/bench/variants/baseline.json --variant <yours>.json ...` on a scene with a reference image, or a suite (`tools/bench/README.md`). Compare with `bench.py compare`. Only rows that are valid with `scene_ok: true` count.
 3. **Report** the rows in the pull request's table and in the switch's row in `docs/switches.md`.
 
