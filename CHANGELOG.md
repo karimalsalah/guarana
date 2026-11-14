@@ -46,7 +46,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Changed
 
-- `docs/switches.md` lists the known issues of the image-changing experiments merged on 14 November (`EDEN_NX2_FG_PINGPONG`, `EDEN_NX2_OOT_BYPASS_STEP_GUARD`, `EDEN_NX2_OOT_BYPASS_SHAPE`): none has had its scene check yet, so they stay off outside paired runs.
+- `docs/switches.md` lists the known issues of the image-changing experiments merged on 14 November (`EDEN_NX2_FG_PINGPONG`, `EDEN_NX2_OOT_BYPASS_STEP_GUARD`, `EDEN_NX2_OOT_BYPASS_SHAPE`): none has had its scene check yet, so they stay off outside paired runs. `EDEN_NX2_FLUID_COMPOSE` is on that list too: it draws at the game's internal size and scales with a bilinear pass, so the configured scaling filter does not run.
 - Docs: the `EDEN_NX2_PRESENT_SPIN` row now says it only changes the non-FLUID present thread's sleep, not the FLUID presenter's, and records that on the Panther Lake laptop it fell to 16.9 real frames a second with a p99 of 132 ms (issue #136).
 - The launcher build pins Node 22 (`actions/setup-node`), so a runner image change cannot move Node outside what the locked vite accepts.
 - Upstream Lichii sync (through `7a4fe8e0`): solid NSZ files play, with a bounded NCZ decoder and a private disk cache (#1675, #1734) and idle readers releasing their decoder for the memory budget (#1737); Mario Kart World gets a 60 FPS mode at normal game speed with a 30 FPS fallback (#1704, two new Advanced settings); command list pages are copied again after DMA copies and clears (#1736); on Intel only divergent barriers lose their execution barrier, uniform ones are kept (Mario Kart World ANV hang, #1377, #1677).
