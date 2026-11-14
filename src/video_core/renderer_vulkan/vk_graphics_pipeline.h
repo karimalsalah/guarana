@@ -394,6 +394,13 @@ public:
         return build->Failed();
     }
 
+    /// The background build (optimized link, or EDEN_NX2_UNOPT_FIRST's optimized libraries) is
+    /// running: destroying the pipeline now would wait for it. GPU thread, once IsBuilt() (the
+    /// build sets `optimized_build` before it completes).
+    [[nodiscard]] bool BackgroundBuildRunning() const noexcept {
+        return IsBuilt() && optimized_build && optimized_build->Running();
+    }
+
     /// Fast draw (nx2_fast_draw.h): whether draws can keep the image views and samplers the last
     /// captured Configure resolved. Handles computed at draw time are evaluated again for each
     /// delta draw (ComputedHandlesChanged).
@@ -512,13 +519,24 @@ private:
     /// failed; the caller then builds the pipeline the monolithic way.
     bool MakeLibraryPipeline(VkRenderPass render_pass);
 
+    /// `unoptimized`: built with VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT
+    /// (EDEN_NX2_UNOPT_FIRST), which is part of its key.
     GplLibrary MakeShaderLibrary(GplPart part, const PipelineStates& states,
-                                 VkRenderPass render_pass) const;
+                                 VkRenderPass render_pass, bool unoptimized) const;
 
     std::string ShaderLibraryKey(GplPart part, const PipelineStates& states,
-                                 VkRenderPass render_pass) const;
+                                 VkRenderPass render_pass, bool unoptimized) const;
 
-    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized);
+    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized,
+                               const std::array<std::shared_ptr<const GplLibrary>, 2>& shaders);
+
+    /// EDEN_NX2_UNOPT_FIRST, in the background: the optimized shader libraries in place of the
+    /// unoptimized ones, linked into the pipeline the draw swaps in (ConfigureDraw).
+    void BuildOptimizedReplacement(VkRenderPass render_pass, const PipelineStates& states);
+
+    /// EDEN_NX2_UNOPT_FIRST: whether `stage`'s shader module is kept for that job, which reads
+    /// only the modules of the parts built unoptimized and releases them itself.
+    bool KeepsModuleForReplacement(size_t stage) const;
 
     /// Build body with libraries: the fast link (or monolithic fallback), then the optimized link
     /// in the background.
@@ -640,6 +658,16 @@ private:
     vk::Pipeline retired_pipeline;
     std::atomic_bool optimized_ready{};
     bool optimized_bound{};
+    /// EDEN_NX2_UNOPT_FIRST: which shader libraries the build took unoptimized, and whether it
+    /// linked the pipeline from any (written by the build before it completes, read by the GPU
+    /// thread after IsBuilt()); the fixed-function state the optimized libraries are built from,
+    /// until their job takes it; the optimized libraries once built; and on the GPU thread, when
+    /// the first draw with this pipeline was recorded.
+    std::array<bool, 2> unoptimized_libraries{};
+    bool unoptimized_first{};
+    std::shared_ptr<PipelineStates> replacement_states;
+    std::array<std::shared_ptr<const GplLibrary>, 2> optimized_libraries;
+    std::chrono::steady_clock::time_point first_draw{};
     /// The build produced a pipeline. Written by the build before it completes, read by the GPU
     /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
     bool has_pipeline{};
