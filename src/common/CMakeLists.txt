@@ -113,6 +113,7 @@ add_library(
     param_package.cpp
     param_package.h
     parent_of_member.h
+    period_worker.h
     point.h
     range_map.h
     range_mutex.h
