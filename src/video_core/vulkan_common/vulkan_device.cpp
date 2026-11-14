@@ -32,6 +32,7 @@
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
+#include "video_core/vulkan_common/pipeline_binaries_policy.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -2415,7 +2416,21 @@ void Device::RemoveUnsuitableExtensions() {
     // with VK_DYNAMIC_STATE_VERTEX_INPUT_EXT (#770), so an RX 6650 XT rebuilt ~5,800 boot
     // pipelines at ~120 ms each (12-15 min to the first frame) at every boot, and turning dynamic
     // vertex input off lost the device on the first pipeline. The store keeps them instead.
-    const bool amd_binaries = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
+    // EDEN_NX2_PIPELINE_BINARIES=0 or 1 overrides that choice (pipeline_binaries_policy.h), never
+    // where the driver lacks the extension, the feature or maintenance5.
+    const char* const pipeline_binaries_env = std::getenv("EDEN_NX2_PIPELINE_BINARIES");
+    const PipelineBinariesOverride pipeline_binaries_requested =
+        ParsePipelineBinariesOverride(pipeline_binaries_env);
+    const PipelineBinariesDecision pipeline_binaries_decision = DecidePipelineBinaries({
+        .extension = extensions.pipeline_binary,
+        .feature = features.pipeline_binary.pipelineBinaries != VK_FALSE,
+        .maintenance5 = extensions.maintenance5,
+        .prefers_internal_cache =
+            properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
+        .driver_caches_pipelines = DriverCachesPipelines(),
+        .amd_proprietary = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY,
+        .requested = pipeline_binaries_requested,
+    });
     if (extensions.pipeline_binary) {
         LOG_INFO(Render_Vulkan,
                  "VK_KHR_pipeline_binary: pipelineBinaries {}, internal cache {}, prefers internal "
@@ -2425,10 +2440,16 @@ void Device::RemoveUnsuitableExtensions() {
                  properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
                  properties.pipeline_binary.pipelineBinaryCompressedData != VK_FALSE);
     }
-    extensions.pipeline_binary =
-        features.pipeline_binary.pipelineBinaries && extensions.maintenance5 &&
-        !properties.pipeline_binary.pipelineBinaryPrefersInternalCache &&
-        (!DriverCachesPipelines() || amd_binaries);
+    if (pipeline_binaries_decision.reason != PipelineBinariesReason::NotOffered ||
+        pipeline_binaries_requested != PipelineBinariesOverride::Unset) {
+        const bool value_ignored = pipeline_binaries_env != nullptr && *pipeline_binaries_env &&
+                                   pipeline_binaries_requested == PipelineBinariesOverride::Unset;
+        LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary store: {} ({}){}",
+                 pipeline_binaries_decision.enabled ? "on" : "off",
+                 PipelineBinariesReasonText(pipeline_binaries_decision.reason),
+                 value_ignored ? ", EDEN_NX2_PIPELINE_BINARIES is neither 0 nor 1: ignored" : "");
+    }
+    extensions.pipeline_binary = pipeline_binaries_decision.enabled;
     RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_binary, features.pipeline_binary,
                                        VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
 
