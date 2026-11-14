@@ -29,6 +29,12 @@ const setWarm = (s: typeof warm.state, bytes = 0) => {
 // One update check per session, in the background, for the badge on the setup card.
 let updateCheck: Promise<UpdateInfo | null> | null = null;
 
+/** Forgets the update check and clears the Updates tab's dot. Updates calls it after an install or a switch. */
+export function resetUpdateCheck(): void {
+  updateCheck = null;
+  document.querySelector('.tab[data-tab="updates"]')?.classList.remove("has-dot");
+}
+
 // Chips: the profile's switches that change how the game looks or paces, when they are on.
 const HIGHLIGHTS = [
   { id: "fluid_presenter", label: "Even frame pacing" },
@@ -341,7 +347,8 @@ function setupCard(state: LauncherState, profile: Profile | undefined, ctx: Scre
 
   if (!updateCheck) updateCheck = api.checkUpdates().catch(() => null);
   void updateCheck.then((info) => {
-    if (ctx.signal.aborted || !info?.update_available) return;
+    // The check is once per session: after an install or a switch, `latest` may be the version in use.
+    if (ctx.signal.aborted || !info?.update_available || info.latest === state.current) return;
     versionRow.appendChild(h("button", { type: "button", class: "link-btn", onClick: () => void go("updates") }, `${v(info.latest)} is out`, icon("chevronRight")));
     document.querySelector('.tab[data-tab="updates"]')?.classList.add("has-dot");
   });

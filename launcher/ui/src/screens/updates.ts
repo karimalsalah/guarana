@@ -12,6 +12,7 @@ import type { Channel, InstalledVersion, LauncherState, Progress, UpdateInfo } f
 import { badge, busy, button, card, segmented, skeleton, type Segmented } from "../ui/controls";
 import { progressRing } from "../ui/progress-ring";
 import { toast } from "../ui/toast";
+import { resetUpdateCheck } from "./home";
 
 const CHANNEL_KEY = "guarana.channel";
 
@@ -23,7 +24,9 @@ function savedChannel(): Channel {
   }
 }
 
+/** After an install or a switch: the footer rereads the version, and Home checks for updates again. */
 function announceState(): void {
+  resetUpdateCheck();
   document.dispatchEvent(new CustomEvent("guarana:state"));
 }
 
