@@ -7,8 +7,11 @@ repository root; [README.md](README.md) explains every option.
 ## 1. Prepare
 
 - A Guarana build with the debug server, the game, and a save standing in the scene (the scene
-  file's `notes` say where: for `oot-hyrule-field`, Hyrule Field in the third file-select entry).
-  Copy that save folder (`<user-dir>/nand/user/save`) somewhere: it is your `--save-backup`.
+  file's `notes` say where: for `oot-hyrule-field`, Hyrule Field in the third file-select entry;
+  for `oot-kokiri-forest`, the newest save of a new game made in Kokiri Forest, about ten minutes
+  of play). Copy that save folder (`<user-dir>/nand/user/save`) somewhere: it is your
+  `--save-backup`. Without a Hyrule Field save, use `oot-kokiri-forest` wherever the steps below
+  name `oot-hyrule-field` (the suite takes `--scene tools/bench/scenes/oot-kokiri-forest.json`).
 - Plug the machine in, close browsers, launchers and overlays, pause updates, and do not touch
   it while it runs.
 - Set the common options once (PowerShell shown; `--user-dir` only if yours is not the default):
@@ -40,6 +43,11 @@ Read the dry run first: it lists every file it will touch. The real run takes ab
 shows whether the GPU keeps its clock once warm. Do not add `--base-ini`, `--mod` or
 `--power-policy` unless you say so in the PR: they make your baseline a different one.
 
+If you play fullscreen, run the suite a second time with `--fullscreen`: that measures what you
+see, the screen output step at your display's size included. Fullscreen rows are listed apart from
+windowed ones and never compared with them. Add `--pacing` to record the presenter's pacing; it
+changes the measured path (see the README, "Pacing"), so say so in the PR.
+
 ## 4. Validate
 
 ```
@@ -53,6 +61,9 @@ A row is invalid (`"valid": false`, with the reason in `invalid_reasons`) when
 
 - `wrong_scene`: a screenshot did not match your reference. Timed menu inputs sometimes miss;
   look at `results/shots/<row id>.png` and run the suite again;
+- `black_picture`: the screenshot was black but for the HUD (or all black). A variant that does
+  this is broken, however fast it looks; look at `results/shots/<row id>.png`;
+- `output_size_unknown`: a fullscreen run whose output size could not be read;
 - `scene_unverified` / `reference_recorded`: there was no reference yet, or this run wrote it;
 - `wrong_title`: another game than the scene's was running;
 - `background_cpu`: other processes used over 10% of the CPU during a window. Find the culprit
@@ -75,6 +86,10 @@ Commit exactly two things:
 - `tools/bench/results/<date>-<machine-id>.jsonl` (a new file, or lines appended to your earlier one);
 - the regenerated `tools/bench/RESULTS.md`.
 
+The `bench-rows` check on the pull request runs `validate` on the results folder and fails when
+`RESULTS.md` is not what `table` generates from it; its log says which row or line is wrong. A
+pull request with only these two files does not start the emulator builds.
+
 In the description, give what the rows cannot say: laptop or desktop model class, thermal or
 performance mode, external display, anything that differs from the scene's notes (another time
 of day, other equipment), and any `--base-ini`, `--mod` or `--power-policy` you used.
@@ -95,6 +110,14 @@ Exactly this, and nothing else:
   environment switches, live calls and rejected shader hashes; the base ini's file name; mod
   folder names and disabled add-on names; the suite name.
 - **Power policy**: the powercfg values applied and the ones they replaced.
+- **Output**: windowed or fullscreen, the fullscreen mode, the size the emulator presented at and
+  its present mode and swapchain image count.
+- **Pacing** (with `--pacing`): the last complete 10 s report in the emulator log, not aligned with
+  the measurement windows, and when it was logged (shown frames a second,
+  intervals between them, share within 2 ms of the median; with `EDEN_NX2_FLUID` slots, shown on
+  their slot, missed, display rate, vblank clock, real frames received).
+- **Picture check**: the limits and, per screenshot, mean, spread and share of near-black cells
+  (whole picture and centre).
 - **Measurements**: frame times and fps (windows, sustained samples, late window); watts
   (package, cores, GPU); GPU clock and its limiter, if you passed a telemetry script; the debug
   server's `memory` and `gpu_costs` answers; the emulator's working set and private bytes; its

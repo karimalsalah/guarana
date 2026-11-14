@@ -86,24 +86,8 @@ public:
         return image_count;
     }
 
-    std::size_t GetImageIndex() const {
-        return image_index;
-    }
-
-    std::size_t GetFrameIndex() const {
-        return frame_index;
-    }
-
-    VkImage GetImageIndex(std::size_t index) const {
-        return images[index];
-    }
-
     VkImage CurrentImage() const {
         return images[image_index];
-    }
-
-    VkFormat GetImageViewFormat() const {
-        return image_view_format;
     }
 
     VkFormat GetImageFormat() const {
