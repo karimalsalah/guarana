@@ -144,6 +144,9 @@ constexpr std::array<std::string_view, static_cast<size_t>(TraceCategory::Count)
         "buffer_upload_batch.join",
         "buffer_upload_batch.gather",
         "buffer_upload_batch.mixed",
+        "frame_gen_process",
+        "frame_gen_interpolate",
+        "frame_gen_extrapolate",
     };
 static_assert(!TRACE_CATEGORY_NAMES.back().empty(), "a TraceCategory without a name");
 

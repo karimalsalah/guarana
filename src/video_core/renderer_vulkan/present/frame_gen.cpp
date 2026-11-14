@@ -433,11 +433,15 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
 
     const bool use_fsr3 = type == Settings::FrameGenType::Fsr3;
 
+    // gpu_costs frame_gen_process: timed only in sampled frames (Scheduler::RecordEmuBegin).
     if (use_fsr3 && fsr3_chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenProcess, {extent.width, extent.height, 0});
         fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+        scheduler.RecordEmuEnd();
     } else if (chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenProcess, {extent.width, extent.height, 0});
         scheduler.Record([this, source = *frame->image, extent, count,
                           dispatch = warm](vk::CommandBuffer cmdbuf) {
             CopyPresentedFrame(cmdbuf, source, chain->Input(count), extent);
@@ -445,6 +449,7 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                 chain->DispatchShared(cmdbuf, count);
             }
         });
+        scheduler.RecordEmuEnd();
 
         const bool dump_requested = generated && Settings::values.frame_gen_dump_flow.GetValue();
         if (!dump_requested) {
@@ -617,8 +622,11 @@ bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend
     }
     const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
     scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                             {destination->width, destination->height, 0});
     fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
                          std::clamp(blend, 0.0f, 1.0f), flow_scale);
+    scheduler.RecordEmuEnd();
     return true;
 }
 
@@ -628,9 +636,11 @@ bool FrameGen::GenerateAt(const Device& device, Frame* destination, f32 advance)
     }
     const VkExtent2D extent{.width = destination->width, .height = destination->height};
     scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.RecordEmuBegin(TraceCategory::FrameGenExtrapolate, {extent.width, extent.height, 0});
     extrapolation->Generate(device, scheduler, *extrapolation_source,
                             *extrapolation_frame->storage_view, *destination->image,
                             *destination->storage_view, extent, extrapolation_screen, advance);
+    scheduler.RecordEmuEnd();
     return true;
 }
 
@@ -730,10 +740,13 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         const VkExtent2D extent{.width = destination->width, .height = destination->height};
 
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenExtrapolate,
+                                 {extent.width, extent.height, 0});
         // The storage view has the image's own format, so reads and writes encode alike.
         extrapolation->Generate(device, scheduler, *extrapolation_source,
                                 *extrapolation_frame->storage_view, *destination->image,
                                 *destination->storage_view, extent, extrapolation_screen, advance);
+        scheduler.RecordEmuEnd();
         return;
     }
 
@@ -744,8 +757,11 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
 
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                                 {destination->width, destination->height, 0});
         fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
                              blend, flow_scale);
+        scheduler.RecordEmuEnd();
     } else if (chain) {
         if (destination->index >= LSFG_MAX_TARGETS) {
             // The FLUID presenter's frames past Lossless Scaling's targets (EDEN_NX2_FLUID at over
@@ -758,12 +774,15 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         const VkExtent2D extent{.width = destination->width, .height = destination->height};
 
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                                 {extent.width, extent.height, 0});
         scheduler.Record([this, count = last_count, generation_count = last_generations, generation,
                           target = destination->index, image = *destination->image,
                           extent](vk::CommandBuffer cmdbuf) {
             chain->DispatchGeneration(cmdbuf, count, generation_count, generation, target, image,
                                       extent);
         });
+        scheduler.RecordEmuEnd();
     }
 }
 
