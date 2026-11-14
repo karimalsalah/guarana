@@ -89,6 +89,9 @@ public:
     /// recorded.
     bool GenerateBlend(const Device& device, Frame* destination, f32 blend);
 
+    /// Whether the active chain can generate an arbitrary interpolation factor.
+    [[nodiscard]] bool CanBlend() const;
+
     [[nodiscard]] VideoCore::FrameGenStatus CurrentStatus() const {
         return {.state = state.load(std::memory_order_relaxed),
                 .generated_frames = generated_frames.load(std::memory_order_relaxed)};

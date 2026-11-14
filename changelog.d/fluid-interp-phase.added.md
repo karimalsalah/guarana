@@ -1,0 +1,1 @@
+- Vulkan: add default-off `EDEN_NX2_FLUID_INTERP_PHASE` for the FSR3 chain only (other frame generation types use main's path), to map interpolated frames to their display slots using unrounded source intervals (#136, #104).
