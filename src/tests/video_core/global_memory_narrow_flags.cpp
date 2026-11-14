@@ -118,6 +118,16 @@ struct NarrowedRecord {
     }
 };
 
+std::vector<u32> NarrowBuffers(u32 flags) {
+    std::vector<u32> buffers;
+    REQUIRE(IR::GlobalLoadFlags::ForEachNarrowBuffer(IR::GlobalLoadFlags::NarrowList(flags),
+                                                     [&](u32 index) {
+                                                         buffers.push_back(index);
+                                                         return true;
+                                                     }));
+    return buffers;
+}
+
 size_t CountFunctions(const std::vector<u32>& code) {
     constexpr u32 OP_FUNCTION{54};
     size_t count{};
@@ -224,4 +234,66 @@ TEST_CASE("The SPIR-V backend does not route an unnarrowed LDG.CG load to buffer
         return CountFunctions(Backend::SPIRV::EmitSPIRV(fixture.profile, fixture.program));
     };
     CHECK(emitted_functions(true) == emitted_functions(false));
+}
+
+TEST_CASE("Joining Vertex A moves Vertex B's narrowed buffer lists to the joined bindings",
+          "[shader][storage_buffer][coherence]") {
+    // Issue #105: MergeDualVertexPrograms puts Vertex B's storage buffers after Vertex A's
+    // (JoinStorageInfo, RemapStorageBindings). A buffer list naming Vertex B's own indices would
+    // make the backend search Vertex A's buffers instead.
+    NarrowedRecord vertex_b{true};
+    vertex_b.RunStorageBufferPass();
+    const std::vector<u32> before{NarrowBuffers(vertex_b.Record().Flags<u32>())};
+    REQUIRE_FALSE(before.empty());
+    const auto old_descriptors{vertex_b.fixture.program.info.storage_buffers_descriptors};
+
+    Info vertex_a{};
+    vertex_a.storage_buffers_descriptors = {{2, 0x40, 1, false}};
+    const std::vector<u32> bindings{
+        Optimization::JoinStorageInfo(vertex_a, vertex_b.fixture.program.info)};
+    Optimization::RemapStorageBindings(vertex_b.fixture.program, bindings);
+
+    const u32 flags{vertex_b.Record().Flags<u32>()};
+    CHECK(IR::GlobalLoadFlags::IsCoherent(flags));
+    const std::vector<u32> after{NarrowBuffers(flags)};
+    REQUIRE(after.size() == before.size());
+    for (size_t i = 0; i < before.size(); ++i) {
+        CAPTURE(i);
+        REQUIRE(before[i] < bindings.size());
+        CHECK(after[i] == bindings[before[i]]);
+        CHECK(after[i] != before[i]);
+        // The joined index names the descriptor the list named in Vertex B
+        REQUIRE(after[i] < vertex_a.storage_buffers_descriptors.size());
+        const auto& joined{vertex_a.storage_buffers_descriptors[after[i]]};
+        const auto& original{old_descriptors[before[i]]};
+        CHECK(joined.cbuf_index == original.cbuf_index);
+        CHECK(joined.cbuf_offset == original.cbuf_offset);
+        CHECK(joined.indirect_offset == original.indirect_offset);
+    }
+}
+
+TEST_CASE("Remapping drops a narrowed buffer list it cannot map", "[shader][coherence]") {
+    using namespace IR::GlobalLoadFlags;
+    Fixture fixture;
+    IR::IREmitter ir{fixture.block};
+    const IR::U64 address{
+        ir.PackUint2x32(ir.CompositeConstruct(ir.LocalInvocationIdX(), ir.Imm32(0)))};
+    IR::Inst* const mapped{ir.LoadGlobal32(address, true).Inst()};
+    IR::Inst* const unmapped{ir.LoadGlobal64(address, true).Inst()};
+    IR::Inst* const plain{ir.LoadGlobal128(address, false).Inst()};
+    u32 mapped_list{};
+    REQUIRE(AppendNarrowBuffer(mapped_list, 0, 0));
+    u32 unmapped_list{mapped_list};
+    REQUIRE(AppendNarrowBuffer(unmapped_list, 1, 5)); // no binding 5 below
+    mapped->SetFlags(WithNarrowList(mapped->Flags<u32>(), mapped_list));
+    unmapped->SetFlags(WithNarrowList(unmapped->Flags<u32>(), unmapped_list));
+
+    const std::vector<u32> bindings{3};
+    Optimization::RemapStorageBindings(fixture.program, bindings);
+
+    CHECK(NarrowBuffers(mapped->Flags<u32>()) == std::vector<u32>{3});
+    CHECK(IsCoherent(mapped->Flags<u32>()));
+    CHECK(NarrowList(unmapped->Flags<u32>()) == 0);
+    CHECK(IsCoherent(unmapped->Flags<u32>()));
+    CHECK(plain->Flags<u32>() == 0);
 }

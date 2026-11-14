@@ -2767,6 +2767,27 @@ void RemapStorageBindings(IR::Program& program, std::span<const u32> bindings) {
             case IR::Opcode::StorageAtomicMaxF16x2:
             case IR::Opcode::StorageAtomicMaxF32x2:
                 break;
+            case IR::Opcode::LoadGlobal32:
+            case IR::Opcode::LoadGlobal64:
+            case IR::Opcode::LoadGlobal128: {
+                // EDEN_NX2_GM bit 2: the buffer list in the flags names bindings as well. A list
+                // with an entry that has no binding here is dropped (the load searches them all).
+                const u32 flags{inst.Flags<u32>()};
+                u32 list{};
+                u32 count{};
+                const bool mapped{IR::GlobalLoadFlags::ForEachNarrowBuffer(
+                    IR::GlobalLoadFlags::NarrowList(flags), [&](u32 index) {
+                        if (index >= bindings.size() ||
+                            !IR::GlobalLoadFlags::AppendNarrowBuffer(list, count,
+                                                                     bindings[index])) {
+                            return false;
+                        }
+                        ++count;
+                        return true;
+                    })};
+                inst.SetFlags(IR::GlobalLoadFlags::WithNarrowList(flags, mapped ? list : 0U));
+                continue;
+            }
             default:
                 continue;
             }
