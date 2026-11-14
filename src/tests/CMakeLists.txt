@@ -105,6 +105,7 @@ add_executable(tests
     video_core/auto_shading_rate.cpp
     common/guarana_modes.cpp
     common/power_governor.cpp
+    common/frame_target_hotkeys.cpp
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp

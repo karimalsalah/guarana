@@ -10,6 +10,7 @@
 
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -1540,6 +1541,17 @@ void MainWindow::InitializeHotkeys() {
         SetFPSSuffix();
     });
 
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        connect_shortcut(QStringLiteral("Frame target 30"),
+                         [this] { SetFrameTargetFromHotkey(30); });
+        connect_shortcut(QStringLiteral("Frame target 40"),
+                         [this] { SetFrameTargetFromHotkey(40); });
+        connect_shortcut(QStringLiteral("Frame target 60"),
+                         [this] { SetFrameTargetFromHotkey(60); });
+        connect_shortcut(QStringLiteral("Cycle frame target"),
+                         [this] { SetFrameTargetFromHotkey(0); });
+    }
+
     connect_shortcut(QStringLiteral("Toggle Renderdoc Capture"), [] {
         if (Settings::values.enable_renderdoc_hotkey) {
             QtCommon::system->GetRenderdocAPI().ToggleCapture();
@@ -2614,6 +2626,32 @@ void MainWindow::RememberSpeedLimitBeforeHotkey() {
             .using_global = Settings::values.use_speed_limit.UsingGlobal(),
         };
     }
+}
+
+void MainWindow::SetFrameTargetFromHotkey(u32 target) {
+    if (!emulation_running) {
+        return;
+    }
+    if (!Settings::values.frame_gen.GetValue()) {
+        ShowHotkeyMessage(tr("Frame generation is off"));
+        return;
+    }
+    // The target is read where it is used, every frame, so it applies without a restart.
+    const u32 next = target != 0 ? target
+                                 : Common::FrameTargetHotkeys::NextPreset(
+                                       Settings::values.frame_gen_target_rate.GetValue());
+    Settings::values.frame_gen_target_rate.SetValue(next);
+    UpdateFrameGenButton();
+    ShowHotkeyMessage(tr("Frame target: %1 FPS").arg(next));
+}
+
+void MainWindow::ShowHotkeyMessage(const QString& text) {
+    // The toast shows in fullscreen too, where the status bar is hidden.
+    if (guarana_toast == nullptr) {
+        guarana_toast = new Guarana::Toast(this);
+    }
+    guarana_toast->ShowMessage(text, 2500);
+    statusBar()->showMessage(text, 2500);
 }
 
 void MainWindow::UndoSessionSpeedChanges() {
