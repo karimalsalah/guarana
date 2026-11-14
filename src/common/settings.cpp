@@ -26,6 +26,7 @@
 
 #include "common/settings_enums.h"
 #include "common/assert.h"
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -493,11 +494,16 @@ size_t FrameGenGenerations() {
     return FrameGenMultiplier() - 1;
 }
 
+u32 FrameGenTargetRate() {
+    return Common::FrameTargetHotkeys::SessionTarget.Resolve(
+        Common::FrameTargetHotkeys::Enabled(), [] { return values.frame_gen_target_rate.GetValue(); });
+}
+
 size_t FrameGenMaxGenerations() {
     if (!values.frame_gen.GetValue()) {
         return 0;
     }
-    if (values.frame_gen_target_rate.GetValue() != 0) {
+    if (FrameGenTargetRate() != 0) {
         return MAX_FRAME_GEN_MULTIPLIER - 1;
     }
     return FrameGenMultiplier() - 1;

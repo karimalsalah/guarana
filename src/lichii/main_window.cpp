@@ -10,6 +10,7 @@
 
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -1540,6 +1541,21 @@ void MainWindow::InitializeHotkeys() {
         SetFPSSuffix();
     });
 
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        const auto connect_frame_target = [this, &connect_shortcut](const QString& action_name,
+                                                                  u32 target) {
+            connect_shortcut(action_name, [this, target] { SetFrameTargetFromHotkey(target); });
+            // LoadHotkeys does not load the context for an empty keyboard binding. These
+            // defaults are empty, but must also work with the separate game window focused.
+            hotkey_registry.GetHotkey("Main Window", action_name.toStdString(), this)
+                ->setContext(Qt::ApplicationShortcut);
+        };
+        connect_frame_target(QStringLiteral("Frame target 30"), 30);
+        connect_frame_target(QStringLiteral("Frame target 40"), 40);
+        connect_frame_target(QStringLiteral("Frame target 60"), 60);
+        connect_frame_target(QStringLiteral("Cycle frame target"), 0);
+    }
+
     connect_shortcut(QStringLiteral("Toggle Renderdoc Capture"), [] {
         if (Settings::values.enable_renderdoc_hotkey) {
             QtCommon::system->GetRenderdocAPI().ToggleCapture();
@@ -2616,6 +2632,32 @@ void MainWindow::RememberSpeedLimitBeforeHotkey() {
     }
 }
 
+void MainWindow::SetFrameTargetFromHotkey(u32 target) {
+    if (!emulation_running) {
+        return;
+    }
+    if (!Settings::values.frame_gen.GetValue()) {
+        ShowHotkeyMessage(tr("Frame generation is off"));
+        return;
+    }
+    // Publish only the session override; configuration storage is not safe for live writes.
+    const u32 next = target != 0 ? target
+                                 : Common::FrameTargetHotkeys::NextPreset(
+                                       Settings::FrameGenTargetRate());
+    Common::FrameTargetHotkeys::SessionTarget.Set(next);
+    UpdateFrameGenButton();
+    ShowHotkeyMessage(tr("Frame target: %1 FPS").arg(next));
+}
+
+void MainWindow::ShowHotkeyMessage(const QString& text) {
+    // The toast shows in fullscreen too, where the status bar is hidden.
+    if (guarana_toast == nullptr) {
+        guarana_toast = new Guarana::Toast(this);
+    }
+    guarana_toast->ShowMessage(text, 2500, render_window);
+    statusBar()->showMessage(text, 2500);
+}
+
 void MainWindow::UndoSessionSpeedChanges() {
     // Undo the session's frame rate limit hotkey and turbo/slow modes. Only what the hotkeys
     // changed is put back, in the scope (global or per-game) it was changed in: forcing the
@@ -2819,6 +2861,10 @@ void MainWindow::OnEmulationStopped() {
     }
 
     emulation_running = false;
+
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        Common::FrameTargetHotkeys::SessionTarget.Reset();
+    }
 
     game_list->SetReportableProgramId(report_session ? report_session->program_id : 0);
 
@@ -5821,7 +5867,7 @@ void MainWindow::UpdateFrameGenButton() {
     const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
                              ? QStringLiteral("DLSS-G")
                              : ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
-    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+    const u32 target_rate = Settings::FrameGenTargetRate();
     const QString mode = target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
                              : tr("FG %1 AUTO").arg(type);

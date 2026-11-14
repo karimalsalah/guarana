@@ -4624,11 +4624,11 @@ void RasterizerVulkan::FlushWork() {
     case SubmissionPolicy::Action::None:
         break;
     case SubmissionPolicy::Action::Dispatch:
-        scheduler.DispatchWork();
+        scheduler.DispatchWorkUnlessHeld();
         break;
     case SubmissionPolicy::Action::Flush:
         if (native && !android && DeferBudgetFlush(budget)) {
-            scheduler.DispatchWork();
+            scheduler.DispatchWorkUnlessHeld();
             break;
         }
         scheduler.Flush();

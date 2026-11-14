@@ -54,7 +54,7 @@ constexpr u32 CADENCE_MAX_DIVISOR = 4;
 /// The shown rate as configured. Same parse as the presenter (LiveShownRateHz).
 [[nodiscard]] f32 BaseTargetRate() {
     return static_cast<f32>(VideoCore::ShownGovernor::LiveShownRateHz(
-        Settings::values.frame_gen_target_rate.GetValue()));
+        Settings::FrameGenTargetRate()));
 }
 
 /// The shown rate the cadence works to: the one EDEN_NX2_SHOWN_GOVERNOR chose, else the configured.
@@ -67,7 +67,7 @@ constexpr auto ACTIVITY_LOG_INTERVAL = std::chrono::seconds(10);
 
 [[nodiscard]] std::string ModeText(Settings::FrameGenType active) {
     const char* type = active == Settings::FrameGenType::Fsr3 ? "FSR3" : "LSFG";
-    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+    const u32 target_rate = Settings::FrameGenTargetRate();
     if (target_rate != 0) {
         return fmt::format("{} up to {}x towards {} FPS", type, Settings::MAX_FRAME_GEN_MULTIPLIER,
                            target_rate);

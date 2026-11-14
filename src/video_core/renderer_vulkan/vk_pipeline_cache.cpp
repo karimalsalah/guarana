@@ -492,6 +492,16 @@ bool PrepassInvariantPosition() {
     return invariant;
 }
 
+/// EDEN_NX2_HMMA_FULL_SUBGROUPS=1, read once: a compute pipeline whose HMMA runs on cooperative
+/// matrices is created with full subgroups also when its SPIR-V is emitted by a deferred job.
+bool HmmaFullSubgroupsEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_HMMA_FULL_SUBGROUPS");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return enabled;
+}
+
 /// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
 /// what the driver gets for a precache build. Resolution scaling bakes the scale into the
 /// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
@@ -3116,7 +3126,37 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
         ReportNewPipelineKey(graphics_key);
         if (scheduled_prebuild) {
             std::optional<std::chrono::steady_clock::duration> waited;
-            pipeline = scheduled_prebuild->Take(graphics_key, &waited);
+            // EDEN_NX2_PREBUILD_NO_INLINE=1: a draw that may be skipped does not build or wait for
+            // an entry still queued or building here. It is raised to NeedNow and a later draw
+            // takes it.
+            static const bool no_inline_prebuild = [] {
+                const char* value = std::getenv("EDEN_NX2_PREBUILD_NO_INLINE");
+                const bool enabled = value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+                if (enabled) {
+                    LOG_INFO(Render_Vulkan,
+                             "EDEN_NX2_PREBUILD_NO_INLINE: draws skip prebuild entries still "
+                             "building");
+                }
+                return enabled;
+            }();
+            if (no_inline_prebuild && MaySkipPendingDraw()) {
+                bool pending = false;
+                pipeline = scheduled_prebuild->TryTake(graphics_key, pending);
+                if (pending) {
+                    graphics_cache.erase(pair);
+                    static std::atomic<u64> skipped_prebuild{};
+                    const u64 total = skipped_prebuild.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if ((total & 255) == 1) {
+                        LOG_INFO(Render_Vulkan,
+                                 "EDEN_NX2_PREBUILD_NO_INLINE: {} draws skipped for a prebuild "
+                                 "entry still queued or building",
+                                 total);
+                    }
+                    return nullptr;
+                }
+            } else {
+                pipeline = scheduled_prebuild->Take(graphics_key, &waited);
+            }
             prebuilt = pipeline != nullptr;
             if (waited) {
                 ReportRuntimePipeline(RuntimeBuild::Prebuild, *waited);
@@ -3360,18 +3400,11 @@ void PipelineCache::EvictUnusedPipelines() {
     translated_again = 0;
 }
 
-/// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
-/// draw may be skipped while it builds (asynchronous shaders; native draws only with
-/// EDEN_NX2_ASYNC_DISCARD=1). Each nullptr returned for an unbuilt pipeline is counted for the log.
-GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexcept {
-    if (pipeline->IsBuilt()) {
-        return pipeline;
-    }
-    if (!use_asynchronous_shaders) {
-        return pipeline;
-    }
-    // EDEN_NX2_ASYNC_DISCARD=1: skip native draws whose pipeline is still building instead of
-    // waiting for it (experimental; the draw may be missing for a frame or more).
+namespace {
+/// How a native draw with an unbuilt pipeline is handled: the native_async_draws setting, which
+/// EDEN_NX2_ASYNC_DISCARD=1 overrides with Skip (experimental; the draw may be missing for a frame
+/// or more). Wait for a draw that is not native.
+NativePendingMode PendingModeOf(bool native) {
     /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
     static const bool discard_native = [] {
         const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
@@ -3381,8 +3414,6 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         }
         return enabled;
     }();
-    const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
     // The environment variable wins over the setting; the setting is read per call.
     NativePendingMode mode = NativePendingMode::Wait;
     if (native) {
@@ -3400,6 +3431,23 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
             mode = NativePendingMode::Skip;
         }
     }
+    return mode;
+}
+} // Anonymous namespace
+
+/// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
+/// draw may be skipped while it builds (asynchronous shaders; native draws only with
+/// EDEN_NX2_ASYNC_DISCARD=1). Each nullptr returned for an unbuilt pipeline is counted for the log.
+GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexcept {
+    if (pipeline->IsBuilt()) {
+        return pipeline;
+    }
+    if (!use_asynchronous_shaders) {
+        return pipeline;
+    }
+    const auto& draw_state = maxwell3d->draw_manager.draw_state;
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    const NativePendingMode mode = PendingModeOf(native);
     // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
     const bool can_discard = CanDiscardPendingDraw(
         native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
@@ -3450,6 +3498,21 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         }
     }
     return discard ? nullptr : pipeline;
+}
+
+/// Whether the current draw would be skipped for a pipeline that is not even translated yet, with
+/// no wait for a build: what BuiltPipeline decides, before there is a pipeline to ask.
+bool PipelineCache::MaySkipPendingDraw() const noexcept {
+    if (!use_asynchronous_shaders) {
+        return false;
+    }
+    const auto& draw_state = maxwell3d->draw_manager.draw_state;
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    const NativePendingMode mode = PendingModeOf(native);
+    const bool can_discard = CanDiscardPendingDraw(
+        native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
+        draw_state.draw_element_count, native && mode != NativePendingMode::Wait);
+    return MaySkipUnbuiltDraw(native, mode, can_discard, native_wait_budget_us);
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::RebuildGraphicsPipeline(KeptGraphicsStages kept) {
@@ -4483,6 +4546,13 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                  key.unique_hash, program.workgroup_size[0], program.workgroup_size[1],
                  program.workgroup_size[2], program.shared_memory_size,
                  program.info.uses_subgroup_shared_scratch ? "on" : "off");
+    }
+    // EDEN_NX2_HMMA_FULL_SUBGROUPS: the same for cooperative matrices, which only EmitSPIRV sets
+    // otherwise, after a deferred job's pipeline copied the info. Before any emission, as the
+    // answer reads the shared memory size that the 16x16x16 path grows.
+    if (HmmaFullSubgroupsEnabled()) {
+        program.info.uses_cooperative_matrix =
+            Shader::Backend::SPIRV::UsesCooperativeMatrix(profile, program);
     }
     std::unique_ptr<ComputePipeline> pipeline;
     const u64 ir_bytes = emit_pools ? IrBytes(std::span(&program, 1)) : 0;

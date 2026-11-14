@@ -154,14 +154,15 @@ Toast::Toast(QWidget* anchor_) : QLabel(nullptr), anchor{anchor_} {
     connect(&hide_timer, &QTimer::timeout, this, &QWidget::hide);
 }
 
-void Toast::ShowMessage(const QString& text, int duration_ms) {
+void Toast::ShowMessage(const QString& text, int duration_ms, QWidget* message_anchor) {
     if (text.isEmpty()) {
         return;
     }
     setText(text);
     adjustSize();
-    const QRect area = anchor->isVisible()
-                           ? QRect(anchor->mapToGlobal(QPoint(0, 0)), anchor->size())
+    const QWidget* placement = message_anchor != nullptr ? message_anchor : anchor;
+    const QRect area = placement->isVisible()
+                           ? QRect(placement->mapToGlobal(QPoint(0, 0)), placement->size())
                            : QGuiApplication::primaryScreen()->geometry();
     move(area.center().x() - width() / 2, area.bottom() - height() - area.height() / 12);
     show();

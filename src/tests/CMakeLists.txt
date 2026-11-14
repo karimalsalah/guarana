@@ -95,6 +95,7 @@ add_executable(tests
     video_core/maxwell_numeric.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
+    video_core/mesh_before_pass.cpp
     video_core/cost_governor.cpp
     video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp
@@ -105,6 +106,7 @@ add_executable(tests
     video_core/auto_shading_rate.cpp
     common/guarana_modes.cpp
     common/power_governor.cpp
+    common/frame_target_hotkeys.cpp
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp

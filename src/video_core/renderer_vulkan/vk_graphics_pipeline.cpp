@@ -30,6 +30,7 @@
 #include "common/scope_exit.h"
 #include "common/zstd_compression.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
+#include "video_core/renderer_vulkan/mesh_before_pass.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
@@ -1515,6 +1516,8 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{views.data(), views.size()};
         texture_cache.CheckFeedbackLoop(view_span);
+        mesh_reads_targets = mesh_emulation && Scheduler::MeshBeforePassEnabled() &&
+                             texture_cache.SamplesRenderTarget(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
             scheduler.RequestOutsideRenderPassOperationContext();
@@ -1690,6 +1693,8 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         texture_cache.UpdateRenderTargets(false, true);
         const std::span<const VideoCommon::ImageViewInOut> view_span{delta_views};
         texture_cache.CheckFeedbackLoop(view_span);
+        mesh_reads_targets = mesh_emulation && Scheduler::MeshBeforePassEnabled() &&
+                             texture_cache.SamplesRenderTarget(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
             scheduler.RequestOutsideRenderPassOperationContext();
@@ -1837,23 +1842,37 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
 
+    std::shared_ptr<VkDescriptorSet> mesh_set;
     if (mesh_emulation) {
-        // The mesh program runs as a compute dispatch outside the render pass and writes the
-        // triangles the draw then reads; both use the descriptor set committed here.
-        scheduler.RequestOutsideRenderPassOperationContext();
-        if (!IsBuilt()) {
-            scheduler.Record([this](vk::CommandBuffer) {
-                const VideoCommon::Nx2Profile::Scope scope{
-                    VideoCommon::Nx2Profile::Zone::PipelineWait};
-                build->Wait(!worker_only_build);
-            });
+        const bool mesh_before_pass = Scheduler::MeshBeforePassEnabled();
+        if (mesh_before_pass) {
+            // Hoisted dispatches need a separate descriptor cell for each draw.
+            mesh_set = std::make_shared<VkDescriptorSet>(VkDescriptorSet{});
+        } else {
+            // Preserve main's pass cut and separate build-wait command when disabled.
+            scheduler.RequestOutsideRenderPassOperationContext();
+            if (!IsBuilt()) {
+                scheduler.Record([this](vk::CommandBuffer) {
+                    const VideoCommon::Nx2Profile::Scope scope{
+                        VideoCommon::Nx2Profile::Zone::PipelineWait};
+                    build->Wait(!worker_only_build);
+                });
+            }
         }
-        scheduler.Record([this, descriptor_data, groups = mesh_groups, capacity = mesh_capacity,
-                          task_buffers = mesh_task_buffers,
+        auto mesh_work = [this, descriptor_data, groups = mesh_groups, capacity = mesh_capacity,
+                          task_buffers = mesh_task_buffers, set_cell = mesh_set,
+                          wait_build = mesh_before_pass && !IsBuilt(),
                           rescaling_data = rescaling.Data(), is_rescaling = texture_cache.IsRescaling(),
                           uses_render_area = render_area.uses_render_area,
                           render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
-            mesh_descriptor_set = VK_NULL_HANDLE;
+            if (wait_build) {
+                const VideoCommon::Nx2Profile::Scope scope{
+                    VideoCommon::Nx2Profile::Zone::PipelineWait};
+                build->Wait(!worker_only_build);
+            }
+            if (!set_cell) {
+                mesh_descriptor_set = VK_NULL_HANDLE;
+            }
             const bool has_task{mesh_emulation->has_task};
             if (!pipeline || !mesh_compute_pipeline || build->Failed() || groups == 0 ||
                 (has_task && (!task_compute_pipeline || !distribution_pipeline))) {
@@ -1862,7 +1881,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             const VkDescriptorSet descriptor_set{descriptor_allocator.Commit()};
             device.GetLogical().UpdateDescriptorSet(descriptor_set, *descriptor_update_template,
                                                     descriptor_data);
-            mesh_descriptor_set = descriptor_set;
+            if (set_cell) {
+                *set_cell = descriptor_set;
+            } else {
+                mesh_descriptor_set = descriptor_set;
+            }
             // The task and mesh programs read the draw's push constants and descriptors.
             const auto bind_program_state = [&] {
                 constexpr VkShaderStageFlags push_stages{VK_SHADER_STAGE_ALL_GRAPHICS |
@@ -1969,7 +1992,25 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             memory_barrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
-        });
+        };
+        // EDEN_NX2_MESH_BEFORE_PASS: inside a render pass, run the dispatches before the pass
+        // begins instead of ending it here and beginning it again for the draw. They read nothing
+        // the pass's draws write: no draw in it wrote storage (RecordBeforePass checks), this
+        // draw writes no storage and samples none of its targets, and the pass holds no copies
+        // or other dispatches (they end it). Their outputs are this draw's own buffers, or its
+        // place in the arena.
+        // A copy of the work goes in, so a refusal leaves it to record here.
+        const bool before_pass{
+            MeshBeforePass::MayHoistDraw(mesh_before_pass, mesh_reads_targets,
+                                        writes_storage) &&
+            scheduler.RecordBeforePass(texture_cache.GetFramebuffer(),
+                                       std::function<void(vk::CommandBuffer)>{mesh_work})};
+        if (!before_pass) {
+            if (mesh_before_pass) {
+                scheduler.RequestOutsideRenderPassOperationContext();
+            }
+            scheduler.Record(std::move(mesh_work));
+        }
     }
     scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
     if (writes_storage) {
@@ -2059,7 +2100,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         });
     }
     const bool is_rescaling{texture_cache.IsRescaling()};
-    const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
+    // A later draw's hoisted dispatch can overwrite the down factor before this draw runs.
+    const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline()) ||
+                                Scheduler::MeshBeforePassEnabled()};
     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
@@ -2088,7 +2131,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
-                      render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
+                      render_area_data = render_area.words, mesh_set](vk::CommandBuffer cmdbuf) {
         if (bind_descriptor_buffer) {
             const VkDescriptorBufferBindingInfoEXT binding_info{
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
@@ -2143,9 +2186,10 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
         if (mesh_emulation) {
             // The set the emulation's dispatch committed (see above).
-            if (mesh_descriptor_set) {
+            const VkDescriptorSet descriptor_set{mesh_set ? *mesh_set : mesh_descriptor_set};
+            if (descriptor_set) {
                 cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, 0,
-                                          mesh_descriptor_set, nullptr);
+                                          descriptor_set, nullptr);
             }
             return;
         }

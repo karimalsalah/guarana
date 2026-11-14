@@ -52,6 +52,12 @@ constexpr u32 GM_NARROW_NO_FALLBACK = 8; ///< with GM_NARROW: zero, not the full
 [[nodiscard]] bool UsesSoftwareMatrixSharedMemory(const Profile& profile,
                                                   const IR::Program& program);
 
+/// Whether EmitSPIRV lowers the program's HMMA to cooperative matrices, which is what it stores in
+/// Info::uses_cooperative_matrix. A pipeline needs full subgroups for them; this answers before the
+/// SPIR-V exists. Call it on a program EmitSPIRV has not touched: the 16x16x16 path grows
+/// IR::Program::shared_memory_size, which this reads.
+[[nodiscard]] bool UsesCooperativeMatrix(const Profile& profile, const IR::Program& program);
+
 /// Words per lane in the buffer of EmitCooperativeHmmaTest: the guest registers a0 a1 a2 a3 b0 b1
 /// c0 c1 as input, then d0 d1 as output.
 constexpr u32 COOPERATIVE_HMMA_TEST_LANE_WORDS = 10;
