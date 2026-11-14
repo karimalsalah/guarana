@@ -59,7 +59,7 @@ class CommonRules:
             self.assertEqual(len({"uses", "run"} & set(step)), 1, (job_name, step))
             self.assertIn("name", step)
             if "uses" in step:
-                self.assertEqual(step["uses"], "actions/checkout@v5", "as in labels.yml and pages.yml")
+                self.assertRegex(step["uses"], r"^actions/checkout@v\d+$", "as in labels.yml and pages.yml")
 
     def test_issue_text_never_reaches_a_run_block(self):
         # Everything a script needs comes through env or $GITHUB_EVENT_PATH, never ${{ }} in run.

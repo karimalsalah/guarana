@@ -21,6 +21,7 @@ FORM_LABELS = (
     "Settings and switches", "Results", "tools/bench rows", "Screenshot", "Anything else", "Credit me as",
     # crash.yml, game_bug.yml, visual_bug.yml, ui_bug.yml
     "Regression", "Last known working build", "Steps to reproduce", "Log / crash dump",
+    "Display refresh rate and variable refresh on/off", "Switches set", "Frame generation",
     # bug_report.yml (upstream consolidated form)
     "Lichii build",
     "What kind of problem is it?",
@@ -42,12 +43,15 @@ FORM_LABELS = (
 # "Graphics card" options of the forms: short name, vendor, integrated or discrete.
 GPU_OPTIONS = {
     "Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)": ("Intel Arc 140T / 140V", "intel", "integrated"),
+    "Intel Arc 130T / 130V (Arrow Lake H, Lunar Lake)": ("Intel Arc 130T / 130V", "intel", "integrated"),
     "Intel Arc (Meteor Lake)": ("Intel Arc (Meteor Lake)", "intel", "integrated"),
     "Intel Arc (Panther Lake)": ("Intel Arc (Panther Lake)", "intel", "integrated"),
     "Other Intel integrated (Iris Xe, UHD)": ("Intel Iris Xe / UHD", "intel", "integrated"),
     "AMD Radeon 780M / 760M": ("AMD Radeon 780M / 760M", "amd", "integrated"),
     "AMD Radeon 880M / 890M": ("AMD Radeon 880M / 890M", "amd", "integrated"),
+    "AMD Radeon 8060S (integrated)": ("AMD Radeon 8060S", "amd", "integrated"),
     "AMD Ryzen Z1 / Z2 (handheld)": ("AMD Ryzen Z1 / Z2", "amd", "integrated"),
+    "Steam Deck (AMD, handheld)": ("Steam Deck", "amd", "integrated"),
     "Other AMD integrated": ("AMD integrated", "amd", "integrated"),
     "Intel Arc discrete (A or B series)": ("Intel Arc A / B series", "intel", "discrete"),
     "NVIDIA RTX 50 series": ("NVIDIA RTX 50 series", "nvidia", "discrete"),

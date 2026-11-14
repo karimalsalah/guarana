@@ -161,7 +161,7 @@ No install? Paste the [copy-paste prompt](docs/AI-QUICKSTART.md#no-install-chatg
 
 **What an `agent-ready` issue holds.** Each one comes from the [agent task form](https://github.com/karimalsalah/guarana/issues/new?template=agent-task.yml): the goal, the files to change and what to read first, an acceptance test that fails before the change and passes after it, the measurement (scene, device, metric, baseline and the gain that counts, or "not a performance task"), whether it can be checked without the game, and its size. Triage adds `agent-ready` when the acceptance test is checkable, and new ones get a **"Solve it with AI"** comment with the commands above filled in. [Open and unclaimed](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aneeds-triage%20no%3Aassignee): 46 as of 2026-11-13.
 
-**Claim it, so two agents do not do the same work.** Take an issue without `needs-triage` and without an assignee. Read it and its comments, and check that nobody has claimed it: an assignee, an "I'm taking this" comment, a linked pull request. Then say on the issue that you are taking it, and for whom. If you stop, say so. Stay inside its scope; anything else is a new issue. The long form: [CONTRIBUTING.md](CONTRIBUTING.md#picking-an-agent-ready-issue), [docs/AGENTS-INVITE.md](docs/AGENTS-INVITE.md), [docs/agents/README.md](https://github.com/karimalsalah/guarana/blob/main/docs/agents/README.md) and [HANDOVER.md](https://github.com/karimalsalah/guarana/blob/main/HANDOVER.md).
+**Claim it, so two agents do not do the same work.** Take an issue without `needs-triage` and without an assignee. Read it and its comments, and check that nobody has claimed it: an assignee, a `claimed` label, a linked pull request. Then comment `/claim`: the `agent-claims` workflow labels it `claimed` and assigns you, and a claim with no open pull request linking the issue is released after 72 hours. If you stop, comment `/unclaim`. Stay inside its scope; anything else is a new issue. The long form: [CONTRIBUTING.md](CONTRIBUTING.md#picking-an-agent-ready-issue), [docs/AGENTS-INVITE.md](docs/AGENTS-INVITE.md), [docs/agents/README.md](docs/agents/README.md) and [HANDOVER.md](HANDOVER.md).
 
 **See and drive the game.** `.mcp.json` registers the `emulator-debug` MCP server ([docs/nx2/debug-mcp.md](docs/nx2/debug-mcp.md)). When a tester starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`, the agent reads frame times, screenshots, GPU costs and logs, A/B tests shaders and sends controller input. Loopback only; the agent never starts or stops the emulator.
 
@@ -284,67 +284,6 @@ Every row, with its measurements and code: [docs/switches.md](docs/switches.md).
 A real frame that lands between two refreshes cannot stay up as long as the one before it, so motion looks uneven even at a steady average. The FLUID presenter shows one frame per 16.7 ms slot instead, timed to the slot's vblank.
 
 </details>
-
-<a name="ai-native-plug-in-your-agent"></a>
-
-## Built for AI agents
-
-Point an agent at an issue and it finds everything it needs here: one rulebook, [AGENTS.md](AGENTS.md); tasks written with an acceptance test; a free test build for every pull request; and, when a tester runs the game, a debug server it can ask for frame times and screenshots. The agent does the work end to end. A person owns the pull request.
-
-**Start in one line.** Fork, clone, start your tool in the folder and give it one sentence:
-
-| Tool | One command in your clone |
-|---|---|
-| **Claude Code** | `claude "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` (`CLAUDE.md` imports `AGENTS.md`) |
-| **OpenAI Codex CLI** | `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` |
-| **Gemini CLI** | `gemini`, then paste the sentence (`GEMINI.md` imports `AGENTS.md`) |
-| **Cursor** | `agent "Read AGENTS.md, then fix ..."`, or open the folder (`.cursor/rules/guarana.mdc` is always on) |
-| **GitHub Copilot** | Agent mode in your editor, or the coding agent from your fork; paste the sentence |
-| **Windsurf** | Open the folder, open Cascade, paste the sentence |
-| **Aider** | `aider --message "Read AGENTS.md, then fix ..."` (`.aider.conf.yml` loads `AGENTS.md`) |
-| **Cline** | `cline "Read AGENTS.md, then fix ..."`, or the extension (`.clinerules/` and `AGENTS.md`) |
-
-No install? Paste the [copy-paste prompt](docs/AI-QUICKSTART.md#no-install-chatgpt-claude-or-gemini-in-the-browser) into ChatGPT, Claude or Gemini in the browser. It points the chat at [`llms-full.txt`](https://karimalsalah.github.io/guarana/llms-full.txt), the whole project context in one URL; the site's [agents page](https://karimalsalah.github.io/guarana/agents.html) has a copy button. Install steps, flags and the honest limits of each tool: [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md).
-
-**What an `agent-ready` issue holds.** Each one comes from the [agent task form](https://github.com/karimalsalah/guarana/issues/new?template=agent-task.yml): the goal, the files to change and what to read first, an acceptance test that fails before the change and passes after it, the measurement (scene, device, metric, baseline and the gain that counts, or "not a performance task"), whether it can be checked without the game, and its size. Triage adds `agent-ready` when the acceptance test is checkable, and new ones get a **"Solve it with AI"** comment with the commands above filled in. [Open and unclaimed](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aneeds-triage%20no%3Aassignee): 46 as of 2026-11-13.
-
-**Claim it, so two agents do not do the same work.** Take an issue without `needs-triage` and without an assignee. Read it and its comments, and check that nobody has claimed it: an assignee, a `claimed` label, a linked pull request. Then comment `/claim`: the `agent-claims` workflow labels it `claimed` and assigns you, and a claim with no open pull request linking the issue is released after 72 hours. If you stop, comment `/unclaim`. Stay inside its scope; anything else is a new issue. The long form: [CONTRIBUTING.md](CONTRIBUTING.md#picking-an-agent-ready-issue), [docs/AGENTS-INVITE.md](docs/AGENTS-INVITE.md), [docs/agents/README.md](docs/agents/README.md) and [HANDOVER.md](HANDOVER.md).
-
-**See and drive the game.** `.mcp.json` registers the `emulator-debug` MCP server ([docs/nx2/debug-mcp.md](docs/nx2/debug-mcp.md)). When a tester starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`, the agent reads frame times, screenshots, GPU costs and logs, A/B tests shaders and sends controller input. Loopback only; the agent never starts or stops the emulator.
-
-**No compiler needed.** CI builds every pull request on Linux and Windows and comments a Windows test build (`guarana-pr<N>-<commit>-windows-x86_64`, kept 14 days) that anyone with the game can run.
-
-**Rules that keep it honest.** Measured gains only, default-off `EDEN_NX2_*` switches, no game data. The person who runs the agent owns the pull request and discloses the AI with an `Assisted-by:` trailer ([docs/AI_POLICY.md](docs/AI_POLICY.md)). Every merged pull request puts its author on the [Hall of fame](#hall-of-fame).
-
-## Why contribute now
-
-- **It is early.** One device has results, the Arc 140T. Almost any laptop or handheld you own is a first data point, and a [device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) needs no code.
-- **Open problems have numbers.** Read-back stalls, first-visit shader stutter, boot time, Hyrule Field fps and the first AMD reports are on the [Open wins](https://karimalsalah.github.io/guarana/wins.html) page, each with its scene, today's number and target.
-- **Your name stays.** Every merged pull request, and every `Co-authored-by:` trailer, goes on the [Hall of fame](#hall-of-fame) and in [CONTRIBUTORS.md](CONTRIBUTORS.md), rebuilt daily from the git history.
-- **Help in real time.** Questions about a task, a driver or a build get answers in the [Discord](https://discord.gg/urz7vMdRM). Bugs and device reports stay on GitHub so they can be tracked.
-- **Small steps count.** Run the [benchmark](docs/BENCHMARKING.md), triage an issue, port an upstream fix with its author credited, add a test. [CONTRIBUTING.md](CONTRIBUTING.md) has the five-minute start.
-
-## Hall of fame
-
-Everyone credited for good. Authors of merged commits and of `Co-authored-by:` trailers are people; bots and AI tools are
-listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.py).
-
-<!-- legacy:start -->
-<!-- Generated by tools/ci/legacy.py. Do not edit between the markers. -->
-
-<p align="center">
-  <a href="https://github.com/cerroverb"><img src="https://github.com/cerroverb.png?size=96" width="48" height="48" alt="cerroverb" title="cerroverb"></a>
-  <a href="https://github.com/danieljesus"><img src="https://github.com/danieljesus.png?size=96" width="48" height="48" alt="danieljesus" title="danieljesus"></a>
-  <a href="https://github.com/jpkto"><img src="https://github.com/jpkto.png?size=96" width="48" height="48" alt="jpkto" title="jpkto"></a>
-  <a href="https://github.com/karimalsalah"><img src="https://github.com/karimalsalah.png?size=96" width="48" height="48" alt="karimalsalah" title="karimalsalah"></a>
-  <a href="https://github.com/Nanoc6"><img src="https://github.com/Nanoc6.png?size=96" width="48" height="48" alt="Nanoc6" title="Nanoc6"></a>
-  <a href="https://github.com/PantACRO4life"><img src="https://github.com/PantACRO4life.png?size=96" width="48" height="48" alt="PantACRO4life" title="PantACRO4life"></a>
-  <a href="https://github.com/zortos293"><img src="https://github.com/zortos293.png?size=96" width="48" height="48" alt="zortos293" title="zortos293"></a>
-</p>
-
-**8 people credited for good**, 1 of them not shown here. Everyone: [CONTRIBUTORS.md](CONTRIBUTORS.md) and the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html).
-
-<!-- legacy:end -->
 
 ## Roadmap
 
