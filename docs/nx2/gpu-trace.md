@@ -5,17 +5,17 @@ A GPU trace (`.lxtrace`) holds what the emulated GPU consumed over a window, in 
 ## Replay
 
 ```sh
-eden-cli --replay <trace> --out <dir> [--frames N] [--device N]
+guarana-cli --replay <trace> --out <dir> [--frames N] [--device N]
 ```
 
-The replay needs no game, no window and no keys. It brings up the GPU on a bare `Core::System` (`System::InitializeForGpuReplay`: kernel, Host1x and the GPU, no process, audio or services), restores the snapshot and feeds the records through the GPU in order. It writes per present:
+`guarana-cli` is the SDL frontend (`eden-cli` before v20.2). The replay needs no game, no window and no keys. It brings up the GPU on a bare `Core::System` (`System::InitializeForGpuReplay`: kernel, Host1x and the GPU, no process, audio or services), restores the snapshot and feeds the records through the GPU in order. It writes per present:
 
 - `frame-NNNN.png`: the composited frame at the size of its largest layer (crop rectangle), through the renderer's screenshot path.
 - `frames.json`: per frame its file, size, XXH3-128 hash of the RGBA bytes and the wall time since the previous frame, plus the program id and the device that replayed it.
 
 The window is a `VK_EXT_headless_surface` surface (`WindowSystemType::Headless`), so any Vulkan driver with that extension works, Mesa's lavapipe included.
 
-`eden-cli --gpu-trace-sample <trace>` writes a synthetic trace that needs no game: one Switch 2 channel whose four frames are two CPU-written images and two sets of 3D engine clears (whole and scissored). The unit tests read it back (`[gpu_trace]`).
+`guarana-cli --gpu-trace-sample <trace>` writes a synthetic trace that needs no game: one Switch 2 channel whose four frames are two CPU-written images and two sets of 3D engine clears (whole and scissored). The unit tests read it back (`[gpu_trace]`).
 
 ## Recording
 
@@ -31,7 +31,7 @@ What happens (`video_core/gpu_trace/recorder.cpp`):
 3. **Commands.** Each command list is recorded when the GPU thread takes it: its GPFIFO entries, the words copied at submit and the entries still deferred. GPU memory maps are recorded when they happen, with the SMMU mapping and content of any new pages.
 4. **Presents.** A composite request is recorded at the GPU tick that runs it, in order with the commands.
 
-`eden-cli --replay <trace> --out <dir> --record <new trace> --record-from <present>` records a replay from a present on. Replaying the new trace must give the same frames as the original from that present: that round trip checks the recorder, the snapshot and the restore against each other.
+`guarana-cli --replay <trace> --out <dir> --record <new trace> --record-from <present>` records a replay from a present on. Replaying the new trace must give the same frames as the original from that present: that round trip checks the recorder, the snapshot and the restore against each other.
 
 A channel that starts submitting after the snapshot ends the recording before its first submit, and a GPU shutdown ends it at once; both traces replay up to that point. Not recorded yet: SMMU unmaps (the replay keeps the stale mapping), sparse backing changes, the order in which suspended channels resume, and Switch 2 semaphore region changes after the snapshot. There is no Qt hotkey yet: use the debug server or the file trigger.
 

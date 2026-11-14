@@ -59,6 +59,12 @@ class FormTests(unittest.TestCase):
         self.assertNotIn("Results", sections)
         self.assertNotIn("Anything else", sections)
 
+    def test_bug_report_build_under_the_new_and_the_old_label(self):
+        for label in ("Guarana build", "Lichii build"):
+            body = f"### {label}\n\nbuild 177\n\n### Log file\n\n_No response_\n"
+            self.assertEqual(issue_forms.parse_form(body), {label: "build 177"})
+            self.assertEqual(issue_forms.form_headings(body), {label, "Log file"})
+
     def test_crlf_bodies_parse_the_same(self):
         body = fixture("device-report-manual.md")
         self.assertEqual(issue_forms.parse_form(body.replace("\n", "\r\n")), issue_forms.parse_form(body))

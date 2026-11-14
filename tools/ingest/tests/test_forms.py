@@ -43,7 +43,8 @@ class FormTests(unittest.TestCase):
         for path in glob.glob(os.path.join(FORMS, "*.yml")):
             if not path.endswith("config.yml"):
                 labels |= set(fields(form(os.path.basename(path))))
-        self.assertEqual(labels, set(issue_forms.FORM_LABELS))
+        self.assertEqual(labels, set(issue_forms.FORM_LABELS) - set(issue_forms.RETIRED_LABELS))
+        self.assertLessEqual(set(issue_forms.RETIRED_LABELS), set(issue_forms.FORM_LABELS))
 
     def test_gpu_options_of_every_form_are_known(self):
         for name in ("device-report.yml", "crash.yml", "game_bug.yml", "visual_bug.yml", "ui_bug.yml", "perf-idea.yml"):
