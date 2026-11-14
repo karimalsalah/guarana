@@ -71,6 +71,9 @@
 - name: ci
   color: "a2eeef"
   description: "Workflows, builds and release packaging"
+- name: fixes-main
+  color: "d93f0b"
+  description: "Repairs a red main; tools/ci/pr_gate.py lets it merge while main is red"
 - name: dependencies
   color: "0366d6"
   description: "Dependency updates, most of them from Dependabot (.github/dependabot.yml)"

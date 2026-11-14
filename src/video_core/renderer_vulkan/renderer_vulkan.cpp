@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -246,48 +247,77 @@ Common::DeviceProfile DeviceProfileOf(const vk::PhysicalDevice& physical) {
     return profile;
 }
 
-Common::DeviceClassification ClassificationOf(const vk::PhysicalDevice& physical) {
-    return Common::Classify(DeviceProfileOf(physical));
+// The compute units or SMs of the GPU where the driver reports them: AMD's shader core properties
+// and NVIDIA's SM builtins. Intel's Windows driver reports neither, so a count of 0 means the
+// driver does not say, not that the GPU has none.
+struct GpuCoreCount {
+    u32 count{};
+    std::string_view unit;
+};
+
+GpuCoreCount GpuCoresOf(const vk::PhysicalDevice& physical) {
+    const std::vector<VkExtensionProperties> extensions =
+        physical.EnumerateDeviceExtensionProperties();
+    const auto has = [&extensions](std::string_view name) {
+        return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
+            return name == extension.extensionName;
+        });
+    };
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    if (has("VK_AMD_shader_core_properties")) {
+        VkPhysicalDeviceShaderCorePropertiesAMD core{};
+        core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_PROPERTIES_AMD;
+        properties2.pNext = &core;
+        physical.GetProperties2(properties2);
+        return {core.shaderEngineCount * core.shaderArraysPerEngineCount *
+                    core.computeUnitsPerShaderArray,
+                "compute units"};
+    }
+    if (has("VK_NV_shader_sm_builtins")) {
+        VkPhysicalDeviceShaderSMBuiltinsPropertiesNV sm{};
+        sm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SM_BUILTINS_PROPERTIES_NV;
+        properties2.pNext = &sm;
+        physical.GetProperties2(properties2);
+        return {sm.shaderSMCount, "SMs"};
+    }
+    return {};
 }
 
-// The refresh rate of the display the window is on, where the host says (Windows); 0 elsewhere.
-double DisplayRefreshHz(void* window) {
+// The display the window is on: its refresh rate (0 where the host does not say: Windows says),
+// its name, whether it is the primary one and the pixels of its mode. A window of null is the
+// primary display.
+Core::GamePresets::DisplayInfo WindowDisplayOf(void* window) {
     const Common::VblankClock display{window};
     const auto period = display.ReportedPeriod().count();
-    return period > 0 ? 1.0e9 / static_cast<double>(period) : 0.0;
+    const Common::VblankClock::Pixels pixels = display.ReportedPixels();
+    return {.refresh_hz = period > 0 ? 1.0e9 / static_cast<double>(period) : 0.0,
+            .name = display.DisplayName(),
+            .primary = display.OnPrimaryDisplay(),
+            .width_px = pixels.width,
+            .height_px = pixels.height};
+}
+
+// What the game presets and the switch defaults match on, from the profile read before the device:
+// the vendor, whether the GPU is integrated, and the device class and family.
+Core::GamePresets::GpuInfo GpuInfoOf(const DeviceStartProfile& start) {
+    return {
+        .vendor = start.vendor,
+        .integrated = start.machine.gpu.kind == Common::GpuKind::Integrated,
+        .device_class = start.classification.device_class,
+        .gpu_family = start.classification.gpu_family,
+        .cores = start.gpu_cores,
+        .cores_unit = start.gpu_cores_unit,
+    };
 }
 
 // Game presets match on the GPU's capabilities and set values the device and the renderer read
 // while they are built.
-void ApplyGamePresets(const Device& device) {
-    using Core::GameSettings::GPUVendor;
-    GPUVendor vendor = GPUVendor::Unknown;
-    switch (device.GetDriverID()) {
-    case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
-    case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
-        vendor = GPUVendor::Intel;
-        break;
-    case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
-        vendor = GPUVendor::Nvidia;
-        break;
-    case VK_DRIVER_ID_AMD_PROPRIETARY:
-    case VK_DRIVER_ID_AMD_OPEN_SOURCE:
-    case VK_DRIVER_ID_MESA_RADV:
-        vendor = GPUVendor::AMD;
-        break;
-    default:
-        break;
-    }
+void ApplyGamePresets(const Device& device, const DeviceStartProfile& start) {
     const u64 program_id = Settings::GetCurrentProgramID();
-    const Common::DeviceClassification machine = ClassificationOf(device.GetPhysical());
-    const Core::GamePresets::GpuInfo gpu{
-        .vendor = vendor,
-        .integrated = device.IsIntegrated(),
-        .software_tensor_math =
-            !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported(),
-        .device_class = machine.device_class,
-        .gpu_family = machine.gpu_family,
-    };
+    Core::GamePresets::GpuInfo gpu = GpuInfoOf(start);
+    gpu.software_tensor_math =
+        !device.IsCooperativeHmmaSupported() && !device.IsCooperativeHmma16x16x16Supported();
     const std::string summary = Core::GamePresets::Apply(program_id, gpu);
     Core::GamePresets::ReportFirstBoot(program_id, gpu, device.GetModelName(), summary);
 }
@@ -296,7 +326,9 @@ void ApplyGamePresets(const Device& device) {
 
 Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
                     VkSurfaceKHR surface,
-                    const std::function<void(const Device&)>& on_capabilities) {
+                    const std::function<void(const Device&, const DeviceStartProfile&)>&
+                        on_capabilities,
+                    void* window, DeviceStartProfile* start_out) {
     const double enumerate_start = Common::BootTiming::Now();
     const std::vector<VkPhysicalDevice> devices = instance.EnumeratePhysicalDevices();
     Common::BootTiming::Mark("vulkan: physical devices enumerated", enumerate_start);
@@ -306,24 +338,30 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
     const vk::PhysicalDevice physical_device(devices[device_index], dld);
-    {
-        // The game's switch defaults go in before the device reads its switches (it picks
-        // extensions by some of them).
-        const VkPhysicalDeviceProperties properties = physical_device.GetProperties();
-        using Core::GameSettings::GPUVendor;
-        const GPUVendor vendor = properties.vendorID == 0x8086   ? GPUVendor::Intel
-                                 : properties.vendorID == 0x1002 ? GPUVendor::AMD
-                                 : properties.vendorID == 0x10DE ? GPUVendor::Nvidia
-                                                                 : GPUVendor::Unknown;
-        // The class and the family are the ones ApplyGamePresets gets: DeviceProfileOf reads the
-        // driver ID from the physical device, so a family is known before the device is built.
-        const Common::DeviceClassification machine = ClassificationOf(physical_device);
-        void(VideoCore::ApplyGameSwitchDefaults(
-            Settings::GetCurrentProgramID(),
-            {.vendor = vendor,
-             .integrated = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
-             .device_class = machine.device_class,
-             .gpu_family = machine.gpu_family}));
+    // The machine is read once, here, before the device exists, and the game's switch defaults
+    // and its settings presets (ApplyGamePresets, through on_capabilities) both take the vendor,
+    // the class and the family from this one profile. DeviceProfileOf reads the driver ID from the
+    // physical device, so a family is known before the device is built. The refresh rate is the
+    // one of the display the window is on, not the primary display's (the same display on a
+    // machine with one).
+    DeviceStartProfile start;
+    start.machine = DeviceProfileOf(physical_device);
+    Core::GamePresets::DisplayInfo display;
+    if (window != nullptr) {
+        display = WindowDisplayOf(window);
+        start.machine.refresh_hz = display.refresh_hz;
+    }
+    start.classification = Common::Classify(start.machine);
+    start.vendor = Core::GamePresets::VendorOfPciId(start.machine.gpu.vendor_id);
+    const GpuCoreCount cores = GpuCoresOf(physical_device);
+    start.gpu_cores = cores.count;
+    start.gpu_cores_unit = cores.unit;
+    // The switch defaults go in before the device reads its switches (it picks extensions by some
+    // of them); VideoCore::ApplyGameSwitchDefaults also reads again the read-back's switches.
+    void(VideoCore::ApplyGameSwitchDefaults(Settings::GetCurrentProgramID(), GpuInfoOf(start),
+                                            display));
+    if (start_out != nullptr) {
+        *start_out = start;
     }
     const double device_start = Common::BootTiming::Now();
     SCOPE_EXIT {
@@ -331,7 +369,13 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
             Common::BootTiming::Mark("vulkan: device created", device_start);
         }
     };
-    return Device(*instance, physical_device, surface, dld, on_capabilities);
+    const std::function<void(const Device&)> with_profile = [&on_capabilities,
+                                                             &start](const Device& created) {
+        if (on_capabilities) {
+            on_capabilities(created, start);
+        }
+    };
+    return Device(*instance, physical_device, surface, dld, with_profile);
 }
 
 RendererVulkan::RendererVulkan(Core::Frontend::EmuWindow& emu_window,
@@ -358,7 +402,8 @@ try
                                                     : vk::DebugUtilsMessenger{})
     // Create surface
     , surface(CreateSurface(instance, render_window.GetWindowInfo()))
-    , device(CreateDevice(instance, dld, *surface, ApplyGamePresets))
+    , device(CreateDevice(instance, dld, *surface, ApplyGamePresets,
+                          render_window.GetWindowInfo().render_surface, &start_profile))
     , memory_allocator(device)
     , state_tracker()
     , scheduler(device, state_tracker)
@@ -929,12 +974,12 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", device_info.model);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
-    // What the machine is, in one line (docs/DEVICES.md).
-    Common::DeviceProfile machine = DeviceProfileOf(device.GetPhysical());
+    // What the machine is, in one line (docs/DEVICES.md): the profile read before the device, with
+    // the driver version the device gives.
+    Common::DeviceProfile machine = start_profile.machine;
     machine.gpu.driver = GetDriverVersion(device);
-    machine.refresh_hz = DisplayRefreshHz(render_window.GetWindowInfo().render_surface);
     LOG_INFO(Render_Vulkan, "Device profile: {}",
-             Common::DescribeDeviceProfile(machine, Common::Classify(machine)));
+             Common::DescribeDeviceProfile(machine, start_profile.classification));
     if (VideoCommon::RenderTrace::Enabled()) {
         LOG_INFO(Render_Vulkan, "Render trace enabled: interval=600 frames, log_filter={}",
                  Settings::values.log_filter.GetValue());

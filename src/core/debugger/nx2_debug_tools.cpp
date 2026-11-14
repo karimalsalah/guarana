@@ -38,6 +38,7 @@
 #include "core/debugger/nx2_debug_server.h"
 #include "core/debugger/nx2_debug_tools.h"
 #include "core/frontend/framebuffer_layout.h"
+#include "core/game_presets.h"
 #include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/nx2_thread_stats.h"
@@ -243,6 +244,81 @@ json FramePredictorState() {
             {"last_window", window(snapshot.last)}};
 }
 
+// What the game's settings, add-ons and switches were resolved to at boot, each with its value, the
+// decision about the user's choices, its reason and its evidence (Core::GamePresets::Resolve).
+json ResolutionState() {
+    namespace Presets = Core::GamePresets;
+    const std::optional<Presets::Resolution> last = Presets::LastResolution();
+    json result;
+    result["resolved"] = last.has_value();
+    if (!last) {
+        return result;
+    }
+    const auto evidence = [](const Presets::Evidence& source) {
+        json item;
+        item["measured"] = source.measured;
+        item["where"] = std::string{source.where};
+        return item;
+    };
+    const Presets::ResolverInputs& in = last->inputs;
+    json inputs;
+    inputs["vendor"] = std::string{Presets::VendorName(in.vendor)};
+    inputs["integrated"] = in.integrated;
+    inputs["software_tensor_math"] = in.software_tensor_math;
+    inputs["device_class"] = std::string{Common::DeviceClassName(in.device_class)};
+    inputs["gpu_family"] = std::string{Common::GpuFamilyName(in.gpu_family)};
+    inputs["refresh_hz"] = in.refresh_hz;
+    inputs["display"] = in.display;
+    inputs["output_width"] = in.output_width;
+    inputs["output_height"] = in.output_height;
+    inputs["gpu_cores"] = in.gpu_cores;
+    inputs["gpu_cores_unit"] = std::string{in.gpu_cores_unit};
+    inputs["pixels_per_core"] = in.pixels_per_core;
+    json settings = json::array();
+    for (const Presets::SettingEntry& entry : last->settings) {
+        json item;
+        item["label"] = std::string{entry.label};
+        item["value"] = std::string{entry.value};
+        item["available"] = entry.available;
+        item["decision"] = std::string{Presets::DecisionName(entry.decision)};
+        item["current"] = entry.current;
+        item["reason"] = std::string{entry.reason};
+        item["evidence"] = evidence(entry.evidence);
+        settings.push_back(std::move(item));
+    }
+    json addons = json::array();
+    for (const Presets::AddonEntry& entry : last->addons) {
+        json item;
+        item["name"] = std::string{entry.name};
+        item["disabled"] = entry.disabled;
+        item["reason"] = std::string{entry.reason};
+        item["evidence"] = evidence(entry.evidence);
+        addons.push_back(std::move(item));
+    }
+    json switches = json::array();
+    for (const Presets::SwitchEntry& entry : last->switches) {
+        json item;
+        item["name"] = std::string{entry.name};
+        item["value"] = std::string{entry.value};
+        item["decision"] = std::string{Presets::SwitchDecisionName(entry.decision)};
+        item["player_value"] = entry.player_value;
+        item["shipped"] = entry.shipped ? json(*entry.shipped) : json(nullptr);
+        item["reason"] = std::string{entry.reason};
+        item["evidence"] = evidence(entry.evidence);
+        switches.push_back(std::move(item));
+    }
+    result["title_id"] = fmt::format("{:016X}", last->title_id);
+    result["presets_enabled"] = last->presets_enabled;
+    result["inputs"] = std::move(inputs);
+    result["preset"] = std::string{last->preset_reason};
+    result["settings"] = std::move(settings);
+    result["addons"] = std::move(addons);
+    result["pacing_set"] = std::string{Presets::PacingSetName(last->pacing)};
+    result["pacing_why"] = last->pacing_why;
+    result["switches"] = std::move(switches);
+    return result;
+}
+
 json Status(ToolState& state, const json& params) {
     const auto window = std::chrono::milliseconds{Param<int>(params, "fps_window_ms", 500, 0, 5000)};
     const u64 before = g_nx2_present_count.load(std::memory_order_relaxed);
@@ -272,6 +348,7 @@ json Status(ToolState& state, const json& params) {
         {"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
         {"autopilot", AutopilotState()},
         {"frame_predictor", FramePredictorState()},
+        {"resolution", ResolutionState()},
     };
 }
 

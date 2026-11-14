@@ -3,6 +3,8 @@
 # major/minor/patch: start a new X.Y.Z-rc1 after a stable release (moves [Unreleased]).
 # rc:                increment X.Y.Z-rcN.
 # release:           promote X.Y.Z-rcN to X.Y.Z and date its changelog heading.
+# Every command first folds the changelog.d fragments into the changelog (tools/ci/
+# changelog_fragments.py release): into [Unreleased] before the move, into [X.Y.Z] for rc and release.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -45,6 +47,8 @@ case "$bump" in
       patch) core="$maj.$min.$((pat + 1))" ;;
     esac
     new="$core-rc1"
+    # Fold the changelog.d fragments into [Unreleased] first (and delete them).
+    python3 -I tools/ci/changelog_fragments.py release
     section_exists Unreleased || {
       echo "CHANGELOG.md is missing the exact ## [Unreleased] heading" >&2
       exit 1
@@ -76,6 +80,8 @@ case "$bump" in
       echo "$cur is not a release candidate; use major, minor or patch" >&2
       exit 1
     }
+    # A fix on the release branch may bring a fragment: it belongs in the version's section.
+    python3 -I tools/ci/changelog_fragments.py release --into "$core"
     section_exists "$core" && section_has_body "$core" || {
       echo "CHANGELOG.md has no non-empty [$core] section" >&2
       exit 1
@@ -87,6 +93,7 @@ case "$bump" in
       echo "$cur is already a stable version" >&2
       exit 1
     }
+    python3 -I tools/ci/changelog_fragments.py release --into "$core"
     section_exists "$core" && section_has_body "$core" || {
       echo "CHANGELOG.md has no non-empty [$core] section" >&2
       exit 1

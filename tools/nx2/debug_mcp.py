@@ -35,7 +35,10 @@ TOOLS = [
         "name": "status",
         "description": "Game title, program id, build, renderer, paused state, presented frame "
                        "count and fps (measured over fps_window_ms), dump directory, live log "
-                       "filter and the shader hashes rejected at runtime.",
+                       "filter, the shader hashes rejected at runtime and the resolution: what "
+                       "the game's settings, add-ons and switches were resolved to at boot, each "
+                       "with its value, decision, reason and evidence, and the inputs (GPU, "
+                       "display rate, output size, GPU cores).",
         "inputSchema": {
             "type": "object",
             "properties": {"fps_window_ms": {"type": "integer", "minimum": 0, "maximum": 5000}},

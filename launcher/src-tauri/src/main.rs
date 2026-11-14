@@ -33,6 +33,7 @@ mod share;
 mod state;
 mod system;
 mod taskbar;
+mod timeline;
 mod types;
 mod util;
 mod warm;

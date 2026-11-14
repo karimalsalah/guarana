@@ -1,5 +1,5 @@
 //! `%LOCALAPPDATA%\Guarana\launcher.log`: the launcher's own lines at Info and above, and
-//! warnings from its libraries. Rotated to `launcher.log.old` past 4 MiB.
+//! warnings from its libraries, each stamped to the millisecond (UTC). Rotated to `launcher.log.old` past 4 MiB.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -27,7 +27,7 @@ impl log::Log for FileLogger {
         }
         let line = format!(
             "{} {:<5} {}: {}\r\n",
-            util::now_rfc3339(),
+            util::now_rfc3339_millis(),
             record.level(),
             record.target(),
             record.args()

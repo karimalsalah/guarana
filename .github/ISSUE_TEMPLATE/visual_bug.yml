@@ -81,6 +81,15 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: driver
+    attributes:
+      label: GPU driver
+      description: "The full version. Intel on Windows: Intel Graphics Software, or Device Manager > Display adapters > the GPU > Driver tab. AMD on Windows: AMD Software: Adrenalin Edition > System > Software & Driver. Linux: the driverInfo line of vulkaninfo --summary."
+      placeholder: "e.g. Intel 32.0.101.xxxx, AMD Adrenalin 25.x.x, Mesa 25.x"
+    validations:
+      required: true
+
   - type: dropdown
     id: os
     attributes:

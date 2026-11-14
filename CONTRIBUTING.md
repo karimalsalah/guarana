@@ -67,7 +67,7 @@ Its row in [docs/switches.md](docs/switches.md) is part of the same pull request
 ## Commits and pull requests
 
 - Commit subjects are `area: change`, in the imperative: `vulkan: keep vertex input dynamic state on Intel 101.x drivers`. The body says why, and for a performance change the device, scene, before and after numbers, and how many runs.
-- One topic per pull request, with its tests, its switch rows and a line in `CHANGELOG.md` under `[Unreleased]`.
+- One topic per pull request, with its tests, its switch rows and a changelog entry: a small file `changelog.d/<slug>.<section>.md` (see [changelog.d/README.md](changelog.d/README.md)), so pull requests do not conflict in `CHANGELOG.md`.
 - Lanes (`main`, `release/vX.Y`, `hotfix/*`, `exp/*`, `upstream`) and releases are in [docs/LANES.md](docs/LANES.md).
 
 ## Upstream first

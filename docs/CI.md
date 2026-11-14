@@ -30,11 +30,11 @@ X.Y.Z-rcN
 
 Examples: `0.1.0-rc1`, `0.1.0`, `0.1.1-rc1`. Numeric components cannot have leading zeroes. The bundle starts with `0.1.0-rc1` as a **suggested starting point**, not as an existing Eglantine version convention. The current public releases use `build-<run number>`; confirm the first semantic version with maintainers before merging this value. The included `[0.1.0]` changelog section is intentionally empty and must receive the real initial release notes before the first versioned release can publish.
 
-Add changes to the top `## [Unreleased]` section in `CHANGELOG.md`. When a new candidate is prepared, the bump script moves those entries beneath `## [X.Y.Z]` and leaves an empty `## [Unreleased]` section ready for the next cycle. The RC and stable release notes come from that version section; an absent or empty section fails before the build is published.
+Add each change as a fragment file `changelog.d/<slug>.<section>.md` (see `changelog.d/README.md`); a line under the top `## [Unreleased]` section in `CHANGELOG.md` is still accepted. When a new candidate is prepared, the bump script folds the fragments into `## [Unreleased]`, deletes them and moves those entries beneath `## [X.Y.Z]` and leaves an empty `## [Unreleased]` section ready for the next cycle. The RC and stable release notes come from that version section; an absent or empty section fails before the build is published.
 
 ### Creating a release
 
-1. For the initial `0.1.0-rc1`, add the real candidate notes under `## [0.1.0]`; after the first stable release, add new notes under `## [Unreleased]` and commit them to `nx2`.
+1. For the initial `0.1.0-rc1`, add the real candidate notes under `## [0.1.0]`; after the first stable release, add new notes as `changelog.d/` fragments (or under `## [Unreleased]`) and commit them to `nx2`.
 2. Open Actions → `bump-version` → Run workflow. Choose one of:
    - `patch`: `0.1.0` → `0.1.1-rc1`.
    - `minor`: `0.1.0` → `0.2.0-rc1`.
