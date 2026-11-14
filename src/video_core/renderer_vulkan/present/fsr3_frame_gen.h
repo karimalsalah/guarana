@@ -17,6 +17,39 @@ namespace Vulkan {
 class Device;
 class Scheduler;
 
+/// EDEN_NX2_FG_PINGPONG: the chain's two frame images swap roles every real frame, so only the
+/// new frame is copied, into the image that held the older one. Image 0 is the one created as
+/// "current", image 1 the one created as "history". Flow descriptor set 0 is written with image 0
+/// at binding 0 (current) and image 1 at binding 1 (history), set 1 with the two exchanged, so the
+/// set to bind is the parity of the number of swaps.
+struct Fsr3PingPong {
+    struct Roles {
+        u32 current;
+        u32 history;
+    };
+
+    /// The images flow descriptor set `set` reads; fixed for the life of the chain.
+    [[nodiscard]] static constexpr Roles SetRoles(u32 set) noexcept {
+        return (set & 1U) == 0 ? Roles{0U, 1U} : Roles{1U, 0U};
+    }
+
+    /// One swap of roles: the image that held the older frame becomes current.
+    constexpr void Advance() noexcept {
+        parity ^= 1U;
+    }
+
+    /// The flow descriptor set whose bindings match the images' roles now.
+    [[nodiscard]] constexpr u32 FlowSet() const noexcept {
+        return parity;
+    }
+
+    [[nodiscard]] constexpr Roles Now() const noexcept {
+        return SetRoles(parity);
+    }
+
+    u32 parity{};
+};
+
 /// AMD FidelityFX Super Resolution 3 (FSR 3) Frame Generation pipeline.
 /// Uses compute-based optical flow and bilateral frame interpolation
 /// to synthesize intermediate frames without requiring engine motion vectors.
@@ -48,6 +81,8 @@ private:
     void CreateResources(const Device& device);
     void CreateShaders(const Device& device);
     void CreatePipelines(const Device& device);
+    void ProcessPingPong(const Device& device, Scheduler& scheduler, VkImage current_frame,
+                         u64 frame_count);
 
     MemoryAllocator& m_allocator;
     VkExtent2D m_extent;
@@ -90,6 +125,11 @@ private:
     bool m_flow_valid{};
 
     bool m_flow_descriptors_initialized{};
+
+    // EDEN_NX2_FG_PINGPONG, read once at construction. The roles are never reset: the two flow
+    // descriptor sets are tied to the parity of the swaps since the images were created.
+    bool m_pingpong{};
+    Fsr3PingPong m_roles{};
 };
 
 } // namespace Vulkan

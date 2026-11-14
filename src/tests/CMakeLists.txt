@@ -111,6 +111,7 @@ add_executable(tests
     video_core/dlss_contract.cpp
     video_core/dlss_mode.cpp
     video_core/frame_gen_choice.cpp
+    video_core/fsr3_pingpong.cpp
     video_core/ampere_fast_fusion.cpp
     video_core/ampere_async_copy.cpp
     video_core/ampere_trap_guards.cpp
