@@ -18,6 +18,7 @@
 #include "common/event_ring.h"
 #include "common/polyfill_thread.h"
 #include "video_core/renderer_vulkan/fluid_compose_math.h"
+#include "video_core/renderer_vulkan/present_sync.h"
 #include "video_core/renderer_vulkan/present_trace.h"
 #include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/shown_governor.h"
@@ -196,6 +197,9 @@ public:
     /// Waits for the present thread to finish presenting all queued frames.
     void WaitPresent();
 
+    /// Drains presentation and waits for the device with all queues excluded.
+    void WaitIdle();
+
     /// How many additional frames can be queued without stalling the render thread
     [[nodiscard]] size_t MaxExtraFrames() const;
 
@@ -257,6 +261,8 @@ private:
     void StartPresentThread();
 
     void PresentThread(std::stop_token token);
+    [[noreturn]] void AbortPresentation(VkResult result = VK_SUCCESS);
+    const char* present_operation = "starting presentation";
 
     /// EDEN_NX2_FLUID: at every vblank, takes the frames sent, frees those no slot shows and
     /// shows the frames without a slot in arrival order; at the vblank before each slot, shows
@@ -304,6 +310,9 @@ private:
     /// EDEN_NX2_FLUID_COPY_AHEAD: presents the frame copied at the last slot's wake, if any.
     void FluidPresentAhead();
 
+    /// Presents an already submitted copy under swapchain_mutex after clearing its pending state.
+    void PresentCopyAhead();
+
     /// Frees a frame that is not shown. Holds swapchain_mutex.
     void FluidDiscard(Frame* frame);
 
@@ -321,7 +330,7 @@ private:
 
     void CopyToSwapchain(Frame* frame);
 
-    void CopyToSwapchainImpl(Frame* frame);
+    void CopyToSwapchainImpl(Frame* frame, PresentSync::FrameSubmission& submission);
 
     /// EDEN_NX2_FLUID_QUEUE: whether this frame's screen copy runs on the dedicated queue.
     [[nodiscard]] bool UseFluidQueue(const Frame* frame, VkExtent2D extent);
@@ -389,6 +398,7 @@ private:
     std::condition_variable_any frame_cv;
     std::condition_variable free_cv;
     mutable std::mutex swapchain_mutex;
+    bool force_swapchain_recreation{}; ///< guarded by swapchain_mutex
     mutable std::mutex queue_mutex;
     mutable std::mutex free_mutex;
     std::jthread present_thread;

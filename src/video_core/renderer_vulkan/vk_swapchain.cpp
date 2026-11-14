@@ -297,7 +297,8 @@ bool Swapchain::Create(
 
     const auto physical_device = device.GetPhysical();
     const auto capabilities{physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface))};
-    if (capabilities.maxImageExtent.width == 0 || capabilities.maxImageExtent.height == 0) {
+    if (!PresentPolicy::HasExtent(capabilities.maxImageExtent,
+                                  ChooseSwapExtent(capabilities, width, height))) {
         return false;
     }
 
@@ -313,7 +314,9 @@ bool Swapchain::Create(
     }
     Destroy();
 
-    CreateSwapchain(capabilities);
+    if (!CreateSwapchain(capabilities)) {
+        return false;
+    }
     CreateSemaphores();
     is_suboptimal = false;
 
@@ -322,36 +325,37 @@ bool Swapchain::Create(
     return true;
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush, bool pace, PresentTrace* trace) {
+PresentPolicy::Acquire Swapchain::AcquireNextImage(bool may_flush, bool pace, PresentTrace* trace) {
+    u32 acquired_index = 0;
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
-        VK_NULL_HANDLE, &image_index);
+        VK_NULL_HANDLE, &acquired_index);
+    const auto action = PresentPolicy::ClassifyAcquire(result);
     if (trace != nullptr && result != VK_SUCCESS) {
         trace->Record(1, {static_cast<u64>(static_cast<s64>(result)), StorageGeneration(),
-                          image_index, frame_index}, "acquire");
+                          action == PresentPolicy::Acquire::Ready ? acquired_index : image_index,
+                          frame_index}, "acquire");
         if (result == VK_ERROR_SURFACE_LOST_KHR) {
             trace->Record(2, {StorageGeneration(), 0, 0, 0}, "surface-lost");
         }
     }
-    switch (result) {
-    case VK_SUCCESS:
+    switch (action) {
+    case PresentPolicy::Acquire::Ready:
+        image_index = acquired_index;
+        if (result == VK_SUBOPTIMAL_KHR) {
+            is_suboptimal = true;
+        }
         break;
-    case VK_SUBOPTIMAL_KHR:
-        is_suboptimal = true;
-        break;
-    case VK_ERROR_OUT_OF_DATE_KHR:
+    case PresentPolicy::Acquire::Recreate:
         is_outdated = true;
-        break;
-    case VK_ERROR_SURFACE_LOST_KHR:
-        vk::Check(result);
-        break;
-    default:
-        LOG_ERROR(Render_Vulkan, "vkAcquireNextImageKHR returned {}", string_VkResult(result));
-        break;
-    }
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        // No image was acquired, so image_index is stale: the caller recreates and tries again.
-        return true;
+        return action;
+    case PresentPolicy::Acquire::Drop:
+        return action;
+    case PresentPolicy::Acquire::DeviceLost:
+        device.ReportLoss();
+        [[fallthrough]];
+    case PresentPolicy::Acquire::Error:
+        throw vk::Exception(result);
     }
 
     const auto wait_with_frame_pacing = [this, may_flush] {
@@ -392,7 +396,7 @@ bool Swapchain::AcquireNextImage(bool may_flush, bool pace, PresentTrace* trace)
 
     // A suboptimal acquire still acquired an image and signals its semaphore: present it, and let
     // NeedsRecreation() recreate at the next frame.
-    return false;
+    return PresentPolicy::Acquire::Ready;
 }
 
 void Swapchain::Present(VkSemaphore render_semaphore) {
@@ -423,11 +427,15 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
         LOG_DEBUG(Render_Vulkan, "Suboptimal swapchain");
         break;
     case VK_ERROR_OUT_OF_DATE_KHR:
+    case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT:
         is_outdated = true;
         break;
     case VK_ERROR_SURFACE_LOST_KHR:
         vk::Check(result);
         break;
+    case VK_ERROR_DEVICE_LOST:
+        device.ReportLoss();
+        throw vk::Exception(result);
     default:
         LOG_CRITICAL(Render_Vulkan, "Failed to present with error {}", string_VkResult(result));
         break;
@@ -438,7 +446,7 @@ void Swapchain::Present(VkSemaphore render_semaphore) {
     }
 }
 
-void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+bool Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto physical_device{device.GetPhysical()};
     const auto formats{physical_device.GetSurfaceFormatsKHR(VkSurfaceKHR(surface))};
     const auto present_modes = physical_device.GetSurfacePresentModesKHR(VkSurfaceKHR(surface));
@@ -603,6 +611,9 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     // Request the size again to reduce the possibility of a TOCTOU race condition.
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
+    if (!PresentPolicy::HasExtent(updated_capabilities.maxImageExtent, swapchain_ci.imageExtent)) {
+        return false;
+    }
     // Don't add code within this and the swapchain creation.
     try {
         try {
@@ -612,7 +623,9 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
             // swapchain main makes, and the frames are shown by the screen copy.
             const VkResult storage_result = storage_exception.GetResult();
             if (!with_storage || storage_result == VK_ERROR_SURFACE_LOST_KHR ||
-                storage_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                storage_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR ||
+                storage_result == VK_ERROR_OUT_OF_DATE_KHR ||
+                storage_result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
                 throw;
             }
             LOG_WARNING(Render_Vulkan,
@@ -736,6 +749,7 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
              Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
              Settings::values.frame_gen.GetValue() ? "on" : "off",
              FrameGenPresents(surface_format.format) ? ", DLSS-G presents" : "");
+    return true;
 }
 
 void Swapchain::CreateSemaphores() {
@@ -749,6 +763,7 @@ void Swapchain::CreateSemaphores() {
 
 void Swapchain::Destroy() {
     frame_index = 0;
+    image_index = 0;
     present_semaphores.clear();
     render_semaphores.clear();
     // The views go before the images they view.
