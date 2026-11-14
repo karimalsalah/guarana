@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifdef __linux__
@@ -22,6 +23,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "common/scope_exit.h"
 #include "video_core/renderer_vulkan/pipeline_build.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_prebuild.h"
 #include "video_core/shader_job_boost.h"
@@ -759,10 +761,14 @@ TEST_CASE("ParallelFor calls every index once, helped by the calling thread",
 
 namespace {
 struct TestPipeline {
-    explicit TestPipeline(std::atomic<int>& builds_, bool fails_ = false)
-        : builds{builds_}, fails{fails_} {}
+    explicit TestPipeline(std::atomic<int>& builds_, bool fails_ = false,
+                          std::function<void()> before_build_ = {})
+        : builds{builds_}, fails{fails_}, before_build{std::move(before_build_)} {}
 
     void Build() {
+        if (before_build) {
+            before_build();
+        }
         ++builds;
     }
     bool Failed() const {
@@ -771,8 +777,21 @@ struct TestPipeline {
 
     std::atomic<int>& builds;
     bool fails;
+    std::function<void()> before_build;
 };
 using TestPrebuild = Vulkan::ScheduledPrebuild<int, TestPipeline>;
+
+std::unique_ptr<TestPipeline> TryTakeUntilReady(TestPrebuild& prebuild, int key, bool& pending) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    do {
+        auto pipeline = prebuild.TryTake(key, pending);
+        if (!pending) {
+            return pipeline;
+        }
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    return nullptr;
+}
 } // namespace
 
 TEST_CASE("A lookup builds a queued prebuild once, on the looking thread",
@@ -859,6 +878,157 @@ TEST_CASE("A prebuild reports what became of its builds once all have ended",
     REQUIRE(prebuild.Take(0, &no_wait) != nullptr);
     REQUIRE_FALSE(no_wait.has_value());
     REQUIRE(prebuild.Finished()->unclaimed == 0);
+}
+
+TEST_CASE("A try-take never builds or waits for a queued prebuild", "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate gate;
+    const auto blocker = Block(scheduler, gate);
+    std::atomic<int> builds{};
+    std::atomic<int> translations{};
+    TestPrebuild prebuild{scheduler};
+    SCOPE_EXIT { gate.Open(); };
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] {
+        ++translations;
+        return std::make_unique<TestPipeline>(builds);
+    }));
+
+    // The only CPU worker is held: nothing ran on the looking thread, and the entry stays.
+    bool pending = false;
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+    REQUIRE(translations == 0);
+    REQUIRE(builds == 0);
+
+    gate.Open();
+    scheduler.RunOrWait(blocker);
+    prebuild.Batch().Wait();
+    const auto pipeline = TryTakeUntilReady(prebuild, 1, pending);
+    REQUIRE(pipeline != nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(translations == 1);
+    REQUIRE(builds == 1);
+
+    // Taken once
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+}
+
+TEST_CASE("A try-take does not wait for a prebuild running on a driver worker",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate gate;
+    std::promise<void> entered;
+    auto started = entered.get_future();
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    // Release the driver before destroying the prebuild, including on assertion failure.
+    SCOPE_EXIT { gate.Open(); };
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] {
+        return std::make_unique<TestPipeline>(builds, false, [&] {
+            entered.set_value();
+            gate.Wait();
+        });
+    }));
+    REQUIRE(started.wait_for(5s) == std::future_status::ready);
+
+    auto lookup = std::async(std::launch::async, [&] {
+        bool pending = false;
+        auto pipeline = prebuild.TryTake(1, pending);
+        return std::pair{std::move(pipeline), pending};
+    });
+    const auto status = lookup.wait_for(1s);
+    // Open before asserting or destroying the future, so a blocking regression fails cleanly.
+    gate.Open();
+    const auto result = lookup.get();
+    REQUIRE(status == std::future_status::ready);
+    REQUIRE(result.first == nullptr);
+    REQUIRE(result.second);
+
+    bool pending = false;
+    const auto pipeline = TryTakeUntilReady(prebuild, 1, pending);
+    REQUIRE(pipeline != nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(builds == 1);
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+}
+
+TEST_CASE("Concurrent try-takes claim a completed prebuild once",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    prebuild.Batch().Wait();
+    // Synchronize with Finish's scheduler lock after the batch notification, so both lookups
+    // see a final job status without first claiming the pipeline.
+    static_cast<void>(scheduler.Stats());
+    Gate start;
+    auto take = [&] {
+        start.Wait();
+        bool pending = false;
+        auto pipeline = prebuild.TryTake(1, pending);
+        return std::pair{std::move(pipeline), pending};
+    };
+    auto first = std::async(std::launch::async, take);
+    // Release the first lookup if launching the second one throws.
+    SCOPE_EXIT { start.Open(); };
+    auto second = std::async(std::launch::async, take);
+    start.Open();
+    const auto a = first.get();
+    const auto b = second.get();
+    REQUIRE_FALSE(a.second);
+    REQUIRE_FALSE(b.second);
+    REQUIRE(static_cast<int>(a.first != nullptr) + static_cast<int>(b.first != nullptr) == 1);
+    REQUIRE(builds == 1);
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    bool pending = false;
+    REQUIRE(TryTakeUntilReady(prebuild, 1, pending) != nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(builds == 2);
+}
+
+TEST_CASE("A try-take gives nothing for a key without a build and drops the ended ones",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    bool pending = true;
+    REQUIRE(prebuild.TryTake(7, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+
+    // One that fails to build, and one that doesn't translate
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds, true); }));
+    REQUIRE(prebuild.Add(2, 0, 0, 0, [] { return std::unique_ptr<TestPipeline>{}; }));
+    prebuild.Batch().Wait();
+    REQUIRE(TryTakeUntilReady(prebuild, 1, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(TryTakeUntilReady(prebuild, 2, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+    // Their entries are gone, so the keys can be added again
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    REQUIRE(prebuild.Add(2, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+}
+
+TEST_CASE("A take after a pending try-take builds the prebuild once", "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate gate;
+    const auto blocker = Block(scheduler, gate);
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    SCOPE_EXIT { gate.Open(); };
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    bool pending = false;
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+
+    REQUIRE(prebuild.Take(1) != nullptr);
+    REQUIRE(builds == 1);
+    gate.Open();
+    scheduler.RunOrWait(blocker);
 }
 
 TEST_CASE("A cancelled prebuild leaves the scheduler usable", "[video_core][shader_jobs]") {
