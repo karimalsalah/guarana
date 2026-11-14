@@ -10,6 +10,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: upstream-sync
@@ -112,3 +113,54 @@ jobs:
             echo "::error::Could not open the pull request. Allow GitHub Actions to create pull requests (Settings > Actions > General > Workflow permissions) or set UPSTREAM_SYNC_TOKEN."
             exit 1
           fi
+
+      # A failed scheduled run is reported in one open issue, "upstream-sync is blocked", which a
+      # later failure comments on only when upstream has moved, and the next good run closes.
+      - name: Close the blocked-sync issue
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          numbers=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search 'in:title "upstream-sync is blocked"' --json number,title \
+            --jq '.[] | select(.title == "upstream-sync is blocked") | .number')
+          for number in $numbers; do
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+              --comment "The sync ran: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          done
+
+      - name: Open or update the blocked-sync issue
+        if: failure() && github.event_name == 'schedule'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIP: ${{ steps.fetch.outputs.tip }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          tip_line="Upstream tip: \`${TIP:-unknown}\`"
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search 'in:title "upstream-sync is blocked"' --json number,title \
+            --jq '[.[] | select(.title == "upstream-sync is blocked")][0].number // empty')
+          if [ -z "$number" ]; then
+            {
+              echo "The scheduled upstream sync failed: $run_url"
+              echo
+              echo "$tip_line"
+              echo
+              echo "The run's log names the cause. The usual fix: add the UPSTREAM_SYNC_TOKEN secret; see docs/LANES.md, \"When the sync stops\", which lists each error and its fix. The next sync that succeeds closes this issue."
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "upstream-sync is blocked" --body-file issue.md
+            exit 0
+          fi
+          # One comment per upstream tip: the same failure every 6 hours adds nothing.
+          last=$(gh issue view "$number" --repo "$GITHUB_REPOSITORY" --json body,comments \
+            --jq '(.comments | last | .body) // .body')
+          if grep -qF -- "$tip_line" <<< "$last"; then
+            echo "#$number already reports upstream at ${TIP:-unknown}"
+            exit 0
+          fi
+          printf 'Still failing, and upstream has moved: %s\n\n%s\n' "$run_url" "$tip_line" > comment.md
+          gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file comment.md
