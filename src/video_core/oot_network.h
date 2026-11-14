@@ -138,7 +138,55 @@ struct BypassState {
     /// What that draw could reach of it (DrawArea), under mutex.
     Area tonemapped_area{};
     std::atomic<bool> output_replaced{}; ///< the latest output pass was replaced
+    /// EDEN_NX2_OOT_BYPASS_STEP_GUARD: the tonemapped image's address and drawn area at the last
+    /// successful replacement, under mutex (written only with the switch).
+    u64 replaced_address{};
+    Area replaced_area{};
 };
+
+/// EDEN_NX2_OOT_BYPASS_STEP_GUARD: the prepass and the network may be skipped only while the
+/// current tonemap is the one whose output pass was last replaced, same image and same drawn
+/// area. The first frame at a new resolution step runs the whole network.
+[[nodiscard]] inline bool SkipAllowed(bool output_replaced, u64 replaced_address,
+                                      const Area& replaced_area, u64 tonemapped_address,
+                                      const Area& tonemapped_area) {
+    return output_replaced && replaced_address == tonemapped_address &&
+           replaced_area.x0 == tonemapped_area.x0 && replaced_area.y0 == tonemapped_area.y0 &&
+           replaced_area.x1 == tonemapped_area.x1 && replaced_area.y1 == tonemapped_area.y1;
+}
+
+/// The images of a compute pass that reads one image and stores one.
+struct OutputShapeInput {
+    bool scene_e5b9g9r9;   ///< the read image is E5B9G9R9
+    bool output_b10g11r11; ///< the stored image is B10G11R11
+    u64 scene_address;
+    u64 output_address;
+    u32 scene_w;
+    u32 scene_h;
+    u32 output_w;
+    u32 output_h;
+};
+
+/// Whether such a pass has the shape of the game's output pass at any resolution step: it reads
+/// the network's E5B9G9R9 image and stores a B10G11R11 image elsewhere, no smaller in either axis.
+[[nodiscard]] inline bool IsOutputShape(const OutputShapeInput& input) {
+    return input.scene_e5b9g9r9 && input.output_b10g11r11 && input.output_address != 0 &&
+           input.output_address != input.scene_address && input.output_w >= input.scene_w &&
+           input.output_h >= input.scene_h;
+}
+
+/// Whether the image an output pass reads is the size of what the tonemap drew, within 1/32 in
+/// each axis (the game's network image can be a few texels narrower than the drawn area).
+[[nodiscard]] inline bool MatchesDrawnArea(u32 scene_w, u32 scene_h, const Area& drawn) {
+    if (drawn.x1 <= drawn.x0 || drawn.y1 <= drawn.y0) {
+        return false;
+    }
+    const auto close_to = [](u32 size, u32 drawn_size) {
+        const u64 difference = size > drawn_size ? size - drawn_size : drawn_size - size;
+        return difference * 32 <= drawn_size;
+    };
+    return close_to(scene_w, drawn.x1 - drawn.x0) && close_to(scene_h, drawn.y1 - drawn.y0);
+}
 
 inline bool BypassEnabled(u64 program_id) {
     return program_id == ProgramId &&

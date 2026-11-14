@@ -86,6 +86,36 @@ tonemapped image is known:
   clip cut by viewport 0 and its scissor), not the whole target, which dynamic resolution may
   leave partly unused.
 
+### Resolution steps
+
+With `EDEN_NX2_OOT_BYPASS_ANY` and without Max Resolution the scene can go black at a dynamic
+resolution step (issue #98). The prepass and the network are skipped while `output_replaced` is
+set, and only an output pass the bypass takes writes that flag. An output pass it does not know
+is left to the game without clearing it, so at a step whose output program is new the network
+stays skipped and the game's upscale reads an image nobody wrote. Two switches, read only with
+`EDEN_NX2_OOT_BYPASS_ANY` and off by default, address it:
+
+- `EDEN_NX2_OOT_BYPASS_STEP_GUARD=1`: each replacement records the tonemapped image's address and
+  drawn area, and the network is skipped only while the current tonemap matches them
+  (`OotNetwork::SkipAllowed`). The first frame at a new step runs the whole network, and its output
+  pass decides: replaced, or left to the game on the network's real output. `Ocarina of Time: step
+  changed to WxH: the network runs this frame` is logged once per drawn area and tonemapped image,
+  with the addresses of both images, so a tonemap that moves to another image at the same step
+  shows up too. A pass the bypass does not take that has the output pass's shape (below) also
+  clears the flag.
+- `EDEN_NX2_OOT_BYPASS_SHAPE=1`: an output pass is also known by its shape
+  (`OotNetwork::IsOutputShape`, the test `EDEN_NX2_OOT_FSR_ANY` already uses): it reads one
+  E5B9G9R9 image and stores one B10G11R11 image elsewhere, no smaller. The image it reads must
+  also be the size of what the tonemap drew, within 1/32 in each axis
+  (`OotNetwork::MatchesDrawnArea`; the issue's 1195x672 against a 1200x672 step). Logged once per
+  shader as `output pass known by its shape (bypass)`. A pass named in `EDEN_NX2_OOT_BYPASS_SKIP`
+  is skipped before this test and is never taken by its shape.
+
+With the guard, a step change costs at least one frame of the full network. At a step whose
+output pass the bypass does not take, the network runs every frame, as without the bypass. With
+`EDEN_NX2_OOT_BYPASS_SHAPE` too, an output pass that matches the drawn area is taken at the step's
+first frame, and the network is skipped again from its second. Neither switch is measured.
+
 ## Results (Ryzen 7 9800X3D, RTX 5090, Kokiri Forest, 1x)
 
 | Mode | fps | Image |
