@@ -51,6 +51,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
         {"clear-nup-version", no_argument, 0, 0x106},
         {"clear-nup-publisher", no_argument, 0, 0x107},
         {"warm-pipelines", required_argument, 0, 0x108},
+        {"launcher-session", no_argument, 0, 0x109},
         {0, 0, 0, 0},
         // clang-format on
     };
@@ -109,6 +110,9 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             case 0x108:
                 p.warm_pipelines_title = std::string(optarg);
+                break;
+            case 0x109:
+                p.launcher_session = true;
                 break;
             case 'i': {
                 p.input_profile = std::string(optarg);
@@ -254,7 +258,9 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
             " --clear-nup-publisher]"
             " Rewrite default-language NUP metadata in place and exit\n"
             "--warm-pipelines <title id>"
-            " Build a title's cached shader pipelines into the driver caches without booting it, then exit\n",
+            " Build a title's cached shader pipelines into the driver caches without booting it, then exit\n"
+            "--launcher-session    With -g: show only the fullscreen game and exit when it stops"
+            " (0 after a stop, 1 when the game did not start); for the Guarana launcher\n",
             lp.argv0
         );
     }

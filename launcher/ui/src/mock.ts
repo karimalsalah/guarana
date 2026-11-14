@@ -9,10 +9,12 @@
 //   warm=1 (an automatic shader warm-up after a driver change runs when the app opens)
 //   open=<title id> (the app was opened with guarana://launch/<title id>; an id not in the library is refused)
 //   speed=<factor> (0.25 makes every delay four times shorter, 20 lets you watch each stage)
+//   boot=session (default) | old | none (the game://boot events a launch plays: a launcher session,
+//     an older emulator whose window only takes the foreground, or nothing at all)
 
 import type { Backend, Unlisten } from "./api";
 import type {
-  AppliedProfile, AskAiResult, AutopilotChange, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
+  AppliedProfile, AskAiResult, AutopilotChange, BootProgress, Credits, Channel, ModeStatus, StopResult, Check, Controller, ControllerKind, Found, FoundKey, Game, GameExited, ImportResult,
   InstallResult, InstalledVersion, LauncherState, Overrides, Profile, Progress, Report, ReportKind, SystemInfo,
   Toggle, ToggleValue, UpdateInfo, WarmProgress, WarmResult, ShareStatus, ShareLink, LaunchRequest, Notifications, BoosterStatus, BoosterLevelInfo,
 } from "./types";
@@ -35,6 +37,7 @@ interface Scenario {
   open: string | null;
   session: number;
   speed: number;
+  boot: "session" | "old" | "none";
 }
 
 const HOME = "C:\\Users\\Player";
@@ -62,6 +65,7 @@ function readScenario(): Scenario {
     open: q.get("open"),
     session: 7,
     speed: 1,
+    boot: "session",
   };
   if (name === "ready" || name === "no-oot" || name === "failure") {
     Object.assign(base, { firstRun: false, keys: true, keysOnDisk: "quick", firmware: true, library: true });
@@ -83,6 +87,8 @@ function readScenario(): Scenario {
   if (session > 0) base.session = session;
   const speed = Number(q.get("speed"));
   if (speed > 0) base.speed = speed;
+  const boot = q.get("boot");
+  if (boot === "session" || boot === "old" || boot === "none") base.boot = boot;
   return base;
 }
 
@@ -770,6 +776,24 @@ export function createMockBackend(): Backend {
         boosterActive = true;
         emit("booster://changed", boosterStatus());
       }
+      // game://boot as boot.rs emits it: the session output of a 20.3+ emulator (boot=session), only
+      // its window taking the foreground (boot=old, an older version), or nothing (boot=none).
+      const boot = (at: number, phase: BootProgress["phase"], done = 0, total = 0) =>
+        setTimeout(() => {
+          if (gameRunning) emit("game://boot", { phase, done, total } satisfies BootProgress);
+        }, at * sc.speed);
+      if (sc.boot === "session") {
+        boot(100, "starting");
+        boot(600, "loading");
+        boot(1400, "window");
+        boot(1500, "shaders");
+        for (let i = 0; i <= 10; i++) boot(1700 + i * 200, "shaders", Math.round((1346 * i) / 10), 1346);
+        boot(3900, "launching");
+        boot(4600, "first-frame");
+        boot(5100, "shown");
+      } else if (sc.boot === "old") {
+        boot(1200, "window");
+      }
       const exited: GameExited = sc.crash ? { code: 3221225477, seconds: 1 } : { code: 0, seconds: 2715 };
       setTimeout(() => {
         gameRunning = false;
@@ -778,8 +802,9 @@ export function createMockBackend(): Backend {
           emit("booster://changed", boosterStatus());
         }
         emit("game://exited", exited);
-      }, (sc.crash ? 1.4 : sc.session) * 1000);
-      return { pid: 23816 };
+        // The session runs once the game is on screen (after the boot above).
+      }, sc.crash ? 1400 : sc.session * 1000 + (sc.boot === "session" ? 5100 : sc.boot === "old" ? 1200 : 0) * sc.speed);
+      return { pid: 23816, follows_boot: sc.boot === "session" };
     },
     async collect_report(a) {
       await sleep(1400);

@@ -37,6 +37,9 @@ bool RestoreGeometry(QWidget* window, const std::string& store);
 
 /// "Esc shows the menu. On a controller: Home + B." from the configured hotkeys.
 QString MenuHintText();
+/// "Esc stops the game and returns to the launcher. On a controller: L + Plus + Minus." for a
+/// launcher session, which has no menu.
+QString LauncherSessionHintText();
 
 /// A short message in a small frameless window above the game; never takes focus or input.
 class Toast : public QLabel {

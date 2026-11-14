@@ -372,6 +372,8 @@ pub struct PrefetchResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct LaunchResult {
     pub pid: u32,
+    /// The emulator writes its boot to the launcher (`game://boot`): a game in a launcher session.
+    pub follows_boot: bool,
 }
 
 /// Payload of `game://exited`.
@@ -379,6 +381,17 @@ pub struct LaunchResult {
 pub struct GameExited {
     pub code: i32,
     pub seconds: f64,
+}
+
+/// Payload of `game://boot` (`boot.rs`): where the game's boot is. `phase` is `starting`,
+/// `loading`, `shaders`, `precache`, `launching`, `first-frame`, `shown` (in that order) or
+/// `window` (a window of the emulator has the foreground). `done` of `total` are shader counts
+/// for `shaders` and `precache`, 0 of 0 otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BootProgress {
+    pub phase: String,
+    pub done: u64,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
