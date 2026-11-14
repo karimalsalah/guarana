@@ -1171,7 +1171,6 @@ bool KeplerCompute::IsOotOutputPass(u64 native_key, u64 unique_hash) {
     return true;
 }
 
-
 /// Identify a known 1.0.0 output pass before shader translation can reject it.
 /// The first word is a quick filter. The full native key must match before replacing the pass.
 bool KeplerCompute::BypassOotBaseNetwork() {
