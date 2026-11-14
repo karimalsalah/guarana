@@ -171,6 +171,14 @@ see "Boot progress and the hand-over"), `game://exited`
 
 ## Launcher session
 
+On Windows, games and shader warm-ups started by the launcher belong to an unnamed job owned
+only by the launcher (`process.rs`). Descendants stay in that job; a failed job assignment aborts
+the start before the worker runs. Closing or crashing the launcher ends those workers too. On
+normal exit the launcher requests `WM_CLOSE` on worker windows and allows five seconds in total
+before terminating the jobs. A hidden shader warm-up has no graceful IPC endpoint today and uses
+that deadline fallback. This is lifetime containment, not a sandbox. The boot and exit events
+below still follow the original worker process; a crash does not automatically restart it.
+
 `launch_game` starts the emulator with `--launcher-session` before `-f -g <file>` (`launch.rs`,
 `src/core/launch_params.cpp`). The emulator then:
 

@@ -28,6 +28,7 @@ mod notify;
 mod open;
 mod paths;
 mod profiles;
+mod process;
 mod report;
 mod share;
 mod state;
@@ -129,8 +130,13 @@ fn main() {
             commands::set_booster_level,
             commands::booster_undo_all,
         ])
-        .run(tauri::generate_context!());
-    if let Err(e) = result {
-        log::error!("Guarana Launcher stopped: {e}");
+        .build(tauri::generate_context!());
+    match result {
+        Ok(app) => app.run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                process::shutdown(std::time::Duration::from_secs(5));
+            }
+        }),
+        Err(e) => log::error!("Guarana Launcher stopped: {e}"),
     }
 }
