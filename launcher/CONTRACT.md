@@ -36,7 +36,7 @@ Hard rules (legal and trust):
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
-| `list_controllers` | – | `Controller[]` (connected pads); `controller://changed` carries the new `Controller[]` whenever one connects, disconnects or its battery moves |
+| `list_controllers` | – | `Controller[]` (connected pads); `controller://changed` carries the new `Controller[]` whenever one connects, disconnects or its battery moves; with `EDEN_NX2_LAUNCHER_PAD_IDLE=1` it is not refreshed while a game runs (see "Pads and the log while a game runs") |
 | `warm_shaders` | `{ title_id }` | `WarmResult`; streams `warm://progress` (`WarmProgress`). Runs `<current>\guarana-cli.exe --warm-pipelines <title_id> -c %APPDATA%\guarana\config\qt-config.ini` (`eden-cli.exe` in a build from before the rename) hidden at below-normal priority ("Prepare shaders" on a game card). Refused while `guarana.exe` (or `lichii.exe`) runs. The launcher also runs it by itself for every title with a shader cache after a GPU driver change (`auto: true` in the events) |
 
 | `stop_warm_shaders` | – | `StopResult`. Ends the running warm-up (the process is ended; guarana-cli stops politely only on Ctrl+C), waits up to 15 s and reports. A stopped automatic run is not resumed and its driver counts as done. The pending `warm_shaders` call resolves with status `stopped` |
@@ -190,6 +190,41 @@ see "Boot progress and the hand-over"), `game://exited`
   restart or a game that starts its own sub-program boots again and does not end the session;
 - shows its dialogs (load errors, confirmations, applets such as the software keyboard) as before,
   above the fullscreen window or, before the window appears, on their own.
+
+### Pads and the log while a game runs
+
+**Controller polling** (`controllers.rs`). The launcher reads pads on a thread of its own (a 250 ms
+loop over a gilrs context; gilrs' Windows backend adds a polling thread of its own, about every
+8 ms). With the environment switch `EDEN_NX2_LAUNCHER_PAD_IDLE` set to a non-zero number in the
+launcher's environment (default off; unset, empty, `0` and `false` are off, as the emulator reads
+its switches; the launcher does not read `nx2_switches.txt`), `launch.rs` stops that polling right
+after the emulator process has started and resumes it when the game-watch thread sees the process
+end. Stopping drops the gilrs context, which ends both threads' work; resuming opens a new context,
+reads the pads once and emits `controller://changed` if the list differs from the last one emitted.
+While it is stopped `list_controllers` (and the Doctor's controller check) return the list from
+before the game and no `controller://changed` is emitted. The pause is held by a guard, released at
+the game's exit, on a panic and when the game-watch thread cannot start. It applies to every
+emulator the launcher starts, with or without a game file. With the switch off nothing changes.
+
+**`launcher.log`.** Every line is stamped in UTC to the millisecond
+(`2026-11-14T09:41:07.123Z INFO  guarana_launcher::launch: ...`; before, to the second). Each start
+writes a launch timeline, a line for each step with the milliseconds since Play was pressed (the
+moment `launch_game` reached the backend):
+
+    Launch timeline: Play pressed at +0.0 ms
+    Launch timeline: install checked at +0.4 ms
+    Launch timeline: settings ready at +31.0 ms
+    Launch timeline: command built at +31.2 ms
+    Launch timeline: Game Booster prepared at +60.8 ms        (only with the booster on)
+    Launch timeline: process spawned (pid 1234) at +75.3 ms
+    Launch timeline: boot phase starting at +410.2 ms          (each boot phase, once, with the counts for shaders and precache)
+    Launch timeline: emulator window has the foreground at +980.0 ms
+    Launch timeline: process exited with 0 at +612345.6 ms
+
+The boot phases are the ones in the table below, logged when the launcher first sees them (the
+pipe's lines, so only in a launcher session); `window` is logged as "emulator window has the
+foreground". The numbers above are an example of the format, not measurements. The timeline adds no
+event and no command.
 
 ### Boot progress and the hand-over
 

@@ -49,6 +49,18 @@ pub fn now_rfc3339() -> String {
     rfc3339(SystemTime::now())
 }
 
+/// RFC 3339 in UTC with milliseconds, e.g. `2026-11-13T09:41:07.123Z`: the stamp of
+/// `launcher.log`'s lines.
+pub fn rfc3339_millis(t: SystemTime) -> String {
+    let (y, mo, d, h, mi, s) = utc_parts(t);
+    let ms = t.duration_since(UNIX_EPOCH).map(|since| since.subsec_millis()).unwrap_or(0);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{ms:03}Z")
+}
+
+pub fn now_rfc3339_millis() -> String {
+    rfc3339_millis(SystemTime::now())
+}
+
 /// `20261113-094107`, for file names.
 pub fn stamp() -> String {
     let (y, mo, d, h, mi, s) = utc_parts(SystemTime::now());
@@ -207,6 +219,24 @@ mod tests {
         assert_eq!(rfc3339(UNIX_EPOCH + Duration::from_secs(1_794_562_867)), "2026-11-13T09:41:07Z");
         // Leap day.
         assert_eq!(rfc3339(UNIX_EPOCH + Duration::from_secs(951_782_400)), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn rfc3339_millis_keeps_the_milliseconds() {
+        assert_eq!(rfc3339_millis(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
+        // 2026-11-13T09:41:07Z and 123 ms
+        assert_eq!(
+            rfc3339_millis(UNIX_EPOCH + Duration::from_millis(1_794_562_867_123)),
+            "2026-11-13T09:41:07.123Z"
+        );
+        // Sub-millisecond parts are cut, not rounded; the second never carries.
+        assert_eq!(
+            rfc3339_millis(UNIX_EPOCH + Duration::from_micros(1_794_562_867_999_999)),
+            "2026-11-13T09:41:07.999Z"
+        );
+        assert_eq!(rfc3339_millis(UNIX_EPOCH + Duration::from_millis(5)), "1970-01-01T00:00:00.005Z");
+        // Before 1970 (a clock set back) reads as the epoch, as `rfc3339` does.
+        assert_eq!(rfc3339_millis(UNIX_EPOCH - Duration::from_secs(1)), "1970-01-01T00:00:00.000Z");
     }
 
     #[test]
