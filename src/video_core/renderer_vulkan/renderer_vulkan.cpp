@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -94,6 +95,14 @@ constexpr s64 FLUID_PHASE_MARGIN_NS = 3'000'000;
 [[nodiscard]] bool FluidSplitSubmit() {
     static const bool on = [] {
         const char* value = std::getenv("EDEN_NX2_FLUID_SPLIT_SUBMIT");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
+[[nodiscard]] bool FluidInterpPhase() {
+    static const bool on = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_INTERP_PHASE");
         return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
     }();
     return on;
@@ -870,33 +879,51 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
     first = interp.first;
     const size_t wanted = interp.wanted;
     const f64 span_slots = interp.span_slots;
+    const bool phase = FluidInterpPhase() && frame_gen.CanBlend() && slots.Valid() &&
+                       fluid_last_real_slot != 0 &&
+                       fluid_last_real_recorded != std::chrono::steady_clock::time_point{};
+    const auto phase_plan =
+        phase ? FluidSlots::PlanInterpPhases(
+                    interp, fluid_last_real_slot,
+                    static_cast<f64>((slots.refresh * static_cast<s64>(slots.divisor)).count()),
+                    static_cast<f64>(duration_cast<nanoseconds>(recorded - fluid_last_real_recorded)
+                                         .count()),
+                    slots.divisor)
+              : FluidSlots::InterpPhases{};
+    const size_t planned = phase ? phase_plan.made : wanted;
     size_t made = 0;
-    for (size_t generation = 0; generation < wanted; ++generation) {
+    bool pool_short = false;
+    for (size_t generation = 0; generation < planned; ++generation) {
+        const u64 slot = first != 0 ? first + generation * slots.divisor : 0;
+        const f32 blend =
+            phase ? phase_plan.factors[generation]
+                  : static_cast<f32>(static_cast<f64>(generation + 1) /
+                                     (std::max)(span_slots, 1.0));
         // Never waits: with no frame to spare the real frame comes sooner.
         Frame* const generated = present_manager.TryGetRenderFrame();
         if (generated == nullptr) {
+            pool_short = true;
             break;
         }
         generated->color_space = output.color_space;
         blit_swapchain.PrepareFrame(device, generated, FrameLayout());
         TagComposeFrame(generated);
-        const f32 blend =
-            static_cast<f32>(static_cast<f64>(generation + 1) / (std::max)(span_slots, 1.0));
         if (!frame_gen.GenerateBlend(device, generated, blend)) {
             frame_gen.GenerateInto(device, generated, generation);
         }
         generated->fluid_batch = frame->fluid_batch;
         generated->fluid_recorded = recorded;
-        generated->fluid_slot = first != 0 ? first + generation * slots.divisor : 0;
+        generated->fluid_slot = slot;
         generated->shown_kind = VideoCore::Nx2ShownFrames::Kind::Interpolated;
         interpolated_frames.push_back(generated);
         ++made;
     }
-    frame->fluid_slot = first != 0 ? first + made * slots.divisor : 0;
+    frame->fluid_slot = phase ? phase_plan.RealSlot(made)
+                              : (first != 0 ? first + made * slots.divisor : 0);
     fluid_last_real_slot = frame->fluid_slot;
     fluid_last_real_recorded = recorded;
     frame_gen.NoteFluidGenerated(made);
-    present_manager.NoteFluidBatch(true, made < wanted, false);
+    present_manager.NoteFluidBatch(true, pool_short, false);
 }
 #endif
 

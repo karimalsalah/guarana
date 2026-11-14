@@ -12,11 +12,74 @@
 #include <random>
 #include <span>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "common/common_types.h"
 #include "video_core/renderer_vulkan/fluid_slot_math.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
+
+TEST_CASE("FLUID_INTERP_PHASE: on-time blends and real slot match main", "[video_core][fluid]") {
+    using namespace Vulkan::FluidSlots;
+    const auto batch = PlanInterpBatch(102, 100, 60.0, 10.0, 2, 5);
+    const auto phases = PlanInterpPhases(batch, 100, 10.0, 60.0, 2);
+    REQUIRE(phases.made == batch.wanted);
+    REQUIRE(phases.made == 5);
+    REQUIRE(phases.RealSlot(11) == 112);
+    for (size_t index = 0; index < phases.made; ++index) {
+        REQUIRE(phases.factors[index] ==
+                Catch::Approx(static_cast<f64>(index + 1) / batch.span_slots));
+    }
+}
+
+TEST_CASE("FLUID_INTERP_PHASE: late arrival keeps source moments and advances the real frame",
+          "[video_core][fluid]") {
+    using namespace Vulkan::FluidSlots;
+    const auto batch = PlanInterpBatch(104, 100, 60.0, 10.0, 1, 5);
+    const auto phases = PlanInterpPhases(batch, 100, 10.0, 60.0, 1);
+    REQUIRE(phases.made == 2);
+    REQUIRE(phases.factors[0] == Catch::Approx(4.0 / 6.0));
+    REQUIRE(phases.factors[1] == Catch::Approx(5.0 / 6.0));
+    REQUIRE(phases.RealSlot(11) == 106);
+    REQUIRE(batch.first + batch.wanted == 109); // Main's real frame.
+}
+
+TEST_CASE("FLUID_INTERP_PHASE: exhausted pools preserve planned factors and bound real slots",
+          "[video_core][fluid]") {
+    using namespace Vulkan::FluidSlots;
+    for (const u64 base : {102ULL, 108ULL}) {
+        const auto batch = PlanInterpBatch(base, 100, 60.0, 10.0, 2, 5);
+        const auto full = PlanInterpPhases(batch, 100, 10.0, 60.0, 2);
+        for (size_t available = 0; available <= 7; ++available) {
+            const auto phases = PlanInterpPhases(batch, 100, 10.0, 60.0, 2, available);
+            REQUIRE(phases.made == (std::min)(available, full.made));
+            REQUIRE(phases.RealSlot(available) == full.RealSlot(available));
+            REQUIRE(phases.RealSlot(available) <=
+                    batch.first + (std::min)(available, batch.wanted) * 2);
+            for (size_t index = 0; index < phases.made; ++index) {
+                REQUIRE(phases.factors[index] == full.factors[index]);
+            }
+        }
+    }
+}
+
+TEST_CASE("FLUID_INTERP_PHASE: fractional 144 Hz interval is not rounded",
+          "[video_core][fluid]") {
+    using namespace Vulkan::FluidSlots;
+    constexpr f64 slot_ns = 1.0e9 / 144.0;
+    constexpr f64 interval_ns = 1.0e9 / 24.3;
+    for (const u64 base : {101ULL, 102ULL}) {
+        const auto batch = PlanInterpBatch(base, 100, interval_ns, slot_ns, 1, 5);
+        const auto phases = PlanInterpPhases(batch, 100, slot_ns, interval_ns, 1);
+        REQUIRE(batch.span_slots == 6.0);
+        REQUIRE(phases.made == (base == 101 ? 5 : 4));
+        REQUIRE(phases.RealSlot(11) == 106);
+        for (size_t index = 0; index < phases.made; ++index) {
+            const f64 source_slots = static_cast<f64>(base - 100 + index);
+            REQUIRE(phases.factors[index] == Catch::Approx(source_slots * 24.3 / 144.0));
+        }
+    }
+}
 
 namespace {
 

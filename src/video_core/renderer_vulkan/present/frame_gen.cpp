@@ -619,9 +619,13 @@ bool FrameGen::CanPredict() const {
            extrapolation_frame != nullptr && extrapolation_frame->storage_view;
 }
 
+bool FrameGen::CanBlend() const {
+    return !extrapolating && generated && built_type == Settings::FrameGenType::Fsr3 &&
+           fsr3_chain.has_value();
+}
+
 bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend) {
-    if (extrapolating || !generated || built_type != Settings::FrameGenType::Fsr3 || !fsr3_chain ||
-        !destination->storage_view) {
+    if (!CanBlend() || !destination->storage_view) {
         return false;
     }
     const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);

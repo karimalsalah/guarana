@@ -62,6 +62,44 @@ struct InterpBatch {
     return batch;
 }
 
+/// A phase batch only contains source moments strictly between the two real frames.
+struct InterpPhases {
+    std::array<f32, 11> factors{};
+    size_t made{};
+    u64 first{};
+    u64 divisor{};
+
+    /// Preserve main's real-frame placement if the renderer runs out of free frames.
+    [[nodiscard]] constexpr u64 RealSlot(size_t available) const {
+        return first != 0 ? first + (std::min)(made, available) * divisor : 0;
+    }
+};
+
+/// PlanInterpBatch's base already excludes elapsed display slots. Anchor the older source
+/// at last_real_slot; slot_ns is one presentation slot (divisor refreshes). The current clock
+/// is used for both indices, so a refresh-period change can shift this anchor for one batch.
+[[nodiscard]] inline InterpPhases PlanInterpPhases(const InterpBatch& batch, u64 last_real_slot,
+                                                  f64 slot_ns, f64 interval_ns, u64 divisor,
+                                                  size_t available = 11) {
+    InterpPhases result{.first = batch.first, .divisor = divisor};
+    if (batch.first == 0 || last_real_slot == 0 || divisor == 0 ||
+        !std::isfinite(slot_ns) || slot_ns <= 0.0 || !std::isfinite(interval_ns) ||
+        interval_ns <= 0.0) {
+        return result;
+    }
+    const size_t limit = (std::min)({batch.wanted, available, result.factors.size()});
+    for (size_t index = 0; index < limit; ++index) {
+        const u64 slot = batch.first + index * divisor;
+        const f64 source_ns = (static_cast<f64>(slot) - static_cast<f64>(last_real_slot)) *
+                              slot_ns / static_cast<f64>(divisor);
+        if (source_ns <= 0.0 || source_ns >= interval_ns) {
+            break;
+        }
+        result.factors[result.made++] = static_cast<f32>(source_ns / interval_ns);
+    }
+    return result;
+}
+
 /// The present thread is back from a screen copy wait this long before the next wake it must not
 /// miss, to present and get to its vblank wait in time.
 inline constexpr std::chrono::nanoseconds CopyWaitMargin{500'000};
