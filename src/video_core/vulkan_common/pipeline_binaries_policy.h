@@ -98,6 +98,12 @@ constexpr PipelineBinariesDecision DecidePipelineBinaries(const PipelineBinaries
     return {false, PipelineBinariesReason::DriverKeepsCache};
 }
 
+/// Log a decision when the extension is offered or the player supplied any value, including an
+/// unusable one. An absent extension must not hide the diagnostic for an ignored override.
+constexpr bool ShouldLogPipelineBinariesDecision(PipelineBinariesReason reason, const char* value) {
+    return reason != PipelineBinariesReason::NotOffered || value != nullptr;
+}
+
 /// The reason as the log line says it.
 constexpr const char* PipelineBinariesReasonText(PipelineBinariesReason reason) {
     switch (reason) {
