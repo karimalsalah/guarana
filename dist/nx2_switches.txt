@@ -1,9 +1,10 @@
-# Switch NX2 - read when the Lichii GUI starts.
+# Switch NX2 - read when the Guarana GUI starts (guarana-cli does not read it).
 # One NAME=VALUE per line. Lines starting with # are ignored.
 # A variable already set in the environment wins over this file.
-# Between files, the user copy (%APPDATA%\lichii\nx2_switches.txt, or
-# $XDG_CONFIG_HOME/lichii/nx2_switches.txt) wins over this one, so editing this file is never
-# needed: copy the lines you want into your own and restart.
+# Between files, the user copy (%APPDATA%\guarana\nx2_switches.txt, or
+# $XDG_CONFIG_HOME/guarana/nx2_switches.txt; user\nx2_switches.txt in a portable install) wins
+# over this one, so editing this file is never needed: copy the lines you want into your own
+# and restart.
 # A game's own switch defaults (docs/switches.md, "Defaults for Ocarina of Time") win over this
 # file, but not over the environment or your own copy.
 # Beside-application files accept EDEN_NX2_* and the emulator's diagnostic switches only.
