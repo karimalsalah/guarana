@@ -2,28 +2,140 @@
   "schema_version": 1,
   "repo": "karimalsalah/guarana",
   "since": "2026-11-13",
-  "as_of": "2026-11-13",
-  "commits": 27,
+  "as_of": "2026-11-14",
+  "commits": 499,
   "people": [
+    {
+      "login": "justin-wq1337",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-07"
+    },
+    {
+      "login": null,
+      "name": "Krim",
+      "commits": 10,
+      "coauthored": 5,
+      "first": "2026-11-07"
+    },
+    {
+      "login": "PantACRO4life",
+      "name": null,
+      "commits": 13,
+      "coauthored": 5,
+      "first": "2026-11-10"
+    },
+    {
+      "login": "jpkto",
+      "name": null,
+      "commits": 4,
+      "coauthored": 1,
+      "first": "2026-11-12"
+    },
+    {
+      "login": "Reiixan",
+      "name": null,
+      "commits": 3,
+      "coauthored": 2,
+      "first": "2026-11-12"
+    },
+    {
+      "login": "auz466",
+      "name": null,
+      "commits": 2,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "bclaud",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "BrunoSilvestre00",
+      "name": null,
+      "commits": 2,
+      "coauthored": 2,
+      "first": "2026-11-13"
+    },
     {
       "login": "cerroverb",
       "name": null,
-      "commits": 0,
+      "commits": 3,
       "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "claude",
+      "name": null,
+      "commits": 129,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "ctborg",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
       "first": "2026-11-13"
     },
     {
       "login": "danieljesus",
       "name": null,
-      "commits": 0,
+      "commits": 3,
       "coauthored": 1,
       "first": "2026-11-13"
     },
     {
-      "login": "jpkto",
+      "login": "davidgith1",
       "name": null,
-      "commits": 0,
-      "coauthored": 1,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "espaker",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "goof787lord",
+      "name": null,
+      "commits": 2,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "IG-ABHINAV",
+      "name": null,
+      "commits": 2,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "janvitos",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "jfhutchi",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "JohnsGoated",
+      "name": null,
+      "commits": 2,
+      "coauthored": 0,
       "first": "2026-11-13"
     },
     {
@@ -34,42 +146,295 @@
       "first": "2026-11-13"
     },
     {
+      "login": "kafasam",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
       "login": "karimalsalah",
       "name": null,
-      "commits": 16,
+      "commits": 180,
       "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "kdegonia-star",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "kimoalsalah",
+      "name": null,
+      "commits": 38,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "krim404",
+      "name": null,
+      "commits": 3,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": null,
+      "name": "marcusbooker77",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "Molier",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "myshadowww",
+      "name": null,
+      "commits": 3,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": null,
+      "name": "myshadowww",
+      "commits": 0,
+      "coauthored": 3,
       "first": "2026-11-13"
     },
     {
       "login": "Nanoc6",
       "name": null,
+      "commits": 1,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "ne1i",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "nemiward",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": null,
+      "name": "Puppywang",
       "commits": 0,
       "coauthored": 1,
       "first": "2026-11-13"
     },
     {
-      "login": "PantACRO4life",
+      "login": "RomainROCH",
+      "name": null,
+      "commits": 0,
+      "coauthored": 2,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "ronaldpena007-ops",
       "name": null,
       "commits": 0,
       "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "sanchodecuba11-del",
+      "name": null,
+      "commits": 1,
+      "coauthored": 2,
+      "first": "2026-11-13"
+    },
+    {
+      "login": null,
+      "name": "ShaderPerf",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "snoozedDev",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "sopedound",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "tibzejoker",
+      "name": null,
+      "commits": 0,
+      "coauthored": 2,
+      "first": "2026-11-13"
+    },
+    {
+      "login": "VirusEx",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
       "first": "2026-11-13"
     },
     {
       "login": "zortos293",
       "name": null,
-      "commits": 11,
-      "coauthored": 1,
+      "commits": 57,
+      "coauthored": 3,
       "first": "2026-11-13"
+    },
+    {
+      "login": "6c696e6b",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "blackxzin",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": null,
+      "name": "BrunoSilvestre00",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "darknagel",
+      "name": null,
+      "commits": 0,
+      "coauthored": 2,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "DuskDarf1",
+      "name": null,
+      "commits": 2,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": null,
+      "name": "Grok 4.7",
+      "commits": 0,
+      "coauthored": 2,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "kurebeyashi-noah",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "Lancito01",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "liomaroliveira",
+      "name": null,
+      "commits": 2,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "marcochiusso-lgtm",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "n0ctbyte",
+      "name": null,
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "njmdietrich",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "simonMettler2000",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "StiensWout",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
+    },
+    {
+      "login": null,
+      "name": "Temirlan J",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-14"
+    },
+    {
+      "login": null,
+      "name": "win",
+      "commits": 0,
+      "coauthored": 2,
+      "first": "2026-11-14"
+    },
+    {
+      "login": "zibiax",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-14"
     }
   ],
   "tools": [
     {
       "name": "Claude",
-      "commits": 17
+      "commits": 353
     },
     {
       "name": "Capy",
-      "commits": 7
+      "commits": 38
+    },
+    {
+      "name": "Dependabot",
+      "commits": 14
+    },
+    {
+      "name": "OpenAI Codex / ChatGPT",
+      "commits": 3
     }
   ]
 }
