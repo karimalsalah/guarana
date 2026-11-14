@@ -1199,4 +1199,47 @@ TEST_CASE("Cooperative matrix use is known before the SPIR-V is emitted",
         fixture.profile.max_compute_shared_memory_size = 2 * 384 * 4 - 4;
         compare_with_emission(fixture, false);
     }
+    SECTION("no tensor instructions") {
+        TensorProgram fixture{0};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x16x16 aligned scratch exactly fits the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.shared_memory_size = 1;
+        fixture.profile.max_compute_shared_memory_size = 16 + 2 * 384 * 4;
+        compare_with_emission(fixture, true);
+        REQUIRE(fixture.program.shared_memory_size == fixture.profile.max_compute_shared_memory_size);
+    }
+    SECTION("16x16x16 alignment pushes scratch past the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.shared_memory_size = 1;
+        fixture.profile.max_compute_shared_memory_size = 2 * 384 * 4 + 4;
+        compare_with_emission(fixture, false);
+    }
+}
+
+TEST_CASE("Early cooperative matrix info preserves SPIR-V and survives an info copy",
+          "[video_core][tensor][ampere]") {
+    for (const bool scratch : {false, true}) {
+        TensorProgram baseline{1, 16};
+        TensorProgram early{1, 16};
+        baseline.profile.support_cooperative_hmma = !scratch;
+        baseline.profile.support_cooperative_hmma_16x16x16 = scratch;
+        early.profile = baseline.profile;
+
+        // Match the deferred path: determine use, copy Info, then emit the job's program.
+        early.program.info.uses_cooperative_matrix =
+            Backend::SPIRV::UsesCooperativeMatrix(early.profile, early.program);
+        const Info copied_info{early.program.info};
+        REQUIRE(copied_info.uses_cooperative_matrix);
+        REQUIRE_FALSE(baseline.program.info.uses_cooperative_matrix);
+        const auto baseline_code = baseline.Emit();
+        const auto early_code = early.Emit();
+        REQUIRE(early_code == baseline_code);
+        REQUIRE(copied_info.uses_cooperative_matrix == early.program.info.uses_cooperative_matrix);
+        REQUIRE(early.program.shared_memory_size == baseline.program.shared_memory_size);
+    }
 }
