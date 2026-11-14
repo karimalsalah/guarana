@@ -14,6 +14,7 @@
 #include <future>
 #include <iterator>
 #include <numeric>
+#include <optional>
 #include <thread>
 
 #include "common/fs/path_util.h"
@@ -44,6 +45,7 @@
 #include "video_core/gpu.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_frame_predictor.h"
+#include "video_core/nx2_shown_frames.h"
 #include "video_core/renderer_base.h"
 
 namespace Core::Nx2Debug {
@@ -88,6 +90,7 @@ struct ToolState {
     std::string log_filter{Settings::values.log_filter.GetValue()};
     u64 captures{};
     u64 screenshots{};
+    u64 shown_captures{};
     u64 samples{};
     u64 gpu_reads{};
     /// Process CPU time and when it was read, at the previous power call.
@@ -407,6 +410,152 @@ json Screenshot(ToolState& state, const json& params) {
         result["png_base64"] = Base64(png);
     }
     return result;
+}
+
+std::vector<u8> EncodePng(const std::vector<u8>& rgb, u32 width, u32 height) {
+    std::vector<u8> png;
+    if (!stbi_write_png_to_func(AppendPng, &png, static_cast<int>(width), static_cast<int>(height),
+                                3, rgb.data(), static_cast<int>(width * 3))) {
+        throw std::runtime_error{"PNG encoding failed"};
+    }
+    return png;
+}
+
+/// The next frames the presenter shows, generated ones included, with their timing and a contact
+/// sheet of their pictures (video_core/nx2_shown_frames.h, docs/nx2/debug-mcp.md).
+json ShownFrames(ToolState& state, const json& params) {
+    namespace Shown = VideoCore::Nx2ShownFrames;
+    if (!IsVulkan()) {
+        throw std::runtime_error{"shown_frames needs the Vulkan renderer"};
+    }
+    const u32 count = Param<u32>(params, "count", 12, 1, 32);
+    const bool pictures = params.value("pictures", true);
+    const u32 height = pictures ? Param<u32>(params, "height", 270, 144, 540) : 0;
+    const int timeout = Param<int>(params, "timeout_s", 10, 1, 60);
+    const u64 id = ++state.shown_captures;
+    if (!Shown::RequestCapture({.id = id, .count = count, .height = height})) {
+        throw std::runtime_error{"another shown_frames capture is still running"};
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{timeout};
+    std::optional<Shown::Result> captured;
+    while (!(captured = Shown::WaitCapture(id, 50ms))) {
+        if (state.stopping.load(std::memory_order_relaxed) ||
+            std::chrono::steady_clock::now() >= deadline) {
+            Shown::CancelCapture(id);
+            throw std::runtime_error{fmt::format(
+                "{} frames were not shown within {} s (paused or loading?)", count, timeout)};
+        }
+    }
+    const Shown::Result& result = *captured;
+    const u32 shown = static_cast<u32>(result.frames.size());
+    const std::vector<Shown::Times> times = Shown::RelativeTimes(result.frames);
+    const Shown::SheetLayout layout = Shown::LayoutSheet(shown, result.width, result.height);
+    const bool each = params.value("each", false);
+    const auto maybe = [](const std::optional<s64>& value) {
+        return value ? json(*value) : json(nullptr);
+    };
+    const size_t picture_bytes = size_t{result.width} * result.height * 4;
+    std::array<u64, 3> kinds{};
+    std::string presenter = shown != 0 ? std::string{result.frames.front().presenter} : "";
+    u32 with_picture = 0;
+    json frames = json::array();
+    for (u32 index = 0; index < shown; ++index) {
+        const Shown::Shown& frame = result.frames[index];
+        const Shown::Times& timing = times[index];
+        ++kinds[static_cast<size_t>(frame.kind)];
+        if (frame.presenter != presenter) {
+            presenter = "mixed";
+        }
+        json entry = {
+            {"index", index},
+            {"kind", std::string{Shown::KindName(frame.kind)}},
+            {"presenter", std::string{frame.presenter}},
+            {"slot", frame.slot != 0 ? json(frame.slot) : json(nullptr)},
+            {"batch", frame.batch != 0 ? json(frame.batch) : json(nullptr)},
+            {"scheduled_us", maybe(timing.scheduled_us)},
+            {"presented_us", timing.presented_us},
+            {"late_us", maybe(timing.late_us)},
+            {"interval_us", maybe(timing.interval_us)},
+            {"age_us", maybe(timing.age_us)},
+            {"deferred_present", frame.deferred},
+            {"picture", false},
+        };
+        const size_t offset = static_cast<size_t>((std::max)(frame.picture, 0)) * picture_bytes;
+        if (frame.picture >= 0 && layout.width != 0 && offset + picture_bytes <= result.pixels.size()) {
+            ++with_picture;
+            const Shown::SheetTile tile = Shown::TileAt(layout, index, result.width, result.height);
+            entry["picture"] = true;
+            entry["tile"] = {{"x", tile.x},
+                             {"y", tile.y},
+                             {"width", result.width},
+                             {"height", result.height}};
+            if (each) {
+                std::vector<u8> rgb(size_t{result.width} * result.height * 3);
+                const u8* source = result.pixels.data() + offset;
+                for (size_t pixel = 0; pixel < rgb.size() / 3; ++pixel, source += 4) {
+                    rgb[pixel * 3] = source[2];
+                    rgb[pixel * 3 + 1] = source[1];
+                    rgb[pixel * 3 + 2] = source[0];
+                }
+                entry["png_base64"] = Base64(EncodePng(rgb, result.width, result.height));
+            }
+        }
+        frames.push_back(std::move(entry));
+    }
+    json answer = {
+        {"count", shown},
+        {"presenter", presenter},
+        {"kinds", {{"real", kinds[0]}, {"predicted", kinds[1]}, {"interpolated", kinds[2]}}},
+        {"span_us", times.empty() ? s64{0} : times.back().presented_us},
+        {"pictures", with_picture},
+        {"width", result.width},
+        {"height", result.height},
+        {"hdr", result.hdr},
+        {"frames", std::move(frames)},
+    };
+    std::vector<std::string> notes;
+    if (presenter != "fluid") {
+        notes.emplace_back("some or all frames are not on the EDEN_NX2_FLUID vblank clock (off, or "
+                           "its watchdog fell back): those are shown in arrival order, so their slot, "
+                           "scheduled_us and late_us are null, and age_us is null too");
+    } else if (height != 0) {
+        notes.emplace_back("while pictures were taken every screen copy ran on the graphics queue, "
+                           "also with EDEN_NX2_FLUID_QUEUE set: for timing exactly as played, ask "
+                           "with pictures: false");
+    }
+    if (result.hdr) {
+        notes.emplace_back("HDR output: the pictures hold the encoded values cut to 8 bits, not "
+                           "tone-mapped");
+    }
+    if (!result.picture_note.empty()) {
+        answer["picture_note"] = result.picture_note;
+    }
+    answer["notes"] = notes;
+    if (with_picture != 0) {
+        const std::vector<u8> sheet = Shown::ComposeSheet(result, layout);
+        const std::vector<u8> png = EncodePng(sheet, layout.width, layout.height);
+        answer["sheet"] = {{"width", layout.width},
+                           {"height", layout.height},
+                           {"columns", layout.columns},
+                           {"rows", layout.rows},
+                           {"legend", "frames in order, left to right then down; the strip above "
+                                      "each: green real, orange predicted, blue interpolated; grey: "
+                                      "no picture"}};
+        if (params.value("save", false)) {
+            std::filesystem::create_directories(state.dump_directory);
+            const auto path =
+                state.dump_directory / fmt::format("shown-{}-{:04}.png", state.session, id);
+            std::ofstream file{path, std::ios::binary};
+            file.write(reinterpret_cast<const char*>(png.data()),
+                       static_cast<std::streamsize>(png.size()));
+            if (!file) {
+                throw std::runtime_error{fmt::format("cannot write {}", path.generic_string())};
+            }
+            answer["path"] = path.generic_string();
+        }
+        answer["sheet_png_base64"] = Base64(png);
+    }
+    return answer;
 }
 
 json LogTail(ToolState&, const json& params) {
@@ -1156,6 +1305,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"status", handler(Status)},
         {"frame_times", handler(FrameTimes)},
         {"screenshot", handler(Screenshot)},
+        {"shown_frames", handler(ShownFrames)},
         {"log_tail", handler(LogTail)},
         {"log_filter", handler(LogFilter)},
         {"capture_frame", handler(CaptureFrame)},
