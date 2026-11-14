@@ -641,6 +641,21 @@ are a best-effort snapshot of monotonic values, fine for a debug read.
 `graphics_pipelines` and `built_pipelines` from `Common::g_memory_counters`. Always counted
 (a few relaxed atomic adds per lookup); no switch needed.
 
+**`readbacks`** `{}`. Async read-back counters since boot
+(`VideoCore::AsyncReadback::g_counters`, `src/video_core/nx2_async_readback.h`, counted in
+`GPU::Impl::OnCPURead`, `BufferCache::FinishReadDownloads` and the split's DMA reads):
+`reads_async` (guest CPU reads of GPU-written memory that forced a flush) and `reads_inflight`
+(an earlier read's download covered them, only the wait was left), `read_ns_total` (request to
+bytes in guest memory, both kinds), `flush_us` (the GPU thread's time in the reads' flushes),
+`reader_waits`/`reader_wait_us`/`reader_max_wait_us` (reading threads that waited for the host
+GPU), `gpu_side_waits`/`gpu_side_wait_us` (GPU-side writes that waited for a read download),
+`dma_reads`/`dma_waited`/`dma_drained`/`dma_wait_us` (macro DMA reads on the split's front),
+`clear_landings`/`clear_waits` (`ClearDownload` landings before GPU-side writes),
+`sync_ops`/`sync_us`/`sync_max_us` (request to sync operation on the GPU thread) and
+`early_recorded`/`early_bytes`/`early_flushes`/`early_refused` (early downloads). Always counted
+(relaxed atomics beside the locks the read path already takes); `EDEN_NX2_GPU_PROFILE` also
+logs the same counters per second.
+
 **`boot_timing`** `{}`. The boot phases `Common::BootTiming` recorded
 (`src/common/boot_timing.cpp`, `RecordedPhases`): every `Mark` and `Span` since the process
 started, oldest first, each with `phase`, `at_ms` (since process start) and `took_ms`, plus
