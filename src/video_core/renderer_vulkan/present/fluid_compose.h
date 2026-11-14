@@ -45,6 +45,7 @@ public:
     }
 
 private:
+    u32 filter_mode{};
     vk::ShaderModule shader;
     vk::Sampler sampler;
     vk::DescriptorSetLayout frame_layout;
