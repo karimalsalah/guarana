@@ -497,7 +497,8 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     scheduler.RequestOutsideRenderPassOperationContext();
     {
-        const auto& layout = render_window.GetFramebufferLayout();
+        // The size the draw is made at: the game's with EDEN_NX2_FLUID_COMPOSE, else the window's.
+        const Layout::FramebufferLayout layout = FrameLayout();
         scheduler.RecordEmuBegin(TraceCategory::Present, {layout.width, layout.height, 0});
     }
     blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers, FrameLayout(),
