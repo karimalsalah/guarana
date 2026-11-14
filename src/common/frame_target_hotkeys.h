@@ -33,8 +33,10 @@ inline constexpr std::array<u32, 3> Presets{30, 40, 60};
     return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
 }
 
+/// Cached at GUI startup after nx2_switches.txt is loaded; target readers never read the environment.
 [[nodiscard]] inline bool Enabled() {
-    return EnabledFromValue(std::getenv("EDEN_NX2_FRAME_TARGET_HOTKEYS"));
+    static const bool enabled = EnabledFromValue(std::getenv("EDEN_NX2_FRAME_TARGET_HOTKEYS"));
+    return enabled;
 }
 
 /// Session-only target: hotkeys never mutate configuration storage read by renderer threads.
