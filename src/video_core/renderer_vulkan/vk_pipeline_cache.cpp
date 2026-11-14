@@ -2384,7 +2384,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     const auto start_prebuild = [&] {
         for (PrebuildRecord& record : prebuild) {
             scheduled_prebuild->Add(
-                record.key, TranslationBytes(record.payload_size), DriverCompileBytes,
+                record.key, record.payload.size(), TranslationBytes(record.payload_size),
+                DriverCompileBytes,
                 [this, record = std::move(record)]() mutable {
                     if (record.payload.empty()) {
                         auto read = CacheV2::ReadRecordPayload(
@@ -2719,29 +2720,11 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
     LOG_INFO(Render_Vulkan, "Shader precache: {} of {} compute programs to build on {} threads",
              jobs.size(), file_entries, num_threads);
     VideoCommon::StutterTrace::BootMarker("precache_begin", fmt::format("jobs={}", jobs.size()));
-    // Builds that capture for EDEN_NX2_PIPELINE_STATS are not the ones the driver's cache is
-    // meant to hold: nothing is marked as precached.
-    const bool marks_precached = !PipelineExecutableDump::Enabled(device);
-    const std::filesystem::path precached_file = ShaderWarm::PrecachedPipelinesPath(
-        title_id, device.IsExtGraphicsPipelineLibrarySupported());
-    const auto note_built = [&](size_t count) {
-        for (size_t index = 0; index < std::min(count, graphics_jobs); ++index) {
-            if (built[index]) {
-                precached.insert(jobs[index].graphics_hash);
-            }
-        }
-    };
-    // The headless warm-up builds in chunks: between them nothing builds, so the driver cache can
-    // be read at any driver, and what was built is saved (the driver cache first, then the list of
-    // what is built for this driver). A run that is killed starts again from the last chunk.
-    constexpr size_t WarmChunk = 500;
-    const size_t chunk = ShaderWarm::WarmOnly() ? WarmChunk : std::max<size_t>(jobs.size(), 1);
-    for (size_t first = 0; first < jobs.size() && !skipped; first += chunk) {
-        const size_t last = std::min(jobs.size(), first + chunk);
+    if (!jobs.empty()) {
         // Background jobs of the shader workers, each built and destroyed: only the driver's
         // cache keeps it.
         const VideoCommon::ShaderJobBatch batch = shader_jobs->CreateBatch();
-        for (size_t index = first; index < last; ++index) {
+        for (size_t index = 0; index < jobs.size(); ++index) {
             shader_jobs->Submit(
                 {
                     .priority = VideoCommon::ShaderJobPriority::Background,
@@ -2788,50 +2771,12 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
         batch.Wait();
-        if (ShaderWarm::WarmOnly() && !skipped && last < jobs.size() && marks_precached) {
-            serialization_thread.WaitForRequests();
-            if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
-                last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
-                                                                   vulkan_pipeline_cache,
-                                                                   CACHE_VERSION, true),
-                                      std::memory_order_relaxed);
-            }
-            const size_t before = precached.size();
-            note_built(last);
-            if (precached.size() != before) {
-                ShaderWarm::WritePrecachedPipelines(
-                    precached_file, {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION},
-                    precached);
-            }
-        }
     }
     const size_t total_built = static_cast<size_t>(std::count(built.begin(), built.end(), u8{1}));
-    if (compute_pending && !skipped && marks_precached) {
+    if (compute_pending && !skipped) {
         if (const auto stamp_done = stamp(file_entries)) {
             ShaderWarm::WriteWarmMarker(warm_file, *stamp_done);
         }
-    }
-    if (ShaderWarm::WarmOnly() && marks_precached && total_built != 0) {
-        // The driver's cache first: the list below says what is in it.
-        serialization_thread.WaitForRequests();
-        if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
-            last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
-                                                               vulkan_pipeline_cache,
-                                                               CACHE_VERSION, true),
-                                  std::memory_order_relaxed);
-        }
-    }
-    const size_t precached_before = precached.size();
-    for (size_t index = 0; index < graphics_jobs; ++index) {
-        if (built[index]) {
-            precached.insert(jobs[index].graphics_hash);
-        }
-    }
-    if (precached.size() != precached_before && marks_precached) {
-        ShaderWarm::WritePrecachedPipelines(
-            ShaderWarm::PrecachedPipelinesPath(title_id,
-                                               device.IsExtGraphicsPipelineLibrarySupported()),
-            {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION}, precached);
     }
     if (!stop_loading.stop_requested() && total_built != 0) {
         // Without this, the builds reach the file only at the next boot, game change or clean

@@ -72,7 +72,7 @@ public:
                 .priority = priority,
                 .cpu_bytes = cpu_bytes,
                 .driver_bytes = driver_bytes,
-                .cpu = [this, entry, capture_bytes, translate = std::move(translate),
+                .cpu = [this, entry, translate = std::move(translate),
                         done = std::move(done)](VideoCommon::ShaderJobContext& context) mutable
                 -> VideoCommon::ShaderDriverStage {
                     const auto finish = [](Common::UniqueFunction<void>& callback) {
