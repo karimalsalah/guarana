@@ -5,6 +5,7 @@
 #include <exception>
 
 #include "common/logging.h"
+#include "video_core/renderer_vulkan/gpl_parallel_parts.h"
 #include "video_core/renderer_vulkan/vk_pipeline_library.h"
 
 namespace Vulkan {
@@ -218,8 +219,23 @@ bool GplOptimizeCachedEnabled() {
     return enabled;
 }
 
+bool GplParallelPartsEnabled() {
+    static const bool enabled = [] {
+        const bool on = GplParallelPartsRequested(std::getenv("EDEN_NX2_GPL_PARALLEL_PARTS"));
+        if (on) {
+            LOG_INFO(Render_Vulkan,
+                     "Nx2Perf gpl: EDEN_NX2_GPL_PARALLEL_PARTS=1, a pipeline built with shader "
+                     "jobs builds its fragment library as a job of its own beside its "
+                     "pre-rasterization one (only with EDEN_NX2_GPL=1)");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
 GraphicsPipelineLibraryCache::GraphicsPipelineLibraryCache() {
     static_cast<void>(GplOptimizeCachedEnabled());
+    static_cast<void>(GplParallelPartsEnabled());
 }
 
 void GraphicsPipelineLibraryCache::Report() {
@@ -229,6 +245,7 @@ void GraphicsPipelineLibraryCache::Report() {
     }
     window = now;
     ReportUnoptimizedFirst();
+    ReportParallelParts();
     const auto take = [](auto& counter) { return counter.exchange(0, std::memory_order_relaxed); };
     const u32 pre_built = take(built[0]), frag_built = take(built[1]);
     const u32 pre_hits = take(hits[0]), frag_hits = take(hits[1]);
@@ -271,6 +288,19 @@ void GraphicsPipelineLibraryCache::Report() {
              mean(optimized_ns, optimized_links), Ms(optimized_max), queued_at_draw,
              fallback_count, Ms(avoided), Ms(held),
              total_libraries.load(std::memory_order_relaxed));
+}
+
+void GraphicsPipelineLibraryCache::ReportParallelParts() {
+    const u32 pipelines = parallel_builds.exchange(0, std::memory_order_relaxed);
+    const u32 here = parallel_ran_here.exchange(0, std::memory_order_relaxed);
+    if (pipelines == 0) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Nx2Perf gpl_parallel in the last 10 s: {} pipelines built their two libraries "
+             "together; the fragment library ran on the building thread, after the other, in {} "
+             "of them (no driver worker was free)",
+             pipelines, here);
 }
 
 void GraphicsPipelineLibraryCache::ReportUnoptimizedFirst() {
