@@ -23,7 +23,8 @@ FORM_LABELS = (
     "Regression", "Last known working build", "Steps to reproduce", "Log / crash dump",
     "Display refresh rate and variable refresh on/off", "Switches set", "Frame generation",
     # bug_report.yml (upstream consolidated form)
-    "Lichii build",
+    "Guarana build",
+    "Lichii build",  # bug_report.yml before the rename, so older issues still parse
     "What kind of problem is it?",
     "Game name and version",
     "GPU model and driver version",
@@ -39,6 +40,9 @@ FORM_LABELS = (
     # feature_request.yml, blank.yml
     "What do you want ?", "Why it's useful", "Issue",
 )
+
+# Labels no form asks for any more, kept in FORM_LABELS for the issues filed with them.
+RETIRED_LABELS = ("Lichii build",)
 
 # "Graphics card" options of the forms: short name, vendor, integrated or discrete.
 GPU_OPTIONS = {
