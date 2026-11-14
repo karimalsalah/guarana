@@ -250,7 +250,7 @@ pub fn apply_current(app: &AppHandle) -> CmdResult<Plan> {
     if plan.mode == CUSTOM {
         return Ok(plan);
     }
-    profiles::apply(&plan.profile_id, &plan.overrides)?;
+    profiles::apply(&plan.profile_id, &plan.overrides, &st.system())?;
     let (id, ov) = (plan.profile_id.clone(), plan.overrides.clone());
     st.update(move |s| {
         s.profile_id = Some(id);
