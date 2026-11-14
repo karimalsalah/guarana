@@ -67,6 +67,30 @@ TOOLS = [
         },
     },
     {
+        "name": "shown_frames",
+        "description": "What the player sees between real frames: the next 'count' frames the "
+                       "presenter actually shows (default 12), generated ones included. Per frame: "
+                       "kind (real, predicted, interpolated), slot, scheduled_us and presented_us "
+                       "(relative to the first present), late_us, interval_us, age_us of the real "
+                       "frame it derives from, and its tile in the contact sheet, returned as one "
+                       "image (strip above each tile: green real, orange predicted, blue "
+                       "interpolated, grey tile: no picture). Scheduled times exist only on the "
+                       "EDEN_NX2_FLUID vblank clock. Taking pictures moves the screen copy to the "
+                       "graphics queue; pictures: false keeps timing exactly as played.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 12},
+                "height": {"type": "integer", "minimum": 144, "maximum": 540, "default": 270,
+                           "description": "Lines of each picture."},
+                "pictures": {"type": "boolean", "default": True},
+                "save": {"type": "boolean", "description": "Also write the sheet into the dump "
+                                                           "directory."},
+                "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10},
+            },
+        },
+    },
+    {
         "name": "log_tail",
         "description": "Log lines kept in memory since the game booted. Without 'after', the newest "
                        "'limit' lines; with 'after' (the 'next' of an earlier call), the lines "
@@ -476,6 +500,8 @@ def default_timeout(name, params):
     """The emulator's own timeout_s default, so the adapter waits at least as long."""
     if name == "capture_frame":
         return 120
+    if name == "shown_frames":
+        return 10
     if name == "capture_bundle":
         return 90
     if name == "frame_times":
@@ -511,6 +537,13 @@ class Adapter:
         result = self.emulator.call(name, params, timeout)
         if name == "screenshot":
             png = result.pop("png_base64", None)
+            return result, base64.b64decode(png) if png else None
+        if name == "shown_frames":
+            # One image for the whole sequence; each frame names its tile in it. Pictures of
+            # single frames ("each", socket only) would only repeat the sheet here.
+            for frame in result.get("frames", []):
+                frame.pop("png_base64", None)
+            png = result.pop("sheet_png_base64", None)
             return result, base64.b64decode(png) if png else None
         if name == "capture_frame":
             self.captures.add(os.path.realpath(result["directory"]))

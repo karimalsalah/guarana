@@ -319,7 +319,6 @@ PacingSet ChoosePacingSet(u64 title_id, const GpuInfo& gpu, u32 refresh_hz) {
     if (refresh_hz >= LOCKED_144_MIN_HZ && refresh_hz <= LOCKED_144_MAX_HZ) {
         return PacingSet::Hz144;
     }
-#endif
     // TODO(measure): defaults by device class or GPU family (gpu.device_class, gpu.gpu_family) go
     // here; settings presets by class or family set GpuMatch's device_class or gpu_family. Each
     // needs a paired run on a verified scene of that class or family first (AGENTS.md, rule 1);

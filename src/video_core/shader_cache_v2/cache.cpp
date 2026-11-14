@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
+#include <vector>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -65,28 +67,60 @@ void Cache::AddProgram(u64 key, u64 lowering_stamp) {
     programs.insert_or_assign(key, lowering_stamp);
 }
 
-void Cache::LoadPrograms(std::span<const LogRecord> live) {
+void Cache::LoadPrograms(std::span<const LogRecord> live, const ForEach& for_each) {
     ASSERT(!loaded_ready.load(std::memory_order_relaxed));
-    std::unordered_map<u64, LoadedProgram> table;
+    struct Decoded {
+        const LogRecord* entry{};
+        std::optional<u64> stamp;
+        /// Set only for a record of this build's lowering under the key its inputs make
+        std::optional<ProgramRecord> record;
+        std::shared_ptr<const LoweredNativeCode> code;
+        bool done{};
+    };
+    std::vector<Decoded> programs_read;
     for (const LogRecord& entry : live) {
-        if (entry.kind != RecordKind::Program) {
-            continue;
+        if (entry.kind == RecordKind::Program) {
+            programs_read.emplace_back().entry = &entry;
         }
-        const std::optional<u64> stamp = ProgramStamp(entry.payload);
-        if (!stamp) {
-            continue;
+    }
+    const auto decode = [](Decoded& program) {
+        program.done = true;
+        program.stamp = ProgramStamp(program.entry->payload);
+        if (!program.stamp || *program.stamp != LoweringStamp()) {
+            return;
         }
-        AddProgram(entry.key, *stamp);
-        if (*stamp != LoweringStamp()) {
-            continue;
-        }
-        std::optional<ProgramRecord> record = DecodeProgram(entry.payload);
+        std::optional<ProgramRecord> record = DecodeProgram(program.entry->payload);
         // A record under another key than its inputs make would never be found
-        if (!record || ProgramKey(*record) != entry.key) {
+        if (!record || ProgramKey(*record) != program.entry->key) {
+            return;
+        }
+        program.code = TakeProgramCode(*record);
+        program.record = std::move(record);
+    };
+    if (for_each && !programs_read.empty()) {
+        const size_t count = programs_read.size();
+        const size_t chunks = std::min<size_t>(count, 256);
+        for_each(chunks, [&](size_t chunk) {
+            const size_t end = (chunk + 1) * count / chunks;
+            for (size_t index = chunk * count / chunks; index < end; ++index) {
+                decode(programs_read[index]);
+            }
+        });
+    }
+    // In the order of the log, as one thread would: a call for_each left out is made here.
+    std::unordered_map<u64, LoadedProgram> table;
+    for (Decoded& program : programs_read) {
+        if (!program.done) {
+            decode(program);
+        }
+        if (!program.stamp) {
             continue;
         }
-        std::shared_ptr<const LoweredNativeCode> code = TakeProgramCode(*record);
-        table.insert_or_assign(entry.key, LoadedProgram{std::move(*record), std::move(code)});
+        AddProgram(program.entry->key, *program.stamp);
+        if (program.record) {
+            table.insert_or_assign(program.entry->key, LoadedProgram{std::move(*program.record),
+                                                                     std::move(program.code)});
+        }
     }
     loaded = std::move(table);
     loaded_ready.store(true, std::memory_order_release);

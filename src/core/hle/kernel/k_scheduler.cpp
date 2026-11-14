@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <bit>
+#include <cstdlib>
 
 #include "common/assert.h"
 #include "common/bit_util.h"
@@ -22,7 +23,36 @@
 #include "core/hle/kernel/nx2_thread_stats.h"
 #include "core/hle/kernel/physical_core.h"
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
+
 namespace Kernel {
+
+namespace {
+
+/// EDEN_NX2_SCHED_PAUSE=1: pause inside the context-switch retry spin. The loop below retries a
+/// std::mutex try_lock with no pause, burning a core at full rate while another core holds the
+/// thread's context lock (a few microseconds). _mm_pause yields the pipeline and cuts the spin's
+/// power and bus traffic without changing when the lock is taken. Default off keeps the tight
+/// loop, byte for byte the original behaviour.
+bool SchedulerSpinPauseEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_SCHED_PAUSE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+void SchedulerSpinPause() {
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+    _mm_pause();
+#elif defined(__aarch64__)
+    asm volatile("yield");
+#endif
+}
+
+} // Anonymous namespace
 
 static void IncrementScheduledCount(Kernel::KThread* thread) {
     if (auto process = thread->GetOwnerProcess(); process) {
@@ -458,6 +488,9 @@ void KScheduler::ScheduleImplFiber(KernelCore& kernel) {
             if (m_state.needs_scheduling.load(std::memory_order_seq_cst)) {
                 // If we do, another core is interfering, and we must start again.
                 goto retry;
+            }
+            if (SchedulerSpinPauseEnabled()) {
+                SchedulerSpinPause();
             }
         }
 

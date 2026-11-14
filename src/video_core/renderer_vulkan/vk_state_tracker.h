@@ -101,14 +101,6 @@ public:
         current_host_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     }
 
-    void InvalidateViewports() {
-        (*flags)[Dirty::Viewports] = true;
-    }
-
-    void InvalidateScissors() {
-        (*flags)[Dirty::Scissors] = true;
-    }
-
     void InvalidateStateEnableFlag() {
         (*flags)[Dirty::StateEnable] = true;
     }
@@ -240,7 +232,6 @@ public:
 
     bool TouchLineStippleEnable() { return Exchange(Dirty::LineStippleEnable, false); }
 
-    bool TouchLineStipple() { return Exchange(Dirty::LineStippleParams, false); }
 
     bool TouchDepthBiasEnable() { return Exchange(Dirty::DepthBiasEnable, false); }
 

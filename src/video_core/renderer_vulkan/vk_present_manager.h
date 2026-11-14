@@ -15,6 +15,7 @@
 
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
+#include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -74,6 +75,8 @@ struct Frame {
     std::chrono::steady_clock::time_point fluid_recorded{};
     /// The scheduler tick whose completion finishes the frame's GPU work.
     u64 gpu_tick{};
+    /// A real frame, a prediction or an interpolated frame (the debug server's shown_frames).
+    VideoCore::Nx2ShownFrames::Kind shown_kind{};
 #ifdef EGLANTINE_STREAMLINE
     // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
     bool frame_gen{};
@@ -230,6 +233,10 @@ private:
                        std::chrono::nanoseconds period);
 
     void NoteShownFrame();
+
+    /// The debug server's shown_frames: notes the frame just presented (`slot` 0 when shown in
+    /// arrival order). Called only while VideoCore::Nx2ShownFrames::Armed().
+    void NoteShownCapture(const Frame* frame, u64 slot, std::string_view presenter);
 
     void CopyToSwapchain(Frame* frame);
 
@@ -396,6 +403,8 @@ private:
     bool fluid_ahead_pending{};
     Frame* fluid_ahead_frame{};
     VkSemaphore fluid_ahead_semaphore{};
+    /// The debug server's shown_frames: pictures and timing of the frames shown.
+    ShownCapture shown_capture;
 };
 
 } // namespace Vulkan

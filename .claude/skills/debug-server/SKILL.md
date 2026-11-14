@@ -1,6 +1,6 @@
 ---
 name: debug-server
-description: "Drive an emulator that is already running with EDEN_NX2_DEBUG_SERVER through the debug MCP adapter (tools/nx2/debug_mcp.py): status, screenshot, frame_times, gpu_costs, log_tail, input and input_sequence, reject_shaders A/B, capture_frame. Use when asked to look at, measure or A/B-test a running game. Never starts or stops the emulator."
+description: "Drive an emulator that is already running with EDEN_NX2_DEBUG_SERVER through the debug MCP adapter (tools/nx2/debug_mcp.py): status, screenshot, shown_frames, frame_times, gpu_costs, log_tail, input and input_sequence, reject_shaders A/B, capture_frame. Use when asked to look at, measure or A/B-test a running game. Never starts or stops the emulator."
 ---
 
 # Live debug server
@@ -15,7 +15,7 @@ The emulator answers on `127.0.0.1:6545` when the owner starts it with
   plus `--out shot.png` for a screenshot. On Windows use the native Python: MSYS `python` rejects
   `C:/` paths.
 
-The adapter offers exactly these methods: `status`, `frame_times`, `screenshot`, `log_tail`,
+The adapter offers exactly these methods: `status`, `frame_times`, `screenshot`, `shown_frames`, `log_tail`,
 `log_filter`, `capture_frame`, `capture_image`, `reject_shaders`, `set_shading_rate`, `set_prepass`,
 `sample`, `read_memory`, `search_memory`, `read_gpu_memory`, `input`, `input_sequence`, `host_timing`,
 `power`, `power_set`, `gpu_costs`, `frame_budget`, `memory`. Anything else (`speed_limit`, `pause`,
@@ -45,6 +45,8 @@ The adapter offers exactly these methods: `status`, `frame_times`, `screenshot`,
 ## Recipes
 
 - What is on screen: `status`, then `screenshot {"height": 720}`.
+- What the player sees between real frames: `shown_frames {"count": 12}` returns each shown frame's
+  kind, slot and timing with a contact sheet as image content; `pictures: false` for timing as played.
 - Frame rate: `frame_times {"seconds": 10, "refresh_hz": 60}` gives fps, p50/p90/p99 ms, VSync
   shares and stutters. Take three, report the median, and use the same window for every variant.
 - Costliest shaders: `gpu_costs {"enable": true}`, wait two seconds, `gpu_costs {"top": 16}`
