@@ -33,6 +33,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
+#include "common/boot_split.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
@@ -330,6 +331,13 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - trace_begin)
                                    .count());
+            if (Common::BootSplit::Enabled()) {
+                Common::BootSplit::NoteBuild(
+                    Common::BootSplit::BuildKind::Compute,
+                    static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - trace_begin)
+                                         .count()));
+            }
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Driver rejected compute shader {:016X}: {}", shader_hash,
                          exception.what());
@@ -751,6 +759,8 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
             }
             // Every GPU channel waits with the dispatch, so long waits are freezes.
             const auto waited = std::chrono::steady_clock::now() - begin;
+            Common::BootSplit::NoteHeldDispatch(static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(waited).count()));
             if (waited > std::chrono::milliseconds{50}) {
                 LOG_INFO(Render_Vulkan, "Compute dispatch waited {:.1f} ms for pipeline {:016x}",
                          std::chrono::duration<double, std::milli>(waited).count(), shader_hash);

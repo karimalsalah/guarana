@@ -18,6 +18,7 @@
 #include <thread>
 
 #include "common/fs/path_util.h"
+#include "common/boot_split.h"
 #include "common/boot_timing.h"
 #include "common/cpu_features.h"
 #include "common/host_memory.h"
@@ -1621,15 +1622,85 @@ json Readbacks(ToolState&, const json&) {
     };
 }
 
+/// Milliseconds of a nanosecond total.
+double NsToMs(u64 ns) {
+    return static_cast<double>(ns) / 1'000'000.0;
+}
+
+/// A Common::BootSplit::Totals as JSON: held draw and dispatch time, builds by kind and the
+/// guest file reads.
+json SplitTotalsJson(const Common::BootSplit::Totals& totals) {
+    json builds = json::object();
+    for (size_t kind = 0; kind < Common::BootSplit::BuildKindCount; ++kind) {
+        builds[std::string{Common::BootSplit::BuildKindNames[kind]}] = {
+            {"count", totals.builds[kind]}, {"ms", NsToMs(totals.build_ns[kind])}};
+    }
+    return {
+        {"held_draws", totals.held_draws},
+        {"held_draw_ms", NsToMs(totals.held_draw_ns)},
+        {"held_dispatches", totals.held_dispatches},
+        {"held_dispatch_ms", NsToMs(totals.held_dispatch_ns)},
+        {"builds", std::move(builds)},
+        {"file_reads", totals.file_reads},
+        {"file_read_bytes", totals.file_read_bytes},
+        {"file_read_ms", NsToMs(totals.file_read_ns)},
+    };
+}
+
+/// A sample with the totals at that moment, and (`since` given) what was added since that sample.
+json SplitSampleJson(const Common::BootSplit::Sample& sample,
+                     const Common::BootSplit::Sample* since) {
+    json result = {{"label", sample.label},
+                   {"at_ms", sample.at_ms},
+                   {"presents", sample.presents},
+                   {"totals", SplitTotalsJson(sample.totals)}};
+    if (since != nullptr) {
+        result["since_first_frame"] =
+            SplitTotalsJson(Common::BootSplit::Difference(sample.totals, since->totals));
+    }
+    return result;
+}
+
 /// The boot phases Common::BootTiming recorded (Mark and Span), oldest first: when each
-/// happened since the process started and how long it took.
-json BootTimingTool(ToolState&, const json&) {
+/// happened since the process started and how long it took; and in "split" the held-draw time,
+/// pipeline builds by kind and guest file read time (Common::BootSplit) at the first presented
+/// frame, at each mark a client took with {"mark": "<label>"}, and now.
+json BootTimingTool(ToolState&, const json& params) {
+    std::optional<Common::BootSplit::Sample> marked;
+    if (params.is_object() && params.contains("mark")) {
+        const json& label = params["mark"];
+        if (!label.is_string() || label.get<std::string>().empty() ||
+            label.get<std::string>().size() > 64) {
+            throw std::runtime_error{"mark must be a label of 1 to 64 characters"};
+        }
+        marked = Common::BootSplit::NoteMark(label.get<std::string>(),
+                                             g_nx2_present_count.load(std::memory_order_relaxed));
+    }
     json phases = json::array();
     for (const Common::BootTiming::Phase& phase : Common::BootTiming::RecordedPhases()) {
         phases.push_back(
             {{"phase", phase.name}, {"at_ms", phase.at_ms}, {"took_ms", phase.took_ms}});
     }
-    return {{"now_ms", Common::BootTiming::Now()}, {"phases", std::move(phases)}};
+    const Common::BootSplit::Recorder& recorder = Common::BootSplit::Global();
+    const std::optional<Common::BootSplit::Sample> first_frame = recorder.FirstFrame();
+    const Common::BootSplit::Sample* const since = first_frame ? &*first_frame : nullptr;
+    json marks = json::array();
+    for (const Common::BootSplit::Sample& mark : recorder.Marks()) {
+        marks.push_back(SplitSampleJson(mark, since));
+    }
+    json split = {
+        {"current", SplitTotalsJson(recorder.Current())},
+        {"first_frame", first_frame ? SplitSampleJson(*first_frame, nullptr) : json{}},
+        {"marks", std::move(marks)},
+        {"note", "cumulative since the process started; first_frame is taken at the first "
+                 "presented guest frame, a mark by boot_timing {\"mark\": \"<label>\"}"},
+    };
+    if (marked) {
+        split["marked"] = marked->label;
+    }
+    return {{"now_ms", Common::BootTiming::Now()},
+            {"phases", std::move(phases)},
+            {"split", std::move(split)}};
 }
 
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {

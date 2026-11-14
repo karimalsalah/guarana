@@ -686,11 +686,37 @@ GPU), `gpu_side_waits`/`gpu_side_wait_us` (GPU-side writes that waited for a rea
 (relaxed atomics beside the locks the read path already takes); `EDEN_NX2_GPU_PROFILE` also
 logs the same counters per second.
 
-**`boot_timing`** `{}`. The boot phases `Common::BootTiming` recorded
+**`boot_timing`** `{mark?}`. The boot phases `Common::BootTiming` recorded
 (`src/common/boot_timing.cpp`, `RecordedPhases`): every `Mark` and `Span` since the process
 started, oldest first, each with `phase`, `at_ms` (since process start) and `took_ms`, plus
 `now_ms`. The last 256 phases are kept. The same boundaries the `Boot timing:` log lines show,
 without parsing the log; boot phases logged before the server starts are included.
+
+`split` says what the time went on between boot and gameplay (`Common::BootSplit`,
+`src/common/boot_split.cpp`). Every total is cumulative since the process started:
+
+- `held_draws`, `held_draw_ms`: draws that waited on the GPU worker for their graphics pipeline
+  to be built, and for how long; `held_dispatches`, `held_dispatch_ms`: the same for compute.
+- `builds`: pipelines built and the driver time they took, summed over every thread, by kind:
+  `graphics_monolithic` (a whole pipeline), `graphics_library_pre_rasterization` and
+  `graphics_library_fragment` (`EDEN_NX2_GPL` shader parts), `graphics_fast_link` and
+  `graphics_optimized_link` (`EDEN_NX2_GPL` links), `compute`. Each is `{count, ms}`. A build the
+  driver rejects is not counted. Time on workers can add up to more than wall time.
+- `file_reads`, `file_read_bytes`, `file_read_ms`: guest storage and file reads, the bytes they
+  asked for, and the time in the backend read.
+
+`split.first_frame` is a sample (`label`, `at_ms`, `presents`, `totals`) taken when the first guest
+frame was presented (null before it; the process's first, a later game in the same process
+does not replace it). `{"mark": "gameplay"}` takes
+another sample now: reach the scene, call it, and `split.marks` (the last 16, oldest first) holds
+it with `since_first_frame`, the totals added since the first frame (absent on a mark taken before
+it), next to its `totals`.
+`split.current` is the totals now. A `mark` that is not 1 to 64 characters is refused.
+
+The counting exists only when the process started with `EDEN_NX2_DEBUG_SERVER` set (the server
+itself is the only reader): without it the counters, the clock reads around the timed work and the
+read timing are skipped, and it is not a switch of its own. Guest reads are timed as well when
+`EDEN_NX2_FS_READ_TRACE` is set, as before; with only the server set they add no log lines.
 
 ### Phase 2: control and input (about 4 to 5 days)
 
