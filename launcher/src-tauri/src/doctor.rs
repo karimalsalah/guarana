@@ -24,18 +24,21 @@ const VC_REDIST_PAGE: &str = "https://learn.microsoft.com/cpp/windows/latest-sup
 const HDR_HELP_PAGE: &str = "https://support.microsoft.com/windows/hdr-settings-in-windows-2d767185-38ec-7fdc-6f97-bbc6c5ef24e6";
 
 /// In report order. `emulator_version` asks GitHub, so it runs alongside the others.
-const CHECKS: [(&str, &str); 18] = [
+const CHECKS: [(&str, &str); 21] = [
     ("emulator_version", "Guarana is up to date"),
     ("gpu_driver", "GPU driver"),
     ("vulkan", "Vulkan driver"),
     ("vc_redist", "Visual C++ 2015-2022 runtime (x64)"),
     ("avx2", "CPU supports AVX2"),
     ("memory", "Memory and page file"),
+    ("memory_now", "Memory free right now"),
     ("disk", "Free disk space for caches"),
     ("power", "Power source and power mode"),
     ("hags", "Hardware-accelerated GPU scheduling"),
     ("intel_shared_memory", "Intel Shared GPU Memory Override"),
     ("windows_hdr", "Windows HDR"),
+    ("refresh_rate", "Display refresh rate and frame generation"),
+    ("displays", "Displays on the integrated GPU"),
     ("defender", "Microsoft Defender and the shader cache"),
     ("shader_tmp", "Shader cache temporary files"),
     ("keys", "Keys"),
@@ -46,18 +49,21 @@ const CHECKS: [(&str, &str); 18] = [
 ];
 
 /// fix id -> (check id it fixes, what it opens or does).
-const FIXES: [(&str, &str); 14] = [
+const FIXES: [(&str, &str); 17] = [
     ("install_update", "emulator_version"),
     ("open_driver_page", "gpu_driver"),
     ("open_vulkan_driver_page", "vulkan"),
     ("open_vc_redist", "vc_redist"),
     ("install_vc_redist", "vc_redist"),
     ("open_memory_settings", "memory"),
+    ("open_about_settings", "memory_now"),
     ("open_storage_settings", "disk"),
     ("open_power_settings", "power"),
     ("open_graphics_settings", "hags"),
     ("open_intel_graphics", "intel_shared_memory"),
     ("open_hdr_help", "windows_hdr"),
+    ("open_display_refresh", "refresh_rate"),
+    ("open_display_settings", "displays"),
     ("open_windows_security", "defender"),
     ("delete_shader_tmp", "shader_tmp"),
     ("open_bluetooth_settings", "controller"),
@@ -291,6 +297,52 @@ fn worse(a: CheckStatus, b: CheckStatus) -> CheckStatus {
     }
 }
 
+/// Below these the memory-now check warns. A judgement, not a measurement: on the first-session
+/// laptop (32 GB) play ran with 3 GB of RAM free and 3.2 GB of commit left (43.7 of 46.9 GB).
+const LOW_FREE_RAM_GB: f64 = 3.0;
+const LOW_COMMIT_LEFT_GB: f64 = 6.0;
+
+/// Free RAM and the commit (memory Windows has promised programs, page file included) against
+/// its limit, as they are while the doctor runs: other programs leave less for the game. `pf`:
+/// the page-file configuration; a system-managed page file grows when the limit is reached.
+fn memory_now_check(m: Option<&system::MemoryNow>, pf: Option<&system::PageFileConfig>) -> Check {
+    let Some(m) = m else {
+        return check("memory_now", CheckStatus::Info, "Could not read how much memory is free.");
+    };
+    let free = util::gib(m.free_ram);
+    let left = util::gib(m.commit_limit.saturating_sub(m.committed));
+    let numbers = format!(
+        "{free:.1} GB of RAM is free, and {:.1} of the {:.1} GB Windows can hand out (RAM plus page file) is in use",
+        util::gib(m.committed),
+        util::gib(m.commit_limit)
+    );
+    let close = "close browsers, game launchers and other games before you play";
+    if left < LOW_COMMIT_LEFT_GB && pf.is_some_and(|p| p.system_managed) {
+        check(
+            "memory_now",
+            CheckStatus::Info,
+            format!("{numbers}: {left:.1} GB is left before Windows has to grow the page file, which can cause a pause; {close}."),
+        )
+    } else if left < LOW_COMMIT_LEFT_GB {
+        check(
+            "memory_now",
+            CheckStatus::Warn,
+            format!(
+                "{numbers}: {left:.1} GB is left, and a Switch 2 game needs several GB more. When it runs out, programs crash. To make room, {close}; a page file that can grow also raises the limit (System > About > Advanced system settings)."
+            ),
+        )
+        .with_fix("open_about_settings", "Open System > About")
+    } else if free < LOW_FREE_RAM_GB {
+        check(
+            "memory_now",
+            CheckStatus::Warn,
+            format!("{numbers}. With this little RAM free, Windows moves memory to the disk while you play and the game stutters: {close}."),
+        )
+    } else {
+        check("memory_now", CheckStatus::Ok, format!("{numbers}."))
+    }
+}
+
 fn disk() -> Check {
     let free = system::free_disk_bytes(&paths::user_data_dir()).unwrap_or(0);
     let gb = util::gib(free);
@@ -375,6 +427,80 @@ fn windows_hdr() -> Check {
             format!("The main display reports a peak of about {:.0} nits and Windows HDR is off.", h.max_nits),
         )),
         None => check("windows_hdr", CheckStatus::Info, "Could not read the display's HDR state."),
+    }
+}
+
+/// The rate frame generation or the FLUID presenter paces frames to when the Ocarina of Time preset
+/// runs on an integrated GPU (src/core/game_presets.cpp). With the launcher's profiles alone frame
+/// generation is off and has no target.
+const FRAME_GEN_TARGET_HZ: u32 = 60;
+
+/// A multiple of 60. 59 and 119 are how Windows lists the 59.94 Hz and 119.88 Hz modes.
+fn even_for_frame_gen(hz: u32) -> bool {
+    hz >= FRAME_GEN_TARGET_HZ - 1 && matches!(hz % FRAME_GEN_TARGET_HZ, 0 | 59)
+}
+
+/// The offered rate closest to `current` that suits frame generation; the higher one on a tie.
+fn nearest_even_rate(current: u32, offered: &[u32]) -> Option<u32> {
+    offered
+        .iter()
+        .copied()
+        .filter(|&hz| even_for_frame_gen(hz))
+        .min_by_key(|&hz| (hz.abs_diff(current), std::cmp::Reverse(hz)))
+}
+
+/// The main display's refresh rate against a pace of 60; `offered` is what the display can run at
+/// its current resolution. `paced_to_60`: the game's GPU is integrated, where the Ocarina of Time
+/// preset paces frames to 60; elsewhere the rate is only reported.
+fn refresh_rate_check(current: u32, offered: &[u32], paced_to_60: bool) -> Check {
+    if current <= 1 {
+        return check("refresh_rate", CheckStatus::Info, "Could not read the main display's refresh rate.");
+    }
+    if even_for_frame_gen(current) {
+        return check("refresh_rate", CheckStatus::Ok, format!("{current} Hz is a multiple of 60."));
+    }
+    if !paced_to_60 {
+        return check(
+            "refresh_rate",
+            CheckStatus::Info,
+            format!("The main display runs at {current} Hz. This matters only when frame generation or the FLUID presenter paces frames to 60 a second, as the Ocarina of Time preset does on integrated GPUs."),
+        );
+    }
+    let why = format!(
+        "The main display runs at {current} Hz. When frame generation or the FLUID presenter paces frames to 60 a second (the Ocarina of Time preset on integrated GPUs), a rate that is not a multiple of 60 cannot show them at even intervals (unless variable refresh rate is on)"
+    );
+    match nearest_even_rate(current, offered) {
+        Some(hz) => check(
+            "refresh_rate",
+            CheckStatus::Warn,
+            format!("{why}. This display can also run at {hz} Hz: choose it under System > Display > Advanced display while you play."),
+        )
+        .with_fix("open_display_refresh", "Open Advanced display"),
+        None => check(
+            "refresh_rate",
+            CheckStatus::Info,
+            format!("{why}. It offers no multiple of 60 at this resolution, so there is nothing to change."),
+        ),
+    }
+}
+
+/// `gpu`: the name of the GPU the game runs on and whether it is integrated. `active`: how many
+/// displays are on through it.
+fn displays_check(gpu: Option<(&str, bool)>, active: Option<u32>) -> Check {
+    match (gpu, active) {
+        (None, _) => check("displays", CheckStatus::Info, "No GPU found through DirectX."),
+        (Some((_, false)), _) => check("displays", CheckStatus::Ok, "The game runs on a dedicated GPU with its own video memory."),
+        (Some((name, true)), None) => check("displays", CheckStatus::Info, format!("Could not count the displays on the {name}.")),
+        (Some((name, true)), Some(0)) => check("displays", CheckStatus::Ok, format!("No display is on through the {name}.")),
+        (Some((name, true)), Some(1)) => check("displays", CheckStatus::Ok, format!("One display is on through the {name}.")),
+        (Some((name, true)), Some(n)) => check(
+            "displays",
+            CheckStatus::Warn,
+            format!(
+                "{n} displays are on, all drawn by the {name} that also runs the game. Each one takes memory bandwidth and compositor work from that GPU. If you do not need one while playing, turn it off in Display settings (select it, then Multiple displays > Disconnect this display)."
+            ),
+        )
+        .with_fix("open_display_settings", "Open Display settings"),
     }
 }
 
@@ -495,11 +621,23 @@ fn blocking_check(app: &AppHandle, id: &str, sys: &SystemInfo) -> Check {
         "vc_redist" => vc_redist(),
         "avx2" => avx2(sys),
         "memory" => memory(sys),
+        "memory_now" => memory_now_check(system::memory_now().as_ref(), system::pagefile_config().as_ref()),
         "disk" => disk(),
         "power" => power(sys),
         "hags" => hags(sys),
         "intel_shared_memory" => intel_shared_memory(sys),
         "windows_hdr" => windows_hdr(),
+        "refresh_rate" => {
+            // Read now, not from the cached system info: the user may have just changed it.
+            let d = system::display();
+            let paced_to_60 = sys.primary().is_some_and(|g| g.is_integrated);
+            refresh_rate_check(d.refresh_hz, &system::refresh_rates(d.width, d.height), paced_to_60)
+        }
+        "displays" => {
+            let gpu = sys.primary();
+            let active = gpu.filter(|g| g.is_integrated).and_then(|g| system::active_outputs(g.vendor_id, g.device_id));
+            displays_check(gpu.map(|g| (g.name.as_str(), g.is_integrated)), active)
+        }
         "defender" => defender(),
         "shader_tmp" => shader_tmp(),
         "keys" => keys(),
@@ -595,7 +733,9 @@ pub async fn apply_fix(app: &AppHandle, fix_id: &str) -> CmdResult<Check> {
         "install_vc_redist" => {
             note = Some(tauri::async_runtime::spawn_blocking(install_vc_redist).await.map_err(|e| e.to_string())??);
         }
-        "open_memory_settings" => util::open_windows_page("ms-settings:about")?,
+        "open_memory_settings" | "open_about_settings" => util::open_windows_page("ms-settings:about")?,
+        "open_display_refresh" => util::open_windows_page("ms-settings:display-advanced")?,
+        "open_display_settings" => util::open_windows_page("ms-settings:display")?,
         "open_storage_settings" => util::open_windows_page("ms-settings:storagesense")?,
         "open_power_settings" => util::open_windows_page("ms-settings:powersleep")?,
         "open_graphics_settings" => util::open_windows_page("ms-settings:display-advancedgraphics")?,
@@ -641,6 +781,77 @@ mod tests {
         assert!(vc_redist_outcome(1638).is_ok());
         assert!(vc_redist_outcome(1223).unwrap_err().contains("not given"));
         assert!(vc_redist_outcome(5).unwrap_err().contains("code 5"));
+    }
+
+    fn mem(free_gb: f64, committed_gb: f64, limit_gb: f64) -> system::MemoryNow {
+        let b = |gb: f64| (gb * (1u64 << 30) as f64) as u64;
+        system::MemoryNow { free_ram: b(free_gb), committed: b(committed_gb), commit_limit: b(limit_gb) }
+    }
+
+    #[test]
+    fn memory_now_warns_only_when_little_is_left() {
+        let managed = system::PageFileConfig { system_managed: true, none: false, custom_max_mb: 0 };
+        let capped = system::PageFileConfig { system_managed: false, none: false, custom_max_mb: 8192 };
+        // A healthy 32 GB PC with a browser open.
+        let ok = memory_now_check(Some(&mem(18.0, 14.0, 37.0)), Some(&managed));
+        assert_eq!(ok.status, CheckStatus::Ok, "{}", ok.detail);
+        assert!(ok.fix_id.is_none());
+        // The first-session laptop while playing: 43.7 of 46.9 GB committed, 3 GB free, page file capped.
+        let full = memory_now_check(Some(&mem(3.0, 43.7, 46.9)), Some(&capped));
+        assert_eq!(full.status, CheckStatus::Warn);
+        assert!(full.detail.contains("3.2 GB is left"), "{}", full.detail);
+        assert_eq!(full.fix_id.as_deref(), Some("open_about_settings"));
+        // The same with a system-managed page file: it grows, so only a note.
+        let grows = memory_now_check(Some(&mem(3.0, 43.7, 46.9)), Some(&managed));
+        assert_eq!(grows.status, CheckStatus::Info, "{}", grows.detail);
+        assert!(grows.fix_id.is_none());
+        // Little RAM free with commit to spare: says what to close, nothing to open.
+        let tight = memory_now_check(Some(&mem(2.0, 12.0, 40.0)), None);
+        assert_eq!(tight.status, CheckStatus::Warn);
+        assert!(tight.detail.contains("close browsers"), "{}", tight.detail);
+        assert!(tight.fix_id.is_none());
+        assert_eq!(memory_now_check(None, None).status, CheckStatus::Info);
+    }
+
+    #[test]
+    fn refresh_rates_against_frame_generation() {
+        // The first-session laptop: a 144 Hz panel that also offers 120 Hz, on an integrated GPU.
+        let c = refresh_rate_check(144, &[60, 120, 144], true);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("also run at 120 Hz"), "{}", c.detail);
+        assert_eq!(c.fix_id.as_deref(), Some("open_display_refresh"));
+        // Not paced to 60 (a dedicated GPU): the rate is only reported.
+        let free = refresh_rate_check(144, &[60, 120, 144], false);
+        assert_eq!(free.status, CheckStatus::Info, "{}", free.detail);
+        assert!(free.fix_id.is_none());
+        // Healthy: multiples of 60, and the 59.94 Hz and 119.88 Hz modes.
+        for hz in [60, 120, 240, 59, 119] {
+            let c = refresh_rate_check(hz, &[hz], true);
+            assert_eq!(c.status, CheckStatus::Ok, "{hz}: {}", c.detail);
+            assert!(c.fix_id.is_none());
+        }
+        // Nearest even rate; the higher one on a tie; none offered means nothing to change.
+        assert_eq!(nearest_even_rate(165, &[60, 120, 165, 180]), Some(180));
+        assert_eq!(nearest_even_rate(90, &[60, 90, 120]), Some(120));
+        assert_eq!(nearest_even_rate(144, &[48, 144]), None);
+        let none = refresh_rate_check(144, &[144], true);
+        assert_eq!(none.status, CheckStatus::Info);
+        assert!(none.fix_id.is_none());
+        assert_eq!(refresh_rate_check(0, &[], true).status, CheckStatus::Info);
+    }
+
+    #[test]
+    fn displays_on_the_integrated_gpu() {
+        let two = displays_check(Some(("Intel(R) Graphics", true)), Some(2));
+        assert_eq!(two.status, CheckStatus::Warn);
+        assert!(two.detail.starts_with("2 displays are on"), "{}", two.detail);
+        assert_eq!(two.fix_id.as_deref(), Some("open_display_settings"));
+        assert_eq!(displays_check(Some(("Intel(R) Graphics", true)), Some(1)).status, CheckStatus::Ok);
+        assert_eq!(displays_check(Some(("Intel(R) Graphics", true)), Some(0)).status, CheckStatus::Ok);
+        // A dedicated GPU is not counted; nothing found is not an alarm.
+        assert_eq!(displays_check(Some(("NVIDIA GeForce RTX 4070", false)), Some(3)).status, CheckStatus::Ok);
+        assert_eq!(displays_check(Some(("Intel(R) Graphics", true)), None).status, CheckStatus::Info);
+        assert_eq!(displays_check(None, None).status, CheckStatus::Info);
     }
 
     #[test]

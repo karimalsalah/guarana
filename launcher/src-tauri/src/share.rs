@@ -359,6 +359,7 @@ mod tests {
                 shared_mb: 16000,
                 vulkan: true,
                 arch_hint: Some("xe-lpg-plus".into()),
+                family: None,
                 vendor_id: 0x8086,
                 device_id: 0,
                 driver_date: None,

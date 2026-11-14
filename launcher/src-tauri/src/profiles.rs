@@ -57,7 +57,7 @@ const PROFILES: [ProfileDef; 5] = [
     ProfileDef {
         id: "intel-arc-igpu",
         name: "Intel Arc integrated",
-        description: "Arc 130T/140T/140V and Meteor Lake or Panther Lake Arc graphics: asynchronous shaders, aggressive VRAM use, frame generation off (Ocarina of Time's own preset handles it).",
+        description: "Arc 130T/140T/140V, Meteor Lake and Panther Lake Arc graphics, and Arrow Lake-H Intel Graphics (by PCI id): asynchronous shaders, aggressive VRAM use, frame generation off (Ocarina of Time's own preset handles it).",
         defaults: Defaults {
             frame_generation: false,
             ocarina_extrapolation: true,
@@ -256,6 +256,8 @@ pub fn recommend(sys: &SystemInfo) -> &'static str {
     let integrated = gpu.map(|g| g.is_integrated).unwrap_or(false);
     let vendor = gpu.map(|g| g.vendor).unwrap_or(Vendor::Other);
     let name = gpu.map(|g| g.name.to_ascii_lowercase()).unwrap_or_default();
+    // Arc-class iGPUs named only "Intel(R) Graphics" are known by their PCI ids.
+    let arc_class = gpu.is_some_and(|g| crate::system::intel_igpu_arc_class(g.vendor_id, g.device_id, &g.name));
     if integrated && sys.power.on_ac == Some(false) {
         return "low-power-handheld";
     }
@@ -265,7 +267,7 @@ pub fn recommend(sys: &SystemInfo) -> &'static str {
         }
     }
     match (vendor, integrated) {
-        (Vendor::Intel, true) if name.contains("arc") => "intel-arc-igpu",
+        (Vendor::Intel, true) if name.contains("arc") || arc_class => "intel-arc-igpu",
         (Vendor::Intel, true) => "low-power-handheld",
         (Vendor::Amd, true) => "amd-igpu-handheld",
         (_, false) if gpu.is_some() => "desktop-dgpu",
