@@ -563,7 +563,7 @@ private:
     MultiplayerState* multiplayer_state = nullptr;
     void RememberSpeedLimitBeforeHotkey();
     /// The "Frame target N" and "Cycle frame target" hotkeys (EDEN_NX2_FRAME_TARGET_HOTKEYS):
-    /// sets frame_gen_target_rate to `target`, or to the next preset when `target` is 0.
+    /// overrides the session target with `target`, or the next preset when `target` is 0.
     void SetFrameTargetFromHotkey(u32 target);
     void ShowHotkeyMessage(const QString& text);
     void UndoSessionSpeedChanges();

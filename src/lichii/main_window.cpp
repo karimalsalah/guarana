@@ -1542,14 +1542,18 @@ void MainWindow::InitializeHotkeys() {
     });
 
     if (Common::FrameTargetHotkeys::Enabled()) {
-        connect_shortcut(QStringLiteral("Frame target 30"),
-                         [this] { SetFrameTargetFromHotkey(30); });
-        connect_shortcut(QStringLiteral("Frame target 40"),
-                         [this] { SetFrameTargetFromHotkey(40); });
-        connect_shortcut(QStringLiteral("Frame target 60"),
-                         [this] { SetFrameTargetFromHotkey(60); });
-        connect_shortcut(QStringLiteral("Cycle frame target"),
-                         [this] { SetFrameTargetFromHotkey(0); });
+        const auto connect_frame_target = [this, &connect_shortcut](const QString& action_name,
+                                                                  u32 target) {
+            connect_shortcut(action_name, [this, target] { SetFrameTargetFromHotkey(target); });
+            // LoadHotkeys does not load the context for an empty keyboard binding. These
+            // defaults are empty, but must also work with the separate game window focused.
+            hotkey_registry.GetHotkey("Main Window", action_name.toStdString(), this)
+                ->setContext(Qt::ApplicationShortcut);
+        };
+        connect_frame_target(QStringLiteral("Frame target 30"), 30);
+        connect_frame_target(QStringLiteral("Frame target 40"), 40);
+        connect_frame_target(QStringLiteral("Frame target 60"), 60);
+        connect_frame_target(QStringLiteral("Cycle frame target"), 0);
     }
 
     connect_shortcut(QStringLiteral("Toggle Renderdoc Capture"), [] {
@@ -2636,11 +2640,11 @@ void MainWindow::SetFrameTargetFromHotkey(u32 target) {
         ShowHotkeyMessage(tr("Frame generation is off"));
         return;
     }
-    // The target is read where it is used, every frame, so it applies without a restart.
+    // Publish only the session override; configuration storage is not safe for live writes.
     const u32 next = target != 0 ? target
                                  : Common::FrameTargetHotkeys::NextPreset(
-                                       Settings::values.frame_gen_target_rate.GetValue());
-    Settings::values.frame_gen_target_rate.SetValue(next);
+                                       Settings::FrameGenTargetRate());
+    Common::FrameTargetHotkeys::SessionTarget.Set(next);
     UpdateFrameGenButton();
     ShowHotkeyMessage(tr("Frame target: %1 FPS").arg(next));
 }
@@ -2650,7 +2654,7 @@ void MainWindow::ShowHotkeyMessage(const QString& text) {
     if (guarana_toast == nullptr) {
         guarana_toast = new Guarana::Toast(this);
     }
-    guarana_toast->ShowMessage(text, 2500);
+    guarana_toast->ShowMessage(text, 2500, render_window);
     statusBar()->showMessage(text, 2500);
 }
 
@@ -2857,6 +2861,10 @@ void MainWindow::OnEmulationStopped() {
     }
 
     emulation_running = false;
+
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        Common::FrameTargetHotkeys::SessionTarget.Reset();
+    }
 
     game_list->SetReportableProgramId(report_session ? report_session->program_id : 0);
 
@@ -5859,7 +5867,7 @@ void MainWindow::UpdateFrameGenButton() {
     const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
                              ? QStringLiteral("DLSS-G")
                              : ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
-    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+    const u32 target_rate = Settings::FrameGenTargetRate();
     const QString mode = target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
                              : tr("FG %1 AUTO").arg(type);

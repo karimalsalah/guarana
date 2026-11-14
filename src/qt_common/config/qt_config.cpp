@@ -3,6 +3,7 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/frame_target_hotkeys.h"
 #include "common/logging.h"
 #include "input_common/main.h"
 #include "qt_config.h"
@@ -473,6 +474,11 @@ void QtConfig::SaveShortcutValues() {
     for (std::size_t i = 0; i < UISettings::default_hotkeys.size(); i++) {
         const auto& [name, group, shortcut] = UISettings::values.shortcuts[i];
         const auto& default_hotkey = UISettings::default_hotkeys[i].shortcut;
+
+        if (!Common::FrameTargetHotkeys::Enabled() &&
+            Common::FrameTargetHotkeys::IsHotkeyName(name)) {
+            continue;
+        }
 
         BeginGroup(group);
         BeginGroup(name);
