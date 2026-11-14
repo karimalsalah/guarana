@@ -332,7 +332,9 @@ void PerfQuery::Begin(vk::CommandBuffer cmdbuf) {
 
 void PerfQuery::End(vk::CommandBuffer cmdbuf, u64 tick) {
     std::scoped_lock lock{mutex};
+    ++end_calls;
     if (!scope_open) {
+        ++end_reject_noscope;
         return;
     }
     cmdbuf.EndQuery(*pool, next_slot);
@@ -340,6 +342,7 @@ void PerfQuery::End(vk::CommandBuffer cmdbuf, u64 tick) {
     pending_slots.push_back({next_slot, tick});
     next_slot = (next_slot + 1) % MaxSlots;
     --frames_left;
+    ++end_closed;
 }
 
 void PerfQuery::CollectLocked() {
@@ -443,11 +446,12 @@ std::string PerfQuery::Diag() const {
     const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
     return fmt::format(
         "pending={} begin_calls={} opened={} rej_noframes={} rej_collision={} "
-        "frames_left={} scope_open={} lock_held={} gpu_tick={} collect_calls={} "
-        "collect_not_ready={} last_qresult={} last_pending_tick={}",
+        "end_calls={} end_closed={} end_noscope={} frames_left={} scope_open={} lock_held={} "
+        "gpu_tick={} collect_calls={} collect_not_ready={} last_qresult={} last_pending_tick={}",
         pending_slots.size(), begin_calls, begin_opened, begin_reject_noframes,
-        begin_reject_collision, frames_left, scope_open, lock_held, gpu_tick, collect_calls,
-        collect_not_ready, last_query_result, last_pending_tick);
+        begin_reject_collision, end_calls, end_closed, end_reject_noscope, frames_left,
+        scope_open, lock_held, gpu_tick, collect_calls, collect_not_ready, last_query_result,
+        last_pending_tick);
 }
 
 void PerfQuery::ReleaseLock() {
