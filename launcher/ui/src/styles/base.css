@@ -176,10 +176,6 @@ html[data-pad-hints] .tab-hint { display: inline-flex; }
 .setup-steps { display: flex; align-items: center; gap: 10px; margin-left: 12px; color: var(--muted); font-size: var(--fs-sm); }
 .setup-steps[hidden] { display: none; }
 .steps-kicker { font-weight: 750; color: var(--text); }
-.steps-dots { display: inline-flex; gap: 6px; }
-.steps-dots i { width: 22px; height: 4px; border-radius: 4px; background: var(--border-strong); transition: background-color var(--dur-3) var(--ease-out); }
-.setup-steps[data-step="1"] .steps-dots i:nth-child(1),
-.setup-steps[data-step="2"] .steps-dots i { background: var(--ember-1); }
 
 .topbar-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 

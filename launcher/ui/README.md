@@ -76,6 +76,15 @@ src/
 | Doctor | `run_doctor`, `apply_fix`, `ask_ai` (the `install_update` fix shows its `install://progress` on the button) | `doctor://progress`, `install://progress` |
 | Report | `ask_ai`, `collect_report {kind, note}`, `open_path`, `open_url` | |
 
+Home has one ember button, Play. Below the hero come the mode card (when keys are imported), the
+library, then "This PC": the Game Booster as a folded card that shows its current level, and the
+controllers and setup cards. The share prompt, when offered, sits under the hero with a secondary
+Share button. First run is Scan and then Home in Auto mode, so the top bar says "Set up" without a
+step count; Scan's Continue unlocks once the device and the files are known, and Health finishes in
+the background. The launch stage shows the title, one status line with a spinner (launch_game sends
+no progress, so there is no bar), then the game's title followed by "is running" on black: the launcher knows the process
+started, not that the game has drawn a frame.
+
 Every listener is registered before the command that streams, and removed when its screen goes.
 Links never navigate the webview: `https://` links go through `open_url`, nothing else opens.
 
@@ -114,17 +123,20 @@ The night stages (Welcome, the game hero, Launch) stay dark in both themes.
 
 ## Motion and performance rules
 
-- Everything that loops or covers a large area animates `transform` and `opacity` only: the intro's layers, beam, embers and grain, the key art's echo arcs and glow, screen transitions, skeleton shimmer. Small one-off transitions also touch other properties (the focus halo's size, the segmented thumb's width, the progress ring's stroke, button shadows and colours), and the intro paints three small things once (the drop's path, the streak masks, the wordmark's light sweep). Bloom and grain are pre-made textures; nothing uses a live `filter: blur` or `backdrop-filter`.
+- Everything that loops or covers a large area animates `transform` and `opacity` only: the intro's layers, beam, embers and grain, the key art's echo arcs and glow, screen transitions, skeleton shimmer.
+- Nothing decorative loops while the player is only looking. The intro's stars, haze and grain run a few cycles and come to rest on their base frame while Set up waits. The hero's echo arcs pulse three times when Home opens, then rest. The launch stage's art holds still, so the spinner next to the status line is the only thing that moves while a game starts. Spinners, skeletons and progress bars run only while something is loading. Small one-off transitions also touch other properties (the focus halo's size, the segmented thumb's width, the progress ring's stroke, button shadows and colours), and the intro paints three small things once (the drop's path, the streak masks, the wordmark's light sweep). Bloom and grain are pre-made textures; nothing uses a live `filter: blur` or `backdrop-filter`.
 - One pause switch: while a game runs or the window is hidden, `html[data-paused]` stops every CSS animation and the pad loop stops; while the window is unfocused, ambient loops (`.ambient`) and pad polling stop.
 - Gamepad polling runs only with a pad connected and the window focused, and is suspended from `launch_game` until `game://exited`, so in-game presses never reach the launcher.
 - Screens are separate chunks loaded with `import()`; Home is preloaded while Scan runs; the library list and the Markdown renderer load when needed; the mock is its own chunk.
-- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title morph into the full-window launch stage, then the stage dims to black over one second as the game window takes over. The intro's logo flies into the top bar's mark when you press Set up.
+- Screen changes use the View Transitions API: slides for forward and back, a short slide for tabs, the hero card's art and title (or only the pressed library row's title) morph into the full-window launch stage, then the stage dims to black over one second as the game window takes over. The intro's logo flies into the top bar's mark when you press Set up.
 - Reduced motion (the system setting or `?motion=reduce`): the intro shows its final frame, transitions are instant, nothing loops.
 
 ## Controllers and keyboard
 
 Keyboard and pads feed one intent layer (`src/input.ts`); focus moves by geometry, and a single halo
-follows it. The halo shows for keyboard and pad use, never for the mouse.
+follows it. The halo shows for keyboard and pad use, never for the mouse. A folded card's heading
+(a `<details>` summary, such as Game Booster or Advanced) is in the focus order, and Select opens or
+closes it.
 
 | Intent | Keyboard | Xbox | PlayStation | Switch Pro | Generic |
 |---|---|---|---|---|---|

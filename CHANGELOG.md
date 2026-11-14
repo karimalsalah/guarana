@@ -22,6 +22,9 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - **Ocarina of Time's frames reach the screen on time.** On Windows integrated GPUs the screen copy now runs on a queue of its own (`EDEN_NX2_FLUID_QUEUE=5` with `EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1`) and the frame budget no longer raises the resolution into the cadence's headroom (`EDEN_NX2_BUDGET_HOLD_RES=1`), by default. In Hyrule Field on the Arc 140T, frames that reached the screen after their refresh went from about 200 per 10 s to 0, and slots shown on time from 475-491 to up to 599 of 600 with 99.5% of frames evenly paced (two paired rounds).
 
 - A borderless fullscreen Vulkan window covers the screen exactly, so it can get independent flip: no desktop composition, up to a refresh less latency. OpenGL keeps the extra row.
+- Launcher setup: Scan no longer shows "Step 1 of 2" or a profile picker, since setup ends in Auto mode and neither did anything. Continue no longer waits for the health checks; they finish in the background.
+- Launcher Home: the game and Play come first, and Play is the only orange button. The library follows, then Game Booster, controllers and setup under "This PC", with the Booster folded to one line that shows its level. In Doctor, Copy diagnostics is a secondary button, so the fix buttons stand out.
+- Launcher launch: Playing from the library carries the game's title into the launch stage. The stage shows one status line instead of a looping placeholder bar, then the game's title followed by "is running" rather than "Playing", since the launcher cannot see the game's first frame. The welcome stage stops animating after its intro, and the hero art pulses three times on arrival.
 
 ### Fixed
 

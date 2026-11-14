@@ -2,12 +2,12 @@
 // live checklist; result cards fill in as each finishes. Nothing is imported until you press Import.
 
 import { api, errorText, events } from "../api";
-import { fill, h } from "../dom";
+import { h } from "../dom";
 import { basename, dirname, gpuName, plural, prettyPath } from "../format";
 import { icon, type IconName } from "../icons";
 import { settleFocus } from "../input";
 import { go, preload, type ScreenDef } from "../router";
-import { checks, controllers, found, launcher, library, profileDraft, profiles, recommendedProfile, systemInfo } from "../state";
+import { checks, controllers, found, launcher, library, profiles, recommendedProfile, systemInfo } from "../state";
 import type { Check, Found, LauncherState, Profile, Progress, SystemInfo } from "../types";
 import { checkRow, sortChecks, summarize } from "../ui/checks";
 import { badge, busy, button, card, skeleton } from "../ui/controls";
@@ -44,7 +44,6 @@ function isSetup(): boolean {
 const screen: ScreenDef = {
   title: "Scan",
   chrome: () => (isSetup() ? "setup" : "full"),
-  step: 1,
 
   render(ctx) {
     preload("home");
@@ -86,7 +85,7 @@ const screen: ScreenDef = {
       h(
         "header",
         { class: "screen-head" },
-        h("p", { class: "eyebrow", text: setup ? "Step 1 of 2" : "Scan" }),
+        h("p", { class: "eyebrow", text: "Scan" }),
         h("h1", { text: setup ? "Getting to know your PC" : "Your PC and your files" }),
         h("p", { class: "lede", text: "A few seconds. Nothing leaves your PC, and nothing is imported until you say so." }),
       ),
@@ -99,7 +98,9 @@ const screen: ScreenDef = {
       h("div", { class: "actionbar" }, h("p", { class: "fine", text: "You can change all of this later." }), cont),
     );
 
-    let pending = 3;
+    // Continue unlocks once the device and the files are known. Health can take up to 20 s (its
+    // update check waits on GitHub), so it finishes in the background; Doctor has the full list.
+    let pending = 2;
     const settle = () => {
       pending -= 1;
       if (pending > 0) return;
@@ -117,7 +118,7 @@ const screen: ScreenDef = {
       })
       .catch((e: unknown) => {
         steps.device.set("fail", errorText(e));
-        reveal(deviceSlot, card("Your device", { icon: "laptop" }, h("p", { class: "fine", text: "Couldn't read this PC's hardware. You can still pick a profile yourself on the next step." })));
+        reveal(deviceSlot, card("Your device", { icon: "laptop" }, h("p", { class: "fine", text: "Couldn't read this PC's hardware. You can still pick a profile yourself later, from Your setup on Home." })));
       })
       .finally(settle);
 
@@ -169,8 +170,9 @@ const screen: ScreenDef = {
       return api.runDoctor();
     })()
       .then((list) => {
-        if (ctx.signal.aborted) return;
+        // Kept even if the player has moved on: Doctor lists it while its own run is going.
         checks.set(list);
+        if (ctx.signal.aborted) return;
         const s = summarize(list);
         const toFix = s.fail + s.warn;
         steps.health.set(s.fail ? "fail" : s.warn ? "warn" : "done", toFix ? `${plural(toFix, "thing", "things")} to look at, ${s.ok} good` : "All good");
@@ -179,8 +181,7 @@ const screen: ScreenDef = {
       .catch((e: unknown) => {
         steps.health.set("fail", errorText(e));
         reveal(healthSlot, card("Health", { icon: "pulse" }, h("p", { class: "fine", text: `Checks didn't finish: ${errorText(e)}` })));
-      })
-      .finally(settle);
+      });
 
     // ---- Controllers (the card itself is live; the step mirrors it)
     const padStep = () => {
@@ -216,45 +217,9 @@ function deviceCard(sys: SystemInfo, profs: Profile[]): HTMLElement {
   const power =
     sys.power.on_ac === null ? "Unknown" : sys.power.on_ac ? `Plugged in${sys.power.plan ? ` · ${sys.power.plan}` : ""}` : `On battery${sys.power.battery_percent !== null ? ` · ${sys.power.battery_percent}%` : ""}`;
 
+  // Read-only: setup ends in Auto mode, which picks the profile from this PC. A picker here changed
+  // nothing, so it is gone; Profile (from Your setup on Home) is where a profile is chosen by hand.
   const rec = recommendedProfile(profs, sys);
-  if (!profileDraft.id && rec) profileDraft.id = rec.id;
-  const pickedName = h("strong", { class: "pick-name" });
-  const pickedBadge = h("span", { class: "pick-badge" });
-  const list = h("div", { class: "pick-list", role: "group", "aria-label": "Device profile", hidden: true });
-  const change = h("button", { type: "button", class: "link-btn", "aria-expanded": "false" }, "Change", icon("chevronDown"));
-  const sync = () => {
-    const p = profs.find((x) => x.id === profileDraft.id) ?? rec;
-    pickedName.textContent = p ? p.name : "Safe defaults";
-    fill(pickedBadge, p?.recommended ? badge("Recommended", "ok", "leaf") : badge("Your pick", "accent"));
-    for (const b of Array.from(list.querySelectorAll<HTMLButtonElement>(".pick"))) b.setAttribute("aria-pressed", String(b.dataset.id === profileDraft.id));
-  };
-  for (const p of profs) {
-    list.appendChild(
-      h(
-        "button",
-        {
-          type: "button",
-          class: "pick",
-          "data-id": p.id,
-          "aria-pressed": "false",
-          onClick: () => {
-            profileDraft.id = p.id;
-            profileDraft.overrides = {};
-            sync();
-          },
-        },
-        h("span", { class: "pick-title", text: p.name }),
-        p.recommended ? h("span", { class: "pick-rec", text: "Recommended" }) : null,
-      ),
-    );
-  }
-  change.addEventListener("click", () => {
-    const open = list.hidden;
-    list.hidden = !open;
-    change.setAttribute("aria-expanded", String(open));
-    change.classList.toggle("is-open", open);
-  });
-  sync();
 
   return card(
     "Your device",
@@ -269,10 +234,14 @@ function deviceCard(sys: SystemInfo, profs: Profile[]): HTMLElement {
       spec("Display", display, "display"),
       spec("Power", power, "plug"),
     ),
-    profs.length
-      ? h("div", { class: "pick-row" }, h("span", { class: "pick-label", text: "Profile" }), pickedName, pickedBadge, h("span", { class: "grow" }), change)
+    rec
+      ? h(
+          "div",
+          { class: "pick-row" },
+          h("span", { class: "pick-label", text: "Recommended profile" }),
+          h("strong", { class: "pick-name", text: rec.name }),
+        )
       : null,
-    profs.length ? list : null,
   );
 }
 
