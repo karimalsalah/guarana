@@ -99,6 +99,10 @@ enum class TraceCategory : u8 {
     BufferUploadBatchJoin,
     BufferUploadBatchGather,
     BufferUploadBatchMixed, ///< Copies of more than one call site
+    /// Frame generation, per call (FrameGen in present/frame_gen.cpp).
+    FrameGenProcess,     ///< Once per real frame: history copies and optical flow
+    FrameGenInterpolate, ///< One in-between frame
+    FrameGenExtrapolate, ///< One frame predicted from the game's motion vectors
     Count,
 };
 
