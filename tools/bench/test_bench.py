@@ -1690,6 +1690,31 @@ class SuiteTest(RunCase):
         self.assertIn("variant vrs-2x2-trace:", output.getvalue())
         self.assertEqual((self.launches, self.host.commands), ([], []))
 
+    def test_shipped_presenter_and_locks_suite(self):
+        args, defaults = self.suite_args(os.path.join(HERE, "suites", "presenter-and-locks.json"))
+        plans, compare_to = bench.load_suite(args.suite, args, defaults)
+        self.assertEqual(len(plans), 1)
+        plan = plans[0]
+        self.assertEqual((plan.suite, plan.scene["name"]), ("presenter-and-locks", "oot-kokiri-forest"))
+        env = {variant["name"]: variant.get("env") or {} for variant in plan.variants}
+        self.assertEqual(env, {
+            "baseline": {},
+            "present-spin": {"EDEN_NX2_PRESENT_SPIN": "1"},
+            "gpl-optimize-cached": {"EDEN_NX2_GPL_OPTIMIZE_CACHED": "1"},
+            "sched-pause": {"EDEN_NX2_SCHED_PAUSE": "1"},
+            "syncpoint-split": {"EDEN_NX2_SYNCPOINT_SPLIT": "1"},
+            "hybrid": {"EDEN_NX2_HYBRID": "1"},
+            "idle-spin-0": {"EDEN_NX2_IDLE_SPIN_US": "0"}})
+        self.assertEqual(list(env)[0], "baseline")
+        self.assertTrue(all(variant["fullscreen"] and variant["pacing"] for variant in plan.variants))
+        self.assertTrue(all(compare_to[("oot-kokiri-forest", name)] == "baseline" for name in env))
+        # Every switch the suite turns on is a documented one.
+        with open(os.path.join(HERE, "..", "..", "docs", "switches.md"), encoding="utf-8") as file:
+            documented = file.read()
+        for switches in env.values():
+            for name in switches:
+                self.assertIn(f"`{name}`", documented)
+
     def write_suite(self, **fields):
         path = os.path.join(self.folder, "suites", "mine.json")
         self.write(os.path.join(self.folder, "extra.json"), json.dumps(
