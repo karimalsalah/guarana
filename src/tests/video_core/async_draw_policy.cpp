@@ -51,3 +51,25 @@ TEST_CASE("Legacy pending draws retain the async heuristic", "[video_core][async
     REQUIRE_FALSE(Vulkan::CanDiscardPendingDraw(false, false, 100, 6));
     REQUIRE_FALSE(Vulkan::CanDiscardPendingDraw(false, false, 0, 0));
 }
+
+TEST_CASE("A draw is dropped before any build only when it would be skipped without a wait",
+          "[video_core][async_draw]") {
+    using Vulkan::MaySkipUnbuiltDraw;
+    using Vulkan::NativePendingMode;
+    for (const auto mode : {NativePendingMode::Wait, NativePendingMode::Bounded,
+                            NativePendingMode::Skip}) {
+        for (const s64 budget : {8000, 0, -500}) {
+            // A draw that is not native follows the heuristic alone.
+            REQUIRE(MaySkipUnbuiltDraw(false, mode, true, budget));
+            REQUIRE_FALSE(MaySkipUnbuiltDraw(false, mode, false, budget));
+            // The heuristic keeps a native draw whatever the mode is.
+            REQUIRE_FALSE(MaySkipUnbuiltDraw(true, mode, false, budget));
+        }
+    }
+    REQUIRE_FALSE(MaySkipUnbuiltDraw(true, NativePendingMode::Wait, true, 0));
+    REQUIRE(MaySkipUnbuiltDraw(true, NativePendingMode::Skip, true, 8000));
+    // Bounded waits while the frame's budget lasts.
+    REQUIRE_FALSE(MaySkipUnbuiltDraw(true, NativePendingMode::Bounded, true, 8000));
+    REQUIRE(MaySkipUnbuiltDraw(true, NativePendingMode::Bounded, true, 0));
+    REQUIRE(MaySkipUnbuiltDraw(true, NativePendingMode::Bounded, true, -500));
+}

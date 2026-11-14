@@ -56,4 +56,19 @@ constexpr NativeDrawAction DecideNativePending(NativePendingMode mode, bool can_
     return NativeDrawAction::WaitTimed;
 }
 
+/// Whether a draw may be dropped at once because its pipeline is not even translated yet, so that
+/// nothing is built or waited for on the calling thread. A native draw follows the native pending
+/// mode: only an outcome of Skip drops it (Bounded with budget left waits for the build).
+/// @param native         The draw comes from a Switch 2 (native Turing macro) program.
+/// @param mode           The native pending mode.
+/// @param can_discard    The legacy heuristic allows skipping this draw.
+/// @param budget_left_us Microseconds left of this frame's wait budget.
+constexpr bool MaySkipUnbuiltDraw(bool native, NativePendingMode mode, bool can_discard,
+                                  s64 budget_left_us) {
+    if (native) {
+        return DecideNativePending(mode, can_discard, budget_left_us) == NativeDrawAction::Skip;
+    }
+    return can_discard;
+}
+
 } // namespace Vulkan

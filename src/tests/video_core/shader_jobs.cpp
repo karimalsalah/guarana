@@ -861,6 +861,80 @@ TEST_CASE("A prebuild reports what became of its builds once all have ended",
     REQUIRE(prebuild.Finished()->unclaimed == 0);
 }
 
+TEST_CASE("A try-take never builds or waits for a queued prebuild", "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate gate;
+    const auto blocker = Block(scheduler, gate);
+    std::atomic<int> builds{};
+    std::atomic<int> translations{};
+    TestPrebuild prebuild{scheduler};
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] {
+        ++translations;
+        return std::make_unique<TestPipeline>(builds);
+    }));
+
+    // The only CPU worker is held: nothing ran on the looking thread, and the entry stays.
+    bool pending = false;
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+    REQUIRE(translations == 0);
+    REQUIRE(builds == 0);
+
+    gate.Open();
+    scheduler.RunOrWait(blocker);
+    prebuild.Batch().Wait();
+    const auto pipeline = prebuild.TryTake(1, pending);
+    REQUIRE(pipeline != nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(translations == 1);
+    REQUIRE(builds == 1);
+
+    // Taken once
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+}
+
+TEST_CASE("A try-take gives nothing for a key without a build and drops the ended ones",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    bool pending = true;
+    REQUIRE(prebuild.TryTake(7, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+
+    // One that fails to build, and one that doesn't translate
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds, true); }));
+    REQUIRE(prebuild.Add(2, 0, 0, 0, [] { return std::unique_ptr<TestPipeline>{}; }));
+    prebuild.Batch().Wait();
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+    REQUIRE(prebuild.TryTake(2, pending) == nullptr);
+    REQUIRE_FALSE(pending);
+    // Their entries are gone, so the keys can be added again
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    REQUIRE(prebuild.Add(2, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+}
+
+TEST_CASE("A take after a pending try-take builds the prebuild once", "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate gate;
+    const auto blocker = Block(scheduler, gate);
+    std::atomic<int> builds{};
+    TestPrebuild prebuild{scheduler};
+    REQUIRE(prebuild.Add(1, 0, 0, 0, [&] { return std::make_unique<TestPipeline>(builds); }));
+    bool pending = false;
+    REQUIRE(prebuild.TryTake(1, pending) == nullptr);
+    REQUIRE(pending);
+
+    REQUIRE(prebuild.Take(1) != nullptr);
+    REQUIRE(builds == 1);
+    gate.Open();
+    scheduler.RunOrWait(blocker);
+}
+
 TEST_CASE("A cancelled prebuild leaves the scheduler usable", "[video_core][shader_jobs]") {
     ShaderJobScheduler scheduler{Config(1, 1)};
     Gate gate;

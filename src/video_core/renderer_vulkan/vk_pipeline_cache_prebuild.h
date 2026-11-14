@@ -150,6 +150,30 @@ public:
         return std::move(entry->pipeline);
     }
 
+    /// Like Take, but never builds or waits. Returns the pipeline once the job of `key` has ended.
+    /// A job still queued or building is raised to NeedNow and its entry stays: `pending` is set
+    /// and null returned. Null with `pending` false: no entry, or its build gave nothing.
+    std::unique_ptr<Pipeline> TryTake(const Key& key, bool& pending) {
+        pending = false;
+        std::shared_ptr<Entry> entry;
+        {
+            std::scoped_lock lock{mutex};
+            const auto it = entries.find(key);
+            if (it == entries.end()) {
+                return nullptr;
+            }
+            entry = it->second;
+        }
+        if (!entry->job.Ready()) {
+            jobs.Promote(entry->job, VideoCommon::ShaderJobPriority::NeedNow);
+            pending = true;
+            return nullptr;
+        }
+        std::scoped_lock lock{mutex};
+        entries.erase(key);
+        return std::move(entry->pipeline);
+    }
+
     /// Calls `done` once every build added so far was translated, on the thread that translated
     /// the last one, or now when none is left. Never once Stop() returned.
     void AfterTranslations(Common::UniqueFunction<void> done) {

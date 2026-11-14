@@ -162,6 +162,10 @@ private:
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
 
+    /// Whether the current draw may be skipped for a pipeline that is not translated yet, without
+    /// waiting for any build (EDEN_NX2_PREBUILD_NO_INLINE).
+    [[nodiscard]] bool MaySkipPendingDraw() const noexcept;
+
     /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
     /// pointers whatever they hold now. `evicted`: a pipeline of this key was evicted.
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
