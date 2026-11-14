@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -86,6 +87,37 @@ public:
 
     const std::filesystem::path original;
     const std::filesystem::path path;
+};
+
+/// Sets an environment variable for one scope. A null value, or an empty one on Windows, where
+/// _putenv_s with "" removes the variable, leaves it unset.
+class ScopedEnv {
+public:
+    ScopedEnv(const char* variable, const char* value) : name{variable} {
+        Set(value);
+    }
+
+    ~ScopedEnv() {
+        Set(nullptr);
+    }
+
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+    void Set(const char* value) const {
+#ifdef _WIN32
+        _putenv_s(name, value != nullptr ? value : "");
+#else
+        if (value != nullptr) {
+            setenv(name, value, 1);
+        } else {
+            unsetenv(name);
+        }
+#endif
+    }
+
+    const char* name;
 };
 
 void CheckFreshProfile() {
@@ -189,6 +221,56 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
     CheckFreshProfile();
     reopened.Reload();
     CheckFreshProfile();
+}
+
+TEST_CASE("EDEN_NX2_SEED_FILTER keeps the scaling filter out of the first-run seed",
+          "[config]") {
+    ConfigDirectory directory;
+    const char* value = nullptr;
+    bool filter_seeded = true;
+    SECTION("unset") {}
+    SECTION("empty") {
+        value = "";
+    }
+    SECTION("zero") {
+        value = "0";
+    }
+    SECTION("false") {
+        value = "false";
+    }
+    SECTION("one") {
+        value = "1";
+        filter_seeded = false;
+    }
+    SECTION("another number") {
+        value = "2";
+        filter_seeded = false;
+    }
+    const ScopedEnv environment{"EDEN_NX2_SEED_FILTER", value};
+    FileConfig config{std::string{"qt-config"}};
+
+    const auto& values = Settings::values;
+    CHECK(values.scaling_filter.GetValue() ==
+          (filter_seeded ? Settings::ScalingFilter::Fsr3 : Settings::ScalingFilter::ScaleForce));
+    // The other four seeds are the same with the switch on or off.
+    CHECK(values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low);
+    CHECK(values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu);
+    CHECK(values.async_presentation.GetValue());
+    CHECK(values.use_asynchronous_shaders.GetValue());
+
+    CSimpleIniA saved;
+    std::ifstream file{std::filesystem::path{Common::FS::ToU8String(config.GetConfigFilePath())}};
+    REQUIRE(file.is_open());
+    const std::string contents{std::istreambuf_iterator<char>{file},
+                               std::istreambuf_iterator<char>{}};
+    REQUIRE(saved.LoadData(contents) >= 0);
+    // A seeded key is written with \default=false, which a game preset reads as the player's
+    // choice; an unseeded one is absent or still at its default.
+    CHECK(saved.GetBoolValue("Renderer", "scaling_filter\\default", true) == !filter_seeded);
+    for (const char* key : {"gpu_accuracy", "nvdec_emulation", "async_presentation",
+                            "use_asynchronous_shaders"}) {
+        CHECK_FALSE(saved.GetBoolValue("Renderer", (std::string{key} + "\\default").c_str(), true));
+    }
 }
 
 TEST_CASE("Existing explicit settings survive load save and reopen", "[config]") {
