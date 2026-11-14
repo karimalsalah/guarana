@@ -23,7 +23,7 @@ jobs:
       issues: write
     steps:
       - name: Check out the script
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           sparse-checkout: tools/ingest
