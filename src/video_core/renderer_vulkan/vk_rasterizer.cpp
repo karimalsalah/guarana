@@ -1201,7 +1201,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         const u64 vs = (u64{regs.pipelines[1].reserved[0] & 0xff} << 32) | regs.pipelines[1].reserved[1];
         const u64 ps = (u64{regs.pipelines[5].reserved[0] & 0xff} << 32) | regs.pipelines[5].reserved[1];
         // Say why, and keep the expected asynchronous-shader skips from using up the line budget.
-        const std::string_view miss = reason == "no pipeline" ? diag_outcome : reason;
+        const std::string_view miss = reason;
         const bool async_miss = miss == "async-build";
         if ((async_miss ? async_logged < 8 : seen.size() < 64) && seen.emplace(vs, ps, miss).second) {
             async_logged += async_miss ? 1 : 0;
