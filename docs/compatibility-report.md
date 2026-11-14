@@ -1,6 +1,8 @@
 # Opt-in desktop compatibility reports
 
-After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Guarana process. Starting another game clears that session, and closing Guarana discards it. This feature does not store play history.
+**In Guarana this dialog is not reachable.** It posts public reports to upstream Lichii's site (`CompatibilityReporting::Site`, lichii.zortos.me), which is a different project. Guarana's game-list entry is **Report a problem with this game…**: it opens Help > Report a problem with that game's session, which writes a zip of the logs and opens a GitHub issue form on karimalsalah/guarana, and sends nothing itself. The dialog code below stays as upstream has it, so upstream changes merge cleanly. `tools/ci/tests/test_report_destination.py` checks the wiring.
+
+The rest of this page describes upstream's dialog. After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Guarana process. Starting another game clears that session, and closing Guarana discards it. This feature does not store play history.
 
 Search the website catalog, select the exact game, and press **Confirm game**. Search is explicit and supports catalog pages. A Nintendo title ID is never used as a catalog ID. The search box uses control metadata or the loader's known title, including NUP package titles. Missing title metadata leaves the search blank rather than using a filename.
 

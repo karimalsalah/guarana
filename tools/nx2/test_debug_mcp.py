@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -68,6 +69,11 @@ class FakeEmulator:
             return {"error": "GPU address 0x5000 is not mapped"}
         if method in ("input", "input_sequence"):
             return {"result": {"controller": "player1", "frames": 3}}
+        if method == "speed_limit":
+            on = request["params"].get("on", True)
+            return {"result": {"previous": True, "on": on}}
+        if method == "autopilot":
+            return {"result": {"running": False, "windows": 0}}
         return {"error": f"unknown method \"{method}\""}
 
     def serve(self):
@@ -122,13 +128,47 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(names, ["status", "frame_times", "screenshot", "shown_frames", "log_tail",
                                  "log_filter", "capture_frame",
                                  "capture_image", "capture_bundle", "reject_shaders", "set_shading_rate",
-                                 "set_prepass", "sample", "read_memory",
+                                 "set_prepass", "sample", "speed_limit", "read_memory",
                                  "search_memory", "read_gpu_memory", "input",
                                  "input_sequence", "host_timing", "power", "power_set",
-                                 "gpu_costs", "frame_budget", "memory", "trace_record",
+                                 "gpu_costs", "frame_budget", "autopilot", "memory", "trace_record",
                                  "trace_stop", "trace_status", "thread_stats", "present_stats",
                                  "cache_stats", "boot_timing"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)
+
+    def test_every_server_method_is_offered(self):
+        # The emulator's methods are the keys of MakeHandlers; the adapter must offer each one,
+        # or --call and MCP refuse a documented method before it reaches the emulator.
+        source = os.path.join(HERE, "..", "..", "src", "core", "debugger", "nx2_debug_tools.cpp")
+        if not os.path.isfile(source):
+            self.skipTest("emulator source not checked out")
+        with open(source, encoding="utf-8") as file:
+            handlers = file.read().partition("Handlers MakeHandlers(")[2]
+        server = set(re.findall(r'\{"(\w+)", (?:handler|waiting)\(', handlers))
+        self.assertGreater(len(server), 20)
+        self.assertEqual(server, debug_mcp.TOOL_NAMES - {"capture_image"})
+
+    def test_speed_limit_and_autopilot_are_forwarded(self):
+        result = self.call("speed_limit", {"on": False})
+        self.assertFalse(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), {"previous": True, "on": False})
+        self.assertEqual(self.fake.requests[-1]["method"], "speed_limit")
+        self.assertEqual(self.fake.requests[-1]["params"], {"on": False})
+        result = self.call("autopilot")
+        self.assertFalse(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"])["running"], False)
+        self.assertEqual(self.fake.requests[-1]["method"], "autopilot")
+
+    def test_call_once_reaches_speed_limit(self):
+        # docs/nx2/debug-mcp.md: speed_limit is used through --call.
+        stdout = io.StringIO()
+        code = debug_mcp.call_once(self.adapter, '{"method":"speed_limit","params":{"on":false}}',
+                                   None, stdout)
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(json.loads(stdout.getvalue()), {"previous": True, "on": False})
+        self.assertEqual(self.fake.requests[-1], {"id": self.fake.requests[-1]["id"],
+                                                  "method": "speed_limit",
+                                                  "params": {"on": False}})
 
     def test_frame_times_is_forwarded(self):
         arguments = {"seconds": 0.5, "refresh_hz": 59.94}

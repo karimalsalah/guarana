@@ -621,7 +621,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     }
     QAction* properties = context_menu.addAction(tr("Configure Game"));
     if (program_id != 0 && program_id == reportable_program_id) {
-        auto* report = context_menu.addAction(tr("Submit compatibility report…"));
+        auto* report = context_menu.addAction(tr("Report a problem with this game…"));
         connect(report, &QAction::triggered, this,
                 [this, program_id] { emit ReportCompatibilityRequested(program_id); });
     }

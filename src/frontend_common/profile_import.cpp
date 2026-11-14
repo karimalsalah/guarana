@@ -11,6 +11,7 @@
 #define SI_NO_CONVERSION 1
 #endif
 #include <SimpleIni.h>
+#include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "common/fs/profile_migration.h"
 #include "frontend_common/profile_import.h"
@@ -37,6 +38,15 @@ bool NeedsLegacyProfileImport() {
         return true;
     }
     if (state != Migration::State::Unresolved) {
+        return false;
+    }
+    // Lichii and fork builds before the rename kept the answer in "lichii.migration", and the
+    // rename copy (data_dir_migration.h) takes only the data folder. Keep reading the old answer
+    // so a user who imported or started fresh there is not asked again.
+    const auto& root = GetEdenPath(EdenPath::EdenDir);
+    const auto pre_rename = Migration::GetState(root.parent_path() /
+                                                (std::string{PRE_GUARANA_DIR} + ".migration"));
+    if (pre_rename == Migration::State::Complete || pre_rename == Migration::State::Fresh) {
         return false;
     }
     constexpr std::array sources{LegacyEdenDir, CitronDir, SudachiDir, SuyuDir, YuzuDir};
