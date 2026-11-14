@@ -38,6 +38,8 @@ interface Scenario {
   session: number;
   speed: number;
   boot: "session" | "old" | "none";
+  /** `?mock=contaminated`: the settings-hygiene rows of the doctor find something (issue #125). */
+  contaminated: boolean;
 }
 
 const HOME = "C:\\Users\\Player";
@@ -66,8 +68,9 @@ function readScenario(): Scenario {
     session: 7,
     speed: 1,
     boot: "session",
+    contaminated: name === "contaminated",
   };
-  if (name === "ready" || name === "no-oot" || name === "failure") {
+  if (name === "ready" || name === "no-oot" || name === "failure" || name === "contaminated") {
     Object.assign(base, { firstRun: false, keys: true, keysOnDisk: "quick", firmware: true, library: true });
   }
   if (name === "no-oot") Object.assign(base, { oot: false, update: false });
@@ -462,6 +465,19 @@ export function createMockBackend(): Backend {
       shaderTmp
         ? { id: "shader_tmp", title: "Shader cache temp files", status: "warn", detail: "14 leftover temp files (38 MB) from an earlier crash.", fix_id: "delete_shader_tmp", fix_label: "Delete temp files" }
         : ok("shader_tmp", "Shader cache temp files", "No leftover temp files."),
+      // Settings hygiene (issue #125): these rows only report, so none has a fix.
+      sc.contaminated
+        ? { id: "switch_file", title: "Switch file", status: "warn", detail: "The launcher's block in nx2_switches.txt is not what this launcher writes for your saved settings: EDEN_NX2_EXTRAPOLATE=1 (this launcher leaves it out). It comes from an older launcher: with an Intel integrated GPU, EDEN_NX2_EXTRAPOLATE=1 turns off the measured 120 and 144 Hz sets of Ocarina of Time (at 144 Hz, 58.5 frames shown a second instead of 91.5; issue #119). The launcher rewrites its block each time you start a game from it, so start your next game from the launcher; starting guarana.exe from its own shortcut keeps the old block until then. The launcher's block sets EDEN_NX2_FLUID=1 (Even frame pacing). Ocarina of Time has a measured value of its own, EDEN_NX2_FLUID=2, but a line in nx2_switches.txt wins over it, so Ocarina runs with 1. Nothing to do for now: a coming update lets the game's measured value win (issue #125). Turning Even frame pacing off under Home > Advanced gives Ocarina its own value but takes even pacing from your other games.", fix_id: null, fix_label: null }
+        : ok("switch_file", "Switch file", "nx2_switches.txt reads as Guarana expects, the launcher's block is what this launcher writes, and no EDEN_NX2_ variable is set in Windows."),
+      sc.contaminated
+        ? { id: "settings_file", title: "Settings", status: "warn", detail: "qt-config.ini turns off \"Use persistent pipeline cache\" (use_disk_shader_cache=false): every start of a game compiles its shaders from nothing, and Prepare shaders has nothing to fill. Turn it back on in Guarana's Configure window, unless you turned it off on purpose to work around a driver problem.", fix_id: null, fix_label: null }
+        : ok("settings_file", "Settings", "The shader cache settings are on, and the launcher's saved settings are all ones it knows."),
+      sc.contaminated
+        ? { id: "cache_files", title: "Shader cache files", status: "warn", detail: `Prepare shaders marked ${OOT_ID} as done, but the GPU driver's pipeline cache file (vulkan_pipelines.fork-v*.bin) is missing or empty, so the shaders it lists are not there and the first play compiles them (issue #106). Run Prepare shaders on the game card again to have them ready before you play.`, fix_id: null, fix_label: null }
+        : ok("cache_files", "Shader cache files", "No shader cache marker or leftover needs attention. The installed Guarana does not say which cache format it writes (it has no build-facts.json), so the formats are not compared."),
+      sc.contaminated
+        ? { id: "user_folder", title: "Settings folder", status: "warn", detail: "Your Lichii settings may not have been carried over to Guarana (issue #107): %APPDATA%\\lichii\\config\\qt-config.ini has 14 setting(s) changed from their defaults and Guarana's own qt-config.ini has none. Guarana copies the lichii folder only on a start when no guarana folder exists yet, and never again after that. Nothing was changed: a coming launcher update offers to copy the settings over (never the folders where saves are kept). Until then, set them again in Guarana. %APPDATA%\\lichii also has a nand or sdmc folder, where Lichii kept saves; this check does not look inside them.", fix_id: null, fix_label: null }
+        : ok("user_folder", "Settings folder", "Nothing was left behind in %APPDATA%\\lichii."),
       state.keys_present
         ? ok("keys", "Keys", "prod.keys is in Guarana's keys folder.")
         : { id: "keys", title: "Keys", status: "fail", detail: "No prod.keys yet. Dump it from your console, then import it under Your files.", fix_id: null, fix_label: null },

@@ -463,12 +463,26 @@ fn outputs(values: &BTreeMap<String, ToggleValue>, gpus: &[Gpu]) -> Outputs {
 /// (`Config::SetUpIni`, `new_global_config`): it skips that once the file exists, so a file the
 /// launcher creates first carries the same values. ScalingFilter::Fsr3 = 15,
 /// GpuAccuracy::Low = 0, NvdecEmulation::Gpu = 2.
-const FIRST_RUN_SEEDS: [(&str, &str); 5] = [
+pub(crate) const FIRST_RUN_SEEDS: [(&str, &str); 5] = [
     ("scaling_filter", "15"),
     ("gpu_accuracy", "0"),
     ("nvdec_emulation", "2"),
     ("async_presentation", "true"),
     ("use_asynchronous_shaders", "true"),
+];
+
+/// Every `[Renderer]` key `outputs` can write. The doctor's `user_folder` row counts them, like the
+/// first-run seeds, as not chosen by the player (`hygiene::chosen_settings`).
+pub(crate) const LAUNCHER_INI_KEYS: [&str; 9] = [
+    "hdr_mode",
+    "hdr_swapchain",
+    "frame_gen",
+    "frame_gen_multiplier",
+    "frame_gen_target_rate",
+    "use_asynchronous_shaders",
+    "vram_usage_mode",
+    "resolution_setup",
+    "fps_limit",
 ];
 
 /// Replaces (or appends) the managed block. Never removes a line outside it.
@@ -660,6 +674,14 @@ pub fn is_known(id: &str) -> bool {
     find(id).is_some()
 }
 
+/// The switches this launcher puts in its block for this profile and these overrides on a machine
+/// with these GPUs, without writing anything: the doctor compares them with the file
+/// (`hygiene::stale_block`). Fails, as `apply` does, on an unknown profile or override.
+pub fn block_switches(profile_id: &str, overrides: &BTreeMap<String, ToggleValue>, gpus: &[Gpu]) -> util::CmdResult<Vec<(String, String)>> {
+    let def = find(profile_id).ok_or_else(|| format!("Unknown profile {profile_id}"))?;
+    Ok(outputs(&profile_values(def, overrides)?, gpus).switches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +730,30 @@ mod tests {
         assert!(out.switches.contains(&("EDEN_NX2_EXTRAPOLATE".into(), "1".into())));
         assert!(out.switches.contains(&("EDEN_NX2_GM".into(), "11".into())));
         assert!(out.switches.contains(&("EDEN_NX2_POWER_POLICY".into(), "igpu".into())));
+    }
+
+    #[test]
+    fn launcher_ini_keys_list_every_key_outputs_writes() {
+        for def in &PROFILES {
+            let mut values = profile_values(def, &BTreeMap::new()).unwrap();
+            values.insert("frame_generation".to_string(), ToggleValue::Bool(true));
+            values.insert("hdr_auto".to_string(), ToggleValue::Bool(true));
+            for w in outputs(&values, &[]).ini {
+                assert!(LAUNCHER_INI_KEYS.contains(&w.key), "{} in {}", w.key, def.id);
+            }
+        }
+    }
+
+    #[test]
+    fn block_switches_are_what_the_block_gets() {
+        let intel = block_switches("intel-arc-igpu", &BTreeMap::new(), &[ptl()]).unwrap();
+        assert_eq!(intel, vec![("EDEN_NX2_FLUID".to_string(), "1".to_string())]);
+        let dgpu = block_switches("intel-arc-igpu", &BTreeMap::new(), &[rtx()]).unwrap();
+        assert!(dgpu.contains(&(EXTRAPOLATE.to_string(), "1".to_string())));
+        assert!(block_switches("no-such-profile", &BTreeMap::new(), &[]).is_err());
+        let mut unknown = BTreeMap::new();
+        unknown.insert("from_a_newer_launcher".to_string(), ToggleValue::Bool(true));
+        assert!(block_switches("intel-arc-igpu", &unknown, &[]).is_err());
     }
 
     #[test]

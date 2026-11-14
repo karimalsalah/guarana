@@ -16,6 +16,7 @@ mod community;
 mod controllers;
 mod credits;
 mod doctor;
+mod hygiene;
 mod ini;
 mod install;
 mod keys;

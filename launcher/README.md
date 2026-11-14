@@ -44,7 +44,9 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   turn them on under Home → Advanced, Windows notifications say when shaders are ready or an update
   is installed. See [Windows integration](#windows-integration).
 - **Doctor**: driver, Vulkan, Visual C++ runtime, AVX2, memory and page file, disk, power, HDR,
-  controllers, keys, firmware, games, updates. Fixes open the official Windows or vendor page, or
+  controllers, keys, firmware, games, updates, and Guarana's own settings (the switch file, the
+  shader cache settings, the shader cache files, and settings left behind in `%APPDATA%\lichii`;
+  these only report, and never look at keys, firmware, saves or games). Fixes open the official Windows or vendor page, or
   act inside Guarana's own folders (deleting stale shader-cache temp files, installing an update).
 - **Report a problem**: zips the emulator's logs, the launcher's log and the system details with
   your user name, profile folder and PC name removed, and opens a prefilled GitHub issue you review
