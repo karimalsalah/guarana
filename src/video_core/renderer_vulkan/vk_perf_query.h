@@ -60,7 +60,7 @@ public:
     std::vector<Sample> Read();
 
     /// The scheduler's timeline, to know when a sampled submission finished on the GPU.
-    void SetSemaphore(const MasterSemaphore& semaphore_);
+    void SetSemaphore(MasterSemaphore& semaphore_);
     /// Submissions whose counters were collected since the window started.
     [[nodiscard]] u64 FramesSampled() const;
 
@@ -81,7 +81,7 @@ private:
     void CollectLocked();
 
     const Device& device;
-    const MasterSemaphore* semaphore{};
+    MasterSemaphore* semaphore{};
     PFN_vkAcquireProfilingLockKHR vkAcquireProfilingLockKHR{};
     PFN_vkReleaseProfilingLockKHR vkReleaseProfilingLockKHR{};
 

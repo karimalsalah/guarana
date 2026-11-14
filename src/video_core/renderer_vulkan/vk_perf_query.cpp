@@ -378,7 +378,7 @@ std::vector<PerfQuery::Sample> PerfQuery::Read() {
     return samples;
 }
 
-void PerfQuery::SetSemaphore(const MasterSemaphore& semaphore_) {
+void PerfQuery::SetSemaphore(MasterSemaphore& semaphore_) {
     semaphore = &semaphore_;
 }
 
