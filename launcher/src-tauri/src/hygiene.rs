@@ -239,7 +239,9 @@ fn misread_lines(text: &str, registry: Option<&BTreeMap<String, String>>) -> Vec
     let mut out = Vec::new();
     let lines = switch_lines(text);
     if text.starts_with('\u{feff}') {
-        match lines.first().filter(|l| l.number == 1) {
+        // A comment line holding an `=` is read as a name too, but no switch is lost there.
+        let first = lines.first().filter(|l| l.number == 1 && !l.name.trim_start_matches('\u{feff}').starts_with('#'));
+        match first {
             Some(l) => out.push(finding(
                 "C3",
                 CheckStatus::Warn,
@@ -261,16 +263,32 @@ fn misread_lines(text: &str, registry: Option<&BTreeMap<String, String>>) -> Vec
         }
         let Some(at) = note_start(l.value) else { continue };
         let head = l.value[..at].trim_end_matches(is_blank);
-        let flagged = match registry.and_then(|r| r.get(l.name)) {
+        let kind = registry.and_then(|r| r.get(l.name)).map(String::as_str);
+        let flagged = match kind {
             Some(kind) => kind == "number" || kind == "word",
             None => plain_word(head),
         };
-        if flagged {
+        if !flagged {
+            continue;
+        }
+        // Number switches are read with `strtoul`/`strtod`, which stop at the blank: `1 # note`
+        // still gives 1. A word is compared whole (`POWER_POLICY=igpu # x` is not `igpu`).
+        let number = kind.map_or_else(|| head.parse::<f64>().is_ok() && head.bytes().any(|b| b.is_ascii_digit()), |k| k == "number");
+        if number {
+            out.push(finding(
+                "C3",
+                CheckStatus::Info,
+                format!(
+                    "nx2_switches.txt line {}: \"{}\". Guarana takes everything after the = as the value, the note too, so it reads \"{}\". A switch that reads a number stops at the blank and still gets {head}, but one that compares the whole text does not match it. Put the note on a line of its own that starts with #.",
+                    l.number, l.raw, l.value
+                ),
+            ));
+        } else {
             out.push(finding(
                 "C3",
                 CheckStatus::Warn,
                 format!(
-                    "nx2_switches.txt line {}: \"{}\". Guarana takes everything after the = as the value, the note too, so it reads \"{}\" and the switch does nothing. Put the note on a line of its own that starts with #.",
+                    "nx2_switches.txt line {}: \"{}\". Guarana takes everything after the = as the value, the note too, so it reads \"{}\", which is not \"{head}\", and the switch does nothing. Put the note on a line of its own that starts with #.",
                     l.number, l.raw, l.value
                 ),
             ));
@@ -465,11 +483,17 @@ fn cache_keys_finding(file: &str, per_game: bool, keys: &[&str]) -> Option<Findi
         }
     }
     let where_ = if per_game { "in the game's Properties" } else { "in Guarana's Configure window" };
+    let (turns, it) = match (per_game, parts.len() > 1) {
+        (true, true) => ("turn", "them"),
+        (true, false) => ("turn", "it"),
+        (false, true) => ("turns", "them"),
+        (false, false) => ("turns", "it"),
+    };
     Some(finding(
         "C11",
         CheckStatus::Warn,
         format!(
-            "{file} turns off {}. Turn it back on {where_}, unless you turned it off on purpose to work around a driver problem.",
+            "{file} {turns} off {}. Turn {it} back on {where_}, unless you turned {it} off on purpose to work around a driver problem.",
             parts.join("; ")
         ),
     ))
@@ -508,7 +532,7 @@ pub fn settings_file(i: &SettingsInput) -> Vec<Finding> {
         out.extend(cache_keys_finding("qt-config.ini", false, &cache_keys_off(text, false)));
     }
     for (name, text) in i.per_game {
-        out.extend(cache_keys_finding(&format!("The settings of one game (config\\custom\\{name})"), true, &cache_keys_off(text, true)));
+        out.extend(cache_keys_finding(&format!("One game's own settings (config\\custom\\{name})"), true, &cache_keys_off(text, true)));
     }
     if let Some(known) = i.known_toggles {
         out.extend(unknown_overrides(i.overrides, known));
@@ -645,7 +669,7 @@ pub fn cache_files(titles: &[TitleCache], installed_format: Option<u32>, gpus: &
             "C16",
             CheckStatus::Info,
             format!(
-                "{} file(s) of a cache migration that was cut short ({}): {}. They hold nothing the cache log lacks; with Guarana closed you can delete them to free the space.",
+                "{} file(s) of a cache migration that was cut short ({}): {}. Each was being written from a cache file that is still there, so deleting it loses nothing; with Guarana closed you can delete them to free the space.",
                 leftovers.len(),
                 util::human_bytes(leftover_bytes),
                 leftovers.join(", ")
@@ -718,7 +742,8 @@ pub fn user_folder(i: &UserFolderInput) -> Vec<Finding> {
     }
     let their_switches = i.lichii_switches.map(own_switch_lines).unwrap_or(0);
     let our_switches = i.guarana_switches.map(own_switch_lines).unwrap_or(0);
-    if their_switches > 0 && our_switches == 0 {
+    let switches_missing = their_switches > 0 && our_switches == 0;
+    if switches_missing {
         missing.push(format!(
             "%APPDATA%\\lichii\\nx2_switches.txt has {their_switches} switch line(s) of yours and Guarana's own has none"
         ));
@@ -727,9 +752,12 @@ pub fn user_folder(i: &UserFolderInput) -> Vec<Finding> {
         return Vec::new();
     }
     let mut text = format!(
-        "Your Lichii settings were not carried over to Guarana (issue #107): {}. Guarana copies the lichii folder only on a start when no guarana folder exists yet, so this copy did not happen. Nothing was changed: a coming launcher update offers to copy the settings over (never the folders where saves are kept). Until then, set them again in Guarana; with Guarana closed, you can copy nx2_switches.txt over yourself.",
+        "Your Lichii settings may not have been carried over to Guarana (issue #107): {}. Guarana copies the lichii folder only on a start when no guarana folder exists yet, and never again after that. Nothing was changed: a coming launcher update offers to copy the settings over (never the folders where saves are kept). Until then, set them again in Guarana.",
         missing.join(", and ")
     );
+    if switches_missing {
+        text.push_str(" With Guarana closed, you can copy your own lines from lichii's nx2_switches.txt into Guarana's, outside the launcher's block.");
+    }
     if i.lichii_has_save_folders {
         text.push_str(" %APPDATA%\\lichii also has a nand or sdmc folder, where Lichii kept saves; this check does not look inside them.");
     }
@@ -940,7 +968,9 @@ pub fn cache_files_now(sys: &SystemInfo) -> (Vec<Finding>, Option<u32>) {
 pub fn user_folder_now() -> Vec<Finding> {
     let roaming = paths::roaming_appdata();
     let (guarana, lichii) = (roaming.join("guarana"), roaming.join("lichii"));
-    if !lichii.is_dir() {
+    // An installed build from before the rename reads lichii itself (`paths::user_data_dir`):
+    // nothing was left behind then.
+    if !lichii.is_dir() || paths::user_data_dir() != guarana {
         return Vec::new();
     }
     let lichii_config = read_text(&lichii.join("config").join("qt-config.ini"), &lichii);
@@ -1070,6 +1100,10 @@ mod tests {
         let comment = misread_lines("\u{feff}# my switches\r\nEDEN_NX2_GM=11\r\n", None);
         assert_eq!(rules(&comment), ["C3"]);
         assert_eq!(comment[0].status, CheckStatus::Info);
+        // A comment that holds an = is not a switch either.
+        let example = misread_lines("\u{feff}# e.g. EDEN_NX2_GM=11\r\nEDEN_NX2_GM=11\r\n", None);
+        assert_eq!(rules(&example), ["C3"]);
+        assert_eq!(example[0].status, CheckStatus::Info);
         assert!(misread_lines("EDEN_NX2_GM=11\r\n", None).is_empty());
     }
 
@@ -1078,7 +1112,12 @@ mod tests {
         let found = misread_lines("EDEN_NX2_POWER_POLICY=igpu # x\r\nX=1 # note\r\n# a comment # with hashes\r\n", None);
         assert_eq!(rules(&found), ["C3", "C3"], "{found:?}");
         assert!(found[0].text.contains("line 1") && found[0].text.contains("reads \"igpu # x\""), "{}", found[0].text);
+        assert!(found[0].text.contains("does nothing"), "{}", found[0].text);
+        assert_eq!(found[0].status, CheckStatus::Warn);
+        // A number is still read up to the blank (`strtoul`), so it is only info.
         assert!(found[1].text.contains("line 2") && found[1].text.contains("reads \"1 # note\""), "{}", found[1].text);
+        assert!(found[1].text.contains("still gets 1") && !found[1].text.contains("does nothing"), "{}", found[1].text);
+        assert_eq!(found[1].status, CheckStatus::Info);
         // A folder name with a # in it is not a note; neither is a quoted value or a # without a blank.
         assert!(misread_lines("EDEN_NX2_PIPELINE_STATS=C:\\runs #2\r\n", None).is_empty());
         assert!(misread_lines("EDEN_NX2_X=\"a # b\"\r\nEDEN_NX2_Y=a#b\r\n", None).is_empty());
@@ -1270,6 +1309,7 @@ mod tests {
         let found = user_folder(&base);
         assert_eq!(rules(&found), ["C12"]);
         assert!(found[0].text.contains("2 setting(s)") && found[0].text.contains("does not look inside"), "{}", found[0].text);
+        assert!(!found[0].text.contains("nx2_switches.txt"), "{}", found[0].text);
         // A Guarana folder without a qt-config.ini is the same case.
         assert_eq!(rules(&user_folder(&UserFolderInput { guarana_config: None, ..base })), ["C12"]);
         // Settings of its own in Guarana: the copy happened, or the player started over.
@@ -1289,6 +1329,7 @@ mod tests {
         let found = user_folder(&switches);
         assert_eq!(rules(&found), ["C12"]);
         assert!(found[0].text.contains("1 switch line(s)") && !found[0].text.contains("nand"), "{}", found[0].text);
+        assert!(found[0].text.contains("outside the launcher's block"), "{}", found[0].text);
     }
 
     #[test]
