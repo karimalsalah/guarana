@@ -100,6 +100,7 @@ private:
     std::vector<Counter> counters;
     std::vector<double> sums;
     u64 collected{};
+    u64 begin_calls{};
     vk::QueryPool pool;
     static constexpr u32 MaxSlots = 8;
 };
