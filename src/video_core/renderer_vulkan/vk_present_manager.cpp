@@ -2029,7 +2029,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     // (the watchdog fell back, the swapchain lost its storage views, its descriptors cannot be
     // written) is blitted to the swapchain like any frame of another size; where the device cannot
     // blit, it is dropped, as a copy would cut it.
-    const bool use_compose = UseCompose(frame) && ComposeSyncSets(frame);
+    bool use_compose = UseCompose(frame) && ComposeSyncSets(frame);
     if (!use_compose && frame->target_width != 0 && transfer_mode != TransferMode::Blit &&
         (frame->width != frame->target_width || frame->height != frame->target_height)) {
         DiscardFrame(frame);
@@ -2049,6 +2049,12 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         if (!RecreateSwapchain(frame)) {
             return;
         }
+    }
+    if (use_compose && compose_swapchain_generation != swapchain.StorageGeneration()) {
+        // The swapchain was out of date at the acquire and made again: its images have new
+        // storage views, or none. The image is acquired, so a frame the pass cannot show now goes
+        // the classic way with it.
+        use_compose = UseCompose(frame) && ComposeSyncSets(frame);
     }
     if (timed) {
         const f64 acquire = ms_since(acquire_start);
