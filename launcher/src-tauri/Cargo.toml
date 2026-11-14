@@ -33,7 +33,9 @@ sha2 = "0.11"
 hex = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 walkdir = "2"
-sysinfo = { version = "0.40", default-features = false }
+# sysinfo 0.40 puts System and Disks behind these features (default-features stays off: no gpu,
+# network, user or component code).
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk"] }
 log = { version = "0.4", features = ["std"] }
 percent-encoding = "2"
 url = "2"
