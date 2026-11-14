@@ -139,7 +139,9 @@ jobs:
       - name: Replay GPU traces on lavapipe
         run: |
           python3 tools/nx2/test_trace_replay.py
-          python3 -I tools/nx2/trace_replay.py check --cli build/bin/eden-cli \
+          # guarana-cli; a build from before the rename has eden-cli.
+          cli=build/bin/guarana-cli; [ -x "$cli" ] || cli=build/bin/eden-cli
+          python3 -I tools/nx2/trace_replay.py check --cli "$cli" \
             --corpus tests/gpu_traces/corpus.json
       # bench-rows.yml also runs it, and checks contributed result rows, on changes under tools/bench/.
       - name: Test benchmark tool
@@ -289,7 +291,10 @@ jobs:
       # Antivirus heuristics count an unsigned program without file metadata against it.
       - name: Check the shipped programs carry a version resource
         run: |
-          for exe in lichii eden-cli lichii-updater; do
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          gui=guarana; [ -f "build/bin/$gui.exe" ] || gui=lichii
+          cli=guarana-cli; [ -f "build/bin/$cli.exe" ] || cli=eden-cli
+          for exe in "$gui" "$cli" lichii-updater; do
             if ! grep -q 'Type: VERSIONINFO' <<< "$("$LLVM_ROOT/bin/llvm-readobj" --coff-resources "build/bin/$exe.exe")"; then
               echo "::error::$exe.exe has no version resource"
               exit 1
