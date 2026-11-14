@@ -252,6 +252,19 @@ class BundleTests(unittest.TestCase):
         names = [tool["name"] for tool in mcpb_pack.manifest("1.2.3")["tools"]]
         self.assertEqual(names, [tool["name"] for tool in debug_mcp.TOOLS])
 
+    def test_the_docs_list_every_debug_method(self):
+        # capture_image is answered by the adapter itself, from a capture it made.
+        import debug_mcp
+        methods = [line for line in read("AGENTS.md").splitlines() if line.startswith("Methods: ")]
+        self.assertEqual(len(methods), 1)
+        reference = read("docs", "nx2", "debug-mcp.md")
+        for tool in debug_mcp.TOOLS:
+            if tool["name"] == "capture_image":
+                continue
+            name = f"`{tool['name']}`"
+            self.assertIn(name, methods[0], "AGENTS.md, Live debug server, Methods:")
+            self.assertIn(name, reference, "docs/nx2/debug-mcp.md")
+
     def test_main_writes_the_bundle_and_updates_server_json(self):
         with tempfile.TemporaryDirectory() as directory:
             server = os.path.join(directory, "server.json")

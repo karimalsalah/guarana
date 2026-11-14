@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""MCP server (stdio) for Lichii's in-process debug server (docs/nx2/debug-mcp.md).
+"""MCP server (stdio) for Guarana's in-process debug server (docs/nx2/debug-mcp.md).
 
-Run Lichii with EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545, then register this script as a stdio MCP
-server for the agent:  python3 -I tools/nx2/debug_mcp.py [--server 127.0.0.1:6545]
-or run one request from a shell:
+Run Guarana (guarana.exe) with EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545, then register this script
+as a stdio MCP server for the agent:  python3 -I tools/nx2/debug_mcp.py [--server 127.0.0.1:6545]
+or run one request from a shell (a method without parameters can be given by name: --call status):
   python3 -I tools/nx2/debug_mcp.py --call '{"method":"screenshot","params":{}}' --out shot.png
 
 Standard library only. Each tool call is forwarded as one JSON line to the emulator, which may
@@ -22,6 +22,7 @@ import sys
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_SERVER = "127.0.0.1:6545"
+POWERSHELL_HINT = "PowerShell can drop inner quotes: use --call status, or escape them"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 BUTTONS = ["A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus", "Up", "Down", "Left", "Right",
@@ -577,7 +578,7 @@ class Emulator:
                 if isinstance(error, socket.timeout):
                     raise EmulatorError(f"no answer within {timeout} s") from error
                 raise EmulatorError(
-                    f"nothing listens on {self.host}:{self.port}: start Lichii with "
+                    f"nothing listens on {self.host}:{self.port}: start Guarana (guarana.exe) with "
                     f"EDEN_NX2_DEBUG_SERVER={self.host}:{self.port} and boot a game") from error
             except OSError as error:
                 # A stale connection from an earlier boot: reconnect once.
@@ -692,7 +693,7 @@ class Adapter:
             reply["result"] = {
                 "protocolVersion": wanted if wanted in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "lichii-debug", "version": "1"},
+                "serverInfo": {"name": "guarana-debug", "version": "1"},
             }
         elif method == "ping":
             reply["result"] = {}
@@ -727,9 +728,20 @@ def serve(adapter, stdin, stdout):
 
 
 def call_once(adapter, request_text, out, stdout):
-    """--call: one request, its JSON result on stdout, its PNG (if any) saved to `out`."""
+    """--call: one request, its JSON result on stdout, its PNG (if any) saved to `out`.
+
+    The request is a JSON object, or only a method name ("status") for a call without
+    parameters, which PowerShell passes through intact."""
+    request_text = request_text.strip()
+    if request_text.startswith("{"):
+        try:
+            request = json.loads(request_text)
+        except ValueError as error:
+            stdout.write(json.dumps({"error": f"{error}. {POWERSHELL_HINT}"}) + "\n")
+            return 1
+    else:
+        request = {"method": request_text}
     try:
-        request = json.loads(request_text)
         result, png = adapter.run(request["method"], request.get("params") or {})
     except (EmulatorError, KeyError, ValueError, TypeError, AttributeError) as error:
         message = f"missing {error} in the request" if isinstance(error, KeyError) else str(error)
@@ -751,7 +763,8 @@ def main():
     parser.add_argument("--server", default=os.environ.get("LICHII_DEBUG_SERVER", DEFAULT_SERVER),
                         help=f"host:port of EDEN_NX2_DEBUG_SERVER (default {DEFAULT_SERVER})")
     parser.add_argument("--call", metavar="JSON",
-                        help='run one request and exit, e.g. \'{"method":"screenshot","params":{}}\'')
+                        help='run one request and exit, e.g. \'{"method":"screenshot","params":{}}\', '
+                             'or only a method name without parameters: --call status')
     parser.add_argument("--out", metavar="PNG", help="with --call: where to save the PNG")
     args = parser.parse_args()
     adapter = Adapter(Emulator(args.server))

@@ -143,6 +143,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 | `shaders` (inventory) | Shader dump and offline sweep | List loaded programs: key, hash, stage, address, lowered or rejected with the error | 2 |
 | `switches` (live `EDEN_NX2_*`) | Relaunch per switch | Toggle the observer switches live (classification below) | 2 |
 | `read_memory`, `search_memory`, `read_gpu_memory` | GDB stub session or log prints plus a rebuild | Read a range by address, find known values in the heap (done) | 3 |
+| `trace_record` `{seconds?, presents?, path?}`, `trace_stop`, `trace_status` | Relaunch with `EDEN_NX2_GPU_TRACE`, owner touches `record.now` | GPU traces, see [gpu-trace.md](gpu-trace.md) (done) | 3 |
 | `dump_texture`, `dump_buffer` | Frame dump of the whole frame | One resource by GPU address, as PNG plus raw | 3 |
 | `gpu_timings` | `EDEN_NX2_GPU_PROFILE` relaunch, zones only | Per-pass GPU time of one frame | 3 |
 | Capture options (pass range, shader filter) | Not possible | Smaller captures, for example only passes 40 to 60 | 3 |
