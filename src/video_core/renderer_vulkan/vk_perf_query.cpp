@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <fmt/format.h>
 #include <string_view>
 #include <type_traits>
 
@@ -290,13 +291,23 @@ bool PerfQuery::Sampling() const {
 void PerfQuery::Begin(vk::CommandBuffer cmdbuf) {
     std::scoped_lock lock{mutex};
     ++begin_calls;
-    if (!supported || frames_left == 0 || scope_open) {
+    if (!supported) {
+        ++begin_reject_unsupported;
+        return;
+    }
+    if (frames_left == 0) {
+        ++begin_reject_noframes;
+        return;
+    }
+    if (scope_open) {
+        ++begin_reject_scopeopen;
         return;
     }
     // A restarted window may reach a slot whose earlier query is still pending on the
     // GPU; resetting it would be invalid, so that submission is simply not sampled.
     for (const PendingSlot& slot : pending_slots) {
         if (slot.index == next_slot) {
+            ++begin_reject_collision;
             return;
         }
     }
@@ -305,6 +316,7 @@ void PerfQuery::Begin(vk::CommandBuffer cmdbuf) {
     device.GetLogical().ResetQueryPool(*pool, next_slot, 1);
     cmdbuf.BeginQuery(*pool, next_slot, 0);
     scope_open = true;
+    ++begin_opened;
 }
 
 void PerfQuery::End(vk::CommandBuffer cmdbuf, u64 tick) {
@@ -388,14 +400,15 @@ u64 PerfQuery::FramesSampled() const {
     return frames_sampled;
 }
 
-std::tuple<u64, u64, u64> PerfQuery::Diag() const {
+std::string PerfQuery::Diag() const {
     std::scoped_lock lock{mutex};
-    // Pack the gate flags into the third word: bit0 scope_open, bit1 lock_held,
-    // bits 8..39 frames_left, bits 40..63 gpu_tick (low 24 bits).
     const u64 gpu_tick = semaphore ? semaphore->KnownGpuTick() : 0;
-    const u64 flags = (scope_open ? 1u : 0u) | (lock_held ? 2u : 0u) |
-                      (static_cast<u64>(frames_left) << 8) | ((gpu_tick & 0xFFFFFF) << 40);
-    return {static_cast<u64>(pending_slots.size()), begin_calls, flags};
+    return fmt::format(
+        "pending={} begin_calls={} opened={} rej_unsupported={} rej_noframes={} "
+        "rej_scopeopen={} rej_collision={} frames_left={} scope_open={} lock_held={} gpu_tick={}",
+        pending_slots.size(), begin_calls, begin_opened, begin_reject_unsupported,
+        begin_reject_noframes, begin_reject_scopeopen, begin_reject_collision, frames_left,
+        scope_open, lock_held, gpu_tick);
 }
 
 void PerfQuery::ReleaseLock() {

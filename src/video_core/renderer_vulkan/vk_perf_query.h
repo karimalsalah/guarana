@@ -64,8 +64,8 @@ public:
     void SetSemaphore(MasterSemaphore& semaphore_);
     /// Submissions whose counters were collected since the window started.
     [[nodiscard]] u64 FramesSampled() const;
-    /// Diagnostic: pending slot count, frames left, and the known GPU tick.
-    [[nodiscard]] std::tuple<u64, u64, u64> Diag() const;
+    /// Diagnostic: Begin gate counters and state.
+    [[nodiscard]] std::string Diag() const;
 
 private:
     struct Counter {
@@ -101,6 +101,11 @@ private:
     std::vector<double> sums;
     u64 collected{};
     u64 begin_calls{};
+    u64 begin_opened{};
+    u64 begin_reject_unsupported{};
+    u64 begin_reject_noframes{};
+    u64 begin_reject_scopeopen{};
+    u64 begin_reject_collision{};
     vk::QueryPool pool;
     static constexpr u32 MaxSlots = 8;
 };

@@ -127,7 +127,7 @@ public:
     [[nodiscard]] u64 GpuPerfFramesSampled() const override {
         return scheduler.Perf().FramesSampled();
     }
-    [[nodiscard]] std::tuple<u64, u64, u64> GpuPerfDiag() const override {
+    [[nodiscard]] std::string GpuPerfDiag() const override {
         return scheduler.Perf().Diag();
     }
 
