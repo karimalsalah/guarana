@@ -9,6 +9,7 @@
 #endif
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <span>
 #include <string>
@@ -673,7 +674,25 @@ void PresentManager::Present(Frame* frame) {
             VideoCommon::Nx2Profile::Scope scope{VideoCommon::Nx2Profile::Zone::PresentWait};
             scheduler.WaitWorker();
         }
-        CopyToSwapchain(frame);
+        present_operation = "copying/presenting renderer-thread frame";
+        try {
+            CopyToSwapchain(frame);
+        } catch (const vk::Exception& exception) {
+            LOG_CRITICAL(Render_Vulkan,
+                         "Presentation failed on renderer thread while {}: Vulkan result {} ({})",
+                         present_operation, static_cast<int>(exception.GetResult()), exception.what());
+            AbortPresentation();
+        } catch (const std::exception& exception) {
+            LOG_CRITICAL(Render_Vulkan,
+                         "Presentation failed on renderer thread while {}: Vulkan result unavailable ({})",
+                         present_operation, exception.what());
+            AbortPresentation();
+        } catch (...) {
+            LOG_CRITICAL(Render_Vulkan,
+                         "Presentation failed on renderer thread while {}: Vulkan result unavailable (unknown exception)",
+                         present_operation);
+            AbortPresentation();
+        }
         if (VideoCore::Nx2ShownFrames::Armed()) {
             NoteShownCapture(frame, 0, "renderer_thread");
         }
@@ -903,7 +922,7 @@ void PresentManager::WaitPresent() {
     std::scoped_lock swapchain_lock{swapchain_mutex};
 }
 
-void PresentManager::PresentThread(std::stop_token token) {
+void PresentManager::PresentThread(std::stop_token token) try {
     Common::SetCurrentThreadName("VulkanPresent");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
     Common::SetCurrentThreadToPerformanceCores();
@@ -927,6 +946,7 @@ void PresentManager::PresentThread(std::stop_token token) {
             const bool trace = Common::DkbFrameTrace::Enabled();
             const auto ready = trace ? std::chrono::steady_clock::now()
                                      : std::chrono::steady_clock::time_point{};
+            present_operation = "copying/presenting queued frame";
             SleepUntil(next_present);
             CopyToSwapchain(frame);
             const auto presented = std::chrono::steady_clock::now();
@@ -945,6 +965,31 @@ void PresentManager::PresentThread(std::stop_token token) {
             free_cv.notify_one();
         }
     }
+} catch (const vk::Exception& exception) {
+    LOG_CRITICAL(Render_Vulkan, "Presentation thread failed while {}: Vulkan result {} ({})",
+                 present_operation, static_cast<int>(exception.GetResult()), exception.what());
+    AbortPresentation();
+} catch (const std::exception& exception) {
+    LOG_CRITICAL(Render_Vulkan, "Presentation thread failed while {}: Vulkan result unavailable ({})",
+                 present_operation, exception.what());
+    AbortPresentation();
+} catch (...) {
+    LOG_CRITICAL(Render_Vulkan, "Presentation thread failed while {}: Vulkan result unavailable (unknown exception)",
+                 present_operation);
+    AbortPresentation();
+}
+
+[[noreturn]] void PresentManager::AbortPresentation() {
+    Common::Log::Flush();
+    {
+        std::scoped_lock lock{queue_mutex};
+        present_queue.clear();
+        fluid_drains = fluid_drain_requests;
+    }
+    frame_cv.notify_all();
+    free_cv.notify_all();
+    // A failed submit may leave GPU fences unsignaled. Do not resume or wait on them.
+    std::abort();
 }
 
 bool PresentManager::FluidPresentThread(std::stop_token token) {
@@ -977,6 +1022,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
                  mmcss ? ", MMCSS Games task" : "");
     }
 #endif
+    present_operation = "running FLUID vblank presentation";
     Common::VblankClock vblank{render_window.GetWindowInfo().render_surface};
     auto source = vblank.CurrentSource();
     LOG_INFO(Render_Vulkan,
@@ -1060,6 +1106,7 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
         std::scoped_lock swapchain_lock{swapchain_mutex};
         fluid_ahead_pending = false;
         fluid_ahead_frame = nullptr;
+        present_operation = "presenting copy-ahead image";
         swapchain.Present(fluid_ahead_semaphore);
     }
     // Nothing is presented from here on: answer WaitPresent.
@@ -1575,6 +1622,7 @@ void PresentManager::FluidPresentAhead() {
     }
     fluid_ahead_pending = false;
     fluid_ahead_frame = nullptr;
+    present_operation = "presenting copy-ahead image";
     swapchain.Present(fluid_ahead_semaphore);
     if (shown_stats) {
         const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
@@ -1700,6 +1748,7 @@ void PresentManager::UpdateHdrMetadata() {
 
 // Returns false after discarding a deferred or incompatible frame; creation exceptions propagate.
 bool PresentManager::RecreateSwapchain(Frame* frame) {
+    present_operation = "recreating swapchain";
 #ifdef EGLANTINE_STREAMLINE
     Streamline::FrameGenSuspend();
 #endif
@@ -1801,7 +1850,8 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
         } catch (const vk::Exception& except) {
             const VkResult result = except.GetResult();
             if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
-                result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR &&
+                result != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
                 throw;
             }
 
@@ -1979,6 +2029,7 @@ void PresentManager::SubmitFluidCompose(Frame* frame, VkExtent2D extent,
     // makes the renderer's writes visible, and the fence the pass signals hands the image back.
     // Every pixel of the swapchain image is written, bars included, so its old contents are
     // discarded (UNDEFINED), as the screen copy does.
+    present_operation = "submitting/presenting acquired image";
     const VkImage image{swapchain.CurrentImage()};
     const VkImageSubresourceRange range{
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2081,6 +2132,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
         fluid_ahead_pending = false;
         fluid_ahead_frame = nullptr;
+        present_operation = "presenting copy-ahead image";
         swapchain.Present(fluid_ahead_semaphore);
     }
 
@@ -2135,7 +2187,16 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             .count();
     };
     const auto acquire_start = std::chrono::steady_clock::now();
-    while (swapchain.AcquireNextImage(!use_present_thread, pace)) {
+    for (;;) {
+        present_operation = "acquiring swapchain image";
+        const auto acquired = swapchain.AcquireNextImage(!use_present_thread, pace);
+        if (acquired == PresentPolicy::Acquire::Ready) {
+            break;
+        }
+        if (acquired == PresentPolicy::Acquire::Drop) {
+            DiscardFrame(frame);
+            return;
+        }
         if (!RecreateSwapchain(frame)) {
             return;
         }
@@ -2152,6 +2213,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         fluid_stats.acquire_max_ms = (std::max)(fluid_stats.acquire_max_ms, acquire);
     }
 
+    present_operation = "submitting/presenting acquired image";
     const VkImage image{swapchain.CurrentImage()};
     const VkExtent2D extent = swapchain.GetExtent();
     const VkSemaphore render_semaphore = swapchain.CurrentRenderSemaphore();

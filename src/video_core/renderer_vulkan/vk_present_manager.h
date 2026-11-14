@@ -255,6 +255,8 @@ private:
     void StartPresentThread();
 
     void PresentThread(std::stop_token token);
+    [[noreturn]] void AbortPresentation();
+    const char* present_operation = "starting presentation";
 
     /// EDEN_NX2_FLUID: at every vblank, takes the frames sent, frees those no slot shows and
     /// shows the frames without a slot in arrival order; at the vblank before each slot, shows
