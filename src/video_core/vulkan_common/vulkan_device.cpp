@@ -1571,6 +1571,20 @@ bool Device::GetSuitability(bool requires_swapchain) {
         graphics_pipeline_library_requested = false;
     }
 
+    // EDEN_NX2_GPU_PERF=1: VK_KHR_performance_query for the gpu_perf counter sampler.
+    // Kept out of the extension tables so a run without the switch creates the device
+    // exactly as before.
+    performance_query_requested = [] {
+        const char* const value = std::getenv("EDEN_NX2_GPU_PERF");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (performance_query_requested &&
+        supported_extensions.contains(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME)) {
+        loaded_extensions.insert(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
+    } else {
+        performance_query_requested = false;
+    }
+
     extensions.depth_stencil_resolve =
         extensions.depth_stencil_resolve &&
         (instance_version >= VK_API_VERSION_1_2 || extensions.create_renderpass2);
@@ -1710,12 +1724,28 @@ bool Device::GetSuitability(bool requires_swapchain) {
         SetNext(next, graphics_pipeline_library_features);
     }
 
+    if (performance_query_requested) {
+        performance_query_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR;
+        SetNext(next, performance_query_features);
+    }
+
     // Perform the feature test.
     physical.GetFeatures2(features2);
 
     if (has_device_fault_extension) {
         loaded_extensions.insert(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         device_fault_features.deviceFaultVendorBinary = VK_FALSE;
+    }
+
+    if (performance_query_requested) {
+        performance_query_enabled =
+            performance_query_features.performanceCounterQueryPools == VK_TRUE;
+        if (!performance_query_enabled) {
+            loaded_extensions.erase(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_GPU_PERF: the device has no performance counter query pools");
+        }
     }
 
     // Base Vulkan 1.0 features are always valid regardless of instance version.

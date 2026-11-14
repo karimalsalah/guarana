@@ -1068,6 +1068,49 @@ json GpuCosts(ToolState& state, const json& params) {
             {"passes", std::move(passes)}};
 }
 
+// EDEN_NX2_GPU_PERF: hardware GPU counters (VK_KHR_performance_query) averaged over a
+// sampling window of submissions: busy, stall, occupancy and core frequency.
+json GpuPerf(ToolState& state, const json& params) {
+    auto& renderer = state.system.GPU().Renderer();
+    if (!renderer.IsGpuPerfSupported()) {
+        return {{"supported", false}, {"reason", renderer.GpuPerfReason()}};
+    }
+    if (params.contains("enable")) {
+        const bool enable = params.at("enable").get<bool>();
+        const u32 frames = Param<u32>(params, "frames", 30, 1, 600);
+        if (!renderer.RequestGpuPerfSampling(enable ? frames : 0)) {
+            return {{"supported", false}, {"reason", renderer.GpuPerfReason()}};
+        }
+    }
+    const std::vector<VideoCore::RendererBase::GpuPerfSample> samples = renderer.ReadGpuPerf();
+    json counters = json::array();
+    json gpu_busy = nullptr;
+    json stall = nullptr;
+    json occupancy = nullptr;
+    json freq = nullptr;
+    for (const auto& sample : samples) {
+        counters.push_back(
+            {{"name", sample.name}, {"value", sample.value}, {"unit", sample.unit}});
+        if (sample.name == "GpuBusy") {
+            gpu_busy = sample.value;
+        } else if (sample.name == "XveStall") {
+            stall = sample.value;
+        } else if (sample.name == "XveThreadOccupancy") {
+            occupancy = sample.value;
+        } else if (sample.name == "AvgGpuCoreFrequencyMHz") {
+            freq = sample.value;
+        }
+    }
+    return {{"supported", true},
+            {"sampling", renderer.IsGpuPerfSampling()},
+            {"frames_sampled", renderer.GpuPerfFramesSampled()},
+            {"counters", std::move(counters)},
+            {"gpu_busy_pct", std::move(gpu_busy)},
+            {"stall_pct", std::move(stall)},
+            {"occupancy_pct", std::move(occupancy)},
+            {"freq_mhz", std::move(freq)}};
+}
+
 // The frame budget controller (EDEN_NX2_TARGET_FPS): sets the target and the GPU time scale live
 // and reports what the controller measured and decided at its last tick.
 json FrameBudgetTool(ToolState&, const json& params) {
@@ -1617,6 +1660,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"power", handler(Power)},
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},
+        {"gpu_perf", handler(GpuPerf)},
         {"frame_budget", handler(FrameBudgetTool)},
         {"autopilot", handler(AutopilotTool)},
         {"memory", handler(MemoryReport)},

@@ -129,6 +129,37 @@ public:
         return {};
     }
 
+    /// EDEN_NX2_GPU_PERF: one hardware performance counter of a gpu_perf sample,
+    /// normalized to percentages/MHz where the counter's unit allows it.
+    struct GpuPerfSample {
+        std::string name;
+        double value{};
+        std::string unit;
+    };
+    /// Whether the gpu_perf counter sampler can run on this renderer/device.
+    [[nodiscard]] virtual bool IsGpuPerfSupported() const {
+        return false;
+    }
+    /// Why gpu_perf cannot sample (unsupported renderer, extension, lock, ...).
+    [[nodiscard]] virtual std::string GpuPerfReason() const {
+        return "not the Vulkan renderer";
+    }
+    /// Samples the next `frames` submissions (0 stops); false when unsupported or the
+    /// profiling lock could not be acquired.
+    virtual bool RequestGpuPerfSampling([[maybe_unused]] u32 frames) {
+        return false;
+    }
+    [[nodiscard]] virtual bool IsGpuPerfSampling() const {
+        return false;
+    }
+    /// Counters averaged over the submissions collected so far; empty until then.
+    [[nodiscard]] virtual std::vector<GpuPerfSample> ReadGpuPerf() {
+        return {};
+    }
+    [[nodiscard]] virtual u64 GpuPerfFramesSampled() const {
+        return 0;
+    }
+
     /// The Vulkan present thread's counters (present_stats); null on other renderers.
     struct PresentStatsView {
         bool fluid{};
