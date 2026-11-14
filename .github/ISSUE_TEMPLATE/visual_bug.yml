@@ -60,12 +60,15 @@ body:
       label: Graphics card
       options:
         - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc 130T / 130V (Arrow Lake H, Lunar Lake)
         - Intel Arc (Meteor Lake)
         - Intel Arc (Panther Lake)
         - Other Intel integrated (Iris Xe, UHD)
         - AMD Radeon 780M / 760M
         - AMD Radeon 880M / 890M
+        - AMD Radeon 8060S (integrated)
         - AMD Ryzen Z1 / Z2 (handheld)
+        - Steam Deck (AMD, handheld)
         - Other AMD integrated
         - Intel Arc discrete (A or B series)
         - NVIDIA RTX 50 series
@@ -90,6 +93,48 @@ body:
         - Other
     validations:
       required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Maker and model
+      placeholder: "e.g. ASUS Zenbook S 14 (UX5406), ASUS ROG Ally X, a desktop"
+
+  - type: input
+    id: power_mode
+    attributes:
+      label: Power mode
+      description: The Windows power mode, the maker's performance mode, and the power limit (TDP) if you set one
+      placeholder: "e.g. Best performance, Turbo, 28 W"
+
+  - type: input
+    id: display_refresh
+    attributes:
+      label: Display refresh rate and variable refresh on/off
+      description: The refresh rate the display was running at, and whether variable refresh (G-Sync, FreeSync, the panel's VRR) was on
+      placeholder: "e.g. 120 Hz panel running at 60 Hz, VRR off; 144 Hz external with FreeSync on"
+
+  - type: dropdown
+    id: frame_generation
+    attributes:
+      label: Frame generation
+      description: Emulation > Configure... > Graphics > Enable Frame Generation, and the Frame Generation Type you chose
+      options:
+        - "Off"
+        - "On - Optical Flow Interpolation (built-in)"
+        - "On - Lossless Scaling (LSFG)"
+        - "On - NVIDIA DLSS Frame Generation"
+        - "On - other type or not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: switches
+    attributes:
+      label: Switches set
+      description: Every EDEN_NX2_* variable you set, or the contents of your nx2_switches.txt, or "none"
+      placeholder: "e.g. EDEN_NX2_GM=11, EDEN_NX2_POWER_POLICY=igpu"
 
   - type: textarea
     id: steps

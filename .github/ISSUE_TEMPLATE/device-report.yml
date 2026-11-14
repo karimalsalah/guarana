@@ -56,12 +56,15 @@ body:
       description: The GPU the emulator ran on
       options:
         - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc 130T / 130V (Arrow Lake H, Lunar Lake)
         - Intel Arc (Meteor Lake)
         - Intel Arc (Panther Lake)
         - Other Intel integrated (Iris Xe, UHD)
         - AMD Radeon 780M / 760M
         - AMD Radeon 880M / 890M
+        - AMD Radeon 8060S (integrated)
         - AMD Ryzen Z1 / Z2 (handheld)
+        - Steam Deck (AMD, handheld)
         - Other AMD integrated
         - Intel Arc discrete (A or B series)
         - NVIDIA RTX 50 series
