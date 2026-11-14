@@ -33,9 +33,6 @@ constexpr std::array<std::string_view, 7> WantedCounters{
     "ComputeEngine0Busy",
 };
 
-/// Bytes one counter result takes with VK_QUERY_RESULT_64_BIT (all storages widen to 8).
-constexpr VkDeviceSize ResultStride = 8;
-
 /// Normalized units for the RPC: percentages and MHz where the counter's unit allows it.
 std::string UnitName(VkPerformanceCounterUnitKHR unit) {
     switch (unit) {
@@ -65,7 +62,17 @@ std::string UnitName(VkPerformanceCounterUnitKHR unit) {
     }
 }
 
-/// Reads one widened counter result of the given storage into a double.
+/// Bytes one counter result takes with VK_QUERY_RESULT_64_BIT | WITH_AVAILABILITY_BIT:
+/// integers widen to 8, FLOAT32 stays 4, plus a 4-byte availability word. The layout is
+/// per-counter {value, availability}; a wrong stride here reads past the buffer.
+VkDeviceSize ResultStride(VkPerformanceCounterStorageKHR storage) {
+    const VkDeviceSize value =
+        storage == VK_PERFORMANCE_COUNTER_STORAGE_FLOAT32_KHR ? 4 : 8;
+    return value + 4; // availability word (u32 with 64-bit results)
+}
+
+/// Reads one counter result of the given storage into a double. The value sits at the
+/// start of the slot; only integers are widened to 64 bits by VK_QUERY_RESULT_64_BIT.
 double ReadValue(const u8* data, VkPerformanceCounterStorageKHR storage) {
     switch (storage) {
     case VK_PERFORMANCE_COUNTER_STORAGE_INT32_KHR:
@@ -80,7 +87,11 @@ double ReadValue(const u8* data, VkPerformanceCounterStorageKHR storage) {
         std::memcpy(&value, data, sizeof(value));
         return static_cast<double>(value);
     }
-    case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT32_KHR:
+    case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT32_KHR: {
+        float value{};
+        std::memcpy(&value, data, sizeof(value));
+        return static_cast<double>(value);
+    }
     case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT64_KHR: {
         f64 value{};
         std::memcpy(&value, data, sizeof(value));
@@ -345,20 +356,41 @@ void PerfQuery::CollectLocked() {
     while (!pending_slots.empty() && semaphore->IsFree(pending_slots.front().tick)) {
         const PendingSlot slot = pending_slots.front();
         pending_slots.erase(pending_slots.begin());
-        std::vector<u8> data(counters.size() * ResultStride);
+        // Per-counter {value, availability} layout; size each slot by its storage so a
+        // FLOAT32 counter (4 bytes, not widened) never overruns the buffer.
+        VkDeviceSize total = 0;
+        for (const Counter& counter : counters) {
+            total += ResultStride(counter.storage);
+        }
+        std::vector<u8> data(total);
         const VkResult result = device.GetLogical().GetQueryResults(
-            *pool, slot.index, 1, data.size(), data.data(), ResultStride, VK_QUERY_RESULT_64_BIT);
+            *pool, slot.index, 1, data.size(), data.data(), 0,
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
         if (result != VK_SUCCESS) {
             ++collect_not_ready;
             last_query_result = static_cast<int>(result);
             LOG_WARNING(Render_Vulkan, "gpu_perf: query result {}", static_cast<int>(result));
             continue;
         }
+        VkDeviceSize offset = 0;
+        bool all_available = true;
         for (size_t i = 0; i < counters.size(); ++i) {
-            sums[i] += ReadValue(data.data() + i * ResultStride, counters[i].storage);
+            const VkDeviceSize stride = ResultStride(counters[i].storage);
+            const u8* slot_data = data.data() + offset;
+            // The availability word follows the value; 0 means the GPU has not written it.
+            u32 available{};
+            std::memcpy(&available, slot_data + (stride - 4), sizeof(available));
+            if (available != 0) {
+                sums[i] += ReadValue(slot_data, counters[i].storage);
+            } else {
+                all_available = false;
+            }
+            offset += stride;
         }
-        ++collected;
-        ++frames_sampled;
+        if (all_available) {
+            ++collected;
+            ++frames_sampled;
+        }
     }
     if (!pending_slots.empty()) {
         last_pending_tick = pending_slots.front().tick;
