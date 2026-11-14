@@ -255,10 +255,17 @@ int main(int argc, char* argv[]) {
         int result{};
         {
             MainWindow main_window{has_broken_vulkan};
-            main_window.show();
+            // A launcher session shows the window itself, only once the game is fullscreen.
+            if (!main_window.IsLauncherSession()) {
+                main_window.show();
+            }
             app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
                         &MainWindow::OnAppFocusStateChanged);
             result = app.exec();
+            // 0 after a stop, 1 when the game did not start (MainWindow::closeEvent).
+            if (const auto code = main_window.LauncherSessionExitCode()) {
+                result = *code;
+            }
         }
         // Ended without a crash: the next start may skip the Vulkan check.
         EndVulkanCheckSession();

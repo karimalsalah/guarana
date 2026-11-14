@@ -122,6 +122,22 @@ QString MenuHintText() {
     return {};
 }
 
+QString LauncherSessionHintText() {
+    // In a launcher session the leave-fullscreen key stops the game (MainWindow's "Exit
+    // Fullscreen" hotkey); the controller has no such combo, so it names the stop combo.
+    const QString key = ShortcutText("Exit Fullscreen", false);
+    const QString pad = ShortcutText("Stop Emulation", true);
+    if (!key.isEmpty() && !pad.isEmpty()) {
+        return QCoreApplication::translate("Guarana", "%1 stops the game and returns to the launcher. On a controller: %2.")
+            .arg(key, pad);
+    }
+    if (!key.isEmpty() || !pad.isEmpty()) {
+        return QCoreApplication::translate("Guarana", "%1 stops the game and returns to the launcher.")
+            .arg(key.isEmpty() ? pad : key);
+    }
+    return {};
+}
+
 Toast::Toast(QWidget* anchor_) : QLabel(nullptr), anchor{anchor_} {
     setObjectName(QStringLiteral("GuaranaToast"));
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
