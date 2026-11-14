@@ -905,7 +905,7 @@ jobs:
       PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: guarana-*-${{ github.sha }}
           path: artifacts
@@ -920,7 +920,7 @@ jobs:
           echo "Built platforms:"; ls artifacts
 
       - name: Download the release notes
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-notes
           path: notes
