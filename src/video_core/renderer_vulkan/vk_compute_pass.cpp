@@ -642,6 +642,7 @@ void ASTCDecoderPass::Assemble(Image& image, const StagingBufferRef& map,
         .level_view = [&image](s32 host_level) { return image.StorageImageView(host_level); },
         .wait = true,
         .levels = image.HostMipLevels(),
+        .gpu_only = true,
     };
     AssembleInto(image.info, image.host_level_offset, image.guest_size_bytes, target, map,
                  swizzles);
@@ -662,6 +663,7 @@ void ASTCDecoderPass::AssembleLayers(Image& image, const StagingBufferRef& map,
                 return image.StorageImageLayerView(host_level, layer);
             },
         .levels = image.HostMipLevels(),
+        .gpu_only = true,
     };
     AssembleInto(image.info, image.host_level_offset, image.guest_size_bytes, target, map,
                  swizzles);
@@ -817,33 +819,53 @@ void ASTCDecoderPass::AssembleInto(const VideoCommon::ImageInfo& info, u32 skip,
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        vk::PIPELINE_STAGE_GRAPHICS_COMPUTE, 0, image_barrier);
     });
-    // Each decode ends with a submit to the host GPU. Measured here
+    // Unless batched, each waiting decode ends with a submit to the host GPU. Measured here
     // (count and time per 5 s); EDEN_NX2_ASTC_FLUSH=0 waits for the host GPU to go idle instead.
     static const bool flush_only = [] {
         const char* value = std::getenv("EDEN_NX2_ASTC_FLUSH");
         return value == nullptr || value[0] != '0';
     }();
+    static const bool flush_batch = [] {
+        const char* value = std::getenv("EDEN_NX2_ASTC_FLUSH_BATCH");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
     if (!target.wait) {
         return;
     }
     const auto start = std::chrono::steady_clock::now();
-    if (flush_only) {
+    const bool batched = flush_batch && flush_only && target.gpu_only;
+    if (batched) {
+        // Defensively extend retirement if a flush separated staging allocation from this decode.
+        staging_buffer_pool.RetainUntilCurrentTick(map);
+    } else if (flush_only) {
         scheduler.Flush();
     } else {
         scheduler.Finish();
     }
     const auto end = std::chrono::steady_clock::now();
     static u32 decodes{};
+    static u32 decodes_batched{};
     static std::chrono::nanoseconds waited{};
     static auto window_start = end;
     ++decodes;
+    decodes_batched += batched ? 1U : 0U;
     waited += end - start;
     if (end - window_start >= std::chrono::seconds{5}) {
-        LOG_INFO(Render_Vulkan, "ASTC GPU decodes: {} in {} ms, {} ms waiting ({})", decodes,
-                 std::chrono::duration_cast<std::chrono::milliseconds>(end - window_start).count(),
-                 std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
-                 flush_only ? "flush" : "finish");
+        if (flush_batch) {
+            LOG_INFO(Render_Vulkan,
+                     "ASTC GPU decodes: {} in {} ms, {} ms waiting ({}), "
+                     "{} decodes batched (same number of dedicated flushes saved)", decodes,
+                     std::chrono::duration_cast<std::chrono::milliseconds>(end - window_start).count(),
+                     std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
+                     flush_only ? "flush" : "finish", decodes_batched);
+        } else {
+            LOG_INFO(Render_Vulkan, "ASTC GPU decodes: {} in {} ms, {} ms waiting ({})", decodes,
+                     std::chrono::duration_cast<std::chrono::milliseconds>(end - window_start).count(),
+                     std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
+                     flush_only ? "flush" : "finish");
+        }
         decodes = 0;
+        decodes_batched = 0;
         waited = {};
         window_start = end;
     }
