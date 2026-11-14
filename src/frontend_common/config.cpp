@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -33,6 +34,23 @@
 #include "common/assert.h"
 
 namespace FS = Common::FS;
+
+namespace {
+
+#ifndef __ANDROID__
+/// EDEN_NX2_SEED_FILTER=1: a new global config is not given a scaling filter. Fsr3 (FSR1 EASU and
+/// RCAS at output size) costs 3.4 to 3.7 ms of GPU time per shown frame on the Arc 140T class,
+/// ScaleForce 1.7 ms; and a seed is written with `\default=false`, which counts as the player's
+/// choice and would keep a game preset (none sets a filter yet) from choosing one. Without a seed
+/// the setting keeps its own default (ScaleForce). Off: unset, empty, 0 or false.
+/// The device is not known when the config is created, so this is not limited to integrated GPUs.
+[[nodiscard]] bool SkipFilterSeed() {
+    const char* const value = std::getenv("EDEN_NX2_SEED_FILTER");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+}
+#endif
+
+} // Anonymous namespace
 
 Config::Config(const ConfigType config_type)
     : type(config_type), global{config_type == ConfigType::GlobalConfig} {}
@@ -221,7 +239,11 @@ void Config::SetUpIni() {
             WriteStringSetting(setting.GetLabel(), value);
             WriteBooleanSetting(setting.GetLabel() + "\\default", false);
         };
-        seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        if (SkipFilterSeed()) {
+            LOG_INFO(Config, "EDEN_NX2_SEED_FILTER: no scaling filter in the first-run seed");
+        } else {
+            seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        }
         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
         seed(Settings::values.async_presentation, ToString(true));
