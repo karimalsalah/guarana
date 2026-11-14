@@ -382,6 +382,14 @@ PresentManager::PresentManager(const vk::Instance& instance_,
     , fluid_presenter{FluidMode() != 0}
     , shown_capture{device_, memory_allocator_, scheduler_}
 {
+    static const bool trace_enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_RECREATE_TRACE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    if (trace_enabled) {
+        recreate_trace = std::make_unique<PresentTrace>();
+        dispatch_trace = std::make_unique<PresentDispatchTrace>();
+    }
     SetImageCount();
 
     auto& dld = device.GetLogical();
@@ -502,6 +510,7 @@ PresentManager::~PresentManager() {
         present_thread.request_stop();
         present_thread.join();
     }
+    DumpRecreateTrace("destroy", false);
     if (fluid_presenter) {
         // The FLUID thread shows frames it held for later slots after the renderer last waited
         // for the GPU: their copies must be done before the frames go.
@@ -681,7 +690,7 @@ void PresentManager::Present(Frame* frame) {
             LOG_CRITICAL(Render_Vulkan,
                          "Presentation failed on renderer thread while {}: Vulkan result {} ({})",
                          present_operation, static_cast<int>(exception.GetResult()), exception.what());
-            AbortPresentation();
+            AbortPresentation(exception.GetResult());
         } catch (const std::exception& exception) {
             LOG_CRITICAL(Render_Vulkan,
                          "Presentation failed on renderer thread while {}: Vulkan result unavailable ({})",
@@ -968,7 +977,7 @@ void PresentManager::PresentThread(std::stop_token token) try {
 } catch (const vk::Exception& exception) {
     LOG_CRITICAL(Render_Vulkan, "Presentation thread failed while {}: Vulkan result {} ({})",
                  present_operation, static_cast<int>(exception.GetResult()), exception.what());
-    AbortPresentation();
+    AbortPresentation(exception.GetResult());
 } catch (const std::exception& exception) {
     LOG_CRITICAL(Render_Vulkan, "Presentation thread failed while {}: Vulkan result unavailable ({})",
                  present_operation, exception.what());
@@ -979,7 +988,19 @@ void PresentManager::PresentThread(std::stop_token token) try {
     AbortPresentation();
 }
 
-[[noreturn]] void PresentManager::AbortPresentation() {
+[[noreturn]] void PresentManager::AbortPresentation(VkResult result) {
+    if (recreate_trace) {
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            recreate_trace->Record(2, {}, "worker-surface-lost");
+        }
+        if (result != VK_SUCCESS) {
+            recreate_trace->Record(8, {static_cast<u64>(static_cast<s64>(result)), 0, 0, 0},
+                                   "worker-vulkan-exception");
+        } else {
+            recreate_trace->Record(8, {}, "worker-exception");
+        }
+        DumpRecreateTrace("worker-exception");
+    }
     Common::Log::Flush();
     {
         std::scoped_lock lock{queue_mutex};
@@ -1746,25 +1767,109 @@ void PresentManager::UpdateHdrMetadata() {
     swapchain.SetHdrMetadata(output.peak_luminance, output.reference_white);
 }
 
-// Returns false after discarding a deferred or incompatible frame; creation exceptions propagate.
-bool PresentManager::RecreateSwapchain(Frame* frame) {
-    present_operation = "recreating swapchain";
-#ifdef EGLANTINE_STREAMLINE
-    Streamline::FrameGenSuspend();
-#endif
-    if (swapchain.Create(*surface, FrameTargetWidth(frame), FrameTargetHeight(frame),
-                         frame->format, frame->color_space)) {
-        SetImageCount();
-        if (frame->color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
-            UpdateHdrMetadata();
-        }
-        ConfigureTransfer(frame);
-        if (transfer_mode != TransferMode::Unsupported) {
-            return true;
+void PresentManager::DumpRecreateTrace(const char* reason, bool failure) const {
+    if (!recreate_trace) {
+        return;
+    }
+    const auto history = recreate_trace->Snapshot();
+    const auto dispatches = dispatch_trace->Snapshot();
+    const auto level = failure ? Common::Log::Level::Error : Common::Log::Level::Info;
+    Common::Log::FmtLogMessage(Common::Log::Class::Render_Vulkan, level, __FILE__, __LINE__,
+                              __func__,
+                              "FLUID recreate trace: {} events={} overwritten={} "
+                              "dispatches={} dispatches_overwritten={}",
+                              reason, history.size, history.overwritten, dispatches.size,
+                              dispatches.overwritten);
+    const char* function = __func__;
+    const auto log_event = [level, function](const auto& event) {
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            event.timestamp.time_since_epoch())
+                            .count();
+        Common::Log::FmtLogMessage(
+            Common::Log::Class::Render_Vulkan, level, __FILE__, __LINE__, function,
+            "FLUID recreate trace: ns={} kind={} tag={} a={} b={} c={} d={}", ns, event.kind,
+            event.tag, event.fields[0], event.fields[1], event.fields[2], event.fields[3]);
+    };
+    std::size_t event_index = 0;
+    std::size_t dispatch_index = 0;
+    while (event_index < history.size || dispatch_index < dispatches.size) {
+        if (dispatch_index == dispatches.size ||
+            (event_index < history.size && history.events[event_index].timestamp <=
+                                              dispatches.events[dispatch_index].timestamp)) {
+            log_event(history.events[event_index++]);
+        } else {
+            log_event(dispatches.events[dispatch_index++]);
         }
     }
-    DiscardFrame(frame);
-    return false;
+    if (!failure) {
+        Common::Log::Flush();
+    }
+}
+
+// Returns false after discarding a deferred or incompatible frame; creation exceptions propagate.
+bool PresentManager::RecreateSwapchain(Frame* frame, const char* reason) {
+    present_operation = "recreating swapchain";
+    bool deferred = false;
+    const auto recreate = [&]() {
+#ifdef EGLANTINE_STREAMLINE
+        Streamline::FrameGenSuspend();
+#endif
+        if (swapchain.Create(*surface, FrameTargetWidth(frame), FrameTargetHeight(frame),
+                             frame->format, frame->color_space)) {
+            SetImageCount();
+            if (frame->color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+                UpdateHdrMetadata();
+            }
+            ConfigureTransfer(frame);
+            if (transfer_mode != TransferMode::Unsupported) {
+                return true;
+            }
+        } else {
+            deferred = true;
+        }
+        DiscardFrame(frame);
+        return false;
+    };
+    if (!recreate_trace) {
+        return recreate();
+    }
+    const u64 old_generation = swapchain.StorageGeneration();
+    if (!recreate_trace_deferred) {
+        recreate_trace->Record(3, {old_generation, FrameTargetWidth(frame), FrameTargetHeight(frame),
+                                   swapchain.GetImageCount()}, reason);
+    }
+    try {
+        const bool result = recreate();
+        // Create returning false is a zero-extent deferral, not a failed recreation.
+        // Keep its first entry and the eventual recovery without filling the ring while minimized.
+        if (!deferred || !recreate_trace_deferred) {
+            const auto extent = swapchain.GetExtent();
+            recreate_trace->Record(4, {old_generation, swapchain.StorageGeneration(), extent.width,
+                                       extent.height}, reason);
+            recreate_trace->Record(5, {swapchain.StorageGeneration(), swapchain.GetImageCount(),
+                                       device.GetFluidFamily(), device.GetPresentFamily()},
+                                    result ? "recreate-ok"
+                                           : deferred ? "recreate-deferred" : "recreate-failed");
+        }
+        recreate_trace_deferred = deferred;
+        if (!result && !deferred) {
+            DumpRecreateTrace("recreate-failed");
+        }
+        return result;
+    } catch (const vk::Exception& exception) {
+        recreate_trace_deferred = false;
+        recreate_trace->Record(5, {old_generation, swapchain.StorageGeneration(),
+                                   static_cast<u64>(static_cast<s64>(exception.GetResult())), 0},
+                                "recreate-vulkan-exception");
+        DumpRecreateTrace("recreate-exception");
+        throw;
+    } catch (...) {
+        recreate_trace_deferred = false;
+        recreate_trace->Record(5, {old_generation, swapchain.StorageGeneration(), 0, 0},
+                                "recreate-exception");
+        DumpRecreateTrace("recreate-exception");
+        throw;
+    }
 }
 
 void PresentManager::ConfigureTransfer(const Frame* frame) {
@@ -1840,7 +1945,7 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
 #ifdef __ANDROID__
                 surface = CreateSurface(instance, render_window.GetWindowInfo());
 #endif
-                if (!RecreateSwapchain(frame)) {
+                if (!RecreateSwapchain(frame, "surface-retry")) {
                     return;
                 }
             }
@@ -1855,6 +1960,10 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
                 throw;
             }
 
+            if (recreate_trace && result == VK_ERROR_SURFACE_LOST_KHR) {
+                recreate_trace->Record(2, {swapchain.StorageGeneration(), attempt, 0, 0},
+                                        "surface-lost-retry");
+            }
             requires_recreation = true;
         }
     }
@@ -1997,10 +2106,19 @@ bool PresentManager::ComposeSyncSets(const Frame* frame) {
     // created, and the frame's last slot pass is done before the frame is drawn into again).
     try {
         if (compose_swapchain_generation != swapchain.StorageGeneration()) {
+            if (recreate_trace) {
+                recreate_trace->Record(6, {compose_swapchain_generation,
+                                           swapchain.StorageGeneration(),
+                                           swapchain.StorageViews().size(), 0}, "swapchain-sets");
+            }
             compose->SetSwapchainViews(device, swapchain.StorageViews());
             compose_swapchain_generation = swapchain.StorageGeneration();
         }
         if (compose_frame_serials[frame->index] != frame->image_serial) {
+            if (recreate_trace) {
+                recreate_trace->Record(6, {frame->index, frame->image_serial,
+                                           compose_frame_serials[frame->index], 0}, "frame-set");
+            }
             compose->SetFrameView(device, frame->index, *frame->image_view);
             compose_frame_serials[frame->index] = frame->image_serial;
         }
@@ -2078,6 +2196,10 @@ void PresentManager::SubmitFluidCompose(Frame* frame, VkExtent2D extent,
     const FluidComposeMath::Rect rect = FluidComposeMath::ScreenRect(
         extent.width, extent.height, target.x, target.y, target.x + target.width,
         target.y + target.height);
+    if (dispatch_trace) {
+        dispatch_trace->Record(7, {frame->index, swapchain.CurrentImageIndex(),
+                                   frame->image_serial, compose_swapchain_generation}, "dispatch");
+    }
     compose->Record(cmdbuf, frame->index, swapchain.CurrentImageIndex(),
                     FluidComposeMath::MakePushConstants(extent.width, extent.height, rect));
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -2143,7 +2265,11 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const bool format_changed = swapchain.GetRequestedFormat() != frame->format;
     const bool color_space_changed = swapchain.GetRequestedColorSpace() != frame->color_space;
     if (is_suboptimal || size_changed || format_changed || color_space_changed) {
-        if (!RecreateSwapchain(frame)) {
+        const char* reason = is_suboptimal       ? "suboptimal"
+                             : size_changed     ? "extent"
+                             : format_changed   ? "format"
+                                                : "color-space";
+        if (!RecreateSwapchain(frame, reason)) {
             return;
         }
     } else if (frame->color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
@@ -2189,7 +2315,8 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     const auto acquire_start = std::chrono::steady_clock::now();
     for (;;) {
         present_operation = "acquiring swapchain image";
-        const auto acquired = swapchain.AcquireNextImage(!use_present_thread, pace);
+        const auto acquired =
+            swapchain.AcquireNextImage(!use_present_thread, pace, recreate_trace.get());
         if (acquired == PresentPolicy::Acquire::Ready) {
             break;
         }
@@ -2197,7 +2324,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             DiscardFrame(frame);
             return;
         }
-        if (!RecreateSwapchain(frame)) {
+        if (!RecreateSwapchain(frame, "acquire-out-of-date")) {
             return;
         }
     }

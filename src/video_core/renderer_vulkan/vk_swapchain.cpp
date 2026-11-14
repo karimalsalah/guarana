@@ -19,6 +19,7 @@
 #endif
 
 #include "common/display_hdr.h"
+#include "common/event_ring.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -324,12 +325,20 @@ bool Swapchain::Create(
     return true;
 }
 
-PresentPolicy::Acquire Swapchain::AcquireNextImage(bool may_flush, bool pace) {
+PresentPolicy::Acquire Swapchain::AcquireNextImage(bool may_flush, bool pace, PresentTrace* trace) {
     u32 acquired_index = 0;
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &acquired_index);
     const auto action = PresentPolicy::ClassifyAcquire(result);
+    if (trace != nullptr && result != VK_SUCCESS) {
+        trace->Record(1, {static_cast<u64>(static_cast<s64>(result)), StorageGeneration(),
+                          action == PresentPolicy::Acquire::Ready ? acquired_index : image_index,
+                          frame_index}, "acquire");
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            trace->Record(2, {StorageGeneration(), 0, 0, 0}, "surface-lost");
+        }
+    }
     switch (action) {
     case PresentPolicy::Acquire::Ready:
         image_index = acquired_index;
