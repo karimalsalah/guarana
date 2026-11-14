@@ -10,6 +10,8 @@
 #include <list>
 #include <mutex>
 #include <optional>
+#include <thread>
+#include <vector>
 
 #include "common/common_types.h"
 
@@ -122,6 +124,13 @@ private:
         return SplitBankLocks() ? host_guard : guard;
     }
 
+    /// Due actions an Increment took out of storage and runs after releasing its lock.
+    struct DueActions {
+        std::list<RegisteredAction> pending; ///< Not started yet; a cancel removes them.
+        ActionHandle running{};              ///< The one being called now, 0 between calls.
+        std::thread::id thread{std::this_thread::get_id()};
+    };
+
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_guest{};
     std::array<std::atomic<u32>, NUM_MAX_SYNCPOINTS> syncpoints_host{};
 
@@ -134,8 +143,17 @@ private:
     /// the sequence is unchanged.
     std::atomic<u64> last_action_id{};
     GuestMirror guest_mirror; ///< Guarded by `guard`.
+    /// Each bank tracks the batches its own Increment runs after releasing its lock. Under the
+    /// single lock both banks share one vector, guarded by `guard`; when split, each vector is
+    /// guarded by its bank's lock.
+    std::vector<DueActions*> due_actions_guest;
+    std::vector<DueActions*> due_actions_host;
+    std::vector<DueActions*>& DueActionsFor(std::mutex& bank_guard) {
+        return &bank_guard == &host_guard ? due_actions_host : due_actions_guest;
+    }
     std::condition_variable wait_guest_cv;
     std::condition_variable wait_host_cv;
+    std::condition_variable action_done_cv;
 };
 
 } // namespace Host1x
