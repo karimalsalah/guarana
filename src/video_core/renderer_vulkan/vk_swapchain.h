@@ -111,6 +111,27 @@ public:
         return requested_color_space;
     }
 
+    /// The index of the acquired image.
+    u32 CurrentImageIndex() const {
+        return image_index;
+    }
+
+    /// EDEN_NX2_FLUID_COMPOSE: whether the images were created with STORAGE usage and have the
+    /// storage views StorageViews lists. Any thread.
+    bool HasStorage() const {
+        return storage_enabled.load(std::memory_order_relaxed);
+    }
+
+    /// Counts the swapchains made, so the descriptors of their storage views are written again.
+    u64 StorageGeneration() const {
+        return storage_generation;
+    }
+
+    /// A storage view of each image, in the format of the swapchain; empty without HasStorage.
+    std::span<const VkImageView> StorageViews() const {
+        return storage_view_handles;
+    }
+
     VkSemaphore CurrentPresentSemaphore() const {
         return *present_semaphores[frame_index];
     }
@@ -160,6 +181,10 @@ private:
     std::vector<u64> resource_ticks;
     std::vector<vk::Semaphore> present_semaphores;
     std::vector<vk::Semaphore> render_semaphores;
+    std::vector<vk::ImageView> storage_views;
+    std::vector<VkImageView> storage_view_handles;
+    std::atomic<bool> storage_enabled{};
+    u64 storage_generation{};
 
     u32 width;
     u32 height;

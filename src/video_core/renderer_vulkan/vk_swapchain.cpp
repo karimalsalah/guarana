@@ -495,6 +495,28 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
         requested_image_count = std::clamp(asked, capabilities.minImageCount, most);
     }
+    // EDEN_NX2_FLUID_COMPOSE: the FLUID presenter's slot pass writes the images through storage
+    // views. Asked for only with a dedicated queue that can compute, a present thread, a surface
+    // that lists the usage and a format that can be stored to.
+    bool with_storage = FluidComposeMode() != 0 && FluidMode() != 0 &&
+                        device.FluidFamilyCanCompute() && !FrameGenLoaded() &&
+                        (Settings::values.async_presentation.GetValue() ||
+                         Settings::values.frame_gen.GetValue()) &&
+                        surface_format.format == VK_FORMAT_B8G8R8A8_UNORM &&
+                        surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    if (with_storage &&
+        ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0 ||
+         (physical_device.GetFormatProperties(surface_format.format).optimalTilingFeatures &
+          VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0)) {
+        static bool logged = false;
+        if (!std::exchange(logged, true)) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID_COMPOSE: the surface offers no storage images in {}; frames "
+                     "are shown by the screen copy",
+                     string_VkFormat(surface_format.format));
+        }
+        with_storage = false;
+    }
     VkSwapchainCreateInfoKHR swapchain_ci{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = nullptr,
@@ -520,6 +542,9 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         .clipped = VK_FALSE,
         .oldSwapchain = VkSwapchainKHR{},
     };
+    if (with_storage) {
+        swapchain_ci.imageUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
     const u32 graphics_family{device.GetGraphicsFamily()};
     const u32 present_family{device.GetPresentFamily()};
     // The families that touch the images: the renderer's, the presenting one and, with
@@ -560,12 +585,38 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         format_list.pNext = std::exchange(swapchain_ci.pNext, &format_list);
         swapchain_ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
     }
+    // A storage image cannot be viewed as sRGB: with storage usage the list holds the UNORM formats.
+    const std::array<VkFormat, 2> storage_view_formats{swapchain_ci.imageFormat,
+                                                       VK_FORMAT_B8G8R8A8_UNORM};
+    if (with_storage) {
+        format_list.viewFormatCount = static_cast<u32>(storage_view_formats.size());
+        format_list.pViewFormats = storage_view_formats.data();
+    }
     // Request the size again to reduce the possibility of a TOCTOU race condition.
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
     // Don't add code within this and the swapchain creation.
     try {
-        swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        try {
+            swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        } catch (const vk::Exception& storage_exception) {
+            // EDEN_NX2_FLUID_COMPOSE: a driver that refuses the storage usage still gets the
+            // swapchain main makes, and the frames are shown by the screen copy.
+            const VkResult storage_result = storage_exception.GetResult();
+            if (!with_storage || storage_result == VK_ERROR_SURFACE_LOST_KHR ||
+                storage_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                throw;
+            }
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: the swapchain cannot be made with storage usage "
+                        "({}); frames are shown by the screen copy",
+                        storage_exception.what());
+            with_storage = false;
+            swapchain_ci.imageUsage &= ~static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT);
+            format_list.viewFormatCount = static_cast<u32>(view_formats.size());
+            format_list.pViewFormats = view_formats.data();
+            swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+        }
     } catch ([[maybe_unused]] const vk::Exception& exception) {
         // A lost surface or a window still in use is transient: the present loop retries those.
         const VkResult result = exception.GetResult();
@@ -589,6 +640,47 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
 
     images = swapchain.GetImages();
     image_count = static_cast<u32>(images.size());
+    if (with_storage) {
+        // One storage view of each image, in the format it has, for the slot pass.
+        try {
+            for (const VkImage image : images) {
+                storage_views.push_back(device.GetLogical().CreateImageView({
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .image = image,
+                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                    .format = surface_format.format,
+                    .components =
+                        {
+                            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                        },
+                    .subresourceRange =
+                        {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                }));
+                storage_view_handles.push_back(*storage_views.back());
+            }
+        } catch (const vk::Exception& exception) {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: no storage view of a swapchain image ({}); frames "
+                        "are shown by the screen copy",
+                        exception.what());
+            storage_view_handles.clear();
+            storage_views.clear();
+            with_storage = false;
+        }
+    }
+    storage_enabled.store(with_storage, std::memory_order_relaxed);
+    ++storage_generation;
     if (present_mode != logged_present_mode || image_count != logged_image_count) {
         logged_present_mode = present_mode;
         logged_image_count = image_count;
@@ -651,6 +743,10 @@ void Swapchain::Destroy() {
     frame_index = 0;
     present_semaphores.clear();
     render_semaphores.clear();
+    // The views go before the images they view.
+    storage_enabled.store(false, std::memory_order_relaxed);
+    storage_view_handles.clear();
+    storage_views.clear();
     swapchain.reset();
 }
 

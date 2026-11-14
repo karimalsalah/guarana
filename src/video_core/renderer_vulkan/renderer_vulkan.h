@@ -246,6 +246,21 @@ private:
     /// The encoding and luminances this frame is presented with; picks the swapchain format
     /// again when the HDR settings or the monitor's state changed.
     HdrPresent UpdateHdrPresent();
+
+    /// EDEN_NX2_FLUID_COMPOSE: decides whether the slot pass composes this composite's frames
+    /// (compose_active), before any of them is drawn.
+    void PlanCompose(std::span<const Tegra::FramebufferConfig> framebuffers,
+                     const HdrPresent& output);
+    /// Marks a frame of this composite as one the slot pass composes.
+    void TagComposeFrame(Frame* frame) const;
+    bool compose_active{};
+    bool compose_native{};
+    FluidComposeMath::Rect compose_rect{};
+    /// The peak size of the game's frames, the size the slot pass's frames are drawn at.
+    FluidComposeMath::Extent compose_internal{};
+    /// The layout this composite's frames are drawn at: the window's, or with the slot pass
+    /// scaling them the game's size with the screen covering all of it.
+    [[nodiscard]] Layout::FramebufferLayout FrameLayout() const;
     /// SDR, with the luminances the game was told: screenshots and captures tone map HDR layers.
     HdrPresent CaptureHdrPresent() const;
 

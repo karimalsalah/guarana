@@ -194,6 +194,8 @@ add_library(video_core STATIC
     renderer_vulkan/present/anti_alias_pass.h
     renderer_vulkan/present/filters.cpp
     renderer_vulkan/present/filters.h
+    renderer_vulkan/present/fluid_compose.cpp
+    renderer_vulkan/present/fluid_compose.h
     renderer_vulkan/present/fsr.cpp
     renderer_vulkan/present/fsr.h
     renderer_vulkan/present/fsr3.cpp
@@ -217,6 +219,7 @@ add_library(video_core STATIC
     renderer_vulkan/blit_image.h
     renderer_vulkan/fixed_pipeline_state.cpp
     renderer_vulkan/fixed_pipeline_state.h
+    renderer_vulkan/fluid_compose_math.h
     renderer_vulkan/fluid_present_mode.h
     renderer_vulkan/fluid_slot_math.h
     renderer_vulkan/framebuffer_clear_layers.h

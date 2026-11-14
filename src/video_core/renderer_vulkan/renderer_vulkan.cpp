@@ -537,16 +537,19 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     const HdrPresent output = UpdateHdrPresent();
     frame->color_space = output.color_space;
+    PlanCompose(framebuffers, output);
+    blit_swapchain.SetComposeInternal(compose_active && !compose_native);
 
     scheduler.RequestOutsideRenderPassOperationContext();
     {
-        const auto& layout = render_window.GetFramebufferLayout();
+        // The size the draw is made at: the game's with EDEN_NX2_FLUID_COMPOSE, else the window's.
+        const Layout::FramebufferLayout layout = FrameLayout();
         scheduler.RecordEmuBegin(TraceCategory::Present, {layout.width, layout.height, 0});
     }
-    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers,
-                              render_window.GetFramebufferLayout(),
+    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers, FrameLayout(),
                               present_manager.SwapchainImageCount(), output_format.format, output);
     scheduler.RecordEmuEnd();
+    TagComposeFrame(frame);
 
 #ifdef HAS_LSFG
     // Frames predicted from this one (EDEN_NX2_EXTRAPOLATE): presented after it, unlike
@@ -875,7 +878,8 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
             break;
         }
         generated->color_space = output.color_space;
-        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        blit_swapchain.PrepareFrame(device, generated, FrameLayout());
+        TagComposeFrame(generated);
         const f32 blend =
             static_cast<f32>(static_cast<f64>(generation + 1) / (std::max)(span_slots, 1.0));
         if (!frame_gen.GenerateBlend(device, generated, blend)) {
@@ -895,6 +899,68 @@ void RendererVulkan::RecordFluidInterpolated(Frame* frame, const HdrPresent& out
     present_manager.NoteFluidBatch(true, made < wanted, false);
 }
 #endif
+
+void RendererVulkan::PlanCompose([[maybe_unused]] std::span<const Tegra::FramebufferConfig> framebuffers,
+                                 [[maybe_unused]] const HdrPresent& output) {
+    compose_active = false;
+#ifdef HAS_LSFG
+    if (FluidComposeMode() == 0) {
+        return;
+    }
+    const auto& window = render_window.GetFramebufferLayout();
+    bool streamline = false;
+#ifdef EGLANTINE_STREAMLINE
+    streamline = Streamline::FrameGenSession();
+#endif
+    // Native: the frames stay at the window's size and the slot pass copies them 1:1. Else they
+    // are the game's size (the largest seen, so a game that changes its render size does not
+    // recreate the frame pool) and the pass scales them into the layout's screen.
+    compose_native = FluidComposeNative();
+    compose_rect = FluidComposeMath::Rect{0, 0, window.width, window.height};
+    bool worthwhile = true;
+    if (!compose_native) {
+        const VkExtent2D guest = GuestExtent(framebuffers);
+        const FluidComposeMath::Extent internal =
+            FluidComposeMath::InternalExtent({guest.width, guest.height}, compose_internal);
+        compose_rect = FluidComposeMath::ScreenRect(window.width, window.height, window.screen.left,
+                                                    window.screen.top, window.screen.right,
+                                                    window.screen.bottom);
+        worthwhile = FluidComposeMath::Worthwhile(compose_rect, internal);
+        compose_internal = internal;
+    }
+    const FluidComposeMath::Gate gate{
+        .available = present_manager.ComposeAvailable(),
+        .hdr = output.IsHdr(),
+        .extrapolation = ExtrapolationRequested() || frame_gen.Extrapolating(),
+        .streamline = streamline,
+        .frame_generation_fits = FluidComposeMath::FrameGenerationFits(
+            FrameGen::FluidInterpolation(), Settings::values.frame_gen.GetValue()),
+        .pictures_armed = VideoCore::Nx2ShownFrames::PicturesArmed(),
+        .worthwhile = worthwhile,
+    };
+    compose_active = FluidComposeMath::Active(gate);
+#endif
+}
+
+Layout::FramebufferLayout RendererVulkan::FrameLayout() const {
+    Layout::FramebufferLayout layout = render_window.GetFramebufferLayout();
+    if (compose_active && !compose_native) {
+        layout.width = compose_internal.width;
+        layout.height = compose_internal.height;
+        layout.screen = Common::Rectangle<u32>{0, 0, compose_internal.width, compose_internal.height};
+    }
+    return layout;
+}
+
+void RendererVulkan::TagComposeFrame(Frame* frame) const {
+    if (!compose_active) {
+        return;
+    }
+    const auto& window = render_window.GetFramebufferLayout();
+    frame->target_width = window.width;
+    frame->target_height = window.height;
+    frame->target_rect = compose_rect;
+}
 
 HdrPresent RendererVulkan::UpdateHdrPresent() {
     const auto& monitor = Common::DisplayHdrMonitor::Instance();

@@ -355,6 +355,12 @@ public:
         return fluid_family;
     }
 
+    /// EDEN_NX2_FLUID_QUEUE: whether the dedicated queue's family can dispatch compute work, which
+    /// EDEN_NX2_FLUID_COMPOSE's slot pass needs.
+    bool FluidFamilyCanCompute() const {
+        return has_fluid_queue && fluid_family_compute;
+    }
+
     /// Returns main graphics queue family index.
     u32 GetGraphicsFamily() const {
         return graphics_family;
@@ -1506,6 +1512,7 @@ private:
     vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
     u32 fluid_family{};
     bool has_fluid_queue{};
+    bool fluid_family_compute{}; ///< the dedicated queue's family has VK_QUEUE_COMPUTE_BIT
     bool fluid_queue_presents{}; ///< presents come from the fluid queue too
     mutable std::atomic<bool> fluid_queue_enabled{true};
     vk::PipelineCache static_pipeline_cache;

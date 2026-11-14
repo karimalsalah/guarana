@@ -1,0 +1,37 @@
+#version 460 core
+
+// EDEN_NX2_FLUID_COMPOSE: the slot pass of the FLUID presenter. One dispatch scales the frame of a
+// slot into the swapchain image (bilinear) and fills the letterbox bars with black. The pushed
+// block is Vulkan::FluidComposeMath::PushConstants (fluid_compose_math.h): six 32-bit integers.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// The frame, in GENERAL layout, through an immutable linear clamp-to-edge sampler.
+layout(set = 0, binding = 0) uniform sampler2D Source;
+// The acquired swapchain image, through a storage view of its own format.
+layout(set = 1, binding = 0) uniform writeonly image2D Destination;
+
+layout(push_constant) uniform PushConstants {
+    int out_width;
+    int out_height;
+    int rect_x;
+    int rect_y;
+    int rect_width;
+    int rect_height;
+};
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= out_width || pixel.y >= out_height) {
+        return;
+    }
+    ivec2 inside = pixel - ivec2(rect_x, rect_y);
+    // The swapchain image is not read before this pass: every pixel is written, bars included.
+    vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+    if (inside.x >= 0 && inside.y >= 0 && inside.x < rect_width && inside.y < rect_height) {
+        // The whole frame maps onto the rectangle, sampled at the pixel's centre.
+        vec2 uv = (vec2(inside) + vec2(0.5)) / vec2(float(rect_width), float(rect_height));
+        color = textureLod(Source, uv, 0.0);
+    }
+    imageStore(Destination, pixel, color);
+}

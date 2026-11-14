@@ -639,6 +639,8 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         if (chosen) {
             fluid_family = *chosen;
             has_fluid_queue = true;
+            fluid_family_compute =
+                (family_properties[fluid_family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
             const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
             fluid_high_priority =
                 fluid_queue_mode != 2 && fluid_queue_mode != 5 && !copy_engine &&
