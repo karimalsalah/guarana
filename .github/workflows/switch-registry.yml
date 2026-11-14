@@ -35,10 +35,14 @@ jobs:
       - name: Test the check
         run: python3 -I tools/ci/tests/test_switch_registry.py -v
 
-      # The tip of the upstream branch (upstream-sync.yml mirrors it) counts as upstream's list too,
-      # so a switch that an upstream sync or merge brings in needs neither a row nor a regenerated
-      # list. The checked-in list still covers names upstream has since dropped.
+      # Upstream's own tip counts as upstream's list too, so a switch that an upstream merge brings
+      # in needs neither a row nor a regenerated list. It is read from upstream itself: the mirror
+      # branch (upstream-sync.yml) stops following when upstream changes a workflow file and no
+      # UPSTREAM_SYNC_TOKEN is set, so it is only the fallback for when upstream cannot be reached.
+      # The checked-in list still covers names upstream has since dropped.
       - name: Check docs/switches.md against the tree
         run: |
-          git fetch --no-tags --depth=1 origin upstream
+          if ! git fetch --no-tags --depth=1 https://github.com/zortos293/Lichii nx2; then
+            git fetch --no-tags --depth=1 origin upstream
+          fi
           python3 -I tools/ci/switch_registry.py --upstream-ref FETCH_HEAD

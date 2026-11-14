@@ -26,7 +26,7 @@ whose switch is used nowhere any more.
 --write-upstream REF rewrites the upstream list from the switches used in src/ of the git
 commit REF (read with git archive; nothing is checked out). --upstream-ref REF takes the switches
 used in src/ of REF as upstream's too, without writing the list: CI (switch-registry.yml) passes
-the tip of the upstream branch that upstream-sync.yml mirrors, so a switch an upstream sync or
+upstream's own tip (the branch upstream-sync.yml mirrors when upstream is out of reach), so a switch an upstream sync or
 merge brings in needs neither a row nor a regenerated list. Standard library only.
 """
 
