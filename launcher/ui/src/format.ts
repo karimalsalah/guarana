@@ -1,6 +1,6 @@
 // Formatting helpers: sizes, durations, dates, paths, progress lines.
 
-import type { Progress } from "./types";
+import type { Gpu, Progress } from "./types";
 
 export function bytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "–";
@@ -86,6 +86,12 @@ export function gpuName(name: string): string {
     .replace(/\(\s*\d+\s*GB\s*\)/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+/** For an Intel integrated GPU: the family its PCI ids matched. Empty when none did, and for other GPUs. */
+export function gpuFamily(gpu: Gpu): string {
+  if (gpu.vendor !== "intel" || !gpu.is_integrated) return "";
+  return gpu.family ?? "";
 }
 
 /** One line for an install://progress event: resolve, download (bytes), verify, extract (files), done. */
