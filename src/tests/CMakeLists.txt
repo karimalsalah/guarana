@@ -145,6 +145,7 @@ add_executable(tests
     video_core/maxwell_fast_method.cpp
     hid_core/sensor_info.cpp
     common/paged_scalar.cpp
+    common/period_worker.cpp
     common/queue_lifetime.cpp
     common/queue_timed_wait.cpp
     common/range_set_move.cpp
