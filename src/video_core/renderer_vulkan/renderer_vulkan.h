@@ -100,6 +100,61 @@ public:
         return scheduler.GpuCosts();
     }
 
+    [[nodiscard]] std::optional<VideoCore::RendererBase::PresentStatsView>
+    GetPresentStats() const override {
+        const PresentManager::PresentStats s = present_manager.GetPresentStats();
+        VideoCore::RendererBase::PresentStatsView view{};
+        view.fluid = s.fluid;
+        view.fallback = s.fallback;
+        view.shown_stats = s.shown_stats;
+        view.slots = s.slots;
+        view.hits = s.hits;
+        view.no_frame = s.no_frame;
+        view.not_done = s.not_done;
+        view.uncovered = s.uncovered;
+        view.rolled = s.rolled;
+        view.spare = s.spare;
+        view.stale = s.stale;
+        view.queued = s.queued;
+        view.overslept = s.overslept;
+        view.in_order = s.in_order;
+        view.late = s.late;
+        view.dropped = s.dropped;
+        view.received = s.received;
+        view.held = s.held;
+        view.age_ms = s.age_ms;
+        view.latency_ms = s.latency_ms;
+        view.latency_samples = s.latency_samples;
+        view.presents = s.presents;
+        view.acquire_ms = s.acquire_ms;
+        view.acquire_max_ms = s.acquire_max_ms;
+        view.copy_waits = s.copy_waits;
+        view.copy_wait_timeouts = s.copy_wait_timeouts;
+        view.copy_wait_ms = s.copy_wait_ms;
+        view.copy_wait_max_ms = s.copy_wait_max_ms;
+        view.lock_ms = s.lock_ms;
+        view.lock_max_ms = s.lock_max_ms;
+        view.call_ms = s.call_ms;
+        view.call_max_ms = s.call_max_ms;
+        view.margin_ms = s.margin_ms;
+        view.margin_min_ms = s.margin_min_ms;
+        view.margin_samples = s.margin_samples;
+        view.after_vblank = s.after_vblank;
+        view.copy_gpu_samples = s.copy_gpu_samples;
+        view.copy_gpu_ms = s.copy_gpu_ms;
+        view.copy_gpu_max_ms = s.copy_gpu_max_ms;
+        view.refresh_hz = s.refresh_hz;
+        view.vblank_index = s.vblank_index;
+        view.divisor = s.divisor;
+        view.lead_ms = s.lead_ms;
+        view.clock_latency_ms = s.clock_latency_ms;
+        view.queued_frames = s.queued_frames;
+        view.free_frames = s.free_frames;
+        view.frame_count = s.frame_count;
+        view.swapchain_images = s.swapchain_images;
+        return view;
+    }
+
     // Enhanced platform-specific initialization
     void InitializePlatformSpecific();
 

@@ -28,6 +28,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_cache_stats.h"
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
@@ -113,6 +114,7 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
             ++create_trace.collected;
             create_trace.collected_bytes += slot_buffers[buffer_id].SizeBytes();
         }
+        VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.buffer_evicted);
         DeleteBuffer(buffer_id);
     }
 }
@@ -3660,10 +3662,12 @@ BufferId BufferCache<P>::FindBuffer(DAddr device_addr, u32 size, bool sparse_com
                 }
             }
             if (usable) {
+                VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.buffer_hits);
                 return buffer_id;
             }
         }
     }
+    VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.buffer_misses);
     return CreateBuffer(device_addr, size, sparse_compatible, caller);
 }
 
@@ -3861,6 +3865,7 @@ BufferId BufferCache<P>::CreateBuffer(DAddr device_addr, u32 wanted_size, bool s
     }
     Register(new_buffer_id);
     TouchBuffer(new_buffer, new_buffer_id);
+    VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.buffer_created);
     return new_buffer_id;
 }
 
@@ -4295,6 +4300,7 @@ template <class P>
 void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     const StutterTrace::SiteScope site{StutterTrace::Site::BufferDelete};
     ++buffer_deletions;
+    VideoCommon::Nx2CacheStats::Add(VideoCommon::Nx2CacheStats::g_counters.buffer_deleted);
     if constexpr (requires { runtime.OnBufferDeleted(slot_buffers[buffer_id]); }) {
         runtime.OnBufferDeleted(slot_buffers[buffer_id]);
     }
