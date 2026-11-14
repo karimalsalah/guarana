@@ -8,9 +8,16 @@
 
 #include <memory>
 #include <optional>
+#include <string>
+
+#include "common/common_types.h"
 
 namespace Core {
 class System;
+}
+
+namespace Core::GamePresets {
+struct GpuInfo;
 }
 
 namespace Core::Frontend {
@@ -28,5 +35,12 @@ class RendererBase;
 /// threads, so that it overlaps the rest of the load. Call before CreateGPU.
 void PrepareRenderer(Core::Frontend::EmuWindow& emu_window);
 void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system);
+
+/// Puts the game's switch defaults in the environment (Core::GamePresets::ApplySwitchDefaults),
+/// then reads again the switches CreateGPU read before they were there: the read-back's
+/// EDEN_NX2_EARLY_* (AsyncReadback::ReadSwitch). The renderer calls it once the GPU is known, so
+/// a game's first start runs with its defaults, and a later start without an earlier game's.
+/// Returns ApplySwitchDefaults' line.
+std::string ApplyGameSwitchDefaults(u64 title_id, const Core::GamePresets::GpuInfo& gpu);
 
 } // namespace VideoCore

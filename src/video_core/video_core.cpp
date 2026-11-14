@@ -11,6 +11,7 @@
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/game_presets.h"
 #include "core/gpu_dirty_memory_manager.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
@@ -93,6 +94,17 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
         LOG_ERROR(HW_GPU, "Failed to initialize GPU: {}", exception.what());
         gpu.reset();
     }
+}
+
+std::string ApplyGameSwitchDefaults(u64 title_id, const Core::GamePresets::GpuInfo& gpu) {
+    std::string line = Core::GamePresets::ApplySwitchDefaults(title_id, gpu);
+    // CreateGPU read these before the defaults were in the environment.
+    AsyncReadback::ReadSwitch();
+    LOG_INFO(HW_GPU,
+             "Read-back switches in effect: EARLY_SUBMIT={}, EARLY_PAGES={}, EARLY_AFTER={}",
+             AsyncReadback::EarlySubmit(), AsyncReadback::EarlyPages(),
+             AsyncReadback::EarlyAfter());
+    return line;
 }
 
 } // namespace VideoCore

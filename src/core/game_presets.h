@@ -131,11 +131,13 @@ enum class SwitchDecision {
 /// where nothing set the switch, and over a value only the shipped nx2_switches.txt set; a switch
 /// the player set to anything (0 included), in the environment or in their own nx2_switches.txt,
 /// stays as set. Call it before the device and the renderer are built: they read most switches
-/// once. Off with the presets (auto_presets, EDEN_NX2_NO_PRESETS=1). Logs and returns what it did
-/// in one line that names the display rate found, the set chosen because of it, the values set,
-/// the ones set over the shipped file (with its value) and the ones the player set. A later call
-/// in the same process (another game start) first puts back what the earlier one set, and its
-/// line says that switches read once keep the first start's values.
+/// once. The renderer calls it through VideoCore::ApplyGameSwitchDefaults, which then reads again
+/// the switches VideoCore::CreateGPU read earlier (the read-back's EARLY_*). Off with the presets
+/// (auto_presets, EDEN_NX2_NO_PRESETS=1). Logs and returns what it did in one line that names the
+/// display rate found, the set chosen because of it, the values set, the ones set over the shipped
+/// file (with its value) and the ones the player set. A later call in the same process (another
+/// game start) first puts back what the earlier one set, and its line says that switches read once
+/// keep the first start's values.
 std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu);
 
 /// Whether the title's first boot on this GPU gets the line ReportFirstBoot logs: Ocarina of

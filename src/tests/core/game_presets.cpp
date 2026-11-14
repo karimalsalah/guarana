@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <cstdlib>
 #include <optional>
 #include <set>
 #include <string>
@@ -13,6 +14,8 @@
 #include "common/settings.h"
 #include "common/switch_origin.h"
 #include "core/game_presets.h"
+#include "video_core/nx2_async_readback.h"
+#include "video_core/video_core.h"
 
 namespace {
 
@@ -418,6 +421,61 @@ TEST_CASE("A switch default replaces only what the shipped switch file alone set
         ShippedOnly(shipped, shipped, {"EDEN_NX2_EXTRAPOLATE"}, nothing_in_environment);
     const SwitchMap expected{{"EDEN_NX2_SPLIT", "2"}};
     CHECK(record == expected);
+}
+
+TEST_CASE("A game's read-back switch defaults are in effect from its first start",
+          "[core][game_presets]") {
+    using namespace VideoCore::AsyncReadback;
+    constexpr std::array early{"EDEN_NX2_EARLY_SUBMIT", "EDEN_NX2_EARLY_PAGES",
+                               "EDEN_NX2_EARLY_AFTER"};
+    // The switch defaults go into this process's environment: only where none of them is set.
+    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+        if (std::getenv(std::string{item.name}.c_str()) != nullptr) {
+            SKIP("A switch of Ocarina of Time's defaults is set in the environment");
+        }
+    }
+    for (const char* name : early) {
+        if (std::getenv(name) != nullptr) {
+            SKIP("A read-back switch is set in the environment");
+        }
+    }
+    if (std::getenv("EDEN_NX2_NO_PRESETS") != nullptr) {
+        SKIP("EDEN_NX2_NO_PRESETS is set");
+    }
+    SettingsScope scope;
+    Settings::values.auto_presets.SetValue(true);
+    Common::SwitchOrigin::RecordShippedOnly({});
+
+    // VideoCore::CreateGPU reads them before the renderer knows the GPU.
+    ReadSwitch();
+    REQUIRE(EarlySubmit() == 0U);
+    REQUIRE(EarlyPages() == 64U);
+    REQUIRE(EarlyAfter() == 2);
+
+    // The renderer's call: the first start runs with the game's defaults, as a later one does.
+    void(VideoCore::ApplyGameSwitchDefaults(OcarinaTitleId, Arc140T));
+#ifdef _WIN32
+    CHECK(EarlySubmit() == 1U);
+    CHECK(EarlyPages() == 256U);
+    CHECK(EarlyAfter() == 1);
+#else
+    // The sets exist on Windows only.
+    CHECK(EarlySubmit() == 0U);
+    CHECK(EarlyPages() == 64U);
+    CHECK(EarlyAfter() == 2);
+#endif
+
+    // Another game started next in the same process: CreateGPU reads what the first game's
+    // defaults left in the environment, and this game's call puts back what they replaced.
+    ReadSwitch();
+    void(VideoCore::ApplyGameSwitchDefaults(0x0100152000022000, Arc140T));
+    CHECK(EarlySubmit() == 0U);
+    CHECK(EarlyPages() == 64U);
+    CHECK(EarlyAfter() == 2);
+    for (const SwitchValue& item : SwitchDefaults(OcarinaTitleId, Arc140T)) {
+        CAPTURE(item.name);
+        CHECK(std::getenv(std::string{item.name}.c_str()) == nullptr);
+    }
 }
 
 TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {
