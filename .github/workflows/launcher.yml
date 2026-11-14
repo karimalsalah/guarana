@@ -71,6 +71,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # windows-latest can move Node without a commit, and the locked vite needs ^20.19 or >=22.12.
+      # The same step as promo-render.yml. No npm cache: the job builds once.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
       - name: Decide the release
         id: plan
         shell: bash
