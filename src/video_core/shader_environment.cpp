@@ -39,6 +39,7 @@
 #include "shader_recompiler/frontend/ampere/program_capture.h"
 #include "shader_recompiler/frontend/ampere/program_address_map.h"
 #include "video_core/engines/kepler_compute.h"
+#include "video_core/detached_snapshot_policy.h"
 #include "video_core/memory_manager.h"
 #include "video_core/native_lowering.h"
 #include "video_core/nx2_debug_control.h"
@@ -1110,7 +1111,9 @@ bool GraphicsEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
     // Recorded for the disk cache, as an attached environment does.
     (void)ReadCbufValue(index, offset);
     (void)ReadCbufValue(index, offset + 4);
-    const bool mapped = snapshot->mapped_pointers.contains(key);
+    const auto& pointers = snapshot->const_buffers[index].mapped_pointers;
+    const size_t slot = offset / sizeof(u32);
+    const bool mapped = slot < pointers.size() && pointers[slot] != 0;
     storage_pointer_types.emplace(key, static_cast<u8>(mapped));
     return mapped;
 }
@@ -1139,6 +1142,12 @@ bool GraphicsEnvironment::Detach(
     if (native_source_size == 0) {
         return false;
     }
+    const auto& live_buffers{maxwell3d->state.shader_stages[stage_index].const_buffers};
+    for (const auto& live : live_buffers) {
+        if (live.enabled && live.size > Maxwell::MaxConstBufferSize) {
+            return false;
+        }
+    }
     const auto& regs{maxwell3d->regs};
     if (!texture_pool) {
         const size_t pool_entries{size_t{regs.tex_header.limit} + 1};
@@ -1149,7 +1158,6 @@ bool GraphicsEnvironment::Detach(
         texture_pool = std::move(pool);
     }
     EngineSnapshot copy;
-    const auto& live_buffers{maxwell3d->state.shader_stages[stage_index].const_buffers};
     for (size_t index = 0; index < live_buffers.size(); ++index) {
         const auto& live{live_buffers[index]};
         auto& copied{copy.const_buffers[index]};
@@ -1157,9 +1165,9 @@ bool GraphicsEnvironment::Detach(
         if (!live.enabled || live.size == 0) {
             continue;
         }
-        // The size register can exceed what a constant buffer holds; never copy more than that.
-        copied.size = (std::min)(live.size, static_cast<u32>(Maxwell::MaxConstBufferSize));
+        copied.size = live.size;
         copied.words.resize(Common::DivCeil(copied.size, u32{sizeof(u32)}) + 1);
+        copied.mapped_pointers.resize(Common::DivCeil(copied.size, u32{sizeof(u32)}));
         gpu_memory->ReadWordsUnsafe(live.address, copied.words.data(), copied.words.size());
         // Offsets at or past `size` read as zero, as ReadCbufValue answers them.
         for (u32 offset = 0; offset < copied.size; offset += sizeof(u32)) {
@@ -1168,7 +1176,7 @@ bool GraphicsEnvironment::Detach(
                                ? copied.words[offset / sizeof(u32) + 1]
                                : 0};
             if (IsMappedGpuAddress(low | (high << 32))) {
-                copy.mapped_pointers.insert(MakeCbufKey(static_cast<u32>(index), offset));
+                copied.mapped_pointers[offset / sizeof(u32)] = 1;
             }
         }
     }
@@ -1194,8 +1202,37 @@ size_t GraphicsEnvironment::SnapshotSizeBytes() const noexcept {
     size_t total{};
     for (const auto& cbuf : snapshot->const_buffers) {
         total += cbuf.words.size() * sizeof(u32);
+        total += cbuf.mapped_pointers.size();
     }
     return total;
+}
+
+std::optional<u64> GraphicsEnvironment::DetachedSizeEstimate() const {
+    if (native_source_size == 0 || has_hle_engine_state) {
+        // Keep replacement tables on the GPU thread rather than budgeting another hash table.
+        return std::nullopt;
+    }
+    u64 bytes = sizeof(*this) + code.capacity() * sizeof(u64);
+    // Flat hash tables retain their capacity; allow for control bytes, alignment and spare space.
+    const auto table_bytes = [](const auto& table) -> u64 {
+        return table.capacity() * (sizeof(typename std::decay_t<decltype(table)>::value_type) + 16) * 2;
+    };
+    bytes += table_bytes(texture_types) + table_bytes(texture_pixel_formats) +
+             table_bytes(cbuf_values) + table_bytes(storage_pointer_types) +
+             table_bytes(cbuf_replacements);
+    for (const auto& cbuf : maxwell3d->state.shader_stages[stage_index].const_buffers) {
+        if (!cbuf.enabled || cbuf.size == 0) {
+            continue;
+        }
+        const auto buffer_bytes = DetachedConstantBufferBytes(
+            cbuf.size, static_cast<u32>(Maxwell::MaxConstBufferSize));
+        if (!buffer_bytes) {
+            return std::nullopt;
+        }
+        bytes += *buffer_bytes;
+    }
+    // Fresh vectors are sized once. Leave headroom for allocator bookkeeping and alignment.
+    return ConservativeSnapshotCharge(bytes);
 }
 
 ComputeEnvironment::ComputeEnvironment(Tegra::Engines::KeplerCompute& kepler_compute_,

@@ -15,7 +15,6 @@
 #include <span>
 #include <type_traits>
 #include "common/container/unordered_map.h"
-#include "common/container/unordered_set.h"
 #include <vector>
 
 #include "common/common_types.h"
@@ -229,8 +228,11 @@ public:
     [[nodiscard]] bool Detach(
         std::shared_ptr<const std::vector<Tegra::Texture::TICEntry>>& texture_pool);
 
-    /// Bytes of constant buffer contents copied by Detach (0 if not detached).
+    /// Bytes of constant buffer contents and pointer flags copied by Detach (0 if not detached).
     [[nodiscard]] size_t SnapshotSizeBytes() const noexcept;
+
+    /// Conservative queued-memory charge, computed before allocating the snapshot.
+    [[nodiscard]] std::optional<u64> DetachedSizeEstimate() const;
 
     /// Frees what Detach copied. Afterwards the environment only holds its recorded answers, for
     /// the disk cache: it must not be translated again.
@@ -248,6 +250,7 @@ private:
             /// Contents when the environment was detached, one word longer than `size` so a
             /// read at any offset below `size` stays inside the copy.
             std::vector<u32> words;
+            std::vector<u8> mapped_pointers;
         };
         std::array<ConstBuffer, Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers> const_buffers;
 
@@ -259,9 +262,6 @@ private:
         ::Common::unordered_map<u64, Tegra::Engines::Maxwell3D::HLEReplacementAttributeType>
             replace_table;
 
-        /// Keys (index, offset) of the 4-byte aligned constant buffer slots whose 8 bytes were a
-        /// mapped GPU address.
-        ::Common::unordered_set<u64> mapped_pointers;
     };
 
     /// Texture descriptor (TIC entry) of a texture handle, from the engine or the snapshot.

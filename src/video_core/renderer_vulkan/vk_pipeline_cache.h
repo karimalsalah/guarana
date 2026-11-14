@@ -221,6 +221,7 @@ private:
         /// The detached environments could not answer translation (DetachedEnvironmentMiss), or
         /// translation failed in a way no pipeline can come of: the GPU thread translates it.
         bool translate_on_gpu_thread{};
+        u64 prepass_generation{};
     };
 
     /// Queues the disk cache record of a new graphics pipeline.
@@ -244,11 +245,14 @@ private:
     /// GPU thread).
     [[nodiscard]] std::optional<u64> DetachGraphicsEnvironments(GraphicsEnvironmentArray& envs);
 
+    [[nodiscard]] std::optional<u64> EstimateGraphicsSnapshots(
+        const GraphicsEnvironmentArray& envs) const;
+
     /// Queues the translation of graphics_key's pipeline as a shader job, holding `reservation`
-    /// for its snapshots (`snapshot_bytes`) until it ran, and waits for it as
+    /// for its snapshots and retained environments (`memory_charge`) until it ran, and waits as
     /// WaitForGraphicsTranslation does. Its pipeline is in graphics_cache if it was adopted in
     /// time.
-    void QueueGraphicsTranslation(GraphicsEnvironmentArray envs, u64 snapshot_bytes,
+    void QueueGraphicsTranslation(GraphicsEnvironmentArray envs, u64 memory_charge,
                                   std::unique_ptr<QueuedIrBudget::Reservation> reservation);
 
     /// Waits for the queued translation of `key` as the current draw's pending policy allows:
@@ -259,7 +263,7 @@ private:
 
     /// The CPU stage of a queued translation, on a shader job worker.
     void TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& key,
-                                   GraphicsEnvironmentArray envs);
+                                   GraphicsEnvironmentArray envs, u64 generation);
 
     /// Moves the pipelines the shader job workers translated into graphics_cache (GPU thread).
     void AdoptTranslatedGraphicsPipelines();
@@ -443,6 +447,8 @@ private:
     /// Keys adopted from a worker that no draw used yet, so the first use counts as built in play
     /// (GPU thread only).
     ::Common::unordered_set<GraphicsPipelineCacheKey> adopted_keys;
+    /// Also track builds already adopted when a live prepass change arrives (GPU thread only).
+    ::Common::unordered_map<GraphicsPipelineCacheKey, u64> async_adopted_generations;
 
     Shader::Profile profile;
     Shader::HostTranslateInfo host_info;

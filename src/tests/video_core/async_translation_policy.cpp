@@ -3,6 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "video_core/renderer_vulkan/async_translation_policy.h"
+#include "video_core/detached_snapshot_policy.h"
+#include "video_core/renderer_vulkan/pipeline_build.h"
 
 using Vulkan::AsyncTranslationInputs;
 using Vulkan::CanTranslateOnWorker;
@@ -14,6 +16,48 @@ using Vulkan::NativeDrawAction;
 using Vulkan::NativePendingMode;
 using Vulkan::TranslationThread;
 using Vulkan::TranslationWait;
+
+TEST_CASE("Detached buffers budget pointer flags and tail reads", "[video_core][async_translation]") {
+    using VideoCommon::DetachedConstantBufferBytes;
+    REQUIRE(DetachedConstantBufferBytes(0, 65536) == 0);
+    REQUIRE(DetachedConstantBufferBytes(1, 65536) == 9);
+    REQUIRE(DetachedConstantBufferBytes(4, 65536) == 9);
+    REQUIRE(DetachedConstantBufferBytes(5, 65536) == 14);
+    REQUIRE(DetachedConstantBufferBytes(65536, 65536) == 81924);
+    REQUIRE_FALSE(DetachedConstantBufferBytes(65537, 65536));
+}
+
+TEST_CASE("Snapshot charges leave headroom without wrapping", "[video_core][async_translation]") {
+    using VideoCommon::ConservativeSnapshotCharge;
+    REQUIRE(ConservativeSnapshotCharge(100) == 4296);
+    const u64 largest = (std::numeric_limits<u64>::max() - 4096) / 2;
+    REQUIRE(ConservativeSnapshotCharge(largest).has_value());
+    REQUIRE_FALSE(ConservativeSnapshotCharge(largest + 1));
+}
+
+TEST_CASE("Translations from an old prepass generation must be retried",
+          "[video_core][async_translation]") {
+    REQUIRE(Vulkan::TranslationGenerationMatches(0, 0));
+    REQUIRE(Vulkan::TranslationGenerationMatches(42, 42));
+    REQUIRE_FALSE(Vulkan::TranslationGenerationMatches(0, 1));
+    REQUIRE_FALSE(Vulkan::TranslationGenerationMatches(41, 42));
+}
+
+TEST_CASE("Queued snapshots compete with queued IR before copying", "[video_core][async_translation]") {
+    const auto charge = VideoCommon::ConservativeSnapshotCharge(
+        *VideoCommon::DetachedConstantBufferBytes(65536, 65536));
+    REQUIRE(charge.has_value());
+    Vulkan::QueuedIrBudget budget{*charge + 1024};
+    auto ir = budget.TryReserve(1025);
+    REQUIRE(ir);
+    REQUIRE_FALSE(budget.TryReserve(*charge));
+    ir.reset();
+    auto snapshot = budget.TryReserve(*charge);
+    REQUIRE(snapshot);
+    REQUIRE_FALSE(budget.TryReserve(1025));
+    snapshot.reset();
+    REQUIRE(budget.TryReserve(*charge));
+}
 
 namespace {
 AsyncTranslationInputs Eligible() {

@@ -3276,7 +3276,7 @@ void PipelineCache::TickFrame() {
     if (const u64 generation = VideoCore::Nx2Debug::PrepassGeneration();
         generation != prepass_generation) {
         // Zero: the first frame, whose pipelines were made with the list as it still is.
-        if (prepass_generation != 0) {
+        if (prepass_generation != 0 || use_async_translate) {
             DropPipelinesWithoutPrepass();
         }
         prepass_generation = generation;
@@ -3334,9 +3334,14 @@ void PipelineCache::TickFrame() {
 void PipelineCache::DropPipelinesWithoutPrepass() {
     std::vector<GraphicsPipelineCacheKey> drop;
     for (const auto& [key, pipeline] : graphics_cache) {
-        if (pipeline != nullptr && pipeline->IsBuilt() && !pipeline->HasPrepassSplit() &&
-            key.unique_hashes[5] != 0 &&
-            VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5])) {
+        const auto captured = async_adopted_generations.find(key);
+        const bool stale_async = use_async_translate &&
+            captured != async_adopted_generations.end() &&
+            !TranslationGenerationMatches(captured->second, VideoCore::Nx2Debug::PrepassGeneration());
+        const bool missing_split = pipeline != nullptr && pipeline->IsBuilt() &&
+            !pipeline->HasPrepassSplit() && key.unique_hashes[5] != 0 &&
+            VideoCore::Nx2Debug::IsPrepassHash(key.unique_hashes[5]);
+        if (pipeline != nullptr && (stale_async || missing_split)) {
             drop.push_back(key);
         }
     }
@@ -3346,6 +3351,8 @@ void PipelineCache::DropPipelinesWithoutPrepass() {
     // As an eviction, but nothing is kept: the next draw translates the pipeline again.
     const u64 tick = scheduler.CurrentTick();
     for (const GraphicsPipelineCacheKey& key : drop) {
+        async_adopted_generations.erase(key);
+        adopted_keys.erase(key);
         const auto it = graphics_cache.find(key);
         if (it->second.get() == current_pipeline) {
             current_pipeline = nullptr;
@@ -3428,6 +3435,8 @@ void PipelineCache::EvictUnusedPipelines() {
     }
     const u64 tick = scheduler.CurrentTick();
     for (const GraphicsPipelineCacheKey& key : evict) {
+        async_adopted_generations.erase(key);
+        adopted_keys.erase(key);
         const auto it = graphics_cache.find(key);
         if (const auto used = used_this_session.find(it->second.get());
             used != used_this_session.end()) {
@@ -4538,18 +4547,20 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::NewAsyncGraphicsPipeline(bool e
     }
     // The snapshots of queued translations count against queued_ir, as IR waiting for its SPIR-V
     // does; past it the pipeline is translated here.
-    const std::optional<u64> snapshot_bytes{DetachGraphicsEnvironments(environments.envs)};
+    const std::optional<u64> estimate{EstimateGraphicsSnapshots(environments.envs)};
     std::unique_ptr<QueuedIrBudget::Reservation> reservation;
-    if (snapshot_bytes) {
-        reservation = queued_ir.TryReserve(*snapshot_bytes);
+    if (estimate) {
+        reservation = queued_ir.TryReserve(*estimate);
     }
+    const std::optional<u64> snapshot_bytes{
+        reservation ? DetachGraphicsEnvironments(environments.envs) : std::nullopt};
     if (ChooseTranslationThread(snapshot_bytes.has_value(), reservation != nullptr) ==
         TranslationThread::GpuThread) {
         // Fresh environments: the ones above may be detached in part.
         return CreateGraphicsPipeline(nullptr, evicted);
     }
     async_translations.copied_bytes += *snapshot_bytes;
-    QueueGraphicsTranslation(std::move(environments.envs), *snapshot_bytes,
+    QueueGraphicsTranslation(std::move(environments.envs), *estimate,
                              std::move(reservation));
     if (translating_graphics.contains(graphics_key) || graphics_cache.contains(graphics_key)) {
         // Still running, or adopted within the wait: no pipeline to hand back for now.
@@ -4581,6 +4592,29 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipelineFromReuse
     return pipeline;
 }
 
+std::optional<u64> PipelineCache::EstimateGraphicsSnapshots(
+    const GraphicsEnvironmentArray& envs) const {
+    const auto& header = maxwell3d->regs.tex_header;
+    const auto last = VideoCommon::TexturePoolLastAddress(header.Address(), header.limit);
+    if (!VideoCommon::CanFlushTexturePool(header.limit) || !last ||
+        !gpu_memory->IsWithinGPUAddressRange(*last)) {
+        return std::nullopt;
+    }
+    u64 bytes = (u64{header.limit} + 1) * sizeof(Tegra::Texture::TICEntry) * 2 + 4096;
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (graphics_key.unique_hashes[index] == 0) {
+            bytes += sizeof(GraphicsEnvironmentArray::value_type);
+            continue;
+        }
+        const auto estimate = envs[index].DetachedSizeEstimate();
+        if (!estimate) {
+            return std::nullopt;
+        }
+        bytes += *estimate;
+    }
+    return bytes;
+}
+
 std::optional<u64> PipelineCache::DetachGraphicsEnvironments(GraphicsEnvironmentArray& envs) {
     // The pool is copied flushed, on this thread, as the parallel translation of a pipeline
     // flushes it: not when it is too large or runs past the GPU address space.
@@ -4609,17 +4643,18 @@ std::optional<u64> PipelineCache::DetachGraphicsEnvironments(GraphicsEnvironment
 }
 
 void PipelineCache::QueueGraphicsTranslation(
-    GraphicsEnvironmentArray envs, u64 snapshot_bytes,
+    GraphicsEnvironmentArray envs, u64 memory_charge,
     std::unique_ptr<QueuedIrBudget::Reservation> reservation) {
     const VideoCommon::ShaderJobHandle job{shader_jobs->Submit({
         .priority = VideoCommon::ShaderJobPriority::Soon,
-        .cpu_bytes = TranslationBytes(snapshot_bytes),
-        .cpu = [this, key = graphics_key, queued_envs = std::move(envs),
+        .cpu_bytes = TranslationBytes(memory_charge),
+        .cpu = [this, key = graphics_key, generation = VideoCore::Nx2Debug::PrepassGeneration(),
+                queued_envs = std::move(envs),
                 held = std::move(reservation)](
                    VideoCommon::ShaderJobContext& context) mutable
             -> VideoCommon::ShaderDriverStage {
             if (!context.StopRequested()) {
-                TranslateGraphicsPipeline(key, std::move(queued_envs));
+                TranslateGraphicsPipeline(key, std::move(queued_envs), generation);
             }
             held.reset();
             return {};
@@ -4668,7 +4703,7 @@ bool PipelineCache::WaitForGraphicsTranslation(const GraphicsPipelineCacheKey& k
 }
 
 void PipelineCache::TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& key,
-                                              GraphicsEnvironmentArray envs) {
+                                              GraphicsEnvironmentArray envs, u64 generation) {
     boost::container::static_vector<Shader::Environment*, Maxwell::MaxShaderProgram> env_ptrs;
     for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
         if (key.unique_hashes[index] != 0) {
@@ -4687,8 +4722,10 @@ void PipelineCache::TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& ke
         translate_on_gpu_thread = true;
     } catch (const std::exception& exception) {
         // Shader errors are handled inside; nothing else may fail the job unadopted.
+        translate_on_gpu_thread = true;
         LOG_ERROR(Render_Vulkan, "Graphics pipeline translation failed: {}", exception.what());
     } catch (...) {
+        translate_on_gpu_thread = true;
         LOG_ERROR(Render_Vulkan, "Graphics pipeline translation failed");
     }
     // Only the recorded answers stay, for the disk cache.
@@ -4701,6 +4738,7 @@ void PipelineCache::TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& ke
         .pipeline = std::move(pipeline),
         .envs = std::move(envs),
         .translate_on_gpu_thread = translate_on_gpu_thread,
+        .prepass_generation = generation,
     });
     num_translated.store(translated_graphics.size(), std::memory_order_release);
 }
@@ -4714,6 +4752,16 @@ void PipelineCache::AdoptTranslatedGraphicsPipelines() {
     }
     for (TranslatedGraphicsPipeline& result : translated) {
         translating_graphics.erase(result.key);
+        if (!TranslationGenerationMatches(result.prepass_generation,
+                                          VideoCore::Nx2Debug::PrepassGeneration())) {
+            // A build may still be running. Retire it without waiting on the drawing thread.
+            if (result.pipeline) {
+                evicted_pipelines.emplace_back(scheduler.CurrentTick(), std::move(result.pipeline));
+            }
+            synchronous_graphics.insert(result.key);
+            ++async_translations.on_gpu_thread;
+            continue;
+        }
         if (ClassifyFinishedTranslation(result.translate_on_gpu_thread, true) ==
             FinishedTranslation::TranslateOnGpuThread) {
             // The next lookup translates it on the GPU thread.
@@ -4725,6 +4773,7 @@ void PipelineCache::AdoptTranslatedGraphicsPipelines() {
         if (result.pipeline) {
             SerializeGraphicsPipeline(result.key, std::move(result.envs));
             adopted_keys.insert(result.key);
+            async_adopted_generations.insert_or_assign(result.key, result.prepass_generation);
         }
         graphics_cache.emplace(result.key, std::move(result.pipeline));
     }

@@ -75,6 +75,10 @@ enum class TranslationWait {
 /// ended without a result.
 enum class FinishedTranslation { Adopt, TranslateOnGpuThread };
 
+[[nodiscard]] constexpr bool TranslationGenerationMatches(u64 captured, u64 current) {
+    return captured == current;
+}
+
 [[nodiscard]] constexpr FinishedTranslation ClassifyFinishedTranslation(bool environment_miss,
                                                                         bool has_result) {
     return environment_miss || !has_result ? FinishedTranslation::TranslateOnGpuThread
