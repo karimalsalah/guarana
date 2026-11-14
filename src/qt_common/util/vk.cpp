@@ -29,18 +29,12 @@ Record::Record(std::string_view name_, const std::vector<VkPresentModeKHR>& vsyn
 
 Record::~Record() = default;
 
-void PopulateRecords(std::vector<Record>& records, QWindow* window) try {
+namespace {
+void FillRecords(std::vector<Record>& records, const Vulkan::vk::Instance& instance,
+                 const Vulkan::vk::InstanceDispatch& dld,
+                 const Core::Frontend::EmuWindow::WindowSystemInfo& wsi) {
     using namespace Vulkan;
 
-    // Create a test window with a Vulkan surface type for checking present modes.
-    QWindow test_window(window);
-    test_window.setSurfaceType(QWindow::VulkanSurface);
-    test_window.create();
-    auto wsi = QtCommon::GetWindowSystemInfo(&test_window);
-
-    vk::InstanceDispatch dld;
-    const auto library = OpenLibrary();
-    const vk::Instance instance = CreateInstance(*library, dld, VK_API_VERSION_1_1, wsi.type);
     const std::vector<VkPhysicalDevice> physical_devices = instance.EnumeratePhysicalDevices();
     vk::SurfaceKHR surface = CreateSurface(instance, wsi);
 
@@ -95,6 +89,31 @@ void PopulateRecords(std::vector<Record>& records, QWindow* window) try {
         records.push_back(
             VkDeviceInfo::Record(name, present_modes, has_broken_compute, fsr4_capable));
     }
+}
+} // Anonymous namespace
+
+void PopulateRecords(std::vector<Record>& records, QWindow* window) try {
+    using namespace Vulkan;
+
+    // Create a test window with a Vulkan surface type for checking present modes.
+    QWindow test_window(window);
+    test_window.setSurfaceType(QWindow::VulkanSurface);
+    test_window.create();
+    auto wsi = QtCommon::GetWindowSystemInfo(&test_window);
+
+    // EDEN_NX2_VULKAN_INSTANCE_ONCE=1: the instance the renderer takes later is made ahead and
+    // lent for this listing, so the boot pays for one vkCreateInstance, not two.
+    if (UseEarlyInstance(wsi.type, false,
+                         [&](const vk::Instance& early, const vk::InstanceDispatch& early_dld) {
+                             FillRecords(records, early, early_dld, wsi);
+                         })) {
+        return;
+    }
+
+    vk::InstanceDispatch dld;
+    const auto library = OpenLibrary();
+    const vk::Instance instance = CreateInstance(*library, dld, VK_API_VERSION_1_1, wsi.type);
+    FillRecords(records, instance, dld, wsi);
 } catch (const Vulkan::vk::Exception& exception) {
     LOG_ERROR(Frontend, "Failed to enumerate devices with error: {}", exception.what());
 }

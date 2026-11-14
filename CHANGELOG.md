@@ -24,6 +24,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Agent kit: [docs/agents/README.md](docs/agents/README.md#what-costs-nothing-today) lists the agent tiers that cost nothing today, with the vendors' stated limits.
 - Pull request template: a note for a first pull request, a tests item for contributors who cannot build (CI runs the tests), and an `Assisted-by:` trailer item; CONTRIBUTING.md says why a first-time contributor's checks may wait for approval.
 - Docs: [docs/lifecycle.md](docs/lifecycle.md) lists what Guarana and its launcher store, from switch files and settings to shader caches and markers, and when each is flushed, loaded and preloaded, with the code that does it; [docs/design/settings-hygiene.md](docs/design/settings-hygiene.md) is the proposal in [#125](https://github.com/karimalsalah/guarana/issues/125) (not yet built) to record who wrote each value, reset what the player did not choose, and let the doctor run on its own.
+- `EDEN_NX2_VULKAN_INSTANCE_ONCE=1` (experiment, off by default, issue #46): the Vulkan instance is created once per boot. A game started from the game list no longer pays for a second `vkCreateInstance` (about 3.6 s on the Arc 140T): the frontend's device list borrows the instance made on another thread and the renderer takes the same one. Not measured.
 
 ### Changed
 

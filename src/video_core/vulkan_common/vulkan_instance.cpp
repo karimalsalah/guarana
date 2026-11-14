@@ -21,6 +21,7 @@
 #include <ranges>
 #include <vulkan/vulkan_core.h>
 #include "core/frontend/emu_window.h"
+#include "video_core/vulkan_common/early_slot.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/vulkan_common/vulkan_library.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -228,52 +229,108 @@ vk::Instance CreateInstanceNow(const Common::DynamicLibrary& library, vk::Instan
 }
 
 #if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-/// An instance made ahead of the renderer (EDEN_NX2_BOOT_ASYNC): its library and dispatch table
-/// are its own, and live as long as the process once handed over, as the instance points at them.
+/// An instance made ahead of the renderer (EDEN_NX2_BOOT_ASYNC, EDEN_NX2_VULKAN_INSTANCE_ONCE): its
+/// library and dispatch table are its own, and live as long as the process once handed over, as
+/// the instance points at them.
 struct Precreated {
     std::shared_ptr<Common::DynamicLibrary> library;
     std::unique_ptr<vk::InstanceDispatch> dld;
     vk::Instance instance; ///< Destroyed first
+    std::mutex use;        ///< Held while the instance is looked at or moved out
+
+    /// Whether the instance is still here (not taken by the renderer).
+    explicit operator bool() const noexcept {
+        return static_cast<bool>(instance);
+    }
 };
 
-struct PrecreateRequest {
+/// What an instance is made for: what the renderer asks of CreateInstance.
+struct InstanceKey {
     Core::Frontend::WindowSystemType window_type;
     bool validation;
-    std::future<std::unique_ptr<Precreated>> result;
+    u32 version;
+
+    bool operator==(const InstanceKey&) const = default;
 };
 
-std::mutex precreate_mutex;
-std::optional<PrecreateRequest> precreate_request;
-std::vector<std::unique_ptr<Precreated>> handed_over;
+using EarlyInstanceSlot = EarlySlot<InstanceKey, Precreated>;
+
+/// Never destroyed: an instance nobody took (the frontend made it for its device list and no
+/// game started) must not be destroyed while the process exits, and the future of its creation
+/// must not make the exit wait.
+EarlyInstanceSlot& EarlyInstances() {
+    static EarlyInstanceSlot* const slot = new EarlyInstanceSlot;
+    return *slot;
+}
+
+std::mutex handed_over_mutex;
+std::vector<std::shared_ptr<Precreated>> handed_over;
 #endif
 } // Anonymous namespace
+
+bool InstanceOnceEnabled() {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_VULKAN_INSTANCE_ONCE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
 
 void PrecreateInstance([[maybe_unused]] Core::Frontend::WindowSystemType window_type,
                        [[maybe_unused]] bool enable_validation) {
 #if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-    static const bool enabled = [] {
+    static const bool boot_async = [] {
         const char* value = std::getenv("EDEN_NX2_BOOT_ASYNC");
         return value != nullptr && value[0] == '1';
     }();
-    if (!enabled) {
+    if (!boot_async && !InstanceOnceEnabled()) {
         return;
     }
-    std::scoped_lock lock{precreate_mutex};
-    if (precreate_request) {
-        return;
+    const InstanceKey key{window_type, enable_validation, VK_API_VERSION_1_1};
+    const bool started = EarlyInstances().Reserve(key, [window_type, enable_validation] {
+        Common::BootTiming::Mark("vulkan: instance creation started ahead of the renderer");
+        return std::async(std::launch::async, [window_type, enable_validation] {
+                   auto made = std::make_shared<Precreated>();
+                   made->library = OpenLibrary(nullptr);
+                   made->dld = std::make_unique<vk::InstanceDispatch>();
+                   made->instance =
+                       CreateInstanceNow(*made->library, *made->dld, VK_API_VERSION_1_1,
+                                         window_type, enable_validation);
+                   return made;
+               })
+            .share();
+    });
+    static_cast<void>(started);
+#endif
+}
+
+bool UseEarlyInstance([[maybe_unused]] Core::Frontend::WindowSystemType window_type,
+                      [[maybe_unused]] bool enable_validation,
+                      [[maybe_unused]] const InstanceUse& use) {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    if (!InstanceOnceEnabled()) {
+        return false;
     }
-    Common::BootTiming::Mark("vulkan: instance creation started ahead of the renderer");
-    precreate_request.emplace(PrecreateRequest{
-        .window_type = window_type,
-        .validation = enable_validation,
-        .result = std::async(std::launch::async, [window_type, enable_validation] {
-            auto made = std::make_unique<Precreated>();
-            made->library = OpenLibrary(nullptr);
-            made->dld = std::make_unique<vk::InstanceDispatch>();
-            made->instance = CreateInstanceNow(*made->library, *made->dld, VK_API_VERSION_1_1,
-                                               window_type, enable_validation);
-            return made;
-        })});
+    // After the renderer took (or dropped) the instance, a later listing, from a settings dialog
+    // while the game runs, makes its own as on main and leaves nothing behind.
+    if (EarlyInstances().WasTaken()) {
+        return false;
+    }
+    PrecreateInstance(window_type, enable_validation);
+    const double start = Common::BootTiming::Now();
+    const bool used = EarlyInstances().Borrow(
+        InstanceKey{window_type, enable_validation, VK_API_VERSION_1_1},
+        [&use](Precreated& made) { use(made.instance, *made.dld); });
+    if (used) {
+        Common::BootTiming::Mark("vulkan: instance shared with the frontend's device list", start);
+    }
+    return used;
+#else
+    return false;
 #endif
 }
 
@@ -281,33 +338,32 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
                             u32 required_version, Core::Frontend::WindowSystemType window_type,
                             bool enable_validation) {
 #if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
-    std::optional<PrecreateRequest> request;
-    {
-        std::scoped_lock lock{precreate_mutex};
-        request = std::move(precreate_request);
-        precreate_request.reset();
-    }
-    if (request) {
-        const double wait_start = Common::BootTiming::Now();
-        try {
-            std::unique_ptr<Precreated> made = request->result.get();
-            if (request->window_type == window_type && request->validation == enable_validation &&
-                required_version == VK_API_VERSION_1_1 && made->instance) {
-                // The instance points at its own dispatch table; the renderer's holds the same
-                // functions.
-                dld = *made->dld;
-                vk::Instance instance = std::move(made->instance);
-                Common::BootTiming::Mark("vulkan: instance taken from the early creation",
-                                         wait_start);
-                std::scoped_lock lock{precreate_mutex};
-                handed_over.push_back(std::move(made));
-                return instance;
-            }
-            LOG_INFO(Render_Vulkan, "The instance made ahead does not fit; creating another");
-        } catch (const std::exception& e) {
-            LOG_WARNING(Render_Vulkan, "Creating the instance ahead failed ({}); creating it now",
-                        e.what());
+    const double wait_start = Common::BootTiming::Now();
+    std::optional<vk::Instance> taken;
+    auto result = EarlyInstances().Take(
+        InstanceKey{window_type, enable_validation, required_version}, [&](Precreated& made) {
+            // The instance points at its own dispatch table; the renderer's holds the same
+            // functions.
+            dld = *made.dld;
+            taken.emplace(std::move(made.instance));
+        });
+    switch (result.outcome) {
+    case EarlyInstanceSlot::Outcome::Empty:
+        break;
+    case EarlyInstanceSlot::Outcome::Mismatch:
+        LOG_INFO(Render_Vulkan, "The instance made ahead does not fit; creating another");
+        break;
+    case EarlyInstanceSlot::Outcome::Failed:
+        LOG_WARNING(Render_Vulkan, "Creating the instance ahead failed ({}); creating it now",
+                    result.error);
+        break;
+    case EarlyInstanceSlot::Outcome::Taken:
+        Common::BootTiming::Mark("vulkan: instance taken from the early creation", wait_start);
+        {
+            std::scoped_lock lock{handed_over_mutex};
+            handed_over.push_back(std::move(result.made));
         }
+        return std::move(*taken);
     }
 #endif
     return CreateInstanceNow(library, dld, required_version, window_type, enable_validation);
