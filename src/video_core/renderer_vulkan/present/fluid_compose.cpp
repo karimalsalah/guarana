@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include "video_core/host_shaders/fluid_compose_comp_spv.h"
@@ -14,6 +15,9 @@
 namespace Vulkan {
 
 FluidCompose::FluidCompose(const Device& device, std::size_t frame_count) {
+    filter_mode = FluidComposeMath::ModeOf(std::getenv("EDEN_NX2_FLUID_COMPOSE_NATIVE")) != 0
+                      ? 0U
+                      : FluidComposeMath::FilterModeOf(std::getenv("EDEN_NX2_FLUID_COMPOSE_FILTER"));
     const auto& dld = device.GetLogical();
     shader = BuildShader(device, FLUID_COMPOSE_COMP_SPV);
 
@@ -208,7 +212,9 @@ void FluidCompose::Record(const vk::CommandBuffer& cmdbuf, u32 frame_index, u32 
                                               swapchain_sets[image_index]};
     cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
     cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline_layout, 0, sets, {});
-    cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, job);
+    auto constants = job;
+    constants.filter_mode = static_cast<s32>(filter_mode);
+    cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, constants);
     cmdbuf.Dispatch(FluidComposeMath::GroupCount(static_cast<u32>(job.out_width)),
                     FluidComposeMath::GroupCount(static_cast<u32>(job.out_height)), 1);
 }
