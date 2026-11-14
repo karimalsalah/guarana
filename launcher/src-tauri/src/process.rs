@@ -232,11 +232,11 @@ mod win {
         fn command() -> Command {
             // Absolute system program, no user shell autorun, no fixture executable or game.
             let root = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
-            let mut command = Command::new(root.join("System32/cmd.exe"));
+            let mut command = Command::new(root.join(r"System32\cmd.exe"));
             // Wait for the test to assign all jobs before allowing cmd to start ping.
             // /s /c strips the outer quotes around the command script.
             let mut script = std::ffi::OsString::from("\"set /p GUARANA_JOB_TEST_READY= & \"");
-            script.push(root.join("System32/ping.exe"));
+            script.push(root.join(r"System32\ping.exe"));
             script.push("\" -t 127.0.0.1 >nul\"");
             command.args(["/d", "/s", "/c"]).raw_arg(script)
                 .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
