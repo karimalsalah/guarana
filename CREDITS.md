@@ -16,7 +16,7 @@ Their copyright notices stay in the source files, and the history in git keeps e
 
 ## Intel fixes
 
-[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp) and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), ported to Lichii `nx2` in this fork, and the experiment EXP56 (a cleared depth target larger than its colour targets follows the clear instead of an upload: `EDEN_NX2_DEPTH_CLEAR_COVERS`). The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
+[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp), 0007 (guest HMMA on 8x16x16 cooperative matrices) and 0008 (Intel's 8x16x16 HMMA rounds after each K=8 half, as the guest), both behind `EDEN_NX2_INTEL_COOP_MATRIX` and built on the Lichii pull request #779 below, and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), ported to Lichii `nx2` in this fork, and the experiment EXP56 (a cleared depth target larger than its colour targets follows the clear instead of an upload: `EDEN_NX2_DEPTH_CLEAR_COVERS`). The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
 
 ## Upstream pull requests we carry
 
@@ -46,6 +46,7 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#1596](https://github.com/zortos293/Lichii/pull/1596) | [sanchodecuba11-del](https://github.com/sanchodecuba11-del) | The selected user index is cast to the launch parameter type (MSVC C4244) |
 | [#1475](https://github.com/zortos293/Lichii/pull/1475) | [RomainROCH](https://github.com/RomainROCH) | Logging no longer calls std::terminate when formatting fails while the host is out of memory |
 | [#1558](https://github.com/zortos293/Lichii/pull/1558) | [BrunoSilvestre00](https://github.com/BrunoSilvestre00) | The loading screen no longer freezes in borderless fullscreen on Windows |
+| [#779](https://github.com/zortos293/Lichii/pull/779) | [dylan-hachmann](https://github.com/dylan-hachmann) | Guest HMMA on Intel's 8x16x16 cooperative matrices as two 8-row products through shared memory (closed unmerged upstream; carried behind `EDEN_NX2_INTEL_COOP_MATRIX`, with Fritchii-Intel-Fixes 0007 and 0008) |
 
 When one of these is merged upstream, the next upstream sync brings the upstream version, and this table says so.
 

@@ -2301,9 +2301,10 @@ void Device::RemoveUnsuitableExtensions() {
         if (extensions.cooperative_matrix) {
             shapes = physical.GetCooperativeMatrixPropertiesKHR();
         }
-        const auto has_shape = [&](u32 columns) {
+        // Whether the driver lists a rows x columns x 16 fp16 subgroup shape without saturation.
+        const auto has_shape = [&](u32 rows, u32 columns) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
-                return shape.MSize == 16 && shape.NSize == columns && shape.KSize == 16 &&
+                return shape.MSize == rows && shape.NSize == columns && shape.KSize == 16 &&
                        shape.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.CType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
@@ -2349,7 +2350,7 @@ void Device::RemoveUnsuitableExtensions() {
                             extensions.subgroup_size_control &&
                             features.subgroup_size_control.computeFullSubgroups;
         cooperative_hmma_16x8x16 =
-            usable && has_shape(8) &&
+            usable && has_shape(16, 8) &&
             (properties.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
             properties.subgroup_properties.subgroupSize == GuestWarpSize &&
             // Compute subgroups may vary between these sizes (always with SPIR-V 1.6), and the
@@ -2357,7 +2358,29 @@ void Device::RemoveUnsuitableExtensions() {
             properties.subgroup_size_control.minSubgroupSize == GuestWarpSize &&
             properties.subgroup_size_control.maxSubgroupSize == GuestWarpSize;
         cooperative_hmma_16x16x16 =
-            usable && has_shape(16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            usable && has_shape(16, 16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+        // EDEN_NX2_INTEL_COOP_MATRIX=1 (default off, parsed with strtoul like its neighbours):
+        // Intel's drivers list only an 8x16x16 shape, so the two paths above never apply. Each HMMA
+        // then runs through shared memory as 8-row products (Fritchii-Intel-Fixes 0007 and 0008,
+        // zortos293/Lichii#779). The condition is what the driver reports, on an Intel device:
+        // the shape, 32-lane compute subgroups and the features `usable` checks. Intel's Windows
+        // driver turns shaderFloat16 off for shaders ("broken float16 math", float16_math), but
+        // the device keeps it for the matrices, so that workaround does not matter here.
+        static const bool intel_coop_matrix = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COOP_MATRIX");
+            return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        }();
+        constexpr u32 intel_vendor_id = 0x8086;
+        if (intel_coop_matrix && properties.properties.vendorID == intel_vendor_id) {
+            const bool has_8x16x16 = has_shape(8, 16);
+            const bool guest_warp = IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            cooperative_hmma_8x16x16 = usable && has_8x16x16 && guest_warp;
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_COOP_MATRIX: {} cooperative matrix shapes listed, 8x16x16 "
+                     "fp16 {}, 32-lane compute subgroups {}, usable {}: 8x16x16 HMMA {}",
+                     shapes.size(), has_8x16x16, guest_warp, usable,
+                     cooperative_hmma_8x16x16);
+        }
         const auto has_fp32_result_shape = [&](VkComponentTypeKHR input) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
                 return shape.MSize == 16 && shape.NSize == 16 && shape.KSize == 16 &&
@@ -2370,7 +2393,8 @@ void Device::RemoveUnsuitableExtensions() {
         };
         fp8_matrix_shapes = has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT16_KHR) &&
                             has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT8_E4M3_EXT);
-        extensions.cooperative_matrix = cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16;
+        extensions.cooperative_matrix =
+            cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16 || cooperative_hmma_8x16x16;
         features.cooperative_matrix.cooperativeMatrixRobustBufferAccess = VK_FALSE;
         RemoveExtensionFeatureIfUnsuitable(extensions.cooperative_matrix,
                                            features.cooperative_matrix,

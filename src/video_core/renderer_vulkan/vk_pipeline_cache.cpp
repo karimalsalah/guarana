@@ -538,12 +538,18 @@ VideoCommon::ShaderWarm::DriverStamp PrecachedListStamp(const Device& device,
         device.CanFastLinkGraphicsLibraries() ? 1ULL : 0ULL,
         GplOptimizeEnabled() ? 1ULL : 0ULL,
     };
+    u64 variant = Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs));
+    // EDEN_NX2_INTEL_COOP_MATRIX changes the emitted code of every tensor program. Mixed in only
+    // when on, so that the stamp with the switch off is the one main computes.
+    if (profile.support_cooperative_hmma_8x16x16) {
+        variant = Common::CityHash64WithSeed(reinterpret_cast<const char*>(&variant),
+                                             sizeof(variant), 0x8816ULL);
+    }
     return {
         .driver = device.GetDriverVersion(),
         .device_id = device.GetDeviceID(),
         .cache_version = CACHE_VERSION,
-        .variant =
-            Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs)),
+        .variant = variant,
     };
 }
 
@@ -1039,8 +1045,14 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         device.IsCooperativeHmmaSupported() && TestCooperativeHmma(device);
     profile.support_cooperative_hmma_16x16x16 =
         !profile.support_cooperative_hmma && device.IsCooperativeHmma16x16x16Supported();
+    // EDEN_NX2_INTEL_COOP_MATRIX=1: the device offers the 8x16x16 path only then (see Device).
+    profile.support_cooperative_hmma_8x16x16 = !profile.support_cooperative_hmma &&
+                                               !profile.support_cooperative_hmma_16x16x16 &&
+                                               device.IsCooperativeHmma8x16x16Supported();
     if (profile.support_cooperative_hmma_16x16x16) {
         LOG_INFO(Render_Vulkan, "Guest tensor operations run on 16x16x16 cooperative matrices");
+    } else if (profile.support_cooperative_hmma_8x16x16) {
+        LOG_INFO(Render_Vulkan, "Guest tensor operations run on 8x16x16 cooperative matrices");
     }
     // EDEN_NX2_SW_MATRIX_SHARED=1 (experiment): without tensor cores, guest tensor operations
     // gather their operands from shared memory instead of shuffling them between lanes.
@@ -1052,6 +1064,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         // Subgroups of exactly the guest's 32 lanes, all full, as for the 16x16x16 matrices
         profile.support_software_matrix_shared_memory =
             !profile.support_cooperative_hmma && !profile.support_cooperative_hmma_16x16x16 &&
+            !profile.support_cooperative_hmma_8x16x16 &&
             (subgroup_stages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
             device.IsExtSubgroupSizeControlSupported() &&
             device.IsComputeFullSubgroupsSupported() &&
