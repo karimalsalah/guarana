@@ -20,7 +20,7 @@ Common::ThreadWorker& GetThreadWorkers() {
         }
         return (std::max)(std::thread::hardware_concurrency() / 4, 2U);
     }(), "ImageTranscode", {},
-    // EDEN_NX2_HYBRID: off the performance cores the guest runs on.
+    // EDEN_NX2_HYBRID: on the efficiency cores, off the cores the GPU threads run on.
     Common::HybridPlacementActive() ? Common::ThreadPlacement::Efficiency
                                     : Common::ThreadPlacement::Default};
     return workers;
