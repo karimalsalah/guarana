@@ -75,7 +75,8 @@ inline std::atomic<u32> g_early_pages{
 inline std::atomic<u32> g_early_after{ParseClamped(std::getenv("EDEN_NX2_EARLY_AFTER"), 2, 1, 8)};
 
 /// Called by VideoCore::CreateGPU: static initialization runs before the frontend loads
-/// nx2_switches.txt, so a switch set only there takes effect from that point on.
+/// nx2_switches.txt, so a switch set only there takes effect from that point on. Called again by
+/// VideoCore::ApplyGameSwitchDefaults, which runs after CreateGPU, for a game's EARLY_* defaults.
 inline void ReadSwitch() {
     g_read_check_every.store(ParseReadCheck(std::getenv("EDEN_NX2_READ_CHECK")),
                              std::memory_order_relaxed);
