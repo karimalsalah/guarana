@@ -12,6 +12,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ### Fixed
 
+- The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
 - Launcher: builds again with the dependency updates (sysinfo 0.40, zip 9, windows 0.62). sysinfo's `system` and `disk` features are turned on, a failed sysinfo start leaves the Win32 and registry answers in place, and the power-plan calls follow the windows 0.62 signatures; behaviour is unchanged.
 
 ## [20.3.0] - 2026-11-14
