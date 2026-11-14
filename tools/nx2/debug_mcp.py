@@ -488,6 +488,21 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "readbacks",
+        "description": "Async read-back counters since boot (VideoCore::AsyncReadback): guest CPU "
+                       "reads of GPU-written memory (GPU::OnCPURead) that forced a GPU flush "
+                       "(reads_async) vs found a download on its way (reads_inflight), their "
+                       "total time (read_ns_total), the GPU thread's flush time (flush_us), "
+                       "reader fence waits (reader_waits, reader_wait_us, reader_max_wait_us), "
+                       "GPU-side write waits (gpu_side_waits, gpu_side_wait_us), macro DMA reads "
+                       "(dma_reads, dma_waited, dma_drained, dma_wait_us), ClearDownload landings "
+                       "(clear_landings, clear_waits), sync operations (sync_ops, sync_us, "
+                       "sync_max_us) and early downloads (early_recorded, early_bytes, "
+                       "early_flushes, early_refused). EDEN_NX2_GPU_PROFILE also logs them per "
+                       "second.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "boot_timing",
         "description": "The boot phases recorded since the process started (BootTiming Mark "
                        "and Span), oldest first: each phase's name, when it happened (ms since "

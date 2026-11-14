@@ -48,6 +48,7 @@
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_trace/recorder.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_cache_stats.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_frame_predictor.h"
@@ -1537,6 +1538,44 @@ json CacheStats(ToolState&, const json&) {
     };
 }
 
+/// Guest CPU readback / GPU-flush counters since boot (VideoCore::AsyncReadback::g_counters),
+/// the readback-sync bottleneck telemetry: reads, flush time, reader/GPU-side waits, DMA reads,
+/// early downloads. Cumulative; EDEN_NX2_GPU_PROFILE also logs a per-second line.
+json Readbacks(ToolState&, const json&) {
+    const VideoCore::AsyncReadback::Counters& c = VideoCore::AsyncReadback::g_counters;
+    const auto get = [](const std::atomic<u64>& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    const auto us = [&get](const std::atomic<u64>& ns) { return get(ns) / 1000.0; };
+    using Read = VideoCore::AsyncReadback::Read;
+    return {
+        {"reads_async", get(c.reads[static_cast<size_t>(Read::Async)])},
+        {"reads_inflight", get(c.reads[static_cast<size_t>(Read::InFlight)])},
+        {"read_us", us(c.read_ns[static_cast<size_t>(Read::Async)])},
+        {"flush_us", us(c.flush_ns)},
+        {"reader_waits", get(c.reader_waits)},
+        {"reader_wait_us", us(c.reader_wait_ns)},
+        {"reader_max_wait_us", us(c.reader_max_wait_ns)},
+        {"gpu_side_waits", get(c.gpu_side_waits)},
+        {"gpu_side_wait_us", us(c.gpu_side_wait_ns)},
+        {"dma_reads", get(c.dma_reads)},
+        {"dma_waited", get(c.dma_waited)},
+        {"dma_drained", get(c.dma_drained)},
+        {"dma_wait_us", us(c.dma_wait_ns)},
+        {"clear_landings", get(c.clear_landings)},
+        {"clear_waits", get(c.clear_waits)},
+        {"clear_wait_us", us(c.clear_wait_ns)},
+        {"sync_ops", get(c.sync_ops)},
+        {"sync_us", us(c.sync_ns)},
+        {"sync_max_us", us(c.sync_max_ns)},
+        {"early_recorded", get(c.early_recorded)},
+        {"early_bytes", get(c.early_bytes)},
+        {"early_flushes", get(c.early_flushes)},
+        {"early_refused", get(c.early_refused)},
+        {"note", "cumulative since boot; EDEN_NX2_GPU_PROFILE logs a per-second line"},
+    };
+}
+
 /// The boot phases Common::BootTiming recorded (Mark and Span), oldest first: when each
 /// happened since the process started and how long it took.
 json BootTimingTool(ToolState&, const json&) {
@@ -1589,6 +1628,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"thread_stats", handler(ThreadStats)},
         {"present_stats", handler(PresentStatsTool)},
         {"cache_stats", handler(CacheStats)},
+        {"readbacks", handler(Readbacks)},
         {"boot_timing", handler(BootTimingTool)},
     };
 }
