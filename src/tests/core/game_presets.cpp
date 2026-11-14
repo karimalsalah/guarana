@@ -151,6 +151,37 @@ TEST_CASE("Game presets are found by title and GPU", "[core][game_presets]") {
     REQUIRE(Find(Presets(), OcarinaTitleId, {.vendor = GPUVendor::Nvidia}) == nullptr);
 }
 
+TEST_CASE("The first matching game preset wins, so a family's goes first",
+          "[core][game_presets]") {
+    const GpuInfo panther_lake{.vendor = GPUVendor::Intel,
+                               .integrated = true,
+                               .software_tensor_math = true,
+                               .device_class = DeviceClass::Integrated,
+                               .gpu_family = GpuFamily::IntelGraphicsPantherLake};
+    const Preset family{.title_id = 1,
+                        .gpu = {.gpu_family = GpuFamily::IntelGraphicsPantherLake},
+                        .reason = "family"};
+    const Preset broad{.title_id = 1, .gpu = {.integrated = true}, .reason = "broad"};
+    const std::array family_first{family, broad};
+    REQUIRE(Find(family_first, 1, panther_lake)->reason == "family");
+    REQUIRE(Find(family_first, 1, Arc140T)->reason == "broad");
+    // Order, not how narrow a match is, decides: listed after the broad one, the family's preset
+    // is never found.
+    const std::array broad_first{broad, family};
+    REQUIRE(Find(broad_first, 1, panther_lake)->reason == "broad");
+
+    // In the shipped list a GPU with exactly what a preset asks for finds that preset, so no
+    // earlier, broader preset of its title hides it.
+    for (const Preset& listed : Presets()) {
+        const GpuInfo probe{.vendor = listed.gpu.vendor,
+                            .integrated = listed.gpu.integrated,
+                            .software_tensor_math = listed.gpu.software_tensor_math,
+                            .device_class = listed.gpu.device_class,
+                            .gpu_family = listed.gpu.gpu_family};
+        CHECK(Find(Presets(), listed.title_id, probe) == &listed);
+    }
+}
+
 TEST_CASE("A game preset value yields to the user's", "[core][game_presets]") {
     REQUIRE(Decide("1", false, "0", "0") == Decision::Apply);
     REQUIRE(Decide("1", false, "1", "0") == Decision::AlreadySet);

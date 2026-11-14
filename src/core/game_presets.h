@@ -67,7 +67,8 @@ enum class Decision {
 
 [[nodiscard]] bool Matches(const GpuMatch& match, const GpuInfo& gpu);
 
-/// The first preset of the title this GPU matches, or nullptr.
+/// The first preset of the title this GPU matches, or nullptr. The list's order decides, not how
+/// narrow a match is: a preset for a GPU family goes before a broader one of the same title.
 [[nodiscard]] const Preset* Find(std::span<const Preset> presets, u64 title_id,
                                  const GpuInfo& gpu);
 
