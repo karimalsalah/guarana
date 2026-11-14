@@ -873,6 +873,11 @@ FN_MAX_LIMIT_LIST
     /// Returns the largest supported fragment size that fits in the wanted one.
     VkExtent2D ClampFragmentShadingRate(VkExtent2D wanted) const;
 
+    /// Returns true if VK_KHR_performance_query is enabled (EDEN_NX2_GPU_PERF=1).
+    bool IsKhrPerformanceQueryEnabled() const {
+        return performance_query_enabled;
+    }
+
     /// Returns true if the device supports VK_KHR_image_format_list.
     bool IsKhrImageFormatListSupported() const {
         return extensions.image_format_list || instance_version >= VK_API_VERSION_1_2;
@@ -1557,6 +1562,12 @@ private:
     bool graphics_pipeline_library_requested{};
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT graphics_pipeline_library_features{};
     bool graphics_pipeline_library_enabled{};
+
+    /// EDEN_NX2_GPU_PERF: kept out of the extension tables so a run without the switch
+    /// creates the device exactly as before.
+    bool performance_query_requested{};
+    VkPhysicalDevicePerformanceQueryFeaturesKHR performance_query_features{};
+    bool performance_query_enabled{};
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};

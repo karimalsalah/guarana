@@ -380,7 +380,9 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
       master_semaphore{std::make_unique<MasterSemaphore>(device)},
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)},
       upload_batch{std::make_unique<UploadBatch>()},
-      reorder_batch{std::make_unique<UploadBatch>()} {
+      reorder_batch{std::make_unique<UploadBatch>()},
+      perf_query{device} {
+    perf_query.SetSemaphore(*master_semaphore);
 
     if (VideoCore::AutoShadingRate::TargetFps() > 0.0 &&
         !device.IsKhrFragmentShadingRateSupported()) {
@@ -1767,6 +1769,9 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
         };
+        // EDEN_NX2_GPU_PERF: the performance-counter scope wraps the whole submission
+        // (uploads included); a no-op unless a sampling window is running.
+        perf_query.Begin(cmdbuf);
         upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WRITE_BARRIER);
         if (trace_gpu_recording && trace_upload_item != TraceNoPass) {
             upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool,
@@ -1797,6 +1802,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         if (trace_work_pool) {
             trace_work = {};
         }
+        perf_query.End(cmdbuf, signal_value);
         cmdbuf.End();
 
         if (on_submit) {

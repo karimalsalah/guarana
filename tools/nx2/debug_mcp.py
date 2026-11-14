@@ -386,6 +386,25 @@ TOOLS = [
         },
     },
     {
+        "name": "gpu_perf",
+        "description": "Hardware GPU counters (VK_KHR_performance_query, EDEN_NX2_GPU_PERF=1 at "
+                       "launch): GpuBusy, XveStall, XveThreadOccupancy, SamplerBottleneck, "
+                       "AvgGpuCoreFrequencyMHz, RenderBusy and ComputeEngine0Busy, averaged over "
+                       "a window of submissions. 'enable' starts sampling 'frames' submissions "
+                       "(default 30) or stops it (false); the exclusive profiling lock is held "
+                       "only for the window. Returns supported, sampling, frames_sampled, "
+                       "counters [{name, value, unit}] and the shortcuts gpu_busy_pct, "
+                       "stall_pct, occupancy_pct, freq_mhz (null until a result is read), or "
+                       "{supported: false, reason} without the switch, extension or lock.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "enable": {"type": "boolean"},
+                "frames": {"type": "integer", "minimum": 1, "maximum": 600, "default": 30},
+            },
+        },
+    },
+    {
         "name": "frame_budget",
         "description": "The frame budget controller (EDEN_NX2_TARGET_FPS): holds guest presents to "
                        "the target's interval and moves the GPU time scale a Switch 2 title sees "

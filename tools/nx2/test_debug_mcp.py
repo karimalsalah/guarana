@@ -74,6 +74,15 @@ class FakeEmulator:
             return {"result": {"previous": True, "on": on}}
         if method == "autopilot":
             return {"result": {"running": False, "windows": 0}}
+        if method == "gpu_perf":
+            if not request["params"].get("enable", True):
+                return {"result": {"supported": True, "sampling": False, "frames_sampled": 0,
+                                   "counters": [], "gpu_busy_pct": None, "stall_pct": None,
+                                   "occupancy_pct": None, "freq_mhz": None}}
+            return {"result": {"supported": True, "sampling": True, "frames_sampled": 30,
+                               "counters": [{"name": "GpuBusy", "value": 62.5, "unit": "pct"}],
+                               "gpu_busy_pct": 62.5, "stall_pct": 12.0,
+                               "occupancy_pct": 71.0, "freq_mhz": 1850.0}}
         return {"error": f"unknown method \"{method}\""}
 
     def serve(self):
@@ -131,7 +140,7 @@ class AdapterTest(unittest.TestCase):
                                  "set_prepass", "sample", "speed_limit", "read_memory",
                                  "search_memory", "read_gpu_memory", "input",
                                  "input_sequence", "host_timing", "power", "power_set",
-                                 "gpu_costs", "frame_budget", "autopilot", "memory", "trace_record",
+                                 "gpu_costs", "gpu_perf", "frame_budget", "autopilot", "memory", "trace_record",
                                  "trace_stop", "trace_status", "thread_stats", "present_stats",
                                  "cache_stats", "boot_timing"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)

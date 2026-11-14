@@ -100,6 +100,34 @@ public:
         return scheduler.GpuCosts();
     }
 
+    [[nodiscard]] bool IsGpuPerfSupported() const override {
+        return scheduler.Perf().Supported();
+    }
+
+    [[nodiscard]] std::string GpuPerfReason() const override {
+        return scheduler.Perf().Reason();
+    }
+
+    bool RequestGpuPerfSampling(u32 frames) override {
+        return scheduler.Perf().RequestSampling(frames);
+    }
+
+    [[nodiscard]] bool IsGpuPerfSampling() const override {
+        return scheduler.Perf().Sampling();
+    }
+
+    [[nodiscard]] std::vector<VideoCore::RendererBase::GpuPerfSample> ReadGpuPerf() override {
+        std::vector<VideoCore::RendererBase::GpuPerfSample> samples;
+        for (const PerfQuery::Sample& sample : scheduler.Perf().Read()) {
+            samples.push_back({sample.name, sample.value, sample.unit});
+        }
+        return samples;
+    }
+
+    [[nodiscard]] u64 GpuPerfFramesSampled() const override {
+        return scheduler.Perf().FramesSampled();
+    }
+
     [[nodiscard]] std::optional<VideoCore::RendererBase::PresentStatsView>
     GetPresentStats() const override {
         const PresentManager::PresentStats s = present_manager.GetPresentStats();

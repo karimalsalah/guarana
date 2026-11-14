@@ -341,6 +341,20 @@ normal session, then `python3 -I tools/nx2/pipeline_stats.py <dir> --costs <repl
 with `DKB gpu_work` lines) prints the executables of the costliest shaders, with the statistics
 named after spills, fills, scratch space, SIMD or dispatch width, instructions, sends, cycles and
 loops marked.
+**`gpu_perf`** `{enable?, frames?}`. Hardware GPU counters through VK_KHR_performance_query
+(`EDEN_NX2_GPU_PERF=1` at launch enables the extension; without it the reply is
+`{supported: false, reason}`). `enable` samples the next `frames` submissions (default 30,
+1 to 600) or stops (`false`); the exclusive profiling lock is acquired for the window only
+and released once its last result is read, so another profiler can use the GPU between
+windows. The reply has `supported`, `sampling`, `frames_sampled`, `counters`
+(`[{name, value, unit}]`, averaged over the submissions collected so far; units `pct`, `mhz`,
+`cycles`, `ns`, `raw`, ...) and the shortcuts `gpu_busy_pct` (GpuBusy), `stall_pct` (XveStall),
+`occupancy_pct` (XveThreadOccupancy) and `freq_mhz` (AvgGpuCoreFrequencyMHz), each null until
+a result was read. The whitelist also carries RenderBusy and ComputeEngine0Busy; counters the
+driver does not expose are skipped. Call again without `enable` to poll a running window.
+This turns "unaccounted frame time" into a named GPU stall: a frame whose GPU time is mostly
+`stall_pct` waits on memory or the sampler, not on shader work.
+
 **`set_shading_rate`** `{hashes?, rate?, all?}`. With `EDEN_NX2_VRS` set at launch, every guest
 graphics pipeline takes its fragment shading rate (VK_KHR_fragment_shading_rate) as dynamic
 state. This sets the fragment size (`1x1`, `2x1`, `1x2`, `2x2`, `4x2`, `2x4`, `4x4`; `2x2` when
