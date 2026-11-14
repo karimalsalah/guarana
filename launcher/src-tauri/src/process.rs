@@ -62,7 +62,7 @@ impl Drop for Worker {
     }
 }
 
-/// Flags are supplied here so CREATE_SUSPENDED is always added, never overwritten.
+/// Starts a worker with the caller's flags and immediately attaches its lifetime to a job.
 pub fn spawn(command: &mut Command, flags: u32) -> io::Result<Worker> {
     #[cfg(windows)]
     return win::spawn(command, flags);
@@ -89,22 +89,18 @@ mod win {
     use std::os::windows::process::CommandExt;
     use std::sync::{Arc, Mutex, OnceLock, Weak};
     use std::time::Instant;
-    use windows::core::BOOL;
+    use windows::core::{BOOL, PCWSTR};
     use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD,
-    };
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::Threading::{
-        OpenThread, ResumeThread, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_SUSPENDED,
-        INFINITE, THREAD_SUSPEND_RESUME,
+        WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, INFINITE,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
     };
 
     fn handle(owned: &OwnedHandle) -> HANDLE { HANDLE(owned.as_raw_handle()) }
@@ -136,7 +132,7 @@ mod win {
     fn new_job() -> io::Result<OwnedHandle> {
         // No SECURITY_ATTRIBUTES: the unnamed job handle is non-inheritable. Neither breakaway
         // flag is enabled, so children and grandchildren stay in the job, including nested jobs.
-        let job = owned(unsafe { CreateJobObjectW(None, None) }.map_err(error)?);
+        let job = owned(unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(error)?);
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         unsafe {
@@ -146,30 +142,10 @@ mod win {
         Ok(job)
     }
 
-    fn resume(pid: u32) -> io::Result<()> {
-        // std::process does not expose the primary thread handle on stable Rust. While created
-        // suspended the process has just that thread; locate it before any worker code can run.
-        let snapshot = owned(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }.map_err(error)?);
-        let mut entry = THREADENTRY32 { dwSize: size_of::<THREADENTRY32>() as u32, ..Default::default() };
-        unsafe { Thread32First(handle(&snapshot), &mut entry) }.map_err(error)?;
-        loop {
-            if entry.th32OwnerProcessID == pid {
-                let thread = owned(unsafe { OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) }.map_err(error)?);
-                if unsafe { ResumeThread(handle(&thread)) } == u32::MAX {
-                    return Err(io::Error::last_os_error());
-                }
-                return Ok(());
-            }
-            if unsafe { Thread32Next(handle(&snapshot), &mut entry) }.is_err() {
-                return Err(io::Error::other("Suspended worker thread not found"));
-            }
-        }
-    }
-
     fn attach(child: &mut Child, job: HANDLE) -> io::Result<()> {
         let result = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) }.map_err(error);
         if let Err(e) = result {
-            // The child has never executed: assignment failure must never leave it suspended.
+            // Assignment failure must not leave the worker running without containment.
             let _ = child.kill();
             let _ = child.wait();
             return Err(e);
@@ -184,14 +160,12 @@ mod win {
         // Rust's Command restricts inherited handles to its stdio handles. Our job is never one
         // of them. Do not allow a caller to request CREATE_BREAKAWAY_FROM_JOB.
         let flags = flags & !CREATE_BREAKAWAY_FROM_JOB.0;
-        let mut child = command.creation_flags(flags | CREATE_SUSPENDED.0).spawn()?;
+        // A child started in the instant before assignment would escape this job. The emulator
+        // and warm-up helper start no child that early; this avoids an unreliable suspended-start
+        // thread search while retaining containment for descendants started after assignment.
+        let mut child = command.creation_flags(flags).spawn()?;
         attach(&mut child, handle(&job))?;
-        let setup = (|| {
-            let process = child.as_handle().try_clone_to_owned()?;
-            resume(child.id())?;
-            Ok::<_, io::Error>(process)
-        })();
-        let process = match setup {
+        let process = match child.as_handle().try_clone_to_owned() {
             Ok(process) => process,
             Err(e) => {
                 let _ = unsafe { TerminateJobObject(handle(&job), 1) };
@@ -209,7 +183,7 @@ mod win {
     unsafe extern "system" fn close_window(hwnd: HWND, param: LPARAM) -> BOOL {
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)); }
-        if pid == param.0 as u32 {
+        if pid == param.0 as u32 && unsafe { IsWindowVisible(hwnd) }.as_bool() {
             let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
         BOOL(1)
@@ -245,10 +219,11 @@ mod win {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::io::Write;
         use std::process::Stdio;
         use windows::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0};
         use windows::Win32::System::Diagnostics::ToolHelp::{
-            Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
         };
         use windows::Win32::System::Threading::{
             GetCurrentProcess, GetProcessHandleCount, OpenProcess, PROCESS_SYNCHRONIZE,
@@ -256,26 +231,43 @@ mod win {
 
         fn command() -> Command {
             // Absolute system program, no user shell autorun, no fixture executable or game.
-            let root = std::env::var_os("SystemRoot").expect("SystemRoot");
-            let mut command = Command::new(std::path::PathBuf::from(root).join("System32/cmd.exe"));
-            command.args(["/d", "/c", "ping.exe -t 127.0.0.1 >nul"])
-                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            let root = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+            let mut command = Command::new(root.join(r"System32\cmd.exe"));
+            // Wait for the test to assign all jobs before allowing cmd to start ping.
+            // /s /c strips the outer quotes around the command script.
+            let mut script = std::ffi::OsString::from("\"set /p GUARANA_JOB_TEST_READY= & \"");
+            script.push(root.join(r"System32\ping.exe"));
+            script.push("\" -t 127.0.0.1 >nul\"");
+            command.args(["/d", "/s", "/c"]).raw_arg(script)
+                .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
             command
         }
 
-        fn descendant(pid: u32) -> OwnedHandle {
+        fn descendant(child: &mut Child) -> OwnedHandle {
+            let pid = child.id();
+            child.stdin.take().expect("fixture stdin").write_all(b"ready\r\n").unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let snapshot = owned(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.unwrap());
                 let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
                 unsafe { Process32FirstW(handle(&snapshot), &mut entry) }.unwrap();
+                let mut observed = Vec::new();
                 loop {
+                    let name_len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
                     if entry.th32ParentProcessID == pid {
+                        observed.push(format!("{}:{name}", entry.th32ProcessID));
+                    }
+                    if entry.th32ParentProcessID == pid && name.eq_ignore_ascii_case("ping.exe") {
                         return owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, entry.th32ProcessID) }.unwrap());
                     }
                     if unsafe { Process32NextW(handle(&snapshot), &mut entry) }.is_err() { break; }
                 }
-                assert!(Instant::now() < deadline, "cmd did not start its ping child");
+                let state = child.try_wait().expect("fixture process state");
+                assert!(state.is_none() && Instant::now() < deadline,
+                    "cmd did not start its ping child: pid={pid}, state={}, exit_code={:?}, snapshot children={observed:?}",
+                    if state.is_some() { "exited" } else { "still running" },
+                    state.and_then(|status| status.code()));
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
@@ -291,12 +283,11 @@ mod win {
             let mut flags = 0;
             unsafe { GetHandleInformation(handle(&job), &mut flags) }.unwrap();
             assert_eq!(flags & HANDLE_FLAG_INHERIT.0, 0);
-            let mut child = command().creation_flags(CREATE_SUSPENDED.0 | 0x0800_0000).spawn().unwrap();
+            let mut child = command().creation_flags(0x0800_0000).spawn().unwrap();
             let process = child.as_handle().try_clone_to_owned().unwrap();
             attach(&mut child, handle(&outer)).unwrap();
             attach(&mut child, handle(&job)).unwrap();
-            resume(child.id()).unwrap();
-            let grandchild = descendant(child.id());
+            let grandchild = descendant(&mut child);
             // No TerminateJobObject call: this models the launcher's last handle closing on death.
             drop(job);
             ended(&process);
@@ -306,8 +297,8 @@ mod win {
         }
 
         #[test]
-        fn assignment_failure_terminates_and_reaps_the_suspended_child() {
-            let mut child = command().creation_flags(CREATE_SUSPENDED.0 | 0x0800_0000).spawn().unwrap();
+        fn assignment_failure_terminates_and_reaps_the_child() {
+            let mut child = command().creation_flags(0x0800_0000).spawn().unwrap();
             let process = child.as_handle().try_clone_to_owned().unwrap();
             assert!(attach(&mut child, HANDLE::default()).is_err());
             ended(&process);
@@ -316,19 +307,33 @@ mod win {
 
         #[test]
         fn cancellation_and_deadline_end_descendants_and_allow_restart() {
+            struct ResetStopping;
+            impl Drop for ResetStopping {
+                fn drop(&mut self) {
+                    registry().lock().unwrap_or_else(|e| e.into_inner()).stopping = false;
+                }
+            }
+            let reset = ResetStopping;
             let mut first = spawn(&mut command(), 0x0800_0000).unwrap();
-            let grandchild = descendant(first.id());
+            let grandchild = descendant(&mut first);
             first.kill().unwrap();
             first.wait().unwrap();
             ended(&grandchild);
             drop(first);
             let mut next = spawn(&mut command(), 0x0800_0000).unwrap();
-            let grandchild = descendant(next.id());
+            let process = next.child.as_handle().try_clone_to_owned().unwrap();
+            let grandchild = descendant(&mut next);
             let started = Instant::now();
-            stop(vec![next.control.clone()], Duration::from_millis(50));
+            super::super::shutdown(Duration::from_millis(50));
             assert!(started.elapsed() < Duration::from_secs(5));
-            next.wait().unwrap();
+            assert!(spawn(&mut command(), 0x0800_0000).is_err());
+            assert!(registry().lock().unwrap_or_else(|e| e.into_inner()).workers.is_empty());
+            ended(&process);
             ended(&grandchild);
+            next.wait().unwrap();
+            drop(next);
+            drop(reset);
+            drop(spawn(&mut command(), 0x0800_0000).unwrap());
         }
 
         fn handle_count() -> u32 {

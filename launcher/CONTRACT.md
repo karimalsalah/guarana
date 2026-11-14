@@ -172,8 +172,10 @@ see "Boot progress and the hand-over"), `game://exited`
 ## Launcher session
 
 On Windows, games and shader warm-ups started by the launcher belong to an unnamed job owned
-only by the launcher (`process.rs`). Descendants stay in that job; a failed job assignment aborts
-the start before the worker runs. Closing or crashing the launcher ends those workers too. On
+only by the launcher (`process.rs`). The worker starts normally and is assigned to its job at once;
+failed assignment terminates and reaps it. A child started in the instant before assignment would
+not be contained. The emulator and shader warm-up helper start no child that early; descendants
+started after assignment stay in the job. Closing or crashing the launcher ends those workers too. On
 normal exit the launcher requests `WM_CLOSE` on worker windows and allows five seconds in total
 before terminating the jobs. A hidden shader warm-up has no graceful IPC endpoint today and uses
 that deadline fallback. This is lifetime containment, not a sandbox. The boot and exit events
