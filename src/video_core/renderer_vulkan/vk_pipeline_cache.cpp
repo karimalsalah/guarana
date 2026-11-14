@@ -72,6 +72,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_records.h"
+#include "video_core/renderer_vulkan/vk_pipeline_library.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_cache_v2.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -478,6 +479,61 @@ bool PrepassInvariantPosition() {
         return value != nullptr && value[0] == '1';
     }();
     return invariant;
+}
+
+/// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
+/// what the driver gets for a precache build. Resolution scaling bakes the scale into the
+/// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
+/// debug setting adds a create flag.
+u64 WarmVariant() {
+    const auto& resolution = Settings::values.resolution_info;
+    const std::array<u64, 7> inputs{
+        VideoCommon::ShaderWarm::EmissionStamp(),
+        resolution.active ? 1ULL : 0ULL,
+        resolution.up_scale,
+        resolution.down_shift,
+        Settings::values.disable_shader_loop_safety_checks.GetValue() ? 1ULL : 0ULL,
+        Settings::values.fix_bloom_effects.GetValue() ? 1ULL : 0ULL,
+        Settings::values.renderer_debug.GetValue() ? 1ULL : 0ULL,
+    };
+    return Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs));
+}
+
+/// What the lists of precached graphics pipelines are kept for. Their variant hashes what decides
+/// the SPIR-V and create flags of a build beyond the driver, device and cache version: the
+/// precache marker's variant (WarmVariant: the emission stamp and the settings the translation
+/// key reads) and the EDEN_NX2_* switches that change the emitted code or the cached link. Any of
+/// them changed, the driver's cache no longer holds what the list says is built.
+VideoCommon::ShaderWarm::DriverStamp PrecachedListStamp(const Device& device,
+                                                        const Shader::Profile& profile) {
+    const char* const undef_zero = std::getenv("EDEN_NX2_UNDEF_ZERO");
+    const std::array<u64, 13> inputs{
+        WarmVariant(),
+        // As emit_spirv_undefined.cpp and tensor_mul_add.cpp read them
+        undef_zero == nullptr || undef_zero[0] != '0' ? 1ULL : 0ULL,
+        std::getenv("EDEN_NX2_NO_TENSOR") != nullptr ? 1ULL : 0ULL,
+        // EDEN_NX2_GM, EDEN_NX2_TASK_DENSITY, EDEN_NX2_SW_MATRIX_SHARED, as the profile took them
+        profile.global_memory_opt,
+        profile.mesh_task_percent,
+        profile.support_software_matrix_shared_memory ? 1ULL : 0ULL,
+        profile.software_matrix_shared_memory_no_barrier ? 1ULL : 0ULL,
+        profile.software_matrix_shared_memory_scalar_loads ? 1ULL : 0ULL,
+        PrepassInvariantPosition() ? 1ULL : 0ULL,
+        // EDEN_NX2_NO_FLOAT_ATOMICS and EDEN_NX2_FORCE_MESH_FALLBACK turn the extensions off
+        profile.support_float32_atomic_add ? 1ULL : 0ULL,
+        device.IsExtMeshShaderSupported() ? 1ULL : 0ULL,
+        // EDEN_NX2_GPL_FAST_LINK and EDEN_NX2_GPL_OPTIMIZE: which link of a library pipeline
+        // goes into the driver's cache
+        device.CanFastLinkGraphicsLibraries() ? 1ULL : 0ULL,
+        GplOptimizeEnabled() ? 1ULL : 0ULL,
+    };
+    return {
+        .driver = device.GetDriverVersion(),
+        .device_id = device.GetDeviceID(),
+        .cache_version = CACHE_VERSION,
+        .variant =
+            Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs)),
+    };
 }
 
 /// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): whether a pipeline of a listed fragment
@@ -1765,7 +1821,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         precached_pipelines = ShaderWarm::ReadPrecachedPipelines(
             ShaderWarm::PrecachedPipelinesPath(title_id,
                                                device.IsExtGraphicsPipelineLibrarySupported()),
-            {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION});
+            PrecachedListStamp(device, profile));
     }
     if (use_vulkan_pipeline_cache) {
         if (driver_cache_load.valid()) {
@@ -1774,6 +1830,17 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             vulkan_pipeline_cache = load_driver_cache();
         }
         Common::BootTiming::Mark("shaders: driver pipeline cache loaded");
+        // The precache markers say what the driver cache file holds. Its load deletes a file it
+        // can't use (cut short, of another version, rejected by the driver), and removing the
+        // cache from the UI leaves none or an empty one: then nothing they list is in it.
+        std::error_code driver_file_error;
+        const auto driver_file_bytes =
+            std::filesystem::file_size(vulkan_pipeline_cache_filename, driver_file_error);
+        if (driver_file_error ||
+            driver_file_bytes <= VULKAN_CACHE_MAGIC_NUMBER.size() + sizeof(u32)) {
+            precached_pipelines.clear();
+            ShaderWarm::RemoveDriverCacheMarkers(base_dir);
+        }
     }
     if (boot_lock->Held() && !Common::FS::NewFile(boot_marker)) {
         LOG_WARNING(Common_Filesystem, "Couldn't create {}",
@@ -2505,11 +2572,14 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     records.clear();
     log.reset();
 
+    // Whether the driver cache file holds what the boot built (with that cache off, the driver's
+    // own shader cache does, if it keeps one)
+    bool boot_saved = !use_vulkan_pipeline_cache;
     if (use_vulkan_pipeline_cache && !async_boot) {
         // Its size from the save's own read: another read would need the build lock as well
         last_cache_size.store(SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
                                                            vulkan_pipeline_cache, CACHE_VERSION,
-                                                           true),
+                                                           true, std::nullopt, &boot_saved),
                               std::memory_order_relaxed);
         last_flush = std::chrono::steady_clock::now();
         Common::BootTiming::Mark("shaders: driver pipeline cache saved");
@@ -2517,15 +2587,17 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         last_flush = std::chrono::steady_clock::now();
     }
     // The cached pipelines the boot just built are in the driver's cache saved above: the list
-    // of what is built for this driver (a hard kill later still keeps them)
+    // of what is built for this driver (a hard kill later still keeps them). Not when that save
+    // failed: the list would say built for what the file does not hold.
     if (warm_only && !state.warm_built.empty() && !stop_loading.stop_requested() &&
         !PipelineExecutableDump::Enabled(device)) {
         precached_pipelines.insert(state.warm_built.begin(), state.warm_built.end());
-        ShaderWarm::WritePrecachedPipelines(
-            ShaderWarm::PrecachedPipelinesPath(title_id,
-                                               device.IsExtGraphicsPipelineLibrarySupported()),
-            {device.GetDriverVersion(), device.GetDeviceID(), CACHE_VERSION},
-            precached_pipelines);
+        if (boot_saved) {
+            ShaderWarm::WritePrecachedPipelines(
+                ShaderWarm::PrecachedPipelinesPath(title_id,
+                                                   device.IsExtGraphicsPipelineLibrarySupported()),
+                PrecachedListStamp(device, profile), precached_pipelines);
+        }
     }
     if (state.statistics) {
         state.statistics->Report();
@@ -2549,7 +2621,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                         bytes(pipeline_cache_filename), bytes(vulkan_pipeline_cache_filename)));
     }
     if (precache && !stop_loading.stop_requested()) {
-        PrecacheShaders(title_id, stop_loading, callback);
+        PrecacheShaders(title_id, boot_saved, stop_loading, callback);
     }
     if (stop_loading.stop_requested()) {
         StopBackgroundJobs();
@@ -2623,27 +2695,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     }
 }
 
-namespace {
-/// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
-/// what the driver gets for a precache build. Resolution scaling bakes the scale into the
-/// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
-/// debug setting adds a create flag.
-u64 WarmVariant() {
-    const auto& resolution = Settings::values.resolution_info;
-    const std::array<u64, 7> inputs{
-        VideoCommon::ShaderWarm::EmissionStamp(),
-        resolution.active ? 1ULL : 0ULL,
-        resolution.up_scale,
-        resolution.down_shift,
-        Settings::values.disable_shader_loop_safety_checks.GetValue() ? 1ULL : 0ULL,
-        Settings::values.fix_bloom_effects.GetValue() ? 1ULL : 0ULL,
-        Settings::values.renderer_debug.GetValue() ? 1ULL : 0ULL,
-    };
-    return Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs));
-}
-} // Anonymous namespace
-
-void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
+void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_token stop_loading,
                                     const VideoCore::DiskResourceLoadCallback& callback) {
     namespace ShaderWarm = VideoCommon::ShaderWarm;
     std::vector<PrecacheJob> jobs;
@@ -2796,15 +2848,27 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
         batch.Wait();
     }
     const size_t total_built = static_cast<size_t>(std::count(built.begin(), built.end(), u8{1}));
+    // The marker says what the driver cache file holds, so it is written once a save put this
+    // precache's builds in it. Written before (or when the save failed), a crash or kill left it
+    // saying "built" for builds the file never got, and later boots skipped them.
+    std::optional<ShaderWarm::WarmStamp> compute_done;
     if (compute_pending && !skipped) {
-        if (const auto stamp_done = stamp(file_entries)) {
-            ShaderWarm::WriteWarmMarker(warm_file, *stamp_done);
-        }
+        compute_done = stamp(file_entries);
     }
-    if (!stop_loading.stop_requested() && total_built != 0) {
+    auto write_marker = [warm_file, compute_done] {
+        if (compute_done) {
+            ShaderWarm::WriteWarmMarker(warm_file, *compute_done);
+        }
+    };
+    if (total_built == 0 && boot_saved) {
+        // Nothing went into the driver's cache since the boot's save. When that save failed, the
+        // save below runs first (the boot's own builds may be what the marker counts).
+        write_marker();
+    } else if (!stop_loading.stop_requested() && (total_built != 0 || compute_done.has_value())) {
         // Without this, the builds reach the file only at the next boot, game change or clean
-        // close, and are lost if the app ends otherwise.
-        QueueVulkanPipelineCacheSave();
+        // close, and are lost if the app ends otherwise. The warm-up's last save waits for this
+        // one (WaitForRequests), so its marker is written before the process ends.
+        QueueVulkanPipelineCacheSave(std::move(write_marker));
     }
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
@@ -2854,32 +2918,55 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
     });
 }
 
-void PipelineCache::QueueVulkanPipelineCacheSave() {
+void PipelineCache::QueueVulkanPipelineCacheSave(Common::UniqueFunction<void> on_saved) {
     if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
+        if (on_saved) {
+            on_saved();
+        }
         return;
     }
-    if (device.SerializesPipelineCacheReads()) {
+    if (device.SerializesPipelineCacheReads() || !device.CanReadPipelineCacheDuringBuilds()) {
         // Here, on the loading screen, before the background prebuild starts: on the
         // serialization thread the save would wait for its first builds and hold back the next.
+        // Where no read is safe during builds (Intel's Windows driver without
+        // EDEN_NX2_CACHE_SAFE=1), nothing builds now either, as for the boot's own save: without
+        // this the precache reached the file only at a game change or a clean exit, and a crash
+        // lost it while its markers said it was built.
+        bool saved = false;
+        const auto save_begin = std::chrono::steady_clock::now();
         const size_t size = SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
                                                          vulkan_pipeline_cache, CACHE_VERSION,
-                                                         true);
+                                                         true, std::nullopt, &saved);
         last_cache_size.store(size, std::memory_order_relaxed);
-        LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
-                 size);
-        return;
-    }
-    if (!device.CanReadPipelineCacheDuringBuilds()) {
+        LOG_INFO(Render_Vulkan,
+                 "Driver pipeline cache {} after the shader precache, {} bytes, {:.0f} ms",
+                 saved ? "saved" : "not saved", size,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           save_begin)
+                     .count());
+        if (saved && on_saved) {
+            on_saved();
+        }
         return;
     }
     // Not skipped when a timed flush is in flight: that one may have read the cache before the
     // stage's last builds. The serialization thread runs the two one after the other.
-    serialization_thread.QueueWork([this] {
-        const size_t size = SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename,
-                                                         vulkan_pipeline_cache, CACHE_VERSION);
+    serialization_thread.QueueWork([this, on_saved = std::move(on_saved)] {
+        bool saved = false;
+        const auto save_begin = std::chrono::steady_clock::now();
+        const size_t size =
+            SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
+                                         CACHE_VERSION, false, std::nullopt, &saved);
         last_cache_size.store(size, std::memory_order_relaxed);
-        LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
-                 size);
+        LOG_INFO(Render_Vulkan,
+                 "Driver pipeline cache {} after the shader precache, {} bytes, {:.0f} ms",
+                 saved ? "saved" : "not saved", size,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           save_begin)
+                     .count());
+        if (saved && on_saved) {
+            on_saved();
+        }
     });
 }
 
@@ -4446,8 +4533,17 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
 size_t PipelineCache::SerializeVulkanPipelineCache(
     const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
     u32 cache_version, bool skip_same_size,
-    std::optional<std::chrono::milliseconds> max_lock_wait) {
+    std::optional<std::chrono::milliseconds> max_lock_wait, bool* saved) {
     using Clock = std::chrono::steady_clock;
+    // Set below where the file holds the cache; every other return leaves it false.
+    if (saved != nullptr) {
+        *saved = false;
+    }
+    const auto mark_saved = [saved] {
+        if (saved != nullptr) {
+            *saved = true;
+        }
+    };
     const auto to_ms = [](Clock::duration duration) {
         return std::chrono::duration<double, std::milli>(duration).count();
     };
@@ -4496,6 +4592,7 @@ size_t PipelineCache::SerializeVulkanPipelineCache(
             LOG_INFO(Render_Vulkan, "Vulkan driver pipeline cache unchanged, nothing built since "
                                     "its file was read or written: not written again");
             log_cached();
+            mark_saved();
             return saved_cache_size;
         }
         VkResult result = VK_SUCCESS;
@@ -4511,6 +4608,7 @@ size_t PipelineCache::SerializeVulkanPipelineCache(
                      "written again",
                      cache_size, builds - saved_cache_builds);
             log_cached();
+            mark_saved();
             return cache_size;
         }
         // Not zeroed first: only what the driver writes is written out
@@ -4585,6 +4683,7 @@ size_t PipelineCache::SerializeVulkanPipelineCache(
                  to_ms(Clock::now() - read_end));
     }
     log_cached();
+    mark_saved();
     return cache_size;
 }
 

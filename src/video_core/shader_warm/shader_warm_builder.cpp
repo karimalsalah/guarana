@@ -46,7 +46,14 @@ constexpr std::string_view StageConverting = "Converting";
 constexpr std::string_view StageWriting = "Writing";
 /// Conversions in flight (each holds a copy of its program).
 constexpr size_t MaxPendingJobs = 2048;
-constexpr u32 PrecachedPipelinesMagic = 0x31504750; // "PGP1"
+/// "PGP2": the lists carry the build variant (DriverStamp::variant). A "PGP1" list, written
+/// without it, reads as empty: what it says is built may be of another variant.
+constexpr u32 PrecachedPipelinesMagic = 0x32504750;
+constexpr std::string_view ComputeWarmName = "warm-compute.bin";
+
+std::string_view PrecachedPipelinesName(bool libraries) {
+    return libraries ? "precache-graphics-libraries.bin" : "precache-graphics.bin";
+}
 
 fs::path TitleDir(u64 title_id) {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) /
@@ -300,7 +307,7 @@ void WriteWarmCount(const fs::path& warm_file, u64 entries) {
 } // Anonymous namespace
 
 fs::path ComputeWarmPath(u64 title_id) {
-    return TitleDir(title_id) / "warm-compute.bin";
+    return TitleDir(title_id) / ComputeWarmName;
 }
 
 fs::path WarmMarkerPath(const fs::path& warm_file) {
@@ -444,8 +451,7 @@ WarmOnlyReport TakeWarmOnlyReport() {
 }
 
 fs::path PrecachedPipelinesPath(u64 title_id, bool libraries) {
-    return TitleDir(title_id) /
-           (libraries ? "precache-graphics-libraries.bin" : "precache-graphics.bin");
+    return TitleDir(title_id) / PrecachedPipelinesName(libraries);
 }
 
 std::unordered_set<u64> ReadPrecachedPipelines(const fs::path& file, const DriverStamp& stamp) {
@@ -459,6 +465,7 @@ std::unordered_set<u64> ReadPrecachedPipelines(const fs::path& file, const Drive
         !in.read(reinterpret_cast<char*>(&saved.driver), sizeof(saved.driver)) ||
         !in.read(reinterpret_cast<char*>(&saved.device_id), sizeof(saved.device_id)) ||
         !in.read(reinterpret_cast<char*>(&saved.cache_version), sizeof(saved.cache_version)) ||
+        !in.read(reinterpret_cast<char*>(&saved.variant), sizeof(saved.variant)) ||
         !in.read(reinterpret_cast<char*>(&count), sizeof(count)) || saved != stamp) {
         return hashes;
     }
@@ -479,12 +486,29 @@ bool WritePrecachedPipelines(const fs::path& file, const DriverStamp& stamp,
     Write(out, stamp.driver);
     Write(out, stamp.device_id);
     Write(out, stamp.cache_version);
+    Write(out, stamp.variant);
     Write(out, static_cast<u64>(hashes.size()));
     for (const u64 hash : hashes) {
         Write(out, hash);
     }
     out.close();
     return static_cast<bool>(out);
+}
+
+bool RemoveDriverCacheMarkers(const fs::path& title_dir) {
+    bool ok = true;
+    for (const auto& path :
+         {title_dir / PrecachedPipelinesName(false), title_dir / PrecachedPipelinesName(true),
+          WarmMarkerPath(title_dir / ComputeWarmName)}) {
+        std::error_code ec;
+        fs::remove(path, ec);
+        if (ec) {
+            LOG_WARNING(Common_Filesystem, "Couldn't remove {}: {}",
+                        Common::FS::PathToUTF8String(path), ec.message());
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 bool DeleteWarmFiles(u64 title_id, std::string* error) {

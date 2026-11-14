@@ -317,6 +317,12 @@ void RemoveVulkanDriverPipelineCache(u64 program_id) {
         QtCommon::Frontend::Warning(tr("Error Removing Vulkan Driver Pipeline Cache"),
                                     tr("Failed to remove the driver pipeline cache."));
     }
+    // The precache markers say what that file holds (ShaderWarm::RemoveDriverCacheMarkers; the
+    // next load removes them too, but the precache question reads them before it)
+    for (const char* const marker :
+         {"precache-graphics.bin", "precache-graphics-libraries.bin", "warm-compute.done"}) {
+        Common::FS::RemoveFile(shader_cache_folder_path / marker);
+    }
 }
 
 void RemoveAllTransferableShaderCaches(u64 program_id) {
