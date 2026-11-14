@@ -39,6 +39,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Launcher Home: the game and Play come first, and Play is the only orange button. The library follows, then Game Booster, controllers and setup under "This PC", with the Booster folded to one line that shows its level. In Doctor, Copy diagnostics is a secondary button, so the fix buttons stand out.
 - Launcher launch: Playing from the library carries the game's title into the launch stage. The stage shows one status line instead of a looping placeholder bar, then the game's title followed by "is running" rather than "Playing", since the launcher cannot see the game's first frame. The welcome stage stops animating after its intro, and the hero art pulses three times on arrival.
 - `EDEN_NX2_HYBRID=1` (off by default) now also places threads on hybrid CPUs with four performance cores (Lunar Lake, Panther Lake-H): the GPU front, back and Vulkan worker keep the P cores, the guest cores and latency threads may also use the E cores, and the low-power island stays out (on Lunar Lake, whose only E cores sit on that island, those cores are used as the E cores). Six-P CPUs are unchanged; 2P+8E CPUs are still left to Windows. Not measured on four-P parts; plan in [docs/switches.md](docs/switches.md).
+- The README opens with what Guarana is, the measured proof, three setup steps, device status, a 10-minute device test ([#55](https://github.com/karimalsalah/guarana/issues/55)) and how to contribute (`/claim`, good first issues).
 
 ### Fixed
 
