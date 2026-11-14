@@ -140,6 +140,9 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Changed
 
 - `EDEN_NX2_GM=11` is now on by default only for Ocarina of Time (0400486024DEC000), the one game it is verified in, instead of every game through `nx2_switches.txt`. An explicit `EDEN_NX2_GM` still wins. Known issue tracked in #6.
+### Documentation
+
+- `docs/switches.md`: a row for each of the 13 switches `dist/nx2_switches.txt` names or sets (#37).
 
 ## [20.0.0]
 
