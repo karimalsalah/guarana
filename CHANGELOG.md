@@ -44,6 +44,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 - Site: the front page follows the README's order (what Guarana is, the measured numbers with their machine, three setup steps, device status, the coming release, how to help) and no longer calls the shipped presenter "in progress".
 - Launcher: a **Game Booster** with three opt-in levels (Off by default) that tune Windows for speed only while a game started from Guarana runs, and undo everything when it exits, when the launcher restarts after a crash (from a journal file), or from an "Undo all" button. Level 1 (no admin): the emulator at Above Normal priority, power throttling (EcoQoS) off for it, and the high-performance GPU asked for `guarana.exe`. Level 2 (one UAC prompt): the High performance, or Ultimate Performance when installed, power plan for the session. Level 3: High priority and pausing SysMain and Windows Search while you play. The elevated steps run in a small `--booster-helper` process behind one prompt, and no security setting is ever touched (Defender, firewall, VBS/HVCI, SmartScreen, UAC, Windows Update, BitLocker). See [launcher/CONTRACT.md](launcher/CONTRACT.md#game-booster).
 
+- Agent kit: the OpenAI Codex CLI reads only the first 32 KiB of `AGENTS.md` by default and ours is longer, so it silently dropped the end of the rules. `.codex/config.toml` raises the limit once the folder is trusted, and the README, [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md) and [docs/agents/README.md](docs/agents/README.md) give the `-c project_doc_max_bytes=65536` override.
+
 ## [20.2.0] - 2026-11-13
 
 ### Added
