@@ -67,6 +67,19 @@ class FormTests(unittest.TestCase):
         for prefix, _ in ingest.REQUIRED_CHECKS:
             self.assertTrue(any(box.startswith(prefix) for box in boxes), prefix)
 
+    def test_bug_forms_ask_for_the_gpu_driver_like_the_device_report(self):
+        reference = fields(form("device-report.yml"))["GPU driver"]["attributes"]
+        for name, required in (("crash.yml", True), ("game_bug.yml", True), ("visual_bug.yml", True), ("ui_bug.yml", False)):
+            doc = form(name)
+            field = fields(doc)["GPU driver"]
+            self.assertEqual(field["type"], "input", name)
+            self.assertEqual(field["id"], "driver", name)
+            self.assertEqual(field["attributes"]["placeholder"], reference["placeholder"], name)
+            self.assertTrue(field["attributes"]["description"], name)
+            self.assertEqual(field.get("validations", {}).get("required") == "true", required, name)
+            labels = [item["attributes"]["label"] for item in doc["body"] if item["type"] != "markdown"]
+            self.assertEqual(labels.index("GPU driver"), labels.index("Graphics card") + 1, name)
+
     def test_agent_task_fields_triage_reads(self):
         doc = form("agent-task.yml")
         for label in ("Goal", "Files", "Acceptance test", "Size"):
