@@ -107,7 +107,7 @@ public:
         view.fluid = s.fluid;
         view.fallback = s.fallback;
         view.shown_stats = s.shown_stats;
-        view.slots = s.slots;
+        view.slot_count = s.slots;
         view.hits = s.hits;
         view.no_frame = s.no_frame;
         view.not_done = s.not_done;

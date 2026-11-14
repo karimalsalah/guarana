@@ -134,7 +134,7 @@ public:
         bool fluid{};
         bool fallback{};
         bool shown_stats{};
-        u64 slots{};
+        u64 slot_count{};
         u64 hits{};
         u64 no_frame{};
         u64 not_done{};

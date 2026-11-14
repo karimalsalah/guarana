@@ -1446,7 +1446,7 @@ json PresentStatsTool(ToolState& state, const json&) {
           {"divisor", stats->divisor},
           {"lead_ms", stats->lead_ms},
           {"latency_ms", stats->clock_latency_ms}}},
-        {"slots", stats->slots},
+        {"slots", stats->slot_count},
         {"hits", stats->hits},
         {"missed", stats->no_frame + stats->queued + stats->overslept},
         {"no_frame", stats->no_frame},
