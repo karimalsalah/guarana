@@ -10,7 +10,6 @@ import contextlib
 import io
 import json
 import os
-import pathlib
 import sys
 import tempfile
 import unittest
@@ -509,7 +508,7 @@ class PublishTests(unittest.TestCase):
     def test_a_shallow_checkout_like_actions_checkout_works(self):
         # actions/checkout fetches one commit: fetch, parents and the lease must work there too.
         shallow = os.path.join(self.temp.name, "shallow")
-        git("clone", "-q", "--depth=1", pathlib.Path(self.origin.bare).as_uri(), shallow)
+        git("clone", "-q", "--depth=1", "--no-local", self.origin.bare, shallow)
         self.assertEqual(git("rev-parse", "--is-shallow-repository", cwd=shallow), "true")
         summary = self.publish(ingest.Git(shallow))
         self.assertTrue(summary["pushed"])
