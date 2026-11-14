@@ -10,6 +10,9 @@
     {
       "variants": [
         {"name": "baseline", "paired": true},
+        {"name": "gm11", "env": {"EDEN_NX2_GM": "11"}, "paired": true},
+        {"name": "gm-off", "env": {"EDEN_NX2_GM": "0"}, "paired": true},
+        {"name": "gm3", "env": {"EDEN_NX2_GM": "3"}, "paired": true},
         {"name": "vrs-2x2", "env": {"EDEN_NX2_VRS": "1", "EDEN_NX2_VRS_HASHES": "78134ce8125d5959:2x2"}, "paired": true},
         {"name": "spin-scale-0.25", "env": {"EDEN_NX2_SPIN_SCALE": "0.25"}},
         {"name": "eco-background", "env": {"EDEN_NX2_ECO_BACKGROUND": "1"}},
