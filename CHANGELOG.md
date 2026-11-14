@@ -10,6 +10,8 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.3.0] - 2026-11-14
+
 ### Changed
 
 - **Ocarina of Time on a 144 Hz display: interpolated frames on the 144 Hz vblank clock, real frames held to 24 a second** on Windows Intel integrated GPUs (primary display at 140 to 148 Hz). One device, single runs (a Panther Lake laptop in Kokiri Forest): 91.5 shown frames a second against 50.5 with the 60 Hz configuration, 917 of 1069 slots on their slot; the real frame shown is older: 89.9 ms against 57.0 ms; outdoors 17.6 to 24.1 real frames a second. A paired A-B-A-B on the same laptop held in both pairs: 79 to 83 shown frames a second against 44 to 51, 24 real frames against 20 to 22, with the real frame shown 20 to 30 ms later. The boot log's switch-defaults line now names the primary display's rate found and the set chosen because of it, and says when `EDEN_NX2_EXTRAPOLATE` overrides a locked set's interpolation (see [docs/switches.md](docs/switches.md)).
