@@ -47,6 +47,7 @@ Pull requests to zortos293/Lichii that were not merged upstream when we took the
 | [#1475](https://github.com/zortos293/Lichii/pull/1475) | [RomainROCH](https://github.com/RomainROCH) | Logging no longer calls std::terminate when formatting fails while the host is out of memory |
 | [#1558](https://github.com/zortos293/Lichii/pull/1558) | [BrunoSilvestre00](https://github.com/BrunoSilvestre00) | The loading screen no longer freezes in borderless fullscreen on Windows |
 | [#779](https://github.com/zortos293/Lichii/pull/779) | [dylan-hachmann](https://github.com/dylan-hachmann) | Guest HMMA on Intel's 8x16x16 cooperative matrices as two 8-row products through shared memory (closed unmerged upstream; carried behind `EDEN_NX2_INTEL_COOP_MATRIX`, with Fritchii-Intel-Fixes 0007 and 0008) |
+| [issue #1431](https://github.com/zortos293/Lichii/issues/1431) (a patch in an issue, not a pull request) | [ronaldpena007-ops](https://github.com/ronaldpena007-ops) | The mesh emulation's compute dispatches of a draw run before the render pass they draw in, instead of cutting the pass (`EDEN_NX2_MESH_BEFORE_PASS`) |
 
 When one of these is merged upstream, the next upstream sync brings the upstream version, and this table says so.
 

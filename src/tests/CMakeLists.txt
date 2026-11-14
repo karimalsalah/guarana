@@ -95,6 +95,7 @@ add_executable(tests
     video_core/maxwell_numeric.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
+    video_core/mesh_before_pass.cpp
     video_core/cost_governor.cpp
     video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp

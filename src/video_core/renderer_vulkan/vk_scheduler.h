@@ -276,6 +276,25 @@ public:
         compute_writes_pending = true;
     }
 
+    /// EDEN_NX2_MESH_BEFORE_PASS=1: the mesh emulation's compute passes of a draw inside the
+    /// active render pass run right before that pass begins instead of cutting it in two.
+    [[nodiscard]] static bool MeshBeforePassEnabled();
+
+    /// Recording thread, EDEN_NX2_MESH_BEFORE_PASS: records `command` so it runs before the
+    /// active render pass begins, when that pass draws into `framebuffer` (a deferred clear of
+    /// it becomes that pass), nothing in it wrote storage and its begin has not reached the
+    /// worker yet. False otherwise: the caller ends the pass and records the command itself.
+    bool RecordBeforePass(const Framebuffer* framebuffer,
+                          std::function<void(vk::CommandBuffer)>&& command);
+
+    /// The rasterizer's periodic DispatchWork; held back while a pass can still take commands
+    /// before its begin (RecordBeforePass).
+    void DispatchWorkUnlessHeld() {
+        if (!pass_prelude) {
+            DispatchWork();
+        }
+    }
+
     /// Returns true when a render pass is currently active in the scheduler state.
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
@@ -366,7 +385,7 @@ public:
         if (chunk->Record(command)) {
             return;
         }
-        DispatchWork();
+        DispatchOrHold();
         (void)chunk->Record(command);
     }
 
@@ -679,6 +698,17 @@ private:
 
     void AcquireNewChunk();
 
+    /// A full chunk: kept while a pass can still take commands before its begin, else sent.
+    void DispatchOrHold() {
+        if (!HoldFullChunk()) {
+            DispatchWork();
+        }
+    }
+
+    /// EDEN_NX2_MESH_BEFORE_PASS: a full chunk while pass_prelude is set is kept, and a new one
+    /// is current. False when the caller must dispatch it.
+    bool HoldFullChunk();
+
     const Device& device;
     StateTracker& state_tracker;
 
@@ -827,6 +857,20 @@ private:
 
     std::unique_ptr<CommandChunk> chunk;
     std::function<void()> on_submit;
+
+    /// EDEN_NX2_MESH_BEFORE_PASS: commands the active pass's begin runs before it begins. Set
+    /// from the begin until the begin's chunk goes to the worker or the pass ends; only the
+    /// recording thread adds to it, and only while it is set.
+    struct PassPrelude {
+        std::vector<std::function<void(vk::CommandBuffer)>> commands;
+    };
+    std::shared_ptr<PassPrelude> pass_prelude;
+    /// Full chunks kept from the worker while pass_prelude is set, in order; DispatchWork
+    /// hands them over before the current one.
+    std::vector<std::unique_ptr<CommandChunk>> held_chunks;
+    static constexpr size_t MaxHeldChunks = 32;
+    /// Counts the DispatchWork calls that sent a chunk, to tell if a begin was sent.
+    u64 chunks_dispatched{};
 
     State state;
     u64 recording_epoch = 0;

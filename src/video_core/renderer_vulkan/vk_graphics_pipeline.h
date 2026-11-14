@@ -695,7 +695,12 @@ private:
     std::optional<MeshEmulationSetup> mesh_emulation;
     vk::ShaderModule mesh_vertex_module;
     vk::Pipeline mesh_compute_pipeline;
-    VkDescriptorSet mesh_descriptor_set{}; ///< shared by the dispatch and the draw it feeds
+    /// The set the dispatch commits and the draw it feeds binds; a new cell for every draw, as
+    /// with EDEN_NX2_MESH_BEFORE_PASS several draws' dispatches can be recorded before the first
+    /// one draws.
+    std::shared_ptr<VkDescriptorSet> mesh_descriptor_set;
+    /// The draw samples one of its render targets (EDEN_NX2_MESH_BEFORE_PASS keeps it in place).
+    bool mesh_reads_targets{};
     VkBuffer mesh_output_buffer{};
     VkDeviceSize mesh_output_offset{};
     VkDeviceSize mesh_output_size{};
