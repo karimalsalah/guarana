@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <system_error>
 
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "nx2_switches.h"
@@ -121,6 +122,8 @@ int main(int argc, char* argv[]) {
     SetUpNvidiaShaderDiskCache();
 #endif
     LoadNx2Switches(argv[0]);
+    // Freeze the switch after file values enter the environment, before any target readers run.
+    static_cast<void>(Common::FrameTargetHotkeys::Enabled());
 #if LICHII_ROOM
     bool launch_room = false;
     for (int i = 1; i < argc; i++) {
