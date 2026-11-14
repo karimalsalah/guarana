@@ -61,6 +61,7 @@ on:
       # Every workflow, which test_supply_chain.py reads, and the scripts the other tests import.
       - ".github/workflows/**"
       - "tools/ci/thanks.py"
+      - "tools/ci/pr_gate.py"
       - "tools/ci/switch_registry.py"
       - "tools/ci/switch-registry-upstream.txt"
       - "tools/ingest/issue_forms.py"

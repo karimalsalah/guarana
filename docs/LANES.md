@@ -16,6 +16,17 @@ The long-lived branches of karimalsalah/guarana, what may land on each, and what
 - Experiments may land here, off by default, each with a row in [switches.md](switches.md). A switch that shows a measured gain on a verified scene can become the default behaviour in a later pull request, with the measurement. A disproven one is removed, or stays off with the result written in its row.
 - `nightly.yml` builds `main` every day at 03:23 UTC if it moved since the last nightly and replaces the rolling [`nightly` pre-release](https://github.com/karimalsalah/guarana/releases/tag/nightly), files and tag. Run it by hand (Actions > nightly > Run workflow, with "force") to rebuild without a new commit. GitHub turns off schedules in a repository without activity for 60 days; the Actions page then has a button to turn them back on.
 
+## Merging
+
+Merge a pull request only when it is safe, and one at a time. `python -I tools/ci/pr_gate.py <number>` answers `ready` or `not-ready` with the reasons, and exits 0 or 1 (`--json` prints the evidence too). It only reads GitHub, and a question it cannot answer counts as not ready. A pull request is not ready when:
+
+- it is a draft: here that means not compiled or not measured yet, and the author marks it ready for review;
+- a required check is failing, cancelled, running or missing on its head commit: the three `build-check` jobs, and `switch-registry` when it ran. A pull request that changes only documentation skips the builds, which counts as a pass. When the resolver settled a conflict on a `resolve/pr-N` branch, ask with `--sha <commit>` so the checks of that commit count;
+- `main` is red (the newest commit on it whose `build-check` jobs have finished, skipping a documentation-only commit or one still building, failed) and the pull request lacks the `fixes-main` label. While `main` is red only what fixes it merges;
+- it conflicts in a file other than `CHANGELOG.md`, `docs/switches.md` and `dist/nx2_switches.txt`, the union files whose conflicts the resolver settles by keeping both sides. The files come from `git merge-tree` in the clone the script runs in.
+
+After each merge, update the next pull request and ask again once its checks have finished. `build-check` also runs on `merge_group`, so GitHub's merge queue, which does the same one at a time, can be turned on later (Settings > Rules > Rulesets, "Require merge queue": the owner's call, and the required checks stay the same). Nothing here turns it on or changes who may merge. The `fixes-main` label is created by `labels.yml`.
+
 ## Releases
 
 Versions are `vX.Y.Z`; release candidates and other pre-releases are `vX.Y.Z-rcN`.
