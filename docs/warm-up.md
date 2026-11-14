@@ -65,6 +65,8 @@ The lists of built pipelines (`precache-graphics.bin`, `precache-graphics-librar
 - After an emulator update that changes the shader recompiler (the lowering stamp): cached programs are lowered again by the next boot anyway; the warm-up does that, then builds.
 - Not while a game is running: it takes the cores. Run it with the emulator closed. It takes the title cache's lock, and another emulator loading the same title makes it exit with code 3.
 
+What the launcher runs on its own today, and the checks proposed in issue [#125](https://github.com/karimalsalah/guarana/issues/125), are in [lifecycle.md](lifecycle.md#8-driver-pipeline-cache-and-driver-blobs).
+
 Use a time limit that matches the machine; the first run is the long one (minutes for a thousand-pipeline title on a cold driver). Show it as a background task; the launcher should pass the same `-c` file as it passes to boot the title.
 
 ## Limits and risks
@@ -113,6 +115,8 @@ Each session writes, beside its Used record, a `UseOrder` record (record kind 10
 ## Warm-up reruns
 
 `--warm-pipelines` skips every cached pipeline already in `precache-graphics.bin` for this driver, the used ones too, and records boot builds in it after the driver cache is saved (see above). The `warm:` progress lines and the final line keep their format. A rerun with nothing new reads the log, finds nothing to build and ends.
+
+What stamps these markers and when the emulator removes them: [lifecycle.md](lifecycle.md#9-precache-lists-and-markers). What issue [#125](https://github.com/karimalsalah/guarana/issues/125) proposes for a shader cache log of an older format: [lifecycle.md](lifecycle.md#7-shader-cache-log-and-the-boot-guard).
 
 ## Measuring boot and warm-up
 

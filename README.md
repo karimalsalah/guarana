@@ -343,6 +343,7 @@ A real frame that lands between two refreshes cannot stay up as long as the one 
 | [docs/FAQ.md](docs/FAQ.md) | Short answers: legality, frame generation, hitches, settings, updates |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Start-up errors, hitches, pacing problems and crashes |
 | [docs/switches.md](docs/switches.md) | Every `EDEN_NX2_*` switch: values, status, measured effect, code |
+| [docs/lifecycle.md](docs/lifecycle.md), [docs/design/settings-hygiene.md](docs/design/settings-hygiene.md) | What Guarana stores and when it is flushed, loaded and preloaded; the proposed settings hygiene ([#125](https://github.com/karimalsalah/guarana/issues/125)) |
 | [docs/frame-generation.md](docs/frame-generation.md) | How frames are predicted and paced, the known limits, and how to test them |
 | [docs/TESTING.md](docs/TESTING.md), [docs/DEVICES.md](docs/DEVICES.md) | The 10-minute device test; requirements and every device's status |
 | [AGENTS.md](AGENTS.md) | The rulebook for agents and people: rules, repository map, build, verification |

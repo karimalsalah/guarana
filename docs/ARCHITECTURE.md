@@ -6,6 +6,9 @@ and how to check a change. It links to the deeper upstream documents instead of 
 - [docs/DesignOverview.md](DesignOverview.md): high-level emulation and the source folders.
 - [NX2_GPU_THREAD_SPLIT.md](../NX2_GPU_THREAD_SPLIT.md): why and how the GPU thread is split.
 - [docs/nx2/debug-mcp.md](nx2/debug-mcp.md): the live debug server and its MCP adapter.
+- [docs/lifecycle.md](lifecycle.md): what Guarana and its launcher store, and when each is
+  flushed, loaded and preloaded; [docs/design/settings-hygiene.md](design/settings-hygiene.md) is
+  the proposal ([#125](https://github.com/karimalsalah/guarana/issues/125)) to record who wrote each value and reset what the player did not choose.
 - [docs/NvidiaGpu.md](NvidiaGpu.md) and [docs/nx2/amd.md](nx2/amd.md): the guest GPU, and how AMD
   drivers differ.
 
