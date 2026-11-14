@@ -1,0 +1,1 @@
+- Launcher: start workers normally before assigning their Windows job, avoiding the suspended-thread startup hang; document the brief pre-assignment containment gap.
