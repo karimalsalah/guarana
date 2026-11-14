@@ -1,0 +1,1 @@
+- Vulkan: defer zero-extent swapchains, handle failed image acquisition explicitly, and flush fatal presentation-thread errors before exiting ([#136](https://github.com/karimalsalah/guarana/issues/136)).

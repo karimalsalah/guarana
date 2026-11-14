@@ -54,10 +54,8 @@ const PresentFilters& BlitScreen::ActiveFilters() const {
     return compose_internal ? *compose_filters : filters;
 }
 
-void BlitScreen::WaitIdle(const Device& device) {
-    present_manager.WaitPresent();
-    scheduler.Finish();
-    device.GetLogical().WaitIdle();
+void BlitScreen::WaitIdle(const Device&) {
+    present_manager.WaitIdle();
 }
 
 void BlitScreen::SetWindowAdaptPass(const Device& device) {

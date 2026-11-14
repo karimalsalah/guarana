@@ -101,7 +101,9 @@ add_executable(tests
     video_core/autopilot_controller.cpp
     video_core/frame_budget.cpp
     video_core/fluid_present_mode.cpp
+    video_core/present_error_policy.cpp
     video_core/fluid_slot_math.cpp
+    video_core/present_sync.cpp
     video_core/shown_governor.cpp
     video_core/fluid_compose_math.cpp
     video_core/auto_shading_rate.cpp
