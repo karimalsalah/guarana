@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -22,6 +24,7 @@
 
 #include "video_core/renderer_vulkan/pipeline_build.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_prebuild.h"
+#include "video_core/shader_job_boost.h"
 #include "video_core/shader_jobs.h"
 
 namespace {
@@ -981,4 +984,356 @@ TEST_CASE("A pipeline build job is dropped while queued and run by a waiting dra
     owned.Build();
     REQUIRE(owned.IsBuilt());
     REQUIRE(builds == 3);
+}
+
+namespace {
+using Common::ThreadPriority;
+
+/// A worker thread's priority as the tests see it
+struct FakeThread {
+    ThreadPriority Current() {
+        std::scoped_lock lock{mutex};
+        return current;
+    }
+
+    std::mutex mutex;
+    ThreadPriority current{ThreadPriority::Low};
+    int sets{};
+    bool refuse{};
+};
+
+class FakeTarget final : public VideoCommon::PriorityTarget {
+public:
+    explicit FakeTarget(std::shared_ptr<FakeThread> thread_) : thread{std::move(thread_)} {}
+
+    bool Set(ThreadPriority priority) override {
+        std::scoped_lock lock{thread->mutex};
+        ++thread->sets;
+        if (thread->refuse) {
+            return false;
+        }
+        thread->current = priority;
+        return true;
+    }
+
+private:
+    std::shared_ptr<FakeThread> thread;
+};
+
+/// The fake threads of the workers of one scheduler. Outlives the scheduler.
+class Fakes {
+public:
+    std::function<std::unique_ptr<VideoCommon::PriorityTarget>()> Factory() {
+        return [this]() -> std::unique_ptr<VideoCommon::PriorityTarget> {
+            auto thread = std::make_shared<FakeThread>();
+            thread->refuse = refuse;
+            {
+                std::scoped_lock lock{mutex};
+                threads.push_back(thread);
+            }
+            return std::make_unique<FakeTarget>(std::move(thread));
+        };
+    }
+
+    size_t Count() {
+        std::scoped_lock lock{mutex};
+        return threads.size();
+    }
+
+    /// Threads above their base priority now
+    int Raised() {
+        std::scoped_lock lock{mutex};
+        int raised{};
+        for (const auto& thread : threads) {
+            raised += thread->Current() != ThreadPriority::Low ? 1 : 0;
+        }
+        return raised;
+    }
+
+    /// Every raise was undone: each thread's changes come in pairs.
+    bool Balanced() {
+        std::scoped_lock lock{mutex};
+        return std::ranges::all_of(threads, [](const auto& thread) {
+            std::scoped_lock thread_lock{thread->mutex};
+            return thread->sets % 2 == 0;
+        });
+    }
+
+    bool refuse{};
+
+private:
+    std::mutex mutex;
+    std::vector<std::shared_ptr<FakeThread>> threads;
+};
+
+ShaderJobConfig BoostConfig(Fakes& fakes, size_t cpu_threads, size_t driver_threads,
+                            bool enabled = true) {
+    auto config = Config(cpu_threads, driver_threads);
+    config.wait_boost = enabled;
+    config.priority_target = fakes.Factory();
+    return config;
+}
+
+template <typename Predicate>
+bool Eventually(Predicate&& predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!predicate()) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    return true;
+}
+
+/// Submits a Soon job that holds a CPU worker until the gate opens.
+ShaderJobHandle BlockSoon(ShaderJobScheduler& scheduler, Gate& gate) {
+    auto entered = std::make_shared<std::promise<void>>();
+    auto started = entered->get_future();
+    auto handle = scheduler.Submit(CpuJob(Soon, [&gate, entered] {
+        entered->set_value();
+        gate.Wait();
+    }));
+    started.wait();
+    return handle;
+}
+} // namespace
+
+TEST_CASE("A stage boost raises once and restores when the stage ends",
+          "[video_core][shader_jobs]") {
+    auto thread = std::make_shared<FakeThread>();
+    FakeTarget target{thread};
+    VideoCommon::StageBoost boost;
+
+    REQUIRE_FALSE(boost.Raise());
+    REQUIRE(thread->sets == 0);
+
+    boost.Attach(target, ThreadPriority::Low);
+    REQUIRE(boost.Raise());
+    REQUIRE(thread->Current() == ThreadPriority::Normal);
+    REQUIRE_FALSE(boost.Raise());
+    REQUIRE(thread->sets == 1);
+    boost.Detach();
+    REQUIRE(thread->Current() == ThreadPriority::Low);
+    REQUIRE(thread->sets == 2);
+    // Over: nothing reaches the thread any more
+    REQUIRE_FALSE(boost.Raise());
+    boost.Detach();
+    REQUIRE(thread->sets == 2);
+
+    // A stage nobody waited for leaves its thread alone
+    boost.Attach(target, ThreadPriority::Low);
+    boost.Detach();
+    REQUIRE(thread->sets == 2);
+
+    // The next stage on the thread can be raised again
+    boost.Attach(target, ThreadPriority::Low);
+    REQUIRE(boost.Raise());
+    boost.Detach();
+    REQUIRE(thread->Current() == ThreadPriority::Low);
+    REQUIRE(thread->sets == 4);
+}
+
+TEST_CASE("A stage boost the host refuses is tried once and changes nothing",
+          "[video_core][shader_jobs]") {
+    auto thread = std::make_shared<FakeThread>();
+    thread->refuse = true;
+    FakeTarget target{thread};
+    VideoCommon::StageBoost boost;
+    boost.Attach(target, ThreadPriority::Low);
+    REQUIRE_FALSE(boost.Raise());
+    REQUIRE_FALSE(boost.Raise());
+    boost.Detach();
+    REQUIRE(thread->sets == 1);
+    REQUIRE(thread->Current() == ThreadPriority::Low);
+}
+
+TEST_CASE("A stage boost raised from other threads is undone by the time the stage ends",
+          "[video_core][shader_jobs]") {
+    auto thread = std::make_shared<FakeThread>();
+    FakeTarget target{thread};
+    VideoCommon::StageBoost boost;
+    std::atomic<bool> done{};
+    std::vector<std::thread> waiters;
+    for (int waiter = 0; waiter < 3; ++waiter) {
+        waiters.emplace_back([&] {
+            while (!done) {
+                boost.Raise();
+                std::this_thread::yield();
+            }
+        });
+    }
+    for (int stage = 0; stage < 2000; ++stage) {
+        boost.Attach(target, ThreadPriority::Low);
+        std::this_thread::yield();
+        boost.Detach();
+        REQUIRE(thread->Current() == ThreadPriority::Low);
+    }
+    done = true;
+    for (auto& waiter : waiters) {
+        waiter.join();
+    }
+    REQUIRE(thread->sets % 2 == 0);
+}
+
+TEST_CASE("Waiting for a running shader job raises its thread until the job ends",
+          "[video_core][shader_jobs]") {
+    Fakes fakes;
+    ShaderJobScheduler scheduler{BoostConfig(fakes, 1, 1)};
+    Gate gate;
+    std::promise<void> entered;
+    const auto job = scheduler.Submit(CpuJob(Background, [&] {
+        entered.set_value();
+        gate.Wait();
+    }));
+    entered.get_future().wait();
+    REQUIRE(fakes.Raised() == 0);
+
+    // Not yet waited for by a draw
+    scheduler.Promote(job, Soon);
+    REQUIRE(fakes.Raised() == 0);
+    scheduler.Promote(job, NeedNow);
+    REQUIRE(fakes.Raised() == 1);
+    REQUIRE(scheduler.Stats().wait_boosts == 1);
+    scheduler.Promote(job, NeedNow);
+    REQUIRE(scheduler.Stats().wait_boosts == 1);
+
+    gate.Open();
+    job.Wait();
+    REQUIRE(Eventually([&] { return fakes.Raised() == 0; }));
+    REQUIRE(fakes.Balanced());
+    REQUIRE(scheduler.Stats().wait_boosts == 1);
+}
+
+TEST_CASE("RunOrWait on a running shader job raises its thread", "[video_core][shader_jobs]") {
+    Fakes fakes;
+    ShaderJobScheduler scheduler{BoostConfig(fakes, 1, 1)};
+    Gate gate;
+    const auto job = BlockSoon(scheduler, gate);
+    auto waiter = std::async(std::launch::async, [&] { scheduler.RunOrWait(job); });
+    const bool raised = Eventually([&] { return fakes.Raised() == 1; });
+    gate.Open();
+    waiter.get();
+    REQUIRE(raised);
+    REQUIRE(Eventually([&] { return fakes.Raised() == 0; }));
+    REQUIRE(fakes.Balanced());
+}
+
+TEST_CASE("A queued shader job a draw waits for starts raised", "[video_core][shader_jobs]") {
+    Fakes fakes;
+    ShaderJobScheduler scheduler{BoostConfig(fakes, 1, 1)};
+    Gate gate;
+    const auto blocker = BlockSoon(scheduler, gate);
+    std::atomic<int> raised_in_promoted{-1};
+    std::atomic<int> raised_in_plain{-1};
+    const auto promoted =
+        scheduler.Submit(CpuJob(Background, [&] { raised_in_promoted = fakes.Raised(); }));
+    const auto plain =
+        scheduler.Submit(CpuJob(Background, [&] { raised_in_plain = fakes.Raised(); }));
+    scheduler.Promote(promoted, NeedNow);
+    // The worker is busy: nothing to raise yet
+    REQUIRE(fakes.Raised() == 0);
+    gate.Open();
+    blocker.Wait();
+    promoted.Wait();
+    plain.Wait();
+
+    REQUIRE(raised_in_promoted == 1);
+    // The raise ended with the promoted job, before the worker took the next one
+    REQUIRE(raised_in_plain == 0);
+    REQUIRE(Eventually([&] { return fakes.Raised() == 0; }));
+    REQUIRE(scheduler.Stats().wait_boosts == 1);
+}
+
+TEST_CASE("Both stages of a shader job a draw waits for run raised", "[video_core][shader_jobs]") {
+    Fakes fakes;
+    ShaderJobScheduler scheduler{BoostConfig(fakes, 1, 1)};
+    Gate gate;
+    std::promise<void> entered;
+    std::atomic<int> raised_in_driver{-1};
+    const auto job = scheduler.Submit(TwoStageJob(
+        Soon,
+        [&](ShaderJobContext&) {
+            entered.set_value();
+            gate.Wait();
+        },
+        [&] { raised_in_driver = fakes.Raised(); }));
+    entered.get_future().wait();
+    scheduler.Promote(job, NeedNow);
+    REQUIRE(fakes.Raised() == 1);
+    gate.Open();
+    job.Wait();
+
+    // The CPU worker restored itself before the job reached the driver worker, which started
+    // raised: one raised thread, not two and not none
+    REQUIRE(raised_in_driver == 1);
+    REQUIRE(Eventually([&] { return fakes.Raised() == 0; }));
+    REQUIRE(fakes.Balanced());
+    REQUIRE(scheduler.Stats().wait_boosts == 2);
+}
+
+TEST_CASE("Without the switch, or where the host refuses, no shader worker is raised",
+          "[video_core][shader_jobs]") {
+    for (const bool switch_on : {false, true}) {
+        Fakes fakes;
+        fakes.refuse = switch_on;
+        ShaderJobScheduler scheduler{BoostConfig(fakes, 1, 1, switch_on)};
+        Gate gate;
+        const auto job = BlockSoon(scheduler, gate);
+        scheduler.Promote(job, NeedNow);
+        REQUIRE(fakes.Raised() == 0);
+        gate.Open();
+        job.Wait();
+        const auto after = scheduler.Submit(CpuJob(NeedNow, [] {}));
+        after.Wait();
+
+        REQUIRE(job.Status() == ShaderJobStatus::Done);
+        REQUIRE(after.Status() == ShaderJobStatus::Done);
+        REQUIRE(fakes.Raised() == 0);
+        REQUIRE(scheduler.Stats().wait_boosts == 0);
+        if (!switch_on) {
+            // The switch off never asks for a target
+            REQUIRE(fakes.Count() == 0);
+        }
+    }
+}
+
+TEST_CASE("No shader worker stays raised once its jobs ended", "[video_core][shader_jobs]") {
+    Fakes fakes;
+    ShaderJobScheduler scheduler{BoostConfig(fakes, 3, 2)};
+    constexpr int Producers = 4;
+    constexpr int JobsPerProducer = 100;
+    std::vector<ShaderJobHandle> handles(Producers * JobsPerProducer);
+    std::vector<std::thread> producers;
+    for (int producer = 0; producer < Producers; ++producer) {
+        producers.emplace_back([&, producer] {
+            std::mt19937 random{static_cast<u32>(producer)};
+            for (int i = 0; i < JobsPerProducer; ++i) {
+                const size_t index = static_cast<size_t>(producer * JobsPerProducer + i);
+                handles[index] = scheduler.Submit(TwoStageJob(
+                    random() % 2 == 0 ? Soon : Background,
+                    [](ShaderJobContext&) { std::this_thread::yield(); },
+                    [] { std::this_thread::yield(); }));
+                switch (random() % 3) {
+                case 0:
+                    scheduler.Promote(handles[index], NeedNow);
+                    break;
+                case 1:
+                    scheduler.RunOrWait(handles[index]);
+                    break;
+                default:
+                    break;
+                }
+            }
+        });
+    }
+    for (auto& producer : producers) {
+        producer.join();
+    }
+    for (const auto& handle : handles) {
+        handle.Wait();
+    }
+    REQUIRE(Eventually([&] { return fakes.Raised() == 0; }));
+    REQUIRE(fakes.Balanced());
+    REQUIRE(scheduler.Stats().in_flight_bytes == 0);
 }

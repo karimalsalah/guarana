@@ -1223,10 +1223,19 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     const size_t driver_threads =
         device.HasBrokenParallelShaderCompiling() ? 1
                                                   : std::min(cpu_threads, driver_thread_limit);
+    // EDEN_NX2_WAIT_BOOST (experiment): a shader job a draw waits for runs at normal priority.
+    const char* const wait_boost_value = std::getenv("EDEN_NX2_WAIT_BOOST");
+    const bool wait_boost =
+        wait_boost_value != nullptr && std::strtoul(wait_boost_value, nullptr, 10) != 0;
+    if (wait_boost) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_WAIT_BOOST=1: shader jobs a draw waits for run at normal "
+                                "thread priority");
+    }
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
         .cpu_threads = cpu_threads,
         .driver_threads = driver_threads,
         .name = "VkShader",
+        .wait_boost = wait_boost,
     });
 }
 
