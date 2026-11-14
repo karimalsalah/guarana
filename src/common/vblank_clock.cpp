@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <memory>
 #include <thread>
 
 #include "common/common_types.h"
+#include "common/logging.h"
+#include "common/period_worker.h"
 #include "common/vblank_clock.h"
 
 #ifdef _WIN32
@@ -41,6 +46,15 @@ constexpr auto RecheckInterval = std::chrono::seconds{2};
         return {};
     }
     return std::chrono::nanoseconds{static_cast<s64>(u64{1'000'000'000} * denominator / numerator)};
+}
+
+// EDEN_NX2_VBLANK_RECHECK_ASYNC=1: the 2 s display-mode recheck (QueryDisplayConfig, which can take
+// milliseconds) runs on a helper thread that publishes the period, instead of on the present
+// thread just before its vblank wait. Read like the neighbouring switches: unset, empty, 0 and
+// false are off, and off is the original code path.
+[[nodiscard]] bool RecheckAsyncRequested() {
+    const char* value = std::getenv("EDEN_NX2_VBLANK_RECHECK_ASYNC");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
 }
 
 // The refresh rate of the active display path whose source is the monitor named gdi_name.
@@ -82,6 +96,18 @@ constexpr auto RecheckInterval = std::chrono::seconds{2};
     }
     return PeriodOf(info.rateRefresh.uiNumerator, info.rateRefresh.uiDenominator);
 }
+
+// The refresh period of a monitor's display mode; DWM's when the path lookup finds none.
+[[nodiscard]] std::chrono::nanoseconds QueryMonitorPeriod(HMONITOR monitor) {
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (monitor != nullptr && GetMonitorInfoW(monitor, &info)) {
+        if (const auto period_ = QueryPathPeriod(info.szDevice); period_.count() > 0) {
+            return period_;
+        }
+    }
+    return QueryDwmPeriod();
+}
 #endif
 
 } // Anonymous namespace
@@ -99,6 +125,24 @@ struct VblankClock::Impl {
     }
 
     ~Impl() {
+        if (worker != nullptr) {
+            // Joined before anything it could still read goes away.
+            worker->Stop();
+            const auto stats = worker->GetStats();
+            if (stats.queries != 0) {
+                const double total_ms =
+                    std::chrono::duration<double, std::milli>(stats.total).count();
+                const double longest_ms =
+                    std::chrono::duration<double, std::milli>(stats.longest).count();
+                LOG_INFO(Common,
+                         "EDEN_NX2_VBLANK_RECHECK_ASYNC: {} display-mode queries on the helper "
+                         "thread, {:.2f} ms on average and {:.2f} ms at most: that time was spent "
+                         "off the present thread",
+                         stats.queries, total_ms / static_cast<double>(stats.queries),
+                         longest_ms);
+            }
+            worker.reset();
+        }
         if (timer != nullptr) {
             CloseHandle(timer);
         }
@@ -115,14 +159,20 @@ struct VblankClock::Impl {
     }
 
     [[nodiscard]] std::chrono::nanoseconds QueryPeriod() const {
-        MONITORINFOEXW info{};
-        info.cbSize = sizeof(info);
-        if (monitor != nullptr && GetMonitorInfoW(monitor, &info)) {
-            if (const auto period_ = QueryPathPeriod(info.szDevice); period_.count() > 0) {
-                return period_;
-            }
-        }
-        return QueryDwmPeriod();
+        return QueryMonitorPeriod(monitor);
+    }
+
+    /// Starts the helper thread of the display-mode recheck, at the first Wait: a clock that is
+    /// built only to read the period (ReportedPeriod) never starts a thread. Its first query is
+    /// one interval away; until a result lands the period of Locate stays.
+    void StartRecheckWorker() {
+        worker = std::make_unique<PeriodWorker>(
+            [this] { return QueryMonitorPeriod(target_monitor.load(std::memory_order_acquire)); },
+            RecheckInterval);
+        LOG_INFO(Common,
+                 "EDEN_NX2_VBLANK_RECHECK_ASYNC: the display mode is looked up every {} s on a "
+                 "helper thread",
+                 std::chrono::duration_cast<std::chrono::seconds>(RecheckInterval).count());
     }
 
     /// Takes the monitor, its DXGI output and its refresh period.
@@ -148,6 +198,13 @@ struct VblankClock::Impl {
         }
         source = output ? Source::Dxgi : Source::Dwm;
         early_returns = 0;
+        if (async_recheck) {
+            // The helper reads the monitor after the generation it is told about: store first.
+            target_monitor.store(monitor, std::memory_order_release);
+            if (worker != nullptr) {
+                worker->Retarget();
+            }
+        }
     }
 
     void Recheck(Clock::time_point now) {
@@ -159,8 +216,10 @@ struct VblankClock::Impl {
             Locate(current);
             return;
         }
-        // The mode may have changed, and a source given up on gets another chance.
-        if (const auto reported = QueryPeriod(); reported.count() > 0) {
+        // The mode may have changed, and a source given up on gets another chance. With the helper
+        // thread the query is not made here: its latest result is taken, 0 before the first.
+        if (const auto reported = worker != nullptr ? worker->Latest() : QueryPeriod();
+            reported.count() > 0) {
             period = reported;
         }
         const Source best = output ? Source::Dxgi : Source::Dwm;
@@ -180,6 +239,9 @@ struct VblankClock::Impl {
     }
 
     Clock::time_point Wait() {
+        if (async_recheck && worker == nullptr) {
+            StartRecheckWorker();
+        }
         Recheck(Clock::now());
         bool waited = false;
         switch (source) {
@@ -240,6 +302,11 @@ struct VblankClock::Impl {
     Clock::time_point last{};
     Clock::time_point recheck{};
     u32 early_returns{};
+    const bool async_recheck{RecheckAsyncRequested()};
+    /// The monitor the helper thread queries; written by Locate on the present thread.
+    std::atomic<HMONITOR> target_monitor{};
+    // Last: destroyed first, and the thread it runs reads target_monitor.
+    std::unique_ptr<PeriodWorker> worker;
 };
 
 VblankClock::VblankClock(void* window) : impl{std::make_unique<Impl>(static_cast<HWND>(window))} {}
