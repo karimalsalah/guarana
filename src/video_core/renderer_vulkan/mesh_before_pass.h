@@ -44,9 +44,10 @@ enum class Verdict {
     return Verdict::Hoist;
 }
 
-/// Whether a draw that samples one of its render targets may have its dispatches moved.
-[[nodiscard]] constexpr bool MayHoistDraw(bool enabled, bool samples_own_targets) noexcept {
-    return enabled && !samples_own_targets;
+/// Storage writes must also stay after earlier draws' reads, even in a pass with no stores.
+[[nodiscard]] constexpr bool MayHoistDraw(bool enabled, bool samples_own_targets,
+                                        bool writes_storage) noexcept {
+    return enabled && !samples_own_targets && !writes_storage;
 }
 
 } // namespace Vulkan::MeshBeforePass

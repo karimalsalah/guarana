@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <initializer_list>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "video_core/renderer_vulkan/mesh_before_pass.h"
@@ -85,8 +87,37 @@ TEST_CASE("Without a pass the dispatches go before the pass the draw begins",
 
 TEST_CASE("A draw that samples its own render targets keeps its dispatches in place",
           "[video_core][mesh_before_pass]") {
-    REQUIRE(MayHoistDraw(true, false));
-    REQUIRE_FALSE(MayHoistDraw(true, true));
-    REQUIRE_FALSE(MayHoistDraw(false, false));
-    REQUIRE_FALSE(MayHoistDraw(false, true));
+    REQUIRE(MayHoistDraw(true, false, false));
+    REQUIRE_FALSE(MayHoistDraw(true, true, false));
+    REQUIRE_FALSE(MayHoistDraw(false, false, false));
+    REQUIRE_FALSE(MayHoistDraw(false, true, false));
+}
+
+TEST_CASE("A draw that writes storage keeps its dispatches in place",
+          "[video_core][mesh_before_pass]") {
+    REQUIRE_FALSE(MayHoistDraw(true, false, true));
+    REQUIRE_FALSE(MayHoistDraw(true, true, true));
+}
+
+TEST_CASE("Unset and zero keep mesh dispatches in place for every draw hazard combination",
+          "[video_core][mesh_before_pass]") {
+    for (const char* value : {static_cast<const char*>(nullptr), "0"}) {
+        for (const bool samples_targets : {false, true}) {
+            for (const bool writes_storage : {false, true}) {
+                REQUIRE_FALSE(MayHoistDraw(ParseSwitch(value), samples_targets, writes_storage));
+            }
+        }
+    }
+}
+
+TEST_CASE("Realizing a deferred clear must recheck whether its begin reached the worker",
+          "[video_core][mesh_before_pass]") {
+    State state{};
+    state.deferred_clear_matches = true;
+    REQUIRE(Decide(state) == Verdict::RealizeClear);
+
+    // Recording the begin can fill and dispatch a chunk, closing its prelude immediately.
+    state = OpenPass();
+    state.has_prelude = false;
+    REQUIRE(Decide(state) == Verdict::Refuse);
 }
