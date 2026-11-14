@@ -127,6 +127,8 @@ private:
     bool extrapolation_usable{};
     /// EDEN_NX2_CADENCE: real frames are held to the target rate / cadence_divisor (0: off).
     u32 cadence_divisor{};
+    /// EDEN_NX2_SHOWN_GOVERNOR: the governed shown rate cadence_divisor was set for, 0 when none.
+    u32 cadence_governed{};
     u32 cadence_slow_checks{};
     u32 cadence_fast_checks{};
     std::chrono::steady_clock::time_point cadence_checked{};
