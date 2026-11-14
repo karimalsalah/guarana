@@ -1,0 +1,1 @@
+- Build: `video_core.h` includes `core/game_presets.h`, so `Core::GamePresets::DisplayInfo` is a complete type where `ApplyGameSwitchDefaults` gives it a default argument. `main` did not compile on GCC or clang-cl after the resolver changes landed ([#101](https://github.com/karimalsalah/guarana/issues/101)).
