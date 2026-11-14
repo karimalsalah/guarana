@@ -12,6 +12,7 @@ import type { Channel, InstalledVersion, LauncherState, Progress, UpdateInfo } f
 import { badge, busy, button, card, segmented, skeleton, type Segmented } from "../ui/controls";
 import { progressRing } from "../ui/progress-ring";
 import { toast } from "../ui/toast";
+import { resetUpdateCheck } from "./home";
 
 const CHANNEL_KEY = "guarana.channel";
 
@@ -23,7 +24,9 @@ function savedChannel(): Channel {
   }
 }
 
+/** After an install or a switch: the footer rereads the version, and Home checks for updates again. */
 function announceState(): void {
+  resetUpdateCheck();
   document.dispatchEvent(new CustomEvent("guarana:state"));
 }
 
@@ -173,6 +176,7 @@ const screen: ScreenDef = {
       const asked = channel;
       latestVer.textContent = "–";
       latestMeta.replaceChildren(skeleton([60]));
+      notesBody.replaceChildren(skeleton([90, 70, 80, 55]));
       action.disabled = true;
       const label = action.querySelector(".btn-label");
       if (label) label.textContent = "Checking…";
@@ -198,6 +202,9 @@ const screen: ScreenDef = {
       } catch (e) {
         if (ctx.signal.aborted) return;
         latestMeta.textContent = "";
+        // No release, no notes: the skeleton would shimmer forever.
+        notesTitle.textContent = "What's new";
+        notesBody.replaceChildren(h("p", { class: "muted", text: "Release notes load once the update check works." }));
         status.textContent = errorText(e);
         if (label) label.textContent = "Try again";
         action.disabled = false;

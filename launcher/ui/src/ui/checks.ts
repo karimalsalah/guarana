@@ -54,7 +54,10 @@ export function checkRow(check: Check, opts: { compact?: boolean; onFixed?: (c: 
                 .then((updated) => {
                   render(updated);
                   opts.onFixed?.(updated);
-                  if (updated.status === "ok" && before !== "ok") toast(`${updated.title}: done.`, { tone: "ok" });
+                  // Only the open_* fixes open a page. The others (install_update, install_vc_redist,
+                  // delete_shader_tmp) put what they did at the start of the check's detail.
+                  if (!fixId.startsWith("open_")) toast(updated.detail, { tone: updated.status === "warn" || updated.status === "fail" ? "warn" : "info" });
+                  else if (updated.status === "ok" && before !== "ok") toast(`${updated.title}: done.`, { tone: "ok" });
                   else toast("Opened. Finish there, then run the checks again.", { tone: "info" });
                 })
                 .catch((err: unknown) => toast(`${c.title}: ${errorText(err)}`, { tone: "fail" }));
