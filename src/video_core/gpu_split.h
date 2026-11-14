@@ -50,7 +50,7 @@ enum class DrainSite : u32 {
     GpSyncFence,    ///< A GP entry's sync bit (sync_memory_operations)
     Map,            ///< GPU memory maps before later command reads
     FrontStart,     ///< The front takes an engine's macros over
-    FrontVerify,    ///< EDEN_NX2_FRONT_VERIFY
+    FrontVerify,    ///< EDEN_NX2_SPLIT_VERIFY
     RingFull,       ///< The ring is full: the front waits for the back to make room
     BackRegister,   ///< A register a macro the back ran may have written (Maxwell3D)
     BackCode,       ///< The macro code changes under the macros the back has yet to run
