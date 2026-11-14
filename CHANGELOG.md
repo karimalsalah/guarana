@@ -10,10 +10,15 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+### Added
+
+- `EDEN_NX2_GPL_OPTIMIZE_CACHED=1` (experiment, off by default): with `EDEN_NX2_GPL=1`, pipelines loaded from the shader cache get the optimized link in the background at their first draw, as pipelines built during play do, instead of drawing fast-linked until they are evicted and rebuilt (issue #103). The `Nx2Perf gpl` line now counts fast-linked draws with no optimized link coming and the links queued at a first draw. Not measured; plan in [docs/switches.md](docs/switches.md).
+
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
 - Shader translation ([#105](https://github.com/karimalsalah/guarana/issues/105)): on GPUs with hardware float atomic adds (Intel), a float atomic add left on a global address no longer calls an undefined function (invalid SPIR-V); and with `EDEN_NX2_GM` bit 2, a Vertex B program joined to a Vertex A one now searches its own buffers, not the ones at its old indices.
+- The README no longer shows its agent, contributor and hall-of-fame sections twice (a merge doubled them), and the tools/ci tests pass again after the actions/checkout bump: the pin test reads the commit from build-check.yml, and the legacy, ingest and triage workflow tests accept any major version. The report tools (`tools/ingest`) know the three fields the bug forms gained in #53 (display refresh rate, switches set, frame generation) and the three new "Graphics card" options (Arc 130T / 130V, Radeon 8060S, Steam Deck), so their tests pass again and such a report is no longer filed under "Other".
 
 ## [20.3.0] - 2026-11-14
 
