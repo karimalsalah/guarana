@@ -163,15 +163,14 @@ public:
                 return nullptr;
             }
             entry = it->second;
+            if (entry->job.Ready()) {
+                entries.erase(it);
+                return std::move(entry->pipeline);
+            }
         }
-        if (!entry->job.Ready()) {
-            jobs.Promote(entry->job, VideoCommon::ShaderJobPriority::NeedNow);
-            pending = true;
-            return nullptr;
-        }
-        std::scoped_lock lock{mutex};
-        entries.erase(key);
-        return std::move(entry->pipeline);
+        jobs.Promote(entry->job, VideoCommon::ShaderJobPriority::NeedNow);
+        pending = true;
+        return nullptr;
     }
 
     /// Calls `done` once every build added so far was translated, on the thread that translated
