@@ -1,0 +1,1 @@
+- Frame target hotkeys: read the experiment switch once after loading the switch file instead of on every target read (#35).
