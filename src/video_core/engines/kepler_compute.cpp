@@ -19,6 +19,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
+#include "shader_recompiler/frontend/ampere/program_override.h"
 #include "core/core.h"
 #include "video_core/gpu_split.h"
 #include "video_core/fire_emblem_upscale.h"
@@ -545,6 +546,8 @@ void KeplerCompute::CallMultiMethod(Core::System& system, u32 method, const u32*
     }
 }
 
+/// Set up the compute registers from the native descriptor and submit the dispatch.
+/// Returns true if the dispatch was submitted, skipped, or replaced.
 bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& qmd) {
     launch_description = {};
     launch_description.grid_dim_x.Assign(qmd[12]);
@@ -725,6 +728,9 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         if (skipping) {
             return true;
         }
+    }
+    if (BypassOotBaseNetwork()) {
+        return true;
     }
     bool dispatched = true;
     try {
@@ -1165,6 +1171,34 @@ bool KeplerCompute::IsOotOutputPass(u64 native_key, u64 unique_hash) {
     return true;
 }
 
+
+/// Identify a known 1.0.0 output pass before shader translation can reject it.
+/// The first word is a quick filter. The full native key must match before replacing the pass.
+bool KeplerCompute::BypassOotBaseNetwork() {
+    using namespace VideoCommon::OotNetwork;
+    const u64 program_id = Settings::GetCurrentProgramID();
+    if (!BypassEnabled(program_id)) {
+        return false;
+    }
+    const GPUVAddr program = regs.code_loc.Address() + launch_description.program_start;
+    if (!memory_manager.IsFullyMappedRange(program, sizeof(u32))) {
+        return false;
+    }
+    const u32 first_word = memory_manager.Read<u32>(program);
+    const auto match =
+        std::ranges::find(BaseOutputPrograms, first_word, &BaseOutputProgram::first_word);
+    if (match == BaseOutputPrograms.end() ||
+        !memory_manager.IsFullyMappedRange(program, match->size)) {
+        return false;
+    }
+    std::vector<Shader::Ampere::Instruction> code(match->size / sizeof(Shader::Ampere::Instruction));
+    memory_manager.ReadBlock(program, code.data(), match->size);
+    return Shader::Ampere::NativeProgramKey(code) == match->key &&
+           BypassOotNetwork(program_id, match->key, 0);
+}
+
+/// Replace a known output pass with the latest tonemap, using scaling for the base game.
+/// The update's prepass and network may be skipped after a successful replacement.
 bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_hash) {
     using namespace VideoCommon::OotNetwork;
     if (!BypassEnabled(program_id)) {
@@ -1191,6 +1225,13 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     // Without the switch the copy takes the whole target, as before.
     if (!extra.any || area.x0 >= area.x1 || area.y0 >= area.y1 || area.x1 > tonemapped.width ||
         area.y1 > tonemapped.height) {
+        area = {0, 0, tonemapped.width, tonemapped.height};
+    }
+    const bool base_output = std::ranges::find(BaseOutputPrograms, native_key,
+                                              &BaseOutputProgram::key) != BaseOutputPrograms.end();
+    // The base game tonemaps the whole image at its own resolution, below the output's:
+    // the copy takes the full tonemapped image, never the experimental crop.
+    if (base_output) {
         area = {0, 0, tonemapped.width, tonemapped.height};
     }
     const u32 source_width = area.x1 - area.x0;
@@ -1232,7 +1273,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
                std::find(keys.begin(), keys.end(), unique_hash) != keys.end();
     };
     const bool output_pass =
-        native_key == OutputProgramKey ||
+        native_key == OutputProgramKey || base_output ||
         (extra.any && IsListedOotOutputPass(extra, native_key, unique_hash));
     if (native_key == PrepassProgramKey || native_key == NetworkProgramKey ||
         (!output_pass && listed(extra.skip))) {
@@ -1248,7 +1289,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     }
     // The known program's output handle is at +0xd0; another's is its one image store, if so.
     u32 handle_offset = OutputImageHandleOffset;
-    if (native_key != OutputProgramKey) {
+    if (native_key != OutputProgramKey && !base_output) {
         const auto handles = NativeImageHandles(regs.code_loc.Address());
         if (handles.second.size() == 1) {
             handle_offset = handles.second.front();
@@ -1260,6 +1301,10 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     const auto fits = [&](u32 to_width, u32 to_height) {
         if (source_width == to_width && source_height == to_height) {
             return true;
+        }
+        // The base game can run its tonemap at a lower resolution than the output.
+        if (base_output) {
+            return source_width <= to_width && source_height <= to_height;
         }
         const u64 cross_a = u64{to_width} * source_height;
         const u64 cross_b = u64{to_height} * source_width;
@@ -1282,6 +1327,8 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
         unexpected = "tonemapped image not B10G11R11";
     } else if (tonemapped.tile_mode.is_pitch_linear) {
         unexpected = "tonemapped image not block-linear";
+    } else if (tonemapped.width == 0 || tonemapped.height == 0) {
+        unexpected = "tonemapped image empty";
     } else if (!fits(output->Width(), output->Height())) {
         unexpected = "sizes differ";
     }
@@ -1331,7 +1378,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_
     const bool same_size = source_width == output->Width() && source_height == output->Height();
     const Fermi2D::Config config{
         .operation = Fermi2D::Operation::SrcCopy,
-        .filter = same_size ? Fermi2D::Filter::Point : Fermi2D::Filter::Bilinear,
+        .filter = (!same_size || base_output) ? Fermi2D::Filter::Bilinear : Fermi2D::Filter::Point,
         .must_accelerate = true,
         .dst_x0 = 0,
         .dst_y0 = 0,

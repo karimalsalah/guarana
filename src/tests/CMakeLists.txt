@@ -172,6 +172,7 @@ add_executable(tests
     video_core/ssa_fixed_variables.cpp
     video_core/virtual_range_cache.cpp
     video_core/ocarina_upscale.cpp
+    video_core/ocarina_camera.cpp
     video_core/fsr4_support.cpp
     common/bit_field.cpp
     common/bit_util.cpp
@@ -221,6 +222,8 @@ add_executable(tests
     core/internal_network/socket_proxy.cpp
     core/priority_queue.cpp
     core/internal_network/network.cpp
+    core/numeric_name_info.cpp
+    core/numeric_name_info_ipc.cpp
     video_core/memory_tracker.cpp
     video_core/invalidation_accumulator.cpp
     video_core/memory_manager_runs.cpp
