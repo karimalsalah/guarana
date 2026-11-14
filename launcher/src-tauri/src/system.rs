@@ -40,20 +40,23 @@ fn reg_u32(root: &RegKey, path: &str, name: &str) -> Option<u32> {
 }
 
 pub fn detect() -> SystemInfo {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    sys.refresh_cpu();
+    // sysinfo 0.40's System::new can fail; the registry and Win32 answers then stand on their own.
+    let sys = sysinfo::System::new().ok().map(|mut sys| {
+        sys.refresh_memory();
+        sys.refresh_cpu_all();
+        sys
+    });
 
     let gpus = gpus();
     let primary_gpu = gpus.iter().position(|g| !g.is_integrated).unwrap_or(0);
     let (power, has_battery) = power();
-    let ram_bytes = installed_ram_bytes().unwrap_or_else(|| sys.total_memory());
+    let ram_bytes = installed_ram_bytes().unwrap_or_else(|| sys.as_ref().map_or(0, |s| s.total_memory()));
 
     SystemInfo {
         os: os_info(),
-        cpu: cpu_info(&sys),
+        cpu: cpu_info(sys.as_ref()),
         ram_gb: util::gib(ram_bytes),
-        pagefile_gb: util::gib(sys.total_swap()),
+        pagefile_gb: util::gib(sys.as_ref().map_or(0, |s| s.total_swap())),
         gpus,
         primary_gpu,
         display: display(),
@@ -92,15 +95,17 @@ pub fn os_build_full() -> String {
     }
 }
 
-fn cpu_info(sys: &sysinfo::System) -> CpuInfo {
+fn cpu_info(sys: Option<&sysinfo::System>) -> CpuInfo {
+    let cpus = sys.map(|s| s.cpus()).unwrap_or_default();
     let name = reg_str(&hklm(), r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString")
-        .or_else(|| sys.cpus().first().map(|c| c.brand().trim().to_string()))
+        .or_else(|| cpus.first().map(|c| c.brand().trim().to_string()))
         .unwrap_or_else(|| "Unknown CPU".to_string());
-    let threads = match sys.cpus().len() {
+    let threads = match cpus.len() {
         0 => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
         n => n,
     };
-    let cores = sys.physical_core_count().unwrap_or(threads);
+    // An associated function in sysinfo 0.40: it no longer needs a System.
+    let cores = sysinfo::System::physical_core_count().unwrap_or(threads);
     let (avx2, avx512, hybrid) = cpu_features();
     CpuInfo { name, cores: cores as u32, threads: threads as u32, avx2, avx512, hybrid }
 }
@@ -128,9 +133,14 @@ fn installed_ram_bytes() -> Option<u64> {
 }
 
 pub fn available_ram_bytes() -> u64 {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    sys.available_memory()
+    match sysinfo::System::new() {
+        Ok(mut sys) => {
+            sys.refresh_memory();
+            sys.available_memory()
+        }
+        // The same figure sysinfo reads on Windows (GlobalMemoryStatusEx's ullAvailPhys).
+        Err(_) => memory_now().map_or(0, |m| m.free_ram),
+    }
 }
 
 /// Memory at this moment, from `GlobalMemoryStatusEx`. All in bytes.
@@ -762,9 +772,8 @@ pub fn pagefile_config() -> Option<PageFileConfig> {
 /// Free bytes on the volume holding `path`.
 pub fn free_disk_bytes(path: &Path) -> Option<u64> {
     let target = path.to_string_lossy().to_ascii_lowercase();
-    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let disks = sysinfo::Disks::new_with_refreshed_list().ok()?;
     disks
-        .list()
         .iter()
         .filter(|d| target.starts_with(&d.mount_point().to_string_lossy().to_ascii_lowercase()))
         .max_by_key(|d| d.mount_point().as_os_str().len())
