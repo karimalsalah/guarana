@@ -24,6 +24,7 @@
 #include "video_core/renderer_vulkan/unoptimized_first.h"
 
 #include "common/bit_field.h"
+#include "common/boot_split.h"
 #include "common/cityhash.h"
 #include "common/scope_exit.h"
 #include "common/zstd_compression.h"
@@ -2048,6 +2049,8 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             hold_time_ns.fetch_add(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(held).count(),
                 std::memory_order::relaxed);
+            Common::BootSplit::NoteHeldDraw(static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(held).count()));
             if (library_cache) {
                 library_cache->RecordHeldDraw(held);
             }
@@ -2837,6 +2840,13 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass, PipelineVariant va
                        std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - trace_begin)
                            .count());
+    if (Common::BootSplit::Enabled()) {
+        Common::BootSplit::NoteBuild(
+            Common::BootSplit::BuildKind::GraphicsMonolithic,
+            static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - trace_begin)
+                                 .count()));
+    }
     if (capture_flags != 0 && variant == PipelineVariant::Main && pipeline) {
         PipelineExecutableDump::Record(device, *pipeline,
                                        {

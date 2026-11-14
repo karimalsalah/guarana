@@ -35,6 +35,7 @@ add_executable(tests
     core/perf_stats.cpp
     core/game_presets.cpp
     core/key_derivation.cpp
+    common/boot_split.cpp
     common/display_hdr.cpp
     common/dkb_cpu_trace.cpp
     common/dkb_frame_trace.cpp
