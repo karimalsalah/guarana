@@ -62,13 +62,10 @@ constexpr size_t FLUID_HIGH_RATE_FRAMES = 16;
 constexpr size_t FLUID_MAX_FRAMES = 16;
 
 /// The rate EDEN_NX2_FLUID shows frames at: EDEN_NX2_SHOWN_RATE=<hz> (30 to 240) if set, else the
-/// frame generation target rate, else 60.
+/// frame generation target rate, else 60. The environment is parsed once (LiveShownRateHz).
 [[nodiscard]] f64 FluidShownRate() {
-    if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
-        return static_cast<f64>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
-    }
-    const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
-    return rate != 0 ? static_cast<f64>(rate) : 60.0;
+    return VideoCore::ShownGovernor::LiveShownRateHz(
+        Settings::values.frame_gen_target_rate.GetValue());
 }
 
 /// EDEN_NX2_FLUID_FRAMES=<n> (7 to 16): the FLUID presenter's frame pool, by default 7, or 12 when

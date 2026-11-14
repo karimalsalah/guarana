@@ -348,6 +348,20 @@ TEST_CASE("Shown governor: a new ladder keeps the block on step ups", "[shown_go
     CHECK(state.block_left == 5);
 }
 
+TEST_CASE("Shown rate: the environment overrides the setting, once parsed", "[shown_governor]") {
+    CHECK_FALSE(ParseShownRateEnv(nullptr).set);
+    CHECK(ResolveShownRateHz(ParseShownRateEnv(nullptr), 0) == Catch::Approx(60.0));
+    CHECK(ResolveShownRateHz(ParseShownRateEnv(nullptr), 144) == Catch::Approx(144.0));
+    CHECK(ParseShownRateEnv("120").set);
+    CHECK(ParseShownRateEnv("120").hz == Catch::Approx(120.0));
+    CHECK(ResolveShownRateHz(ParseShownRateEnv("120"), 60) == Catch::Approx(120.0));
+    // Below 30 and above 240 clamp, including text strtol reads as 0.
+    CHECK(ParseShownRateEnv("10").hz == Catch::Approx(30.0));
+    CHECK(ParseShownRateEnv("999").hz == Catch::Approx(240.0));
+    CHECK(ParseShownRateEnv("").hz == Catch::Approx(30.0));
+    CHECK(ParseShownRateEnv("abc").hz == Catch::Approx(30.0));
+}
+
 TEST_CASE("Shown governor: the measured laptop settles at 72 and stays", "[shown_governor]") {
     // 144 shown: 50% of the slots on time and 24 real frames cost 47.6 ms of GPU each, so about 21
     // real frames at a saturated GPU. 72 shown: 74% on time, 33.1 ms per real frame, 79% busy.

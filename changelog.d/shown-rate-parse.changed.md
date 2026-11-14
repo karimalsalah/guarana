@@ -1,0 +1,1 @@
+- The FLUID presenter and the frame-generation cadence parse `EDEN_NX2_SHOWN_RATE` once per process instead of calling `getenv` on every vblank. The frame-generation setting is still read each time, so a UI change applies when the environment did not override it. The rate is unchanged.

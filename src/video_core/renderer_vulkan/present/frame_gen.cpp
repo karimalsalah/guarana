@@ -51,14 +51,10 @@ constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
 
 constexpr u32 CADENCE_MAX_DIVISOR = 4;
 
-/// The shown rate as configured.
+/// The shown rate as configured. Same parse as the presenter (LiveShownRateHz).
 [[nodiscard]] f32 BaseTargetRate() {
-    // EDEN_NX2_SHOWN_RATE=<hz>: the shown rate the FLUID presenter uses, over the setting.
-    if (const char* value = std::getenv("EDEN_NX2_SHOWN_RATE")) {
-        return static_cast<f32>(std::clamp<long>(std::strtol(value, nullptr, 10), 30L, 240L));
-    }
-    const u32 rate = Settings::values.frame_gen_target_rate.GetValue();
-    return rate != 0 ? static_cast<f32>(rate) : 60.0f;
+    return static_cast<f32>(VideoCore::ShownGovernor::LiveShownRateHz(
+        Settings::values.frame_gen_target_rate.GetValue()));
 }
 
 /// The shown rate the cadence works to: the one EDEN_NX2_SHOWN_GOVERNOR chose, else the configured.
