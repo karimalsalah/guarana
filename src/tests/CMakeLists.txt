@@ -128,6 +128,7 @@ add_executable(tests
     video_core/bounded_store.cpp
     video_core/pipeline_eviction_policy.cpp
     video_core/async_shader_emission.cpp
+    video_core/async_translation_policy.cpp
     video_core/graphics_pipeline_library_policy.cpp
     video_core/pipeline_binaries_policy.cpp
     video_core/oot_network.cpp
