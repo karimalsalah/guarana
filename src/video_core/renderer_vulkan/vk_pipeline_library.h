@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/unoptimized_first.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
@@ -56,6 +57,11 @@ constexpr u32 GPL_FRAGMENT_IMAGE_SCALING_BASE = 32;
 /// VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT. EDEN_NX2_GPL_OPTIMIZE=0 leaves
 /// the fast-linked pipelines in place.
 bool GplOptimizeEnabled();
+
+/// EDEN_NX2_UNOPT_FIRST=1 (unoptimized_first.h): whether it applies with `driver_id`, and
+/// `libraries` (graphics pipeline libraries in use). Logs the outcome when it was asked for:
+/// called once per pipeline cache, at startup.
+bool UnoptimizedFirstEnabled(VkDriverId driver_id, bool libraries);
 
 enum class GplPart : u32 {
     PreRasterization = 0,
@@ -106,9 +112,35 @@ public:
 
     /// The library for `key`: built with `build` on this thread when nobody has built it yet,
     /// waited for when another thread is building it. Null when its build failed (a failed key
-    /// is not retried). `name` (a shader hash) is only for the log.
+    /// is not retried). `name` (a shader hash) is only for the log. `unoptimized`: `build` makes
+    /// it with optimization disabled (EDEN_NX2_UNOPT_FIRST), counted apart as well. `background`:
+    /// EDEN_NX2_UNOPT_FIRST's optimized replacement asks, no draw waits for it, so it is left out
+    /// of the builds, reuses and draw wait avoided of `Nx2Perf gpl` (it has its own counters).
     std::shared_ptr<const GplLibrary> GetOrCreate(GplPart part, const std::string& key,
-                                                  const Builder& build, u64 name);
+                                                  const Builder& build, u64 name,
+                                                  bool unoptimized = false,
+                                                  bool background = false);
+
+    /// Whether the library of `key` is built and usable now. Never waits for a build.
+    bool HasBuilt(const std::string& key);
+
+    /// EDEN_NX2_UNOPT_FIRST: set at startup (UnoptimizedFirstEnabled), before any build.
+    void SetUnoptimizedFirst(bool enabled) noexcept {
+        unoptimized_first = enabled;
+    }
+    [[nodiscard]] bool UnoptimizedFirst() const noexcept {
+        return unoptimized_first;
+    }
+    /// A pipeline was linked from at least one unoptimized library.
+    void RecordUnoptimizedStart() {
+        started_unoptimized.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// The Background build of a pipeline's optimized libraries and their link ended; `built`
+    /// when it gave a pipeline to swap in.
+    void RecordReplacementBuild(bool built, std::chrono::nanoseconds time);
+    /// GPU thread: a pipeline linked from unoptimized libraries is swapped for its optimized
+    /// build, `since_first_draw` after its first draw. Logs one line.
+    void RecordUnoptimizedSwap(u64 pipeline_hash, std::chrono::nanoseconds since_first_draw);
 
     void RecordLink(bool optimized, std::chrono::nanoseconds time);
     void RecordHeldDraw(std::chrono::nanoseconds time);
@@ -139,6 +171,9 @@ private:
         std::shared_ptr<const GplLibrary> library;
     };
 
+    /// The EDEN_NX2_UNOPT_FIRST line of Report, when it is on and anything happened.
+    void ReportUnoptimizedFirst();
+
     std::mutex mutex;
     std::unordered_map<std::string, std::shared_ptr<Entry>> entries;
 
@@ -159,6 +194,20 @@ private:
     std::atomic<u32> logged_builds{};
     std::atomic<size_t> total_libraries{};
     std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+
+    // EDEN_NX2_UNOPT_FIRST
+    bool unoptimized_first{};
+    std::array<std::atomic<u32>, 2> unoptimized_built{};
+    std::array<std::atomic<u64>, 2> unoptimized_build_ns{};
+    std::array<std::atomic<u64>, 2> unoptimized_build_max_ns{};
+    std::atomic<u32> replacement_builds{};
+    std::atomic<u32> replacement_failures{};
+    std::atomic<u64> replacement_build_ns{};
+    std::atomic<u64> replacement_build_max_ns{};
+    std::atomic<u64> started_unoptimized{}; ///< Since startup, not reset by Report
+    std::atomic<u64> swapped_unoptimized{}; ///< Since startup, not reset by Report
+    std::mutex swap_mutex;
+    SwapDelays swap_delays;
 };
 
 } // namespace Vulkan
