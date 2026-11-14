@@ -4,13 +4,18 @@
 
 import os
 import pathlib
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+CXX = os.environ.get("CXX", "c++")
 
 
+@unittest.skipUnless(sys.platform.startswith("linux") and shutil.which(CXX),
+                     f"needs Linux and the C++ compiler {CXX!r} (set CXX)")
 class SwitchDiscovery(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -42,7 +47,7 @@ int main(int argc, char** argv) {
     std::cout << (value ? value : "unset");
 }
 ''')
-        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), str(ROOT / "src/common/switch_origin.cpp"), "-o", str(self.bin / "lichii")], check=True)
+        subprocess.run([CXX, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), str(ROOT / "src/common/switch_origin.cpp"), "-o", str(self.bin / "lichii")], check=True)
 
     def tearDown(self):
         self.tmp.cleanup()

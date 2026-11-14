@@ -26,6 +26,7 @@ on:
         default: false
   # The tests on pull requests that change the bots or what they read: drift between the forms,
   # labels, bench schema or site files and the parsers shows up here, not in a failed publish.
+  # The list must cover every file the suite reads.
   pull_request:
     paths:
       - "tools/ingest/**"
@@ -45,6 +46,24 @@ on:
       - "site/agents.html"
       - "README.md"
       - "SUPPORT.md"
+      # The agent kit, the site and the docs that test_ai_kit.py and test_site.py read.
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "GEMINI.md"
+      - "CONVENTIONS.md"
+      - "CONTRIBUTING.md"
+      - ".windsurfrules"
+      - ".aider.conf.yml"
+      - ".mcp.json"
+      - ".codex/**"
+      - ".cursor/**"
+      - ".clinerules/**"
+      - ".github/copilot-instructions.md"
+      - "site/**"
+      - "docs/README.md"
+      - "docs/agents/README.md"
+      - "docs/i18n/**"
+      - "assets/readme/**"
 
 permissions: {}
 

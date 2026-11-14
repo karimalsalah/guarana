@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import contextlib
+import importlib.util
+import io
 import os
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNNER = os.path.join(HERE, "thread_worker_wake.py")
@@ -32,6 +36,22 @@ chmod +x "$out"
 """
 
 
+class Platform(unittest.TestCase):
+    # Runs on every platform: the runner sees a non-Linux sys.platform and stops before compiling.
+    # CXX is set so that the --cxx default does not call shutil.which under the patched platform.
+    def test_unsupported_off_linux(self):
+        spec = importlib.util.spec_from_file_location("thread_worker_wake", RUNNER)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        output = io.StringIO()
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.object(sys, "argv", [RUNNER]), \
+                mock.patch.dict(os.environ, {"CXX": "c++"}), contextlib.redirect_stdout(output):
+            self.assertEqual(runner.main(), 77)
+        self.assertIn("unsupported: Linux only", output.getvalue())
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "the runner and its /bin/sh stub compiler are Linux-only")
 class RunnerExitCodes(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory()
