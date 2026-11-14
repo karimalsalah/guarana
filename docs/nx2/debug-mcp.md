@@ -216,8 +216,8 @@ the host functions above `(jit)` while the JIT calls out.
 
 **`speed_limit`** `{on?}`. Lifts (`false`) or restores (`true`) the speed limit live and returns
 the `previous` and current `on` state, so a test script can boot through the logos and menus
-unlimited. Without `on` it only reports the state. Use it through `--call`; the MCP adapter does
-not list it.
+unlimited. Without `on` it only reports the state. The MCP adapter offers it, and `--call` reaches
+it, as every other method.
 
 **`host_timing`** `{stats?}`. Turns the per-second `HostTiming wait` log line
 (`EDEN_NX2_HOSTTIMING_STATS`) on or off and returns the `previous` and current `stats` state.

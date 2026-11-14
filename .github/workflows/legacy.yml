@@ -48,6 +48,11 @@ on:
       - "tools/nx2/debug_mcp.py"
       - "docs/agents/**"
       - "HANDOVER.md"
+      # The report entry that tools/ci/tests/test_report_destination.py checks.
+      - "src/lichii/main_window.cpp"
+      - "src/lichii/game/game_list.cpp"
+      - "src/lichii/problem_report.cpp"
+      - ".github/ISSUE_TEMPLATE/game_bug.yml"
 
 permissions: {}
 
