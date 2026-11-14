@@ -1,8 +1,8 @@
 #version 460 core
 
 // EDEN_NX2_FLUID_COMPOSE: the slot pass of the FLUID presenter. One dispatch scales the frame of a
-// slot into the swapchain image (bilinear) and fills the letterbox bars with black. The pushed
-// block is Vulkan::FluidComposeMath::PushConstants (fluid_compose_math.h): six 32-bit integers.
+// slot into the swapchain image and fills the letterbox bars with black. The pushed
+// block is Vulkan::FluidComposeMath::PushConstants (fluid_compose_math.h): seven 32-bit integers.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -18,7 +18,58 @@ layout(push_constant) uniform PushConstants {
     int rect_y;
     int rect_width;
     int rect_height;
+    int filter_mode;
 };
+
+// Keep the weight arithmetic in sync with FluidComposeMath's CPU reference.
+vec4 CatmullRomWeights(float f) {
+    float f2 = f * f;
+    float f3 = f2 * f;
+    return vec4(-0.5 * f + f2 - 0.5 * f3, 1.0 - 2.5 * f2 + 1.5 * f3,
+                0.5 * f + 2.0 * f2 - 1.5 * f3, -0.5 * f2 + 0.5 * f3);
+}
+
+vec4 Filter(vec2 uv, vec2 size) {
+    vec2 position = uv * size - 0.5;
+    vec2 base = floor(position);
+    vec4 wx = CatmullRomWeights(position.x - base.x);
+    vec4 wy = CatmullRomWeights(position.y - base.y);
+    vec2 middle = vec2(wx.y + wx.z, wy.y + wy.z);
+    vec2 centre = base + vec2(wx.z, wy.z) / middle + 0.5;
+    vec2 inv_size = 1.0 / size;
+    // Tap positions match FluidComposeMath::CatmullRomFivePositions.
+    // The 3x3 bilinear form with its four corner taps dropped, then renormalised.
+    vec4 left = textureLod(Source, vec2(base.x - 0.5, centre.y) * inv_size, 0.0);
+    vec4 top = textureLod(Source, vec2(centre.x, base.y - 0.5) * inv_size, 0.0);
+    vec4 mid = textureLod(Source, centre * inv_size, 0.0);
+    vec4 right = textureLod(Source, vec2(base.x + 2.5, centre.y) * inv_size, 0.0);
+    vec4 bottom = textureLod(Source, vec2(centre.x, base.y + 2.5) * inv_size, 0.0);
+    float wl = wx.x * middle.y;
+    float wt = middle.x * wy.x;
+    float wm = middle.x * middle.y;
+    float wr = wx.w * middle.y;
+    float wb = middle.x * wy.w;
+    vec4 low = min(mid, min(min(left, right), min(top, bottom)));
+    vec4 high = max(mid, max(max(left, right), max(top, bottom)));
+    vec4 color = clamp((wl * left + wt * top + wm * mid + wr * right + wb * bottom) /
+                       (wl + wt + wm + wr + wb), low, high);
+    if (filter_mode == 2) {
+        // Four extra bilinear taps, one source texel from this output sample. RCAS-style
+        // extrema limit the negative lobe, with a modest fixed ceiling of 1/8.
+        vec3 n = textureLod(Source, uv + vec2(0.0, -inv_size.y), 0.0).rgb;
+        vec3 s = textureLod(Source, uv + vec2(0.0, inv_size.y), 0.0).rgb;
+        vec3 e = textureLod(Source, uv + vec2(inv_size.x, 0.0), 0.0).rgb;
+        vec3 w = textureLod(Source, uv + vec2(-inv_size.x, 0.0), 0.0).rgb;
+        vec3 lo = min(color.rgb, min(min(n, s), min(e, w)));
+        vec3 hi = max(color.rgb, max(max(n, s), max(e, w)));
+        vec3 limit = min(lo / max(4.0 * hi, vec3(1e-6)),
+                         (1.0 - hi) / max(4.0 * (1.0 - lo), vec3(1e-6)));
+        float amount = clamp(min(limit.r, min(limit.g, limit.b)), 0.0, 0.125);
+        color.rgb = clamp((color.rgb - amount * (n + s + e + w)) / (1.0 - 4.0 * amount),
+                          0.0, 1.0);
+    }
+    return color;
+}
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -31,7 +82,12 @@ void main() {
     if (inside.x >= 0 && inside.y >= 0 && inside.x < rect_width && inside.y < rect_height) {
         // The whole frame maps onto the rectangle, sampled at the pixel's centre.
         vec2 uv = (vec2(inside) + vec2(0.5)) / vec2(float(rect_width), float(rect_height));
-        color = textureLod(Source, uv, 0.0);
+        // Native is disabled on the host; a matching source/rectangle also stays 1:1.
+        if (filter_mode == 0 || all(equal(textureSize(Source, 0), ivec2(rect_width, rect_height)))) {
+            color = textureLod(Source, uv, 0.0);
+        } else {
+            color = Filter(uv, vec2(textureSize(Source, 0)));
+        }
     }
     imageStore(Destination, pixel, color);
 }
