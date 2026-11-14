@@ -84,7 +84,11 @@ target_compile_definitions(qt_common PUBLIC
     QT_NO_URL_CAST_FROM_STRING
 )
 
-target_link_libraries(qt_common PRIVATE core Qt6::Core Qt6::Concurrent SimpleIni::SimpleIni QuaZip::QuaZip)
+# qt_config.h includes frontend_common/config.h, which includes SimpleIni.h. That header is
+# public, so consumers compiling against qt_common (the frame-target toast test compiles
+# guarana_ui.cpp, which includes uisettings.h) need the SimpleIni include path.
+target_link_libraries(qt_common PUBLIC SimpleIni::SimpleIni)
+target_link_libraries(qt_common PRIVATE core Qt6::Core Qt6::Concurrent QuaZip::QuaZip)
 target_link_libraries(qt_common PUBLIC frozen::frozen-headers Vulkan::Headers)
 target_link_libraries(qt_common PRIVATE gamemode::headers frontend_common)
 
