@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+- The README no longer shows its agent, contributor and hall-of-fame sections twice (a merge doubled them), and the tools/ci tests pass again after the actions/checkout bump: the pin test reads the commit from build-check.yml, and the legacy, ingest and triage workflow tests accept any major version. The report tools (`tools/ingest`) know the three fields the bug forms gained in #53 (display refresh rate, switches set, frame generation) and the three new "Graphics card" options (Arc 130T / 130V, Radeon 8060S, Steam Deck), so their tests pass again and such a report is no longer filed under "Other".
 
 ## [20.3.0] - 2026-11-14
 

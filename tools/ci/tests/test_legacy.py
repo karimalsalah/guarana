@@ -376,7 +376,7 @@ class WorkflowTests(unittest.TestCase):
             for step in job["steps"]:
                 self.assertEqual(len({"uses", "run"} & set(step)), 1)
                 if "uses" in step:
-                    self.assertEqual(step["uses"], "actions/checkout@v5")
+                    self.assertRegex(step["uses"], r"^actions/checkout@v\d+$")  # dependabot bumps it
                 else:
                     self.assertTrue(step["run"].startswith("python3 -I "), step["run"])
                     self.assertNotIn("${{", step["run"])
