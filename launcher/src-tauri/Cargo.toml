@@ -33,7 +33,7 @@ sha2 = "0.11"
 hex = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 walkdir = "2"
-sysinfo = { version = "0.30", default-features = false }
+sysinfo = { version = "0.40", default-features = false }
 log = { version = "0.4", features = ["std"] }
 percent-encoding = "2"
 url = "2"
