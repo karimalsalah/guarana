@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Lichii Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Guarana contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "winresrc.h"
@@ -16,13 +16,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "Lichii Emulator Project"
+            VALUE "CompanyName", "Guarana contributors"
             VALUE "FileDescription", "@LICHII_FILE_DESCRIPTION@"
             VALUE "FileVersion", "@LICHII_VERSION_STRING@"
             VALUE "InternalName", "@LICHII_FILE_NAME@"
-            VALUE "LegalCopyright", "Copyright Lichii Emulator Project, GPL-3.0-or-later"
+            VALUE "LegalCopyright", "GPL-3.0-or-later. Based on Lichii, Eden, Eglantine and yuzu."
             VALUE "OriginalFilename", "@LICHII_FILE_NAME@"
-            VALUE "ProductName", "Lichii"
+            VALUE "ProductName", "Guarana"
             VALUE "ProductVersion", "@LICHII_VERSION_STRING@"
         END
     END
