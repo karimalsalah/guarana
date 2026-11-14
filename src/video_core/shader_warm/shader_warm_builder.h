@@ -134,11 +134,16 @@ struct WarmOnlyReport {
 void ReportWarmOnly(const WarmOnlyReport& report);
 [[nodiscard]] WarmOnlyReport TakeWarmOnlyReport();
 
-/// The GPU driver, device and pipeline cache version pipelines were precached for.
+/// The GPU driver, device, pipeline cache version and build variant pipelines were precached
+/// for. The variant hashes what else decides the SPIR-V and create flags the driver gets (the
+/// SPIR-V emission stamp, the settings and EDEN_NX2_* switches that change the emitted code):
+/// without it, a build or setting that emits other SPIR-V kept a list saying "built" for
+/// pipelines the driver's cache did not hold.
 struct DriverStamp {
     u32 driver{};
     u32 device_id{};
     u32 cache_version{};
+    u64 variant{};
 
     bool operator==(const DriverStamp&) const = default;
 };
@@ -149,13 +154,20 @@ struct DriverStamp {
 std::filesystem::path PrecachedPipelinesPath(u64 title_id, bool libraries);
 
 /// The pipeline key hashes in `file`, empty when there is none or it was written for another
-/// driver, device or cache version.
+/// driver, device, cache version or variant.
 std::unordered_set<u64> ReadPrecachedPipelines(const std::filesystem::path& file,
                                                const DriverStamp& stamp);
 
-/// Writes `hashes` for `stamp` to `file`. Returns false when it cannot be written.
+/// Writes `hashes` for `stamp` to `file`. Returns false when it cannot be written. The list says
+/// what the driver pipeline cache file holds: written only after a save of that file succeeded.
 bool WritePrecachedPipelines(const std::filesystem::path& file, const DriverStamp& stamp,
                              const std::unordered_set<u64>& hashes);
+
+/// Removes the markers that say what a title's driver pipeline cache file holds, in `title_dir`
+/// (<shader dir>/<title id>): both lists of precached graphics pipelines and the precache file's
+/// marker (.done). For when that file is missing, deleted or rejected: what they list is not in
+/// it. The precache file and its count stay. Returns false when a marker cannot be removed.
+bool RemoveDriverCacheMarkers(const std::filesystem::path& title_dir);
 
 /// Removes the title's precache file, its marker and count, the list of precached graphics
 /// pipelines older builds kept and a leftover temporary file (rebuild or delete from the UI). Returns false when a file exists but cannot be removed, with

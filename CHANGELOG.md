@@ -13,6 +13,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 ### Fixed
 
 - The switch registry check passes on main again: `tools/ci/switch-registry-upstream.txt` is regenerated from upstream Lichii's `57b75fec`, the commit the upstream integration merged, which adds upstream's `EDEN_NX2_GPU_TRACE` and `EDEN_NX2_GPU_TRACE_PRESENTS` (upstream [#1655](https://github.com/zortos293/Lichii/pull/1655)) and drops `EDEN_NX2_LIST_HLE_VERIFY`, which nothing uses any more. The `upstream` mirror still stops at the previous merge, so CI's `--upstream-ref` did not have them.
+- Shader precache markers no longer say "built" for pipelines the driver's cache file does not hold ([#106](https://github.com/karimalsalah/guarana/issues/106)): the lists of precached graphics pipelines carry the build variant (the precache marker's variant, which holds the SPIR-V emission stamp, the resolution scale and the loop safety, bloom and debug settings, plus the `EDEN_NX2_*` switches known to change the SPIR-V or the cached link), the lists and `warm-compute.done` are written only after a save of the driver cache succeeded (on Intel's Windows driver the precache is now saved on the loading screen instead of only at exit), and they are removed when that file is missing, empty or deleted at load. Not measured.
 
 ## [20.3.0] - 2026-11-14
 
