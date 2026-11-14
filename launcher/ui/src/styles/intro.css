@@ -36,7 +36,9 @@
     radial-gradient(1px 1px at 4% 92%, rgba(255, 255, 255, 0.5), transparent 60%),
     radial-gradient(1px 1px at 46% 46%, rgba(255, 255, 255, 0.35), transparent 60%);
   background-size: 560px 320px;
-  animation: twinkle 7s ease-in-out infinite alternate;
+  /* The stage settles once the intro is over: twinkle, haze and grain run a few cycles, then rest
+     while Set up waits. Each ends on its base frame, so nothing jumps when it stops. */
+  animation: twinkle 7s ease-in-out 2 alternate;
 }
 @keyframes twinkle { to { opacity: 0.55; } }
 
@@ -47,7 +49,7 @@
   width: 96vmax;
   height: 96vmax;
   background: radial-gradient(circle, rgba(52, 86, 178, 0.38) 0%, rgba(52, 86, 178, 0.14) 34%, rgba(52, 86, 178, 0) 64%);
-  animation: haze-drift 18s ease-in-out infinite alternate;
+  animation: haze-drift 9s ease-in-out 2 alternate;
 }
 .haze-b {
   right: -34vmax;
@@ -55,7 +57,7 @@
   width: 88vmax;
   height: 88vmax;
   background: radial-gradient(circle, rgba(242, 133, 26, 0.24) 0%, rgba(242, 133, 26, 0.08) 34%, rgba(242, 133, 26, 0) 64%);
-  animation: haze-drift 22s ease-in-out infinite alternate-reverse;
+  animation: haze-drift 22s ease-in-out 1 alternate-reverse;
 }
 @keyframes haze-drift { to { translate: 4vmax 3vmax; } }
 
@@ -89,7 +91,7 @@
   pointer-events: none;
   background-image: var(--grain, none);
   background-size: 160px 160px;
-  animation: grain 0.9s steps(6) infinite;
+  animation: grain 0.9s steps(6) 4;
 }
 @keyframes grain {
   0% { transform: translate(0, 0); }

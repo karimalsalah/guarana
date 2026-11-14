@@ -117,6 +117,39 @@ int main(int argc, char** argv) {
         self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "3")
         self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image), EDEN_NX2_PRELOAD_ALL_PIPELINES="4"), "4")
 
+    def test_portable_user_folder_replaces_per_user_copy(self):
+        # Outside Windows the path manager looks for the portable "user" folder in the current
+        # directory, and run_probe starts the probe in self.root.
+        (self.bin / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=1\n")
+        (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=3\n")
+        self.assertEqual(self.run_probe(self.bin / "lichii"), "3")
+        portable = self.root / "user"
+        portable.mkdir()
+        self.assertEqual(self.run_probe(self.bin / "lichii"), "1")
+        (portable / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
+        self.assertEqual(self.run_probe(self.bin / "lichii"), "2")
+        self.assertEqual(self.run_probe(self.bin / "lichii", EDEN_NX2_PRELOAD_ALL_PIPELINES="4"), "4")
+        outer = self.root / "app"
+        outer.mkdir()
+        image = outer / "Lichii.AppImage"
+        image.touch()
+        (outer / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=5\n")
+        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "2")
+
+    def test_portable_copy_is_limited_like_sidecars(self):
+        portable = self.root / "user"
+        portable.mkdir()
+        (portable / "nx2_switches.txt").write_text("LD_PRELOAD=/untrusted\nEDEN_STREAMLINE_DIR=/untrusted\n")
+        (self.config / "nx2_switches.txt").write_text("EDEN_STREAMLINE_DIR=/trusted\n")
+        for name in ("LD_PRELOAD", "EDEN_STREAMLINE_DIR"):
+            with self.subTest(name=name):
+                self.assertEqual(self.run_probe(self.bin / "lichii", name), "unset")
+
+    def test_user_file_is_not_portable_mode(self):
+        (self.root / "user").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
+        (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=3\n")
+        self.assertEqual(self.run_probe(self.bin / "lichii"), "3")
+
 
 if __name__ == "__main__":
     unittest.main()

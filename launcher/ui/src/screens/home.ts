@@ -1,5 +1,5 @@
-// Home, Ocarina-first: a hero card for Ocarina of Time with one big Play, the controller and setup
-// cards, then the rest of the library (lazy). Warms the shader cache in the background once.
+// Home, Ocarina-first: a hero card for Ocarina of Time with one big Play, the mode, the rest of the
+// library (lazy), then "This PC" (Booster, controllers, setup). Warms the shader cache once, in the background.
 
 import { api, errorText, events } from "../api";
 import { h } from "../dom";
@@ -73,7 +73,16 @@ const screen: ScreenDef = {
     const modeSlot = h("div", { class: "mode-slot" });
     const boosterSlot = h("div", { class: "booster-slot" });
     const shareSlot = shareCard(ctx);
-    const el = h("div", { class: "home" }, heroSlot, shareSlot, modeSlot, boosterSlot, h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot), libSection);
+    // One primary action: the game and Play first, then the mode and the library. The PC's own cards
+    // (Booster, controllers, setup) sit below, quieter, under one heading.
+    const pcSection = h(
+      "section",
+      { class: "home-pc", "aria-labelledby": "pc-title" },
+      h("div", { class: "section-head" }, h("h2", { class: "section-title", id: "pc-title", text: "This PC" })),
+      boosterSlot,
+      h("div", { class: "home-grid" }, controllersCard(ctx.signal), setupSlot),
+    );
+    const el = h("div", { class: "home" }, heroSlot, shareSlot, modeSlot, libSection, pcSection);
 
     const exited = ctx.params.exited as { code: number; seconds: number; title: string } | undefined;
     if (exited) {
@@ -345,6 +354,7 @@ function renderLibrary(section: HTMLElement, body: HTMLElement, games: Game[], s
       h(
         "div",
         { class: "empty" },
+        h("span", { class: "empty-icon", "aria-hidden": "true" }, icon("game")),
         h("p", { class: "empty-title", text: state.game_folders.length ? "No other games yet" : "No games yet" }),
         h("p", { class: "fine", text: "Guarana looks in the folders you add. It never downloads games." }),
         button("Find my games", { kind: "secondary", icon: "search", onClick: () => void go("scan", { params: { deep: true } }) }),
@@ -358,7 +368,15 @@ function renderLibrary(section: HTMLElement, body: HTMLElement, games: Game[], s
       body.replaceChildren(
         m.libraryList(games, {
           canPlay: state.keys_present,
-          onPlay: (g) => void go("launch", { params: { game: g, profileId }, transition: "fade" }),
+          // The row's title carries into the launch stage, like the hero's does.
+          onPlay: (g, titleEl) => {
+            rumble(60);
+            titleEl.style.setProperty("view-transition-name", "hero-title");
+            void go("launch", { params: { game: g, profileId, morph: "title" }, transition: "launch" }).catch((e: unknown) => {
+              titleEl.style.removeProperty("view-transition-name");
+              toast(errorText(e), { tone: "fail" });
+            });
+          },
         }),
       );
     });
@@ -411,7 +429,8 @@ async function shareNow(): Promise<void> {
 function shareCard(ctx: ScreenContext): HTMLElement {
   const text = h("p", { class: "share-text", role: "status" });
   const fine = h("p", { class: "fine", text: "Nothing is sent. Your browser opens GitHub's device report with these numbers filled in. You add the scene and a screenshot, read it, and press Submit yourself." });
-  const share = button("Share", { kind: "primary", icon: "sparkle", onClick: (_e, self) => void busy(self, shareNow, "Opening…").catch((e: unknown) => toast(errorText(e), { tone: "fail" })) });
+  // Secondary on purpose: Play is the one ember button on Home.
+  const share = button("Share", { kind: "secondary", icon: "sparkle", onClick: (_e, self) => void busy(self, shareNow, "Opening…").catch((e: unknown) => toast(errorText(e), { tone: "fail" })) });
   const later = button("Not now", { kind: "ghost", onClick: () => void api.shareDismiss().then(show).catch(() => undefined) });
   const never = h("button", { type: "button", class: "link-btn" }, "Don't ask again");
   never.addEventListener("click", () => {
@@ -610,6 +629,7 @@ function boosterCard(ctx: ScreenContext): HTMLElement {
   const activeRow = h("p", { class: "booster-active", role: "status", hidden: true }, icon("bolt"), h("span", { text: "Boost is on for this game. It will be undone when the game exits." }));
   const note = h("p", { class: "fine mode-note", hidden: true });
   const undo = button("Undo all", { kind: "ghost", size: "sm", icon: "history", attrs: { title: "Put every change back right now" } });
+  const levelName = h("span", { class: "disclosure-value", "aria-live": "polite" });
   let current = 0;
 
   const select = (level: number) => {
@@ -644,6 +664,7 @@ function boosterCard(ctx: ScreenContext): HTMLElement {
       }),
     );
     const chosen = st.levels.find((l) => l.level === current);
+    levelName.textContent = st.active ? `${chosen?.title ?? "On"} · on for this game` : (chosen?.title ?? "");
     changes.replaceChildren(
       ...(chosen && chosen.changes.length
         ? chosen.changes.map((c) => h("li", {}, icon("check"), h("span", { text: c })))
@@ -652,6 +673,8 @@ function boosterCard(ctx: ScreenContext): HTMLElement {
     activeRow.hidden = !st.active;
     note.hidden = !st.note;
     note.textContent = st.note ?? "";
+    // A note (what Undo or an exit did) is never left hidden inside the folded card.
+    if (st.note) box.open = true;
   }
 
   undo.addEventListener("click", () => {
@@ -663,19 +686,35 @@ function boosterCard(ctx: ScreenContext): HTMLElement {
       .catch((e: unknown) => toast(errorText(e), { tone: "fail" }));
   });
 
-  void api.getBooster().then(show, (e: unknown) => changes.replaceChildren(h("li", { class: "muted", text: `Booster unavailable: ${errorText(e)}` })));
+  // Folded by default: one line with the current level; the four levels and their changes open on demand.
+  const box = h(
+    "details",
+    { class: "card disclosure booster-card" },
+    h(
+      "summary",
+      { class: "disclosure-head" },
+      h("h3", { class: "card-title", text: "Game Booster" }),
+      levelName,
+      h("span", { class: "disclosure-chevron", "aria-hidden": "true" }, icon("chevronDown")),
+    ),
+    h(
+      "div",
+      { class: "disclosure-body" },
+      h("p", { class: "fine", text: "Tunes Windows for speed only while a game runs, and puts everything back when it exits. Off by default. It never touches security settings." }),
+      group,
+      h("h4", { class: "booster-sub", text: "What this level changes" }),
+      changes,
+      activeRow,
+      note,
+      h("div", { class: "row" }, undo),
+    ),
+  );
+
+  void api.getBooster().then(show, (e: unknown) => {
+    levelName.textContent = "Unavailable";
+    changes.replaceChildren(h("li", { class: "muted", text: `Booster unavailable: ${errorText(e)}` }));
+  });
   void events.boosterChanged(show, ctx.signal).catch(() => undefined);
 
-  return h(
-    "section",
-    { class: "card booster-card", "aria-label": "Game Booster" },
-    h("div", { class: "mode-head" }, h("h2", { class: "card-title", text: "Game Booster" })),
-    h("p", { class: "fine", text: "Tunes Windows for speed only while a game runs, and puts everything back when it exits. Off by default. It never touches security settings." }),
-    group,
-    h("h3", { class: "booster-sub", text: "What this level changes" }),
-    changes,
-    activeRow,
-    note,
-    h("div", { class: "row" }, undo),
-  );
+  return box;
 }

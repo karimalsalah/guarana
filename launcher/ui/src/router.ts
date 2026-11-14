@@ -32,8 +32,6 @@ export interface ScreenDef {
   /** Static, or decided per visit (Scan and Profile are setup steps on first run, normal screens later). */
   chrome: Chrome | ((params: Record<string, unknown>) => Chrome);
   tab?: TabId;
-  /** 1 or 2 in the first-run flow. */
-  step?: number;
   /** Builds the screen synchronously (skeletons are fine) and fills it in asynchronously. */
   render(ctx: ScreenContext): HTMLElement;
   /** Called after the transition finished, e.g. to start entrance animations. */
@@ -98,7 +96,7 @@ export interface GoOptions {
 
 type ShellHooks = {
   outlet: HTMLElement;
-  setChrome(chrome: Chrome, tab: TabId | undefined, step: number | undefined): void;
+  setChrome(chrome: Chrome, tab: TabId | undefined): void;
   announce(text: string): void;
   loading(on: boolean): void;
 };
@@ -165,7 +163,7 @@ export async function go(id: ScreenId, opts: GoOptions = {}): Promise<void> {
     el.dataset.screen = id;
     next.el = el;
     hooks.outlet.replaceChildren(el);
-    hooks.setChrome(chrome, chrome === "full" ? def.tab : undefined, def.step);
+    hooks.setChrome(chrome, chrome === "full" ? def.tab : undefined);
     current = next;
     document.title = id === "home" ? "Guarana" : `${def.title} · Guarana`;
     const main = document.getElementById("main");

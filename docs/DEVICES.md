@@ -11,7 +11,7 @@ one of the most useful contributions you can make.
 
 | | Requirement | Tested with |
 |---|---|---|
-| Operating system | Windows x64 for release builds. Other platforms: build from source ([docs/Build.md](Build.md)); untested on these devices | Windows |
+| Operating system | Windows x64 is the tested platform. Linux and macOS builds are on Releases; untested on these devices ([docs/Build.md](Build.md) to build from source) | Windows |
 | CPU | x86-64 with AVX2: release builds use `x86-64-v3` code | Core Ultra 9 285H |
 | GPU | A Vulkan driver; an integrated GPU is the target | Arc 140T, Intel driver 32.0.101.9175 |
 | Memory | 16 GB of shared memory is below the comfortable floor: Switch 2 titles use a 12 GiB guest memory layout, and the iGPU takes its memory from the same RAM | 32 GB |
@@ -92,16 +92,18 @@ great first contribution.
 
 ## The device profile in the log
 
-When a game boots, the log gets one `Render.Vulkan` Info line that says what the machine is and
-which device class it falls in. It looks like this (the values are an example):
+When a game boots, the log gets one `Render.Vulkan` Info line that says what the machine is, which
+device class it falls in and which GPU family its GPU is in. It looks like this (the values are an
+example):
 
 ```text
-Device profile: class=Integrated label="Intel Arc 140T, integrated, 32 GB, hybrid 6P+8E+2LPE, NPU" gpu_vendor=Intel gpu_model="Intel(R) Arc(TM) 140T GPU (16GB)" gpu_type=integrated gpu_driver=101.9175 gpu_local_mib=16384 gpu_uma=yes cpu_logical=16 cpu_physical=16 cpu_hybrid=6P+8E+2LPE ram_mib=32768 ram_source=installed power=ac display_hz=60.00 npu=yes
+Device profile: class=Integrated gpu_family=IntelArrowLakeH label="Intel Arc 140T, integrated, 32 GB, hybrid 6P+8E+2LPE, NPU" gpu_vendor=Intel gpu_model="Intel(R) Arc(TM) 140T GPU (16GB)" gpu_type=integrated gpu_driver=101.9175 gpu_local_mib=16384 gpu_uma=yes cpu_logical=16 cpu_physical=16 cpu_hybrid=6P+8E+2LPE ram_mib=32768 ram_source=installed power=ac display_hz=60.00 npu=yes
 ```
 
 | Field | Meaning |
 |---|---|
 | `class` | The device class, from the table below |
+| `gpu_family` | The GPU's model family, from the second table below, or `None` |
 | `label` | The same machine in a few words: GPU, its kind (and memory when discrete), RAM, cores, `on battery`, `NPU` |
 | `gpu_vendor`, `gpu_model` | The GPU's vendor (by PCI vendor ID) and the name its driver reports |
 | `gpu_type` | `integrated`, `discrete`, `virtual`, `cpu` (a software renderer) or `unknown` |
@@ -123,9 +125,33 @@ Device profile: class=Integrated label="Intel Arc 140T, integrated, 32 GB, hybri
 | `DiscreteEntry` | A discrete GPU with less |
 | `Unknown` | A virtual GPU, a software renderer, or a GPU whose kind or memory the driver does not say |
 
-The class changes nothing yet. A default for a class comes only with a paired run on a verified
-scene of that class ([AGENTS.md](../AGENTS.md), rule 1). The line holds no paths or names from your
-machine, so you can paste it into a report as it is.
+The class is broad: an Arc 140T and the small Panther Lake GPU are both `Integrated`. The GPU
+family is the model the PCI IDs Vulkan reports prove (vendor and device ID, and the name where one
+ID covers several parts). It needs an integrated GPU on the vendor's own driver (Intel's or AMD's
+Windows driver, or Mesa's ANV or RADV); anything else is `None`, and so is any GPU not listed here.
+
+| GPU family | PCI IDs |
+|---|---|
+| `IntelArcMeteorLake` | Intel 7D55: Meteor Lake "Intel Arc Graphics", 128 or 112 EUs |
+| `IntelArrowLakeH` | Intel 7D51: Arrow Lake-H "Intel Graphics", 128 or 112 EUs, whatever name the driver gives it (the size of an Arc 140T or 130T; Intel does not call 7D51 Arc). 7DD1 only when the name says 140T or 130T |
+| `IntelArcLunarLake` | Intel 64A0: Lunar Lake "Intel Arc Graphics", 64 or 56 EUs (the size of an Arc 140V or 130V). 64B0 only when the name says 140V or 130V |
+| `IntelGraphicsPantherLake` | Intel B090, B0A0: Panther Lake "Intel Graphics", 4, 3 or 2 Xe3 cores |
+| `IntelArcB370` | Intel B081, B083, B085, B087: Panther Lake Arc B370 and Arc Pro B370, 11 or 10 Xe3 cores |
+| `IntelArcB390` | Intel B080, B082, B084, B086: Panther Lake Arc B390 and Arc Pro B390, 12 Xe3 cores |
+| `AmdRadeon780M` | AMD 15BF, 1900 when the name says 780M (15BF is also the 760M and 740M, 1900 also the 760M) |
+| `AmdRadeon880M`, `AmdRadeon890M` | AMD 150E when the name says 880M or 890M |
+| `AmdRadeon8060S` | AMD 1586 when the name says 8060S (the same ID is also the 8050S and 8040S) |
+| `AmdCustomGpu0405` | AMD 163F, "AMD Custom GPU 0405" (the Steam Deck LCD's) |
+| `AmdCustomGpu0932` | AMD 1435, "AMD Custom GPU 0932" (the Steam Deck OLED's) |
+
+The IDs come from the Linux kernel's `include/drm/intel/pciids.h`, Intel's lists of the GPUs its
+i915 and Xe drivers support, and libdrm's `amdgpu.ids`. A GPU of yours in no family can be added
+with its source.
+
+The class and the family change nothing yet. A preset can match either one, but a default for a
+class or a family comes only with a paired run on a verified scene of that class or family
+([AGENTS.md](../AGENTS.md), rule 1). The line holds no paths or names from your machine, so you
+can paste it into a report as it is.
 
 ## Send a device report
 

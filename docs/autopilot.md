@@ -109,6 +109,85 @@ in or on battery as the test says:
 Also check that the autopilot is quiet: a stable scene should show no `Autopilot:` change lines
 after convergence.
 
+## When the scale does not answer
+
+The frame budget (`EDEN_NX2_TARGET_FPS`, or the target `EDEN_NX2_CADENCE` gives it) has one
+lever, the GPU time scale, and it only works through the game's own dynamic resolution. With
+Ocarina of Time's Max Resolution add-on, which the preset for Intel integrated GPUs without matrix
+cores enables, the game renders at a fixed resolution. One session on a Panther Lake laptop
+(release v20.2.0, handheld, target 50 ms) shows the result: the scale walked from 0.256 to its
+4.000 cap in state `slow`, the frame without the pacing wait stayed at 55-97 ms, and nothing said
+so. The autopilot cannot help there: while the budget has a target, the autopilot leaves the scale
+alone (`resolution_available` in `core/nx2_autopilot_session.cpp`).
+
+Detection, with `EDEN_NX2_BUDGET_UNANSWERED=1` and a budget target
+(`video_core/frame_budget_controller.cpp`; unset, raises go on to the upper limit as before):
+
+- Every missed tick of a run that began below the upper limit counts (a raise, or a hold at the
+  limit after one); a run that begins at the limit never tried a raise and stays `saturated`. The
+  reference is the fastest of the run's first three ticks, so a noisy frame time has to beat the
+  best start. Three ticks in a row 12% under it are an answer and the count starts again from
+  there.
+- The ninth missed tick without an answer (about 4.5 s) enters state `unanswered`: the scale is
+  held where it is and is not raised again. The frame budget logs once a game (until its target
+  goes off), for example:
+
+  ```
+  Frame budget: the GPU time scale rose from 0.256 to 1.526 over 9 missed ticks and the frame is still 71.00 ms without the pacing wait against a 50.00 ms target: the game does not follow the scale (a patch such as Max Resolution fixes its resolution, or the frame is not bound by it). The scale stays where it is; nothing else is moved (EDEN_NX2_VRS with EDEN_NX2_VRS_AUTO lets shading rates take over)
+  ```
+
+  The line names no add-on: knowing that the built-in Max Resolution patch applied needs a hook
+  in `PatchManager::PatchNSO`, which is in the owner's boot lane (draft #3) and is left to them.
+- The debug server's `frame_budget` shows `state: unanswered` and `unanswered_from` (the scale at
+  the start of the run, or at its last answer).
+- Undone when the cause goes away: a tick without a miss, while no coarse shading rates are held
+  and not under `EDEN_NX2_BUDGET_HOLD_RES`, lets the next run of misses try the scale again. A new
+  target forgets it. Under `EDEN_NX2_BUDGET_HOLD_RES` (in the Ocarina preset) the scale stays
+  held until the target changes.
+
+Escalation: the next lever has to cut GPU work at a fixed resolution and be safe to move while the
+game runs. What exists today:
+
+| Lever | Moves at run time | Cuts GPU work of a real frame | Used |
+|---|---|---|---|
+| Shading-rate governor (`EDEN_NX2_VRS` + `EDEN_NX2_VRS_AUTO`) | Yes, a table entry per fragment shader | Yes, fragment work | Yes: `unanswered` lets it coarsen, as `saturated` did before. Its timestamp pools are made at scheduler creation (`vk_scheduler.cpp`), so it exists only when both switches were set at launch; without them nothing else moves |
+| Cadence divisor (`EDEN_NX2_CADENCE`) | Adaptive mode `1` already steps it from the same frame time | No, it lowers the real-frame target | No: the preset fixes it at `3`, and the code is in the presenter lane (`frame_gen.cpp`, owner's pull request #74) |
+| Frame generation target or multiplier (autopilot) | Yes | No, it changes how often frames are shown | No: under a fixed cadence a new target leaves the budget's target where it was (`FrameGen::UpdateCadence` keeps divisor 3 at a target of 30), so shown and real rates would stop matching |
+| Frame generation flow scale | Rebuilds the frame generation chain | Only the optical flow pass; the extrapolation path (`EDEN_NX2_EXTRAPOLATE`, `FrameGen::GenerateInto`) generates from the game's motion instead, and no one has measured what the pass costs here | No |
+| Render resolution | No, the add-on patches the game's code at load | Yes | No |
+
+The hand-over logs in the same shape as the `Autopilot:` lines, only while the governor runs:
+
+```
+Frame budget: shading rates may coarsen (the GPU time scale does not answer; frame 71.00 ms without the pacing wait, target 50.00 ms, GPU time scale 1.526)
+Frame budget: shading rates go back to full (the GPU time scale has resolution to give; ...)
+```
+
+What a later lever needs: the shading-rate governor without launch switches needs its per-draw
+timestamp pools made at scheduler creation whenever a budget target can exist (a memory and
+query-pool cost no one has measured), and a check that the device has
+`VK_KHR_fragment_shading_rate`. Giving the held scale back to where the run began would protect a
+game that does lower its resolution while the frame is bound elsewhere; it needs its own switch
+and a scene where it can be seen. An adaptive cadence step under a fixed preset divisor belongs to
+the presenter lane.
+
+Measurement (not measured; this is the plan for the Panther Lake laptop): Ocarina of Time,
+handheld, the preset as shipped, the same save in Hyrule Field, 60 s after the scene settles,
+three alternating pairs per comparison.
+
+1. Detection, before and after this change: the `Frame budget:` lines, `frame_budget` polled every
+   second (`state`, `scale`, `work_ms`), and `Shown frames:` lines. Expected without a speed claim:
+   one "does not follow the scale" line within a few seconds of play, and the scale held below
+   the cap in most runs; at the cap when the first ticks are the slowest. Frame times should not
+   move; a change outside the pair-to-pair spread is a bug. "After" means with
+   `EDEN_NX2_BUDGET_UNANSWERED=1`.
+2. Negative control: Max Resolution disabled in Add-Ons. The game follows the scale, so no
+   `unanswered` state should appear; if it does, the threshold is wrong.
+3. Hand-over: the same with `EDEN_NX2_VRS=1 EDEN_NX2_VRS_AUTO=20` against without. Compare
+   `work_ms`, real fps, shown p95 and the count of presents over 100 ms, and look at the image
+   for coarse shading artefacts. First check the log for "the device has no per-draw shading
+   rate".
+
 ## Risks
 
 - Settings are written from the autopilot thread while the present threads read them. They are

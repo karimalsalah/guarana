@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <array>
 #include <chrono>
 #include <cmath>
 
@@ -330,4 +331,212 @@ TEST_CASE("Frame budget ticks on the guest presents of half a second",
     Budget::OnGuestPresent(now, now);
     Budget::OnGuestPresent(now + 40ms, now + 40ms);
     REQUIRE(Budget::GetStatus().samples == 0);
+}
+
+namespace {
+
+/// Ocarina of Time with the Max Resolution add-on on a Panther Lake integrated GPU: a 50 ms
+/// target, and frames of 55 to 97 ms without the pacing wait whatever the scale.
+constexpr std::array<double, 12> FixedResolutionTrace{97.0, 62.0, 88.0, 55.0, 79.0, 93.0,
+                                                      68.0, 84.0, 71.0, 90.0, 58.0, 96.0};
+
+FrameBudgetController::Input In50(double frame_ms, bool hold_lower = false) {
+    return {.frame_ms = frame_ms, .target_ms = 50.0, .ceiling = 4.0, .hold_lower = hold_lower};
+}
+
+/// EDEN_NX2_BUDGET_UNANSWERED=1.
+FrameBudgetController::Config Watching() {
+    FrameBudgetController::Config config;
+    config.max_unanswered = 8;
+    return config;
+}
+
+} // namespace
+
+TEST_CASE("Frame budget holds a scale whose raises the frame time does not answer",
+          "[video_core][frame_budget]") {
+    FrameBudgetController controller{Watching()};
+    double scale = 0.256;
+    // Eight missed ticks, eight raises.
+    for (size_t i = 0; i < 8; ++i) {
+        const auto decision = controller.Update(In50(FixedResolutionTrace[i]), scale);
+        REQUIRE(decision.action == Action::Raise);
+        REQUIRE(decision.state == State::Slow);
+        REQUIRE_FALSE(decision.scale_spent);
+        scale = decision.scale;
+    }
+    REQUIRE(Near(scale, 0.256 * std::pow(1.25, 8)));
+    REQUIRE_FALSE(controller.Unanswered());
+    // The ninth finds the frame time no faster than the best of the first three: the scale is
+    // held below its limit, and the next lever may act.
+    for (size_t i = 8; i < FixedResolutionTrace.size(); ++i) {
+        const auto decision = controller.Update(In50(FixedResolutionTrace[i]), scale);
+        REQUIRE(decision.action == Action::Hold);
+        REQUIRE(decision.state == State::Unanswered);
+        REQUIRE(decision.scale_spent);
+        REQUIRE_FALSE(decision.at_limit);
+        REQUIRE(Near(decision.scale, scale));
+    }
+    REQUIRE(controller.Unanswered());
+    REQUIRE(Near(controller.UnansweredFrom(), 0.256));
+    REQUIRE(controller.UnansweredTicks() == 9);
+
+    // On target while another lever holds coarse rates: the scale stays out of its way, and a
+    // new miss is not raised against either.
+    auto decision = controller.Update(In50(48.0, true), scale);
+    REQUIRE(decision.state == State::OnTarget);
+    REQUIRE(decision.scale_spent);
+    decision = controller.Update(In50(80.0, true), scale);
+    REQUIRE(decision.action == Action::Hold);
+    REQUIRE(decision.state == State::Unanswered);
+    REQUIRE(decision.scale_spent);
+    // On target with nothing else holding quality back: undone, the scale is tried again.
+    decision = controller.Update(In50(48.0), scale);
+    REQUIRE(decision.state == State::OnTarget);
+    REQUIRE_FALSE(decision.scale_spent);
+    REQUIRE_FALSE(controller.Unanswered());
+    REQUIRE(controller.UnansweredFrom() == 0.0);
+    decision = controller.Update(In50(80.0), scale);
+    REQUIRE(decision.action == Action::Raise);
+    REQUIRE(decision.state == State::Slow);
+
+    // A new target forgets it all.
+    REQUIRE(Run(controller, scale, Slow, 1).action == Action::Raise);
+    controller.Reset();
+    REQUIRE_FALSE(controller.Unanswered());
+    REQUIRE(controller.UnansweredTicks() == 0);
+}
+
+TEST_CASE("Frame budget keeps raising while the frame time answers",
+          "[video_core][frame_budget]") {
+    // A game whose dynamic resolution follows the scale a tick late: 90 ms at 0.256, 50.6 ms
+    // at 0.977.
+    const auto frame_at = [](double at_scale) {
+        return 30.0 + 60.0 * std::pow(0.256 / at_scale, 0.8);
+    };
+    FrameBudgetController controller{Watching()};
+    double scale = 0.256;
+    double rendered = scale;
+    u32 raises = 0;
+    FrameBudgetController::Decision decision;
+    for (u32 i = 0; i < 20; ++i) {
+        decision = controller.Update(In50(frame_at(rendered)), scale);
+        REQUIRE(decision.state != State::Unanswered);
+        REQUIRE_FALSE(decision.scale_spent);
+        rendered = scale;
+        scale = decision.scale;
+        raises += decision.action == Action::Raise ? 1 : 0;
+    }
+    REQUIRE(raises == 7);
+    REQUIRE(decision.state == State::OnTarget);
+    REQUIRE_FALSE(controller.Unanswered());
+}
+
+TEST_CASE("Frame budget counts holds at the limit once raises were tried",
+          "[video_core][frame_budget]") {
+    // From 2.0 four raises reach the limit, and the holds there go on counting.
+    FrameBudgetController controller{Watching()};
+    double scale = 2.0;
+    for (u32 i = 0; i < 8; ++i) {
+        const auto decision = controller.Update(In(Slow), scale);
+        REQUIRE(decision.state == (i < 4 ? State::Slow : State::Saturated));
+        REQUIRE_FALSE(controller.Unanswered());
+        scale = decision.scale;
+    }
+    REQUIRE(Near(scale, 4.0));
+    const auto decision = controller.Update(In(Slow), scale);
+    REQUIRE(decision.action == Action::Hold);
+    REQUIRE(decision.state == State::Unanswered);
+    REQUIRE(decision.at_limit);
+    REQUIRE(decision.scale_spent);
+    REQUIRE(Near(controller.UnansweredFrom(), 2.0));
+
+    // GPU Clocks at Normal: a run that begins at the limit never tried a raise, so it stays
+    // saturated.
+    FrameBudgetController normal{Watching()};
+    auto input = In(Slow);
+    input.ceiling = 1.0;
+    for (u32 i = 0; i < 20; ++i) {
+        REQUIRE(normal.Update(input, 1.0).state == State::Saturated);
+        REQUIRE_FALSE(normal.Unanswered());
+    }
+
+    // Without EDEN_NX2_BUDGET_UNANSWERED the scale walks to its limit and stays saturated.
+    FrameBudgetController never;
+    double never_scale = 1.0;
+    const auto last = Run(never, never_scale, Slow, 30);
+    REQUIRE(last.state == State::Saturated);
+    REQUIRE(Near(never_scale, 4.0));
+    REQUIRE_FALSE(never.Unanswered());
+}
+
+TEST_CASE("Frame budget finds an unanswered scale when the slowest ticks come first",
+          "[video_core][frame_budget]") {
+    // The worst order for the check: the reference is the slowest frames of the trace, so
+    // noise under it can pass for an answer.
+    constexpr std::array<double, 4> slowest_first{97.0, 96.0, 93.0, 90.0};
+    FrameBudgetController controller{Watching()};
+    double scale = 0.256;
+    size_t found_at = 0;
+    for (size_t i = 0; i < slowest_first.size() + FixedResolutionTrace.size() && found_at == 0;
+         ++i) {
+        const double frame_ms = i < slowest_first.size()
+                                    ? slowest_first[i]
+                                    : FixedResolutionTrace[i - slowest_first.size()];
+        scale = controller.Update(In50(frame_ms), scale).scale;
+        if (controller.Unanswered()) {
+            found_at = i + 1;
+        }
+    }
+    REQUIRE(found_at != 0);
+    REQUIRE(found_at <= 13);
+    REQUIRE(scale < 4.0);
+}
+
+TEST_CASE("Frame budget without EDEN_NX2_BUDGET_UNANSWERED raises past an unanswered run",
+          "[video_core][frame_budget]") {
+    namespace Budget = VideoCore::FrameBudget;
+    namespace Auto = VideoCore::AutoShadingRate;
+    using namespace std::chrono_literals;
+    const Settings::GpuClock previous_clock = Settings::values.gpu_clock.GetValue();
+    SCOPE_EXIT {
+        Budget::SetTargetFps(0.0);
+        Budget::SetGpuTimeScale(1.0);
+        Settings::values.gpu_clock.SetValue(previous_clock);
+    };
+    Settings::values.gpu_clock.SetValue(Settings::GpuClock::Boost);
+    Budget::SetGpuTimeScale(0.256);
+    Budget::SetTargetFps(20.0);
+    const Budget::Status start = Budget::GetStatus();
+
+    Budget::TimePoint now{100s};
+    Budget::OnGuestPresent(now, now);
+    // Presents of one frame time, unpaced since they are later than the interval, up to a tick.
+    const auto tick = [&now](double frame_ms) {
+        const u64 ticks = Budget::GetStatus().ticks;
+        while (Budget::GetStatus().ticks == ticks) {
+            now += std::chrono::duration_cast<Budget::TimePoint::duration>(
+                std::chrono::duration<double, std::milli>{frame_ms});
+            Budget::OnGuestPresent(now, now);
+        }
+    };
+    for (size_t i = 0; i < 8; ++i) {
+        tick(FixedResolutionTrace[i]);
+    }
+    Budget::Status status = Budget::GetStatus();
+    REQUIRE(status.state == "slow");
+    REQUIRE(status.raises == start.raises + 8);
+    REQUIRE(status.unanswered_from == 0.0);
+    REQUIRE_FALSE(status.shading_allowed);
+    REQUIRE_FALSE(Auto::GetStatus().allowed);
+
+    // The switch is unset in the tests: the ninth missed tick raises as before.
+    tick(FixedResolutionTrace[8]);
+    status = Budget::GetStatus();
+    REQUIRE(status.state == "slow");
+    REQUIRE(status.raises == start.raises + 9);
+    REQUIRE(Near(status.scale, 0.256 * std::pow(1.25, 9)));
+    REQUIRE(status.unanswered_from == 0.0);
+    REQUIRE_FALSE(status.shading_allowed);
+    REQUIRE_FALSE(Auto::GetStatus().allowed);
 }

@@ -39,6 +39,9 @@ pub struct Gpu {
     pub vulkan: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arch_hint: Option<String>,
+    /// The Intel integrated GPU family its PCI ids matched (`system::intel_igpu_family`), e.g.
+    /// "Panther Lake Intel Graphics"; null when none matched. Auto reads `system::intel_igpu_arc_class`.
+    pub family: Option<String>,
     /// PCI ids and the driver date, used by the doctor; not part of the contract.
     #[serde(skip)]
     pub vendor_id: u32,

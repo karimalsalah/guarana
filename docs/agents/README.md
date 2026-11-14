@@ -4,7 +4,9 @@ This is the front door for AI coding agents, and for the people who run them, th
 pull request in Guarana. The rules of the tree are in [AGENTS.md](../../AGENTS.md). What is in
 flight right now is in [HANDOVER.md](../../HANDOVER.md). One command per tool is in
 [AI-QUICKSTART.md](../AI-QUICKSTART.md). Why this page looks the way it does:
-[RESEARCH-2026-11.md](RESEARCH-2026-11.md).
+[RESEARCH-2026-11.md](RESEARCH-2026-11.md). Running the Codex CLI? It reads only the first 32 KiB
+of AGENTS.md unless you trust the folder (so it loads `.codex/config.toml`) or start it with
+`-c project_doc_max_bytes=65536` ([AI-QUICKSTART.md](../AI-QUICKSTART.md#one-command-per-tool)).
 
 ## 1. Find work
 
