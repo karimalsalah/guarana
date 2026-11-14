@@ -237,6 +237,7 @@ add_library(video_core STATIC
     renderer_vulkan/pipeline_statistics.cpp
     renderer_vulkan/pipeline_statistics.h
     renderer_vulkan/renderer_vulkan.h
+    renderer_vulkan/present_trace.h
     renderer_vulkan/renderer_vulkan.cpp
     renderer_vulkan/unoptimized_first.h
     renderer_vulkan/vk_blit_screen.cpp
@@ -291,7 +292,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_cache_v2.cpp
     renderer_vulkan/vk_shader_cache_v2.h
     renderer_vulkan/vk_present_manager.cpp
-    renderer_vulkan/present_trace.h
     renderer_vulkan/vk_present_manager.h
     renderer_vulkan/vk_present_predict.cpp
     renderer_vulkan/vk_shown_capture.cpp

@@ -1740,12 +1740,13 @@ void PresentManager::DumpRecreateTrace(const char* reason, bool failure) const {
                               "dispatches={} dispatches_overwritten={}",
                               reason, history.size, history.overwritten, dispatches.size,
                               dispatches.overwritten);
-    const auto log_event = [level](const auto& event) {
+    const char* function = __func__;
+    const auto log_event = [level, function](const auto& event) {
         const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                             event.timestamp.time_since_epoch())
                             .count();
         Common::Log::FmtLogMessage(
-            Common::Log::Class::Render_Vulkan, level, __FILE__, __LINE__, __func__,
+            Common::Log::Class::Render_Vulkan, level, __FILE__, __LINE__, function,
             "FLUID recreate trace: ns={} kind={} tag={} a={} b={} c={} d={}", ns, event.kind,
             event.tag, event.fields[0], event.fields[1], event.fields[2], event.fields[3]);
     };
