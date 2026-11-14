@@ -81,6 +81,18 @@ std::mutex session_mutex;
 int session_progress_stage = -1;
 int session_progress_percent = -1;
 
+std::mutex phases_mutex;
+std::vector<Phase> phases;
+
+/// Keeps the last 256 phase boundaries for the debug server's boot_timing tool.
+void Record(std::string_view phase, double at, double took) {
+    std::scoped_lock lock{phases_mutex};
+    phases.push_back(Phase{std::string{phase}, at, took});
+    if (phases.size() > 256) {
+        phases.erase(phases.begin());
+    }
+}
+
 } // Anonymous namespace
 
 void SetSessionOutput(bool enabled) {
@@ -137,9 +149,15 @@ double Now() {
     return std::chrono::duration<double, std::milli>(Clock::now() - process_start).count();
 }
 
+std::vector<Phase> RecordedPhases() {
+    std::scoped_lock lock{phases_mutex};
+    return phases;
+}
+
 void Mark(std::string_view phase) {
     const double now = Now();
     const double since_last = now - last_mark.exchange(now, std::memory_order_relaxed);
+    Record(phase, now, since_last);
     LOG_INFO(Common, "Boot timing: {} at {:.1f} ms (+{:.1f} ms)", phase, now, since_last);
     if (session_output.load(std::memory_order_relaxed)) {
         SessionLine(fmt::format("Boot timing: {} at {:.1f} ms (+{:.1f} ms)", phase, now, since_last));
@@ -149,6 +167,7 @@ void Mark(std::string_view phase) {
 void Mark(std::string_view phase, double start) {
     const double now = Now();
     const double since_last = now - last_mark.exchange(now, std::memory_order_relaxed);
+    Record(phase, now, now - start);
     LOG_INFO(Common, "Boot timing: {} at {:.1f} ms (+{:.1f} ms), took {:.1f} ms", phase, now,
              since_last, now - start);
     if (session_output.load(std::memory_order_relaxed)) {
@@ -158,6 +177,7 @@ void Mark(std::string_view phase, double start) {
 }
 
 void Span(std::string_view phase, double start, double end) {
+    Record(phase, end, end - start);
     LOG_INFO(Common, "Boot timing: {} at {:.1f} ms, took {:.1f} ms", phase, end, end - start);
     if (session_output.load(std::memory_order_relaxed)) {
         SessionLine(fmt::format("Boot timing: {} at {:.1f} ms, took {:.1f} ms", phase, end,

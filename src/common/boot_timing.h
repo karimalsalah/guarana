@@ -4,12 +4,26 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace Common::BootTiming {
 
 /// Milliseconds since the process started.
 [[nodiscard]] double Now();
+
+/// One recorded phase boundary: its name, when it happened (ms since the process started) and
+/// how long it took (ms since the previous mark, or since `start` for Mark(phase, start) and
+/// Span). RecordedPhases returns them in order.
+struct Phase {
+    std::string name;
+    double at_ms{};
+    double took_ms{};
+};
+
+/// Every Mark and Span since the process started, oldest first (at most the last 256).
+[[nodiscard]] std::vector<Phase> RecordedPhases();
 
 /// Logs a boot phase boundary at Info ("Boot timing: ..."): the time since the process started
 /// and since the previous mark.
