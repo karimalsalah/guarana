@@ -186,6 +186,10 @@ unless the debug server changes them live. A GUI launch cannot set environment v
    which wins over the shipped one;
 3. a variable already set in the real environment wins over both.
 
+A game's switch defaults (`ApplySwitchDefaults` in `src/core/game_presets.cpp`) replace a value
+that only the shipped copy set, and keep every other one: `LoadNx2Switches` records which values
+came from that copy alone (`src/common/switch_origin.h`).
+
 The files accept `EDEN_NX2_*` and a short list of diagnostic names only. Restart after editing.
 The registry of every switch, with its status and evidence, is [docs/switches.md](switches.md).
 

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -112,11 +113,29 @@ enum class PacingSet {
 /// display's refresh rate. Empty for everything else.
 [[nodiscard]] std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu);
 
-/// Sets the title's SwitchDefaults that neither the environment nor nx2_switches.txt set, as
-/// environment variables of this process, so a switch set to anything (0 included) stays the
-/// user's. Call it before the device and the renderer are built: they read most switches once.
-/// Off with the presets (auto_presets, EDEN_NX2_NO_PRESETS=1). Logs and returns what it did in
-/// one line that names the display rate found and the set chosen because of it.
+/// What a game's switch default does with the switch's value.
+enum class SwitchDecision {
+    Set,            ///< Nothing set the switch: the default is set.
+    ReplaceShipped, ///< Only the shipped nx2_switches.txt set it: the default replaces that value.
+    KeepPlayers,    ///< The player set it (the real environment, their own nx2_switches.txt).
+};
+
+/// What to do with one switch default, from the switch's value in the environment (`current`,
+/// nullopt when unset) and the value the shipped nx2_switches.txt alone gave it (`shipped_only`,
+/// Common::SwitchOrigin::ShippedOnlyValue; nullopt when it did not). A value that is no longer
+/// the shipped file's is the player's. Pure.
+[[nodiscard]] SwitchDecision DecideSwitch(std::optional<std::string_view> current,
+                                          std::optional<std::string_view> shipped_only);
+
+/// Sets the title's SwitchDefaults as environment variables of this process, by DecideSwitch:
+/// where nothing set the switch, and over a value only the shipped nx2_switches.txt set; a switch
+/// the player set to anything (0 included), in the environment or in their own nx2_switches.txt,
+/// stays as set. Call it before the device and the renderer are built: they read most switches
+/// once. Off with the presets (auto_presets, EDEN_NX2_NO_PRESETS=1). Logs and returns what it did
+/// in one line that names the display rate found, the set chosen because of it, the values set,
+/// the ones set over the shipped file (with its value) and the ones the player set. A later call
+/// in the same process (another game start) first puts back what the earlier one set, and its
+/// line says that switches read once keep the first start's values.
 std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu);
 
 /// Whether the title's first boot on this GPU gets the line ReportFirstBoot logs: Ocarina of

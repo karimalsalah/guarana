@@ -29,23 +29,60 @@ std::filesystem::path GetDataDirectory(const std::string&) {
 }
 int main(int argc, char** argv) {
     LoadNx2Switches(argv[0]);
-    const char* value = std::getenv(argc > 1 ? argv[1] : "EDEN_NX2_PRELOAD_ALL_PIPELINES");
+    const char* name = argc > 1 ? argv[1] : "EDEN_NX2_PRELOAD_ALL_PIPELINES";
+    if (argc > 2) {
+        // "origin": the value the shipped copy alone put in the environment ("-" when it did not),
+        // then "set" when the loader put the name there itself ("-" when it did not).
+        const auto shipped = Common::SwitchOrigin::ShippedOnlyValue(name);
+        std::cout << (shipped ? *shipped : std::string{"-"}) << ' '
+                  << (Common::SwitchOrigin::SetByProcess().contains(name) ? "set" : "-");
+        return 0;
+    }
+    const char* value = std::getenv(name);
     std::cout << (value ? value : "unset");
 }
 ''')
-        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), "-o", str(self.bin / "lichii")], check=True)
+        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), str(ROOT / "src/common/switch_origin.cpp"), "-o", str(self.bin / "lichii")], check=True)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_probe(self, executable, name="EDEN_NX2_PRELOAD_ALL_PIPELINES", **env):
+    def run_probe(self, executable, name="EDEN_NX2_PRELOAD_ALL_PIPELINES", mode=None, **env):
         clean = os.environ.copy()
         clean.pop("EDEN_NX2_PRELOAD_ALL_PIPELINES", None)
         clean.pop(name, None)
         clean.pop("APPIMAGE", None)
         clean["XDG_CONFIG_HOME"] = str(self.config.parent)
         clean.update(env)
-        return subprocess.check_output([str(executable), name], env=clean, cwd=self.root, text=True)
+        command = [str(executable), name] + ([mode] if mode else [])
+        return subprocess.check_output(command, env=clean, cwd=self.root, text=True)
+
+    def test_only_the_shipped_copy_counts_as_shipped(self):
+        # A game's switch defaults replace only what the copy next to the executable alone set;
+        # every other file is the player's, and so is the real environment.
+        name = "EDEN_NX2_PRELOAD_ALL_PIPELINES"
+        origin = lambda **env: self.run_probe(self.bin / "lichii", mode="origin", **env)
+        (self.bin / "nx2_switches.txt").write_text(f"{name}=1\n")
+        self.assertEqual(origin(), "1 set")
+        self.assertEqual(origin(**{name: "1"}), "- -")
+        # The player's own copy, at the shipped value or another one.
+        for value in ("1", "0"):
+            with self.subTest(value=value):
+                (self.config / "nx2_switches.txt").write_text(f"{name}={value}\n")
+                self.assertEqual(origin(), "- set")
+        (self.config / "nx2_switches.txt").unlink()
+        outer = self.root / "app"
+        outer.mkdir()
+        image = outer / "Lichii.AppImage"
+        image.touch()
+        (outer / "nx2_switches.txt").write_text(f"{name}=1\n")
+        self.assertEqual(origin(APPIMAGE=str(image)), "- set")
+        self.assertEqual(origin(), "1 set")
+        portable = self.root / "user"
+        portable.mkdir()
+        self.assertEqual(origin(), "1 set")
+        (portable / "nx2_switches.txt").write_text(f"{name}=2\n")
+        self.assertEqual(origin(), "- set")
 
     def test_untrusted_sidecars_cannot_set_host_environment(self):
         outer = self.root / "app"

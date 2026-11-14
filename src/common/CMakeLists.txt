@@ -144,6 +144,8 @@ add_library(
     string_util.cpp
     string_util.h
     swap.h
+    switch_origin.cpp
+    switch_origin.h
     power_governor.cpp
     power_governor.h
     power_meter.cpp

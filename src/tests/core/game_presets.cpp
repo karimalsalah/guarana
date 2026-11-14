@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "common/settings.h"
+#include "common/switch_origin.h"
 #include "core/game_presets.h"
 
 namespace {
@@ -315,10 +319,11 @@ TEST_CASE("The pacing sets hold the switches measured", "[core][game_presets]") 
     CHECK(PacingSwitches(PacingSet::None, Arc140T).empty());
 #ifdef _WIN32
     const std::string hz144 = names(PacingSwitches(PacingSet::Hz144, Arc140T));
-    // Exactly as measured: the 60 Hz Intel set without EXTRAPOLATE, with FLUID_INTERP, FLUID_RT,
+    // Exactly as measured: the 60 Hz Intel set with EXTRAPOLATE=0, FLUID_INTERP, FLUID_RT,
     // SHOWN_RATE=144 and CADENCE_DIVISOR=6; no BUDGET_CEILING.
     CHECK(hz144 == "EDEN_NX2_FLUID=2 EDEN_NX2_FLUID_INTERP=1 EDEN_NX2_FLUID_RT=1 "
                    "EDEN_NX2_SHOWN_RATE=144 EDEN_NX2_CADENCE=3 EDEN_NX2_CADENCE_DIVISOR=6 "
+                   "EDEN_NX2_EXTRAPOLATE=0 "
                    "EDEN_NX2_EARLY_SUBMIT=1 EDEN_NX2_EARLY_PAGES=256 EDEN_NX2_EARLY_AFTER=1 "
                    "EDEN_NX2_FLUID_QUEUE=5 EDEN_NX2_FLUID_QUEUE_HOST_WAIT=1 "
                    "EDEN_NX2_BUDGET_HOLD_RES=1 EDEN_NX2_GPL=1 ");
@@ -328,6 +333,10 @@ TEST_CASE("The pacing sets hold the switches measured", "[core][game_presets]") 
     CHECK(hz120.find("EDEN_NX2_CADENCE=3 ") != std::string::npos);
     CHECK(hz120.find("EDEN_NX2_CADENCE_DIVISOR") == std::string::npos);
     CHECK(hz120.find("EDEN_NX2_BUDGET_CEILING=1 ") != std::string::npos);
+    // Interpolated in-between frames: EXTRAPOLATE=1 (the shipped nx2_switches.txt) would turn
+    // FLUID_INTERP off.
+    CHECK(hz120.find("EDEN_NX2_EXTRAPOLATE=0 ") != std::string::npos);
+    CHECK(hz120.find("EDEN_NX2_FLUID_INTERP=1 ") != std::string::npos);
 
     const std::string hz60 = names(PacingSwitches(PacingSet::Hz60, Arc140T));
     CHECK(hz60.find("EDEN_NX2_EXTRAPOLATE=1 ") != std::string::npos);
@@ -342,6 +351,73 @@ TEST_CASE("The pacing sets hold the switches measured", "[core][game_presets]") 
     CHECK(PacingSwitches(PacingSet::Hz120, Arc140T).empty());
     CHECK(PacingSwitches(PacingSet::Hz144, Arc140T).empty());
 #endif
+}
+
+TEST_CASE("A switch default yields to the player's value, not to the shipped file's",
+          "[core][game_presets]") {
+    // Nothing set it.
+    CHECK(DecideSwitch(std::nullopt, std::nullopt) == SwitchDecision::Set);
+    // Only the shipped nx2_switches.txt set it.
+    CHECK(DecideSwitch("1", "1") == SwitchDecision::ReplaceShipped);
+    // The player set it: no shipped-only record, whatever the value (0 and empty included).
+    CHECK(DecideSwitch("1", std::nullopt) == SwitchDecision::KeepPlayers);
+    CHECK(DecideSwitch("0", std::nullopt) == SwitchDecision::KeepPlayers);
+    CHECK(DecideSwitch("", std::nullopt) == SwitchDecision::KeepPlayers);
+    // A shipped-only record whose value something has changed since is no longer the file's.
+    CHECK(DecideSwitch("0", "1") == SwitchDecision::KeepPlayers);
+    // A record with no value in the environment (removed since): nothing set it now.
+    CHECK(DecideSwitch(std::nullopt, "1") == SwitchDecision::Set);
+}
+
+TEST_CASE("A switch default replaces only what the shipped switch file alone set",
+          "[core][game_presets]") {
+    using Common::SwitchOrigin::ShippedOnly;
+    using Common::SwitchOrigin::SwitchMap;
+    const SwitchMap shipped{{"EDEN_NX2_EXTRAPOLATE", "1"}, {"EDEN_NX2_SPLIT", "2"}};
+    const auto nothing_in_environment = [](const std::string&) { return false; };
+    // The decision for EDEN_NX2_EXTRAPOLATE as LoadNx2Switches and ApplySwitchDefaults reach it:
+    // `merged` and `named_by_player` from the files, `environment` the real one at start, and the
+    // value the switch then has in the environment.
+    const auto decide = [&shipped](const SwitchMap& merged,
+                                   const std::set<std::string>& named_by_player,
+                                   const std::optional<std::string>& environment) {
+        const SwitchMap record =
+            ShippedOnly(shipped, merged, named_by_player,
+                        [&environment](const std::string& name) {
+                            return environment.has_value() && name == "EDEN_NX2_EXTRAPOLATE";
+                        });
+        const auto it = record.find("EDEN_NX2_EXTRAPOLATE");
+        std::optional<std::string_view> shipped_only;
+        if (it != record.end()) {
+            shipped_only = it->second;
+        }
+        std::optional<std::string_view> current;
+        if (environment) {
+            current = *environment;
+        } else if (const auto entry = merged.find("EDEN_NX2_EXTRAPOLATE");
+                   entry != merged.end()) {
+            current = entry->second;
+        }
+        return DecideSwitch(current, shipped_only);
+    };
+
+    // Nothing set: no file names it, the environment does not set it.
+    CHECK(decide({{"EDEN_NX2_SPLIT", "2"}}, {}, std::nullopt) == SwitchDecision::Set);
+    // Set by the shipped file only.
+    CHECK(decide(shipped, {}, std::nullopt) == SwitchDecision::ReplaceShipped);
+    // Set by the shipped file and overridden by the player's file, to another value or the same.
+    CHECK(decide({{"EDEN_NX2_EXTRAPOLATE", "0"}, {"EDEN_NX2_SPLIT", "2"}},
+                 {"EDEN_NX2_EXTRAPOLATE"}, std::nullopt) == SwitchDecision::KeepPlayers);
+    CHECK(decide(shipped, {"EDEN_NX2_EXTRAPOLATE"}, std::nullopt) == SwitchDecision::KeepPlayers);
+    // Set in the real environment, to another value or to the shipped file's.
+    CHECK(decide(shipped, {}, "0") == SwitchDecision::KeepPlayers);
+    CHECK(decide(shipped, {}, "1") == SwitchDecision::KeepPlayers);
+
+    // The other shipped switch stays shipped-only when the player names a different one.
+    const SwitchMap record =
+        ShippedOnly(shipped, shipped, {"EDEN_NX2_EXTRAPOLATE"}, nothing_in_environment);
+    const SwitchMap expected{{"EDEN_NX2_SPLIT", "2"}};
+    CHECK(record == expected);
 }
 
 TEST_CASE("The device class changes no preset or switch default yet", "[core][game_presets]") {

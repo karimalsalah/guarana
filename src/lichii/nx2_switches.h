@@ -7,10 +7,13 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
+#include <utility>
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "common/switch_origin.h"
 
 // The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
 // set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
@@ -19,6 +22,9 @@
 // overridden by %APPDATA%\guarana\nx2_switches.txt without editing the one that gets replaced.
 // In portable mode (a "user" folder, found the way the path manager finds it) user\nx2_switches.txt
 // takes the per-user copy's place and the per-user folder is not read at all.
+// Only the copy next to the executable is the shipped one; every other file is the player's. The
+// values that reach the environment from the shipped copy alone are recorded
+// (Common::SwitchOrigin), so a game's switch defaults can replace them and nothing else.
 static void ParseSwitchFile(const std::filesystem::path& path,
                             std::map<std::string, std::string>& entries) {
     std::ifstream file{path};
@@ -92,10 +98,22 @@ static std::filesystem::path GetSwitchPortableDirectory(
 static void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
     std::map<std::string, std::string> entries;
+    // Every name one of the player's files sets, to any value.
+    std::set<std::string> named_by_player;
+    const auto parse_players_file = [&entries,
+                                     &named_by_player](const std::filesystem::path& file_path) {
+        std::map<std::string, std::string> own;
+        ParseSwitchFile(file_path, own);
+        for (auto& [own_name, own_value] : own) {
+            named_by_player.insert(own_name);
+            entries.insert_or_assign(own_name, std::move(own_value));
+        }
+    };
     const auto exe_dir = GetSwitchExeDirectory(argv0);
     if (!exe_dir.empty()) {
         ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
     }
+    const std::map<std::string, std::string> shipped = entries;
 #ifdef __linux__
     if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
         std::error_code ec;
@@ -103,7 +121,7 @@ static void LoadNx2Switches(const char* argv0) {
         if (path.is_absolute()) {
             const auto resolved = std::filesystem::canonical(path, ec);
             if (!ec) {
-                ParseSwitchFile(resolved.parent_path() / "nx2_switches.txt", entries);
+                parse_players_file(resolved.parent_path() / "nx2_switches.txt");
             }
         }
     }
@@ -112,7 +130,7 @@ static void LoadNx2Switches(const char* argv0) {
     // the same names; it wins over them the way the per-user copy does.
     const auto portable_dir = GetSwitchPortableDirectory(exe_dir);
     if (!portable_dir.empty()) {
-        ParseSwitchFile(portable_dir / "nx2_switches.txt", entries);
+        parse_players_file(portable_dir / "nx2_switches.txt");
     }
     std::erase_if(entries, [](const auto& entry) {
         const auto& name = entry.first;
@@ -135,11 +153,14 @@ static void LoadNx2Switches(const char* argv0) {
             // first start after the rename the user's file is still only in the old folder.
             std::error_code ec;
             const bool has_current_dir = std::filesystem::exists(config_base / EDEN_DIR, ec);
-            ParseSwitchFile(config_base / (has_current_dir ? EDEN_DIR : PRE_GUARANA_DIR) /
-                                "nx2_switches.txt",
-                            entries);
+            parse_players_file(config_base / (has_current_dir ? EDEN_DIR : PRE_GUARANA_DIR) /
+                               "nx2_switches.txt");
         }
     }
+    // Before the loop below, which puts them in the environment.
+    Common::SwitchOrigin::RecordShippedOnly(Common::SwitchOrigin::ShippedOnly(
+        shipped, entries, named_by_player,
+        [](const std::string& name) { return std::getenv(name.c_str()) != nullptr; }));
     for (const auto& [name, value] : entries) {
         if (std::getenv(name.c_str()) != nullptr) {
             continue;
@@ -149,5 +170,6 @@ static void LoadNx2Switches(const char* argv0) {
 #else
         setenv(name.c_str(), value.c_str(), 1);
 #endif
+        Common::SwitchOrigin::RecordSetByProcess(name);
     }
 }
