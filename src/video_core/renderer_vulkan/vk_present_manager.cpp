@@ -903,6 +903,17 @@ void PresentManager::WaitPresent() {
     std::scoped_lock swapchain_lock{swapchain_mutex};
 }
 
+void PresentManager::WaitIdle() {
+    scheduler.Finish();
+    WaitPresent();
+    const PresentSync::IdleLocks locks{swapchain_mutex, scheduler.submit_mutex};
+    const VkResult result = device.GetLogical().WaitIdle();
+    if (result == VK_ERROR_DEVICE_LOST) {
+        device.ReportLoss();
+    }
+    vk::Check(result);
+}
+
 void PresentManager::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
@@ -1303,6 +1314,22 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
     }
     {
         std::scoped_lock swapchain_lock{swapchain_mutex};
+        if (drain != 0 && fluid_ahead_pending) {
+            fluid_ahead_pending = false;
+            fluid_ahead_frame = nullptr;
+            try {
+                swapchain.Present(fluid_ahead_semaphore);
+            } catch (const vk::Exception& except) {
+                force_swapchain_recreation = true;
+                const VkResult result = except.GetResult();
+                if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
+                    result != VK_ERROR_OUT_OF_DATE_KHR &&
+                    result != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT &&
+                    result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                    throw;
+                }
+            }
+        }
         std::erase_if(fluid.pending, [this, drain](Frame* frame) {
             if (drain == 0 && frame->fluid_slot != FLUID_NOT_SHOWN) {
                 return false;
@@ -1782,7 +1809,8 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
         }
     };
 #endif
-    bool requires_recreation = false;
+    bool requires_recreation = force_swapchain_recreation;
+    PresentSync::FrameSubmission submission;
 
     for (u32 attempt = 0; attempt < MAX_PRESENT_ATTEMPTS; ++attempt) {
         try {
@@ -1794,14 +1822,27 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
                 if (!RecreateSwapchain(frame)) {
                     return;
                 }
+                force_swapchain_recreation = false;
             }
 
             // Draw to swapchain.
-            return CopyToSwapchainImpl(frame);
+            return CopyToSwapchainImpl(frame, submission);
         } catch (const vk::Exception& except) {
             const VkResult result = except.GetResult();
+            if (!submission.CanRetry()) {
+                force_swapchain_recreation = true;
+                if (result == VK_ERROR_SURFACE_LOST_KHR || result == VK_INCOMPLETE ||
+                    result == VK_ERROR_OUT_OF_DATE_KHR ||
+                    result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT ||
+                    result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                    return;
+                }
+                throw;
+            }
             if (result != VK_ERROR_SURFACE_LOST_KHR && result != VK_INCOMPLETE &&
-                result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+                result != VK_ERROR_OUT_OF_DATE_KHR &&
+                result != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT &&
+                result != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
                 throw;
             }
 
@@ -2076,7 +2117,7 @@ void PresentManager::SubmitFluidCompose(Frame* frame, VkExtent2D extent,
     }
 }
 
-void PresentManager::CopyToSwapchainImpl(Frame* frame) {
+void PresentManager::CopyToSwapchainImpl(Frame* frame, PresentSync::FrameSubmission& submission) {
     if (fluid_ahead_pending) {
         // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
         fluid_ahead_pending = false;
@@ -2164,6 +2205,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         } else {
             SubmitFluidCopy(frame, image, extent, render_semaphore);
         }
+        submission.Submitted();
         bool streamline_frame = false;
 #ifdef EGLANTINE_STREAMLINE
         streamline_frame = frame->frame_gen;
@@ -2324,6 +2366,7 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             switch (const VkResult result =
                         device.GetGraphicsQueue().Submit(submit_info, *frame->present_done)) {
             case VK_SUCCESS:
+                submission.Submitted();
                 break;
             case VK_ERROR_DEVICE_LOST:
                 device.ReportLoss();

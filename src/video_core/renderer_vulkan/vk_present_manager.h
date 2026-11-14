@@ -17,6 +17,7 @@
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
 #include "video_core/renderer_vulkan/fluid_compose_math.h"
+#include "video_core/renderer_vulkan/present_sync.h"
 #include "video_core/renderer_vulkan/vk_shown_capture.h"
 #include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
@@ -194,6 +195,9 @@ public:
     /// Waits for the present thread to finish presenting all queued frames.
     void WaitPresent();
 
+    /// Drains presentation and waits for the device with all queues excluded.
+    void WaitIdle();
+
     /// How many additional frames can be queued without stalling the render thread
     [[nodiscard]] size_t MaxExtraFrames() const;
 
@@ -319,7 +323,7 @@ private:
 
     void CopyToSwapchain(Frame* frame);
 
-    void CopyToSwapchainImpl(Frame* frame);
+    void CopyToSwapchainImpl(Frame* frame, PresentSync::FrameSubmission& submission);
 
     /// EDEN_NX2_FLUID_QUEUE: whether this frame's screen copy runs on the dedicated queue.
     [[nodiscard]] bool UseFluidQueue(const Frame* frame, VkExtent2D extent);
@@ -383,6 +387,7 @@ private:
     std::condition_variable_any frame_cv;
     std::condition_variable free_cv;
     mutable std::mutex swapchain_mutex;
+    bool force_swapchain_recreation{}; ///< guarded by swapchain_mutex
     mutable std::mutex queue_mutex;
     mutable std::mutex free_mutex;
     std::jthread present_thread;
