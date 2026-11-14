@@ -9,7 +9,9 @@
 #endif
 #include <cmath>
 #include <cstdlib>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -1079,26 +1081,36 @@ std::chrono::nanoseconds PresentManager::FluidCountVblanks(
         fluid.interval_next = (fluid.interval_next + 1) % fluid.intervals.size();
         fluid.interval_count = (std::min)(fluid.interval_count + 1, fluid.intervals.size());
     }
+    // EDEN_NX2_FLUID_MODE_PERIOD=1: wakes that slip past vblanks do not replace the display mode's
+    // period; they are counted as vblanks slept through.
+    static const bool keep_mode = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_MODE_PERIOD");
+        const bool on = value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        if (on) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_MODE_PERIOD: the display's refresh period is "
+                                    "kept when wakes slip");
+        }
+        return on;
+    }();
+    static_assert(std::tuple_size_v<decltype(fluid.intervals)> <= FluidSlots::MaxWakeIntervals);
     // The display mode's period, unless the wakes disagree with it (a dynamic refresh rate).
-    std::chrono::nanoseconds period =
-        reported.count() > 0 ? reported : std::chrono::nanoseconds{16'666'667};
-    if (fluid.interval_count >= 8) {
-        auto sorted = fluid.intervals;
-        const auto count = static_cast<std::ptrdiff_t>(fluid.interval_count);
-        std::nth_element(sorted.begin(), sorted.begin() + count / 2, sorted.begin() + count);
-        const s64 median = sorted[static_cast<size_t>(count / 2)];
-        const s64 nominal = period.count();
-        if (std::abs(median - nominal) * 10 > nominal && median >= 2'000'000 &&
-            median <= 50'000'000) {
-            period = std::chrono::nanoseconds{median};
+    const std::span<const s64> intervals{fluid.intervals.data(), fluid.interval_count};
+    const std::chrono::nanoseconds period{
+        FluidSlots::ChooseRefreshPeriodNs(intervals, reported.count(), keep_mode)};
+    if (keep_mode) {
+        static std::chrono::steady_clock::time_point kept_logged{};
+        const s64 wakes = FluidSlots::ChooseRefreshPeriodNs(intervals, reported.count(), false);
+        if (wakes != period.count() && (kept_logged == std::chrono::steady_clock::time_point{} ||
+                                        wake - kept_logged >= std::chrono::seconds{10})) {
+            kept_logged = wake;
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID_MODE_PERIOD: wakes every {:.2f} ms, kept the display's "
+                     "{:.2f} ms",
+                     static_cast<f64>(wakes) * 1.0e-6, static_cast<f64>(period.count()) * 1.0e-6);
         }
     }
     // A wake that came late counts the vblanks it slept through.
-    s64 elapsed = 1;
-    if (!first) {
-        const f64 refreshes = static_cast<f64>(since) / static_cast<f64>(period.count());
-        elapsed = (std::max<s64>)(1, static_cast<s64>(std::llround(refreshes)));
-    }
+    const s64 elapsed = first ? 1 : FluidSlots::ElapsedVblanks(since, period.count());
     fluid.vblank += static_cast<u64>(elapsed);
     fluid.last_wake = wake;
     // Slots of the frame generation target rate (16.7 ms at 60, a refresh each at 120 on a 120 Hz

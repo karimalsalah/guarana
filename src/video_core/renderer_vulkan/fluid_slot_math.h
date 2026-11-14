@@ -4,9 +4,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <span>
 
 #include "common/common_types.h"
 
@@ -87,6 +90,66 @@ inline constexpr std::chrono::nanoseconds CopyWaitMargin{500'000};
 /// held the screen exactly one slot.
 [[nodiscard]] constexpr bool HeldOneSlot(u64 shown_vblank, u64 last_shown_vblank, u64 divisor) {
     return shown_vblank - last_shown_vblank == divisor;
+}
+
+/// FluidCountVblanks reads at most this many wake intervals.
+inline constexpr size_t MaxWakeIntervals = 32;
+
+/// The rule FluidCountVblanks has always used: a median of the wake intervals replaces `period`
+/// when it differs from it by more than 10% and lies in 2 to 50 ms (a dynamic refresh rate).
+[[nodiscard]] inline bool WakesReplacePeriod(s64 median, s64 period) {
+    return std::abs(median - period) * 10 > period && median >= 2'000'000 &&
+           median <= 50'000'000;
+}
+
+/// EDEN_NX2_FLUID: the refresh period vblanks are counted with, from the display mode's period
+/// `reported_ns` (60 Hz when not known) and the last wake intervals (the first
+/// MaxWakeIntervals of them are read). With fewer than 8 intervals, that period as is; with
+/// `keep_mode` off or no mode period, the median of the intervals by the rule of
+/// WakesReplacePeriod.
+/// EDEN_NX2_FLUID_MODE_PERIOD (`keep_mode`): sleeping through vblanks only lengthens intervals,
+/// so a median within 10% of a whole multiple (2 or more) of the mode period is refused, and any
+/// other median is taken only if the lower quartile of the intervals differs from the mode period
+/// by more than 10% too, as it does on a display whose refresh really changed.
+[[nodiscard]] inline s64 ChooseRefreshPeriodNs(std::span<const s64> intervals, s64 reported_ns,
+                                               bool keep_mode) {
+    const s64 period = reported_ns > 0 ? reported_ns : 16'666'667;
+    if (intervals.size() < 8) {
+        return period;
+    }
+    std::array<s64, MaxWakeIntervals> sorted{};
+    const size_t count = (std::min)(intervals.size(), MaxWakeIntervals);
+    std::copy_n(intervals.begin(), count, sorted.begin());
+    const auto first = sorted.begin();
+    const auto last = first + static_cast<std::ptrdiff_t>(count);
+    const auto middle = first + static_cast<std::ptrdiff_t>(count / 2);
+    std::nth_element(first, middle, last);
+    const s64 median = *middle;
+    if (!keep_mode || reported_ns <= 0) {
+        return WakesReplacePeriod(median, period) ? median : period;
+    }
+    const s64 multiple = static_cast<s64>(
+        std::llround(static_cast<f64>(median) / static_cast<f64>(reported_ns)));
+    if (multiple >= 2 && std::abs(median - multiple * reported_ns) * 10 <= reported_ns) {
+        return reported_ns;
+    }
+    if (!WakesReplacePeriod(median, reported_ns)) {
+        return reported_ns;
+    }
+    const auto quarter = first + static_cast<std::ptrdiff_t>(count / 4);
+    std::nth_element(first, quarter, last);
+    const s64 quartile = *quarter;
+    return std::abs(quartile - reported_ns) * 10 > reported_ns ? median : reported_ns;
+}
+
+/// The vblanks a wake `since_ns` after the last one counts: the nearest whole number of refreshes,
+/// at least 1 (also with no period known).
+[[nodiscard]] inline s64 ElapsedVblanks(s64 since_ns, s64 period_ns) {
+    if (period_ns <= 0) {
+        return 1;
+    }
+    const f64 refreshes = static_cast<f64>(since_ns) / static_cast<f64>(period_ns);
+    return (std::max<s64>)(1, static_cast<s64>(std::llround(refreshes)));
 }
 
 } // namespace Vulkan::FluidSlots

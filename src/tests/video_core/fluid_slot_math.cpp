@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <initializer_list>
+#include <iterator>
+#include <random>
+#include <span>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -281,4 +286,150 @@ TEST_CASE("FLUID: one slot held counts slots of any length", "[video_core][fluid
     REQUIRE(HeldOneSlot(12, 10, 2));
     REQUIRE_FALSE(HeldOneSlot(11, 10, 2));
     REQUIRE_FALSE(HeldOneSlot(13, 10, 2));
+}
+
+namespace {
+
+using WakeRing = std::array<s64, 15>;
+
+/// FluidCountVblanks's period before EDEN_NX2_FLUID_MODE_PERIOD, as it was written inline.
+s64 PeriodBeforeModeSwitch(const WakeRing& intervals, size_t interval_count, nanoseconds reported) {
+    nanoseconds period = reported.count() > 0 ? reported : nanoseconds{16'666'667};
+    if (interval_count >= 8) {
+        auto sorted = intervals;
+        const auto count = static_cast<std::ptrdiff_t>(interval_count);
+        std::nth_element(sorted.begin(), sorted.begin() + count / 2, sorted.begin() + count);
+        const s64 median = sorted[static_cast<size_t>(count / 2)];
+        const s64 nominal = period.count();
+        if (std::abs(median - nominal) * 10 > nominal && median >= 2'000'000 &&
+            median <= 50'000'000) {
+            period = nanoseconds{median};
+        }
+    }
+    return period.count();
+}
+
+/// FluidCountVblanks's elapsed vblanks before EDEN_NX2_FLUID_MODE_PERIOD, for a wake after the
+/// first.
+s64 ElapsedBeforeModeSwitch(s64 since, s64 period) {
+    const f64 refreshes = static_cast<f64>(since) / static_cast<f64>(period);
+    return (std::max<s64>)(1, static_cast<s64>(std::llround(refreshes)));
+}
+
+WakeRing RingOf(std::initializer_list<s64> values) {
+    WakeRing ring{};
+    std::copy(values.begin(), values.end(), ring.begin());
+    return ring;
+}
+
+WakeRing Filled(s64 interval) {
+    WakeRing ring{};
+    ring.fill(interval);
+    return ring;
+}
+
+s64 Choose(const WakeRing& ring, size_t count, nanoseconds reported, bool keep_mode) {
+    return Vulkan::FluidSlots::ChooseRefreshPeriodNs(std::span<const s64>{ring.data(), count},
+                                                     reported.count(), keep_mode);
+}
+
+} // namespace
+
+TEST_CASE("FLUID_MODE_PERIOD: wakes that sleep through vblanks keep the mode's period",
+          "[video_core][fluid]") {
+    // Every other vblank slept through at 144 Hz: the median is two refreshes.
+    const WakeRing every_other = Filled(13'888'889);
+    REQUIRE(Choose(every_other, 15, Hz144, false) == 13'888'889);
+    REQUIRE(Choose(every_other, 15, Hz144, true) == Hz144.count());
+    // Nine wakes two refreshes apart and six one apart.
+    const WakeRing mixed =
+        RingOf({13'888'889, 6'944'444, 13'888'889, 13'888'889, 6'944'444, 13'888'889, 6'944'444,
+                13'888'889, 13'888'889, 6'944'444, 13'888'889, 6'944'444, 13'888'889, 6'944'444,
+                13'888'889});
+    REQUIRE(Choose(mixed, 15, Hz144, false) == 13'888'889);
+    REQUIRE(Choose(mixed, 15, Hz144, true) == Hz144.count());
+    // Three refreshes each.
+    const WakeRing every_third = Filled(20'833'333);
+    REQUIRE(Choose(every_third, 15, Hz144, false) == 20'833'333);
+    REQUIRE(Choose(every_third, 15, Hz144, true) == Hz144.count());
+}
+
+TEST_CASE("FLUID_MODE_PERIOD: a display whose refresh really changed is still followed",
+          "[video_core][fluid]") {
+    // A variable refresh display at 120 Hz while the mode says 144 (1.2 refreshes, no multiple).
+    const WakeRing variable = Filled(Hz120.count());
+    REQUIRE(Choose(variable, 15, Hz144, false) == Hz120.count());
+    REQUIRE(Choose(variable, 15, Hz144, true) == Hz120.count());
+    // Wakes within 2% of the mode's period: both keep it.
+    const WakeRing near_mode =
+        RingOf({7'000'000, 6'900'000, 6'944'444, 7'050'000, 6'850'000, 6'944'444, 7'000'000,
+                6'900'000, 6'944'444, 7'050'000, 6'850'000, 6'944'444, 7'000'000, 6'900'000,
+                6'944'444});
+    REQUIRE(Choose(near_mode, 15, Hz144, false) == Hz144.count());
+    REQUIRE(Choose(near_mode, 15, Hz144, true) == Hz144.count());
+    // A median 1.2 refreshes long whose lower quartile is the mode's period: kept.
+    const WakeRing quartile_on_mode =
+        RingOf({6'944'444, 6'944'444, 6'944'444, 6'944'444, 6'944'444, 8'333'333, 8'333'333,
+                8'333'333, 8'333'333, 8'333'333, 8'333'333, 8'333'333, 8'333'333, 8'333'333,
+                8'333'333});
+    REQUIRE(Choose(quartile_on_mode, 15, Hz144, false) == Hz120.count());
+    REQUIRE(Choose(quartile_on_mode, 15, Hz144, true) == Hz144.count());
+}
+
+TEST_CASE("FLUID_MODE_PERIOD: no mode period or too few wakes", "[video_core][fluid]") {
+    // No mode period: both follow the old rule, also for a whole multiple of 60 Hz.
+    const s64 no_mode_intervals[] = {Hz120.count(), Hz60.count(), 33'333'333, 60'000'000};
+    for (const s64 interval : no_mode_intervals) {
+        const WakeRing ring = Filled(interval);
+        const s64 before = PeriodBeforeModeSwitch(ring, 15, nanoseconds{0});
+        REQUIRE(Choose(ring, 15, nanoseconds{0}, false) == before);
+        REQUIRE(Choose(ring, 15, nanoseconds{0}, true) == before);
+    }
+    REQUIRE(Choose(Filled(Hz120.count()), 15, nanoseconds{0}, true) == Hz120.count());
+    REQUIRE(Choose(Filled(33'333'333), 15, nanoseconds{0}, true) == 33'333'333);
+    // Seven wakes: the mode's period, or 60 Hz without one.
+    const WakeRing every_other = Filled(13'888'889);
+    REQUIRE(Choose(every_other, 7, Hz144, false) == Hz144.count());
+    REQUIRE(Choose(every_other, 7, Hz144, true) == Hz144.count());
+    REQUIRE(Choose(every_other, 7, nanoseconds{0}, true) == Hz60.count());
+}
+
+TEST_CASE("FLUID_MODE_PERIOD: elapsed vblanks", "[video_core][fluid]") {
+    using Vulkan::FluidSlots::ElapsedVblanks;
+    REQUIRE(ElapsedVblanks(13'900'000, Hz144.count()) == 2);
+    REQUIRE(ElapsedVblanks(3'000'000, Hz144.count()) == 1);
+    REQUIRE(ElapsedVblanks(0, Hz144.count()) == 1);
+    REQUIRE(ElapsedVblanks(13'900'000, 0) == 1);
+    REQUIRE(ElapsedVblanks(20'833'333, Hz144.count()) == 3);
+}
+
+TEST_CASE("FLUID_MODE_PERIOD: with the switch off the period is the old rule's",
+          "[video_core][fluid]") {
+    // Seeded, so every run checks the same table.
+    std::mt19937_64 rng{136};
+    const auto below = [&rng](u64 bound) { return rng() % bound; };
+    constexpr s64 bases[] = {1'000'000,  6'944'444,  8'333'333,  13'888'889,
+                             16'666'667, 20'833'333, 33'333'333, 60'000'000};
+    const nanoseconds reported_choices[] = {nanoseconds{0}, nanoseconds{-1}, Hz60, Hz75, Hz120,
+                                            Hz144};
+    for (int trial = 0; trial < 4000; ++trial) {
+        WakeRing ring{};
+        const size_t count = static_cast<size_t>(below(ring.size() + 1));
+        const s64 base = bases[below(std::size(bases))];
+        for (size_t index = 0; index < count; ++index) {
+            // A wake within 25% of the base, or now and then one of the other bases.
+            const s64 pick = below(5) == 0 ? bases[below(std::size(bases))] : base;
+            const s64 spread = static_cast<s64>(below(static_cast<u64>(pick / 2) + 1));
+            ring[index] = pick - pick / 4 + spread;
+        }
+        const nanoseconds reported = reported_choices[below(std::size(reported_choices))];
+        const s64 period = Choose(ring, count, reported, false);
+        REQUIRE(period == PeriodBeforeModeSwitch(ring, count, reported));
+        // With the switch on: the old rule's period or the mode's, never a third one.
+        const s64 kept = Choose(ring, count, reported, true);
+        REQUIRE((kept == period || (reported.count() > 0 && kept == reported.count())));
+        const s64 since = static_cast<s64>(below(100'000'000));
+        REQUIRE(Vulkan::FluidSlots::ElapsedVblanks(since, period) ==
+                ElapsedBeforeModeSwitch(since, period));
+    }
 }
