@@ -340,8 +340,8 @@ private:
     std::condition_variable_any frame_cv;
     std::condition_variable free_cv;
     mutable std::mutex swapchain_mutex;
-    std::mutex queue_mutex;
-    std::mutex free_mutex;
+    mutable std::mutex queue_mutex;
+    mutable std::mutex free_mutex;
     std::jthread present_thread;
     VkFormat transfer_source_format{VK_FORMAT_UNDEFINED};
     TransferMode transfer_mode{TransferMode::Unsupported};
