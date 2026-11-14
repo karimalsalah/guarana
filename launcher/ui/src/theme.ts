@@ -25,7 +25,7 @@ export function initTheme(): void {
 function apply(t: Theme): void {
   root.dataset.theme = t;
   document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", t === "light" ? "light dark" : "dark light");
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#f7f5f0" : "#070b14");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#f5f0e6" : "#000000");
   for (const fn of subs) fn(t);
 }
 

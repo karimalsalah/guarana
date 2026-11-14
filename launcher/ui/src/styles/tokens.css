@@ -1,58 +1,74 @@
-/* Design tokens. Dark ("night stage") is the default on :root; light is opt-in via data-theme.
-   Brand values come from assets/brand (ember gradient, leaf, echo) and site/assets/site.css. */
+/* Design tokens: "The living seed".
+   Dark ("Rainforest night") is the default: true OLED black, deep canopy greens, ember for action and
+   focus, one leaf-green accent for what is alive, on or chosen. Light ("Aril") is the fruit's white
+   flesh with deep-green ink. The seed itself (red shell, white flesh, black seed) is the same in both.
+   Brand values come from assets/brand (ember gradient, leaf, echo); the shell red is the fruit's. */
 
 :root {
   color-scheme: dark;
 
-  /* Brand: fixed in both themes */
+  /* The fruit: fixed in both themes */
   --ember-1: #ffc94a;
   --ember-2: #f2851a;
   --echo: #f59e0b;
   --leaf: #3ccf7e;
+  --shell: #d8321f;
+  --shell-deep: #7c120c;
+  --flesh: #f6f1e6;
+  --seed: #060504;
   --ink: #0f1218;
-  --night: #070b14;
+  --night: #000000;
   --on-ember: #1a1204;
   --grad-ember: linear-gradient(135deg, var(--ember-1) 0%, var(--ember-2) 100%);
+  --grad-shell: radial-gradient(120% 120% at 70% 20%, #ff7a3d 0%, var(--shell) 38%, var(--shell-deep) 100%);
+
+  /* Canopy: rainforest-night greens behind everything (decoration only, never text backgrounds) */
+  --canopy-1: #020a06;
+  --canopy-2: #05170d;
+  --canopy-3: #0a2717;
 
   /* Surfaces */
-  --bg: #070b14;
-  --bg-glow-1: rgba(52, 86, 178, 0.24);
-  --bg-glow-2: rgba(255, 176, 32, 0.08);
-  --surface: #0e1527;
-  --surface-2: #141d33;
-  --surface-3: #1b2640;
-  --surface-hover: #172038;
-  --border: rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.28);
+  --bg: #000000;
+  --bg-glow-1: rgba(17, 72, 40, 0.42);
+  --bg-glow-2: rgba(242, 133, 26, 0.07);
+  --surface: #06120c;
+  --surface-2: #0a1b12;
+  --surface-3: #10271a;
+  --surface-hover: #0c2016;
+  --border: rgba(170, 225, 190, 0.1);
+  --border-strong: rgba(170, 225, 190, 0.22);
 
-  /* Text */
-  --text: #eef1f6;
-  --text-2: #c2c9d6;
-  --muted: #8f99ad;
+  /* Text: aril white on black */
+  --text: #f3efe6;
+  --text-2: #c8c9bb;
+  --muted: #8e9c90;
 
-  /* Accent (links, focus, selected): the site's dark accent */
-  --accent: #fbbf24;
-  --accent-2: #fcd34d;
-  --accent-soft: rgba(251, 191, 36, 0.13);
-  --halo: #ffc94a;
+  /* Accents. Ember = action, focus and progress. Leaf = alive, on, selected. */
+  --accent: #ffbf5a;
+  --accent-2: #ffd58a;
+  --accent-soft: rgba(255, 191, 90, 0.12);
+  --leaf-ink: #6fe3a0;
+  --leaf-soft: rgba(60, 207, 126, 0.14);
+  --halo: #ffb547;
+  --halo-2: #f2851a;
 
   /* Status: always paired with an icon and a word */
-  --ok: #4ade80;
-  --ok-bg: rgba(74, 222, 128, 0.12);
-  --warn: #fdba74;
-  --warn-bg: rgba(253, 186, 116, 0.13);
-  --fail: #fca5a5;
-  --fail-bg: rgba(248, 113, 113, 0.15);
-  --info: #c4b5fd;
-  --info-bg: rgba(196, 181, 253, 0.13);
+  --ok: #6fe3a0;
+  --ok-bg: rgba(60, 207, 126, 0.13);
+  --warn: #ffc27a;
+  --warn-bg: rgba(255, 170, 80, 0.13);
+  --fail: #ff8b7b;
+  --fail-bg: rgba(216, 50, 31, 0.2);
+  --info: #d6d1c2;
+  --info-bg: rgba(214, 209, 194, 0.1);
 
-  /* Depth */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px -16px rgba(0, 0, 0, 0.7);
-  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.35), 0 28px 60px -24px rgba(0, 0, 0, 0.8);
-  --glow-ember: 0 12px 34px -12px rgba(242, 133, 26, 0.7);
-  --skeleton: rgba(148, 163, 184, 0.1);
-  --skeleton-hi: rgba(148, 163, 184, 0.2);
-  --scrim: rgba(7, 11, 20, 0.78);
+  /* Depth: light, not shadow. Panes float on black by their hairline and a faint canopy tint. */
+  --shadow-1: none;
+  --shadow-2: 0 30px 80px -30px rgba(0, 0, 0, 0.9);
+  --glow-ember: 0 14px 40px -14px rgba(242, 133, 26, 0.75);
+  --skeleton: rgba(170, 225, 190, 0.07);
+  --skeleton-hi: rgba(170, 225, 190, 0.16);
+  --scrim: rgba(0, 0, 0, 0.8);
 
   /* Type: system fonts only (Segoe UI Variable on Windows 11), like the site */
   --font: "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
@@ -65,6 +81,7 @@
   --fs-xl: 1.375rem;
   --fs-2xl: 2rem;
   --fs-3xl: 2.75rem;
+  --fs-stage: clamp(2.4rem, 4.6vw, 4.6rem);
 
   /* Space: 4 px grid */
   --sp-1: 4px;
@@ -77,88 +94,110 @@
   --sp-10: 40px;
   --sp-12: 48px;
 
-  /* Radius */
+  /* Shape: the leaf. Two opposite corners round, two nearly sharp. */
   --r-sm: 8px;
   --r-md: 14px;
   --r-lg: 20px;
   --r-xl: 28px;
   --r-pill: 999px;
+  --r-leaf-sm: 14px 4px;
+  --r-leaf: 24px 7px;
+  --r-leaf-lg: 34px 10px;
 
-  /* Motion: 150-250 ms for micro-interactions, springs for anything that moves */
-  --dur-1: 150ms;
+  /* Chrome */
+  --rail-w: 84px;
+  --hint-h: 38px;
+
+  /* Motion: organic, springy, never mechanical */
+  --dur-1: 140ms;
   --dur-2: 200ms;
-  --dur-3: 250ms;
-  --dur-screen: 420ms;
-  --dur-hero: 700ms;
+  --dur-3: 260ms;
+  --dur-screen: 380ms;
+  --dur-hero: 760ms;
+  --dur-fold: 560ms;
+  --dur-iris: 760ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
   --ease-emph: cubic-bezier(0.2, 0, 0, 1);
+  /* Something being swallowed: slow start, fast end. */
+  --ease-fold: cubic-bezier(0.7, 0, 0.84, 0);
+  /* Something blooming: fast start, long soft landing. */
+  --ease-bloom: cubic-bezier(0.16, 1, 0.3, 1);
   /* Fallbacks for engines without linear(); replaced below. */
   --ease-spring: cubic-bezier(0.3, 1.25, 0.5, 1);
   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-jelly: cubic-bezier(0.34, 1.7, 0.6, 1);
 }
 
 @supports (transition-timing-function: linear(0, 1)) {
   :root {
-    /* Damped springs (zeta 0.75: 3% overshoot; zeta 0.55: 12%), sampled from the closed form. */
+    /* Damped springs sampled from the closed form: zeta 0.75 (3 % overshoot), 0.55 (12 %), 0.4 (25 %, jelly). */
     --ease-spring: linear(0, 0.095 5%, 0.294 10%, 0.508 15%, 0.693 20%, 0.833 25%, 0.928 30%, 0.986 35%, 1.015 40%, 1.027 45%, 1.028 50%, 1.024 55%, 1.018 60%, 1.012 65%, 1.007 70%, 1.004 75%, 1.001 80%, 1);
     --ease-bounce: linear(0, 0.141 5%, 0.432 10%, 0.727 15%, 0.95 20%, 1.078 25%, 1.124 30%, 1.117 35%, 1.083 40%, 1.045 45%, 1.013 50%, 0.994 55%, 0.985 60%, 0.984 65%, 0.988 70%, 0.993 75%, 0.997 80%, 1);
+    --ease-jelly: linear(0, 0.18 5%, 0.56 10%, 0.92 15%, 1.16 20%, 1.25 25%, 1.21 30%, 1.1 35%, 0.99 40%, 0.92 45%, 0.91 50%, 0.94 55%, 0.98 60%, 1.02 65%, 1.03 70%, 1.02 75%, 1.005 85%, 1);
   }
 }
 
-/* The night stages (intro, game hero, launch) stay dark in both themes: their controls use dark tokens. */
+/* The night stages (intro, launch) stay dark in both themes: their controls use the dark tokens. */
 .intro,
-.hero,
 .launch {
   color-scheme: dark;
-  --surface: #0e1527;
-  --surface-2: #141d33;
-  --surface-3: #1b2640;
-  --surface-hover: #172038;
-  --border: rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.28);
-  --text: #eef1f6;
-  --text-2: #c2c9d6;
-  --muted: #8f99ad;
-  --accent: #fbbf24;
-  --accent-2: #fcd34d;
-  --accent-soft: rgba(251, 191, 36, 0.13);
-  --halo: #ffc94a;
-  --ok: #4ade80;
-  --fail: #fca5a5;
-  --glow-ember: 0 12px 34px -12px rgba(242, 133, 26, 0.7);
+  --bg: #000000;
+  --surface: #06120c;
+  --surface-2: #0a1b12;
+  --surface-3: #10271a;
+  --surface-hover: #0c2016;
+  --border: rgba(170, 225, 190, 0.1);
+  --border-strong: rgba(170, 225, 190, 0.22);
+  --text: #f3efe6;
+  --text-2: #c8c9bb;
+  --muted: #8e9c90;
+  --accent: #ffbf5a;
+  --accent-2: #ffd58a;
+  --accent-soft: rgba(255, 191, 90, 0.12);
+  --leaf-ink: #6fe3a0;
+  --halo: #ffb547;
+  --ok: #6fe3a0;
+  --fail: #ff8b7b;
+  --glow-ember: 0 14px 40px -14px rgba(242, 133, 26, 0.75);
 }
 
+/* Aril: the fruit's white flesh, deep-green ink. Every text pair is 4.5:1 or more, the halo 3:1. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f7f5f0;
-  --bg-glow-1: rgba(110, 140, 230, 0.14);
-  --bg-glow-2: rgba(255, 176, 32, 0.16);
-  --surface: #ffffff;
-  --surface-2: #f4f2ed;
-  --surface-3: #ebe7df;
-  --surface-hover: #faf8f4;
-  --border: #e4e0d8;
-  --border-strong: #cdc7bb;
-  --text: #16181d;
-  --text-2: #434954;
-  --muted: #5c626d;
-  --accent: #a8510a;
-  --accent-2: #8a420a;
-  --accent-soft: rgba(168, 81, 10, 0.1);
-  --halo: #d97706;
-  --ok: #05744f;
-  --ok-bg: #e6f6ef;
-  --warn: #9a3412;
-  --warn-bg: #fff1e6;
-  --fail: #b42318;
-  --fail-bg: #fdecea;
-  --info: #6a2fd0;
-  --info-bg: #f1ecfd;
-  --shadow-1: 0 1px 2px rgba(22, 24, 29, 0.06), 0 10px 28px -16px rgba(22, 24, 29, 0.22);
-  --shadow-2: 0 2px 8px rgba(22, 24, 29, 0.08), 0 28px 60px -24px rgba(22, 24, 29, 0.3);
-  --glow-ember: 0 12px 30px -14px rgba(194, 96, 10, 0.55);
-  --skeleton: rgba(22, 24, 29, 0.06);
-  --skeleton-hi: rgba(22, 24, 29, 0.12);
-  --scrim: rgba(247, 245, 240, 0.85);
+  --canopy-1: #eee8db;
+  --canopy-2: #e3ddcd;
+  --canopy-3: #cfdccc;
+  --bg: #f5f0e6;
+  --bg-glow-1: rgba(60, 160, 100, 0.16);
+  --bg-glow-2: rgba(242, 133, 26, 0.12);
+  --surface: #fbf8f1;
+  --surface-2: #efe9dc;
+  --surface-3: #e6dfcf;
+  --surface-hover: #f8f4ec;
+  --border: rgba(30, 50, 35, 0.13);
+  --border-strong: rgba(30, 50, 35, 0.27);
+  --text: #0f1a12;
+  --text-2: #3b4a3f;
+  --muted: #546155;
+  --accent: #974407;
+  --accent-2: #7a3605;
+  --accent-soft: rgba(151, 68, 7, 0.1);
+  --leaf-ink: #0b6b39;
+  --leaf-soft: rgba(11, 107, 57, 0.1);
+  --halo: #b4530a;
+  --halo-2: #8a3d06;
+  --ok: #0b6b39;
+  --ok-bg: #e2f2e6;
+  --warn: #8f3a06;
+  --warn-bg: #fbe9d8;
+  --fail: #a8200f;
+  --fail-bg: #fbe2dc;
+  --info: #464c42;
+  --info-bg: #ebe6da;
+  --shadow-2: 0 30px 70px -34px rgba(40, 30, 10, 0.45);
+  --glow-ember: 0 14px 34px -16px rgba(194, 96, 10, 0.6);
+  --skeleton: rgba(30, 50, 35, 0.07);
+  --skeleton-hi: rgba(30, 50, 35, 0.14);
+  --scrim: rgba(245, 240, 230, 0.86);
 }

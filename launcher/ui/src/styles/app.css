@@ -1,6 +1,8 @@
-/* Guarana Launcher styles. Order matters: tokens, base, components, screens, intro. */
+/* Guarana Launcher styles. Order matters: tokens, base, components, seed, numbers, screens, intro. */
 @import "./tokens.css";
 @import "./base.css";
 @import "./components.css";
+@import "./seed.css";
+@import "./numbers.css";
 @import "./screens.css";
 @import "./intro.css";

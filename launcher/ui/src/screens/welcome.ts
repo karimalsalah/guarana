@@ -1,63 +1,64 @@
-// First run. A ~3.4 s intro on a dark stage: the drop forms and stretches into motion, its streaks
-// cut in, the leaf pops, the echo arcs (predicted frames) draw ahead, a light sweep crosses the
-// logo, then one button: "Set up". Depth layers drift with the pointer; grain and bloom are static
-// textures moved by transform/opacity only. Skippable with any key, click or pad button.
+// First run. A ~2 s intro in a rainforest at night: one ember spark in the dark swells into a
+// closed guarana fruit, its leaf unfurls, the shell splits and the fruit opens like an eye, looks
+// around and settles its gaze on you. The name rises letter by letter, the echo arcs (predicted
+// frames) slide out ahead of the fruit, then one button: "Set up", which the seed watches.
+// Depth layers of canopy drift with the pointer; fireflies drift a few times and come to rest.
+// Only transform and opacity move, except the leaf (a small SVG paint, once). Skippable with any
+// key, click or pad button.
 
-import { h, nextId, svg } from "../dom";
-import { DROP_D, dropPath, echoD, LEAF_D } from "../icons";
+import { h, svg } from "../dom";
 import { focusElement } from "../input";
 import { reducedMotion } from "../motion";
 import { go, preload, type ScreenDef } from "../router";
+import { seed } from "../ui/seed";
 
-let grainUrl: string | null = null;
-
-/** A 160 px noise tile, generated once. */
-function grain(): string {
-  if (grainUrl) return grainUrl;
-  const size = 160;
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  const g = c.getContext("2d");
-  if (!g) return "";
-  const img = g.createImageData(size, size);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const v = Math.random() * 255;
-    img.data[i] = v;
-    img.data[i + 1] = v;
-    img.data[i + 2] = v;
-    img.data[i + 3] = Math.random() * 60;
-  }
-  g.putImageData(img, 0, 0);
-  grainUrl = c.toDataURL("image/png");
-  return grainUrl;
+/** A small seeded random, so the forest is the same forest every time. */
+function rng(seedValue: number): () => number {
+  let a = seedValue >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-function introMark(): SVGSVGElement {
-  const id = nextId("intro");
-  const echoes = [0, 1, 2]
-    .map((i) => `<path class="intro-echo intro-echo-${i}" d="${echoD(i * 7)}" pathLength="1" fill="none" stroke="#F59E0B" stroke-opacity="${[0.6, 0.3, 0.14][i]}" stroke-width="3" stroke-linecap="round"/>`)
-    .join("");
-  return svg(
-    `<svg class="intro-mark" viewBox="-4 -2 86 68" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="${id}-f" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
-        <linearGradient id="${id}-sw" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#FFF6DC" stop-opacity=".85"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
-        <mask id="${id}-m" maskUnits="userSpaceOnUse" x="-10" y="-10" width="100" height="84">
-          <rect x="-10" y="-10" width="100" height="84" fill="#fff"/>
-          <path class="intro-cut" d="M29 29.2H-6" pathLength="1" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
-          <path class="intro-cut" d="M29 42.8H-6" pathLength="1" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
-        </mask>
-        <clipPath id="${id}-c"><path d="${DROP_D}"/></clipPath>
-      </defs>
-      <g class="intro-drop-wrap">
-        <path class="intro-drop" d="${DROP_D}" fill="url(#${id}-f)" mask="url(#${id}-m)"/>
-        <g clip-path="url(#${id}-c)" mask="url(#${id}-m)"><rect class="intro-sweep" x="-34" y="-2" width="26" height="68" fill="url(#${id}-sw)" transform="skewX(-14)"/></g>
-      </g>
-      <path class="intro-leaf" d="${LEAF_D}" fill="#3CCF7E"/>
-      ${echoes}
-    </svg>`,
-  );
+function leafPath(len: number, w: number): string {
+  const f = (n: number) => n.toFixed(1);
+  return `M0 0C${f(len * 0.28)} ${f(-w)} ${f(len * 0.74)} ${f(-w * 0.86)} ${f(len)} 0C${f(len * 0.74)} ${f(w * 0.86)} ${f(len * 0.28)} ${f(w)} 0 0Z`;
+}
+
+/** One depth layer of canopy: leaves reaching in from the left, the right and the top. */
+function canopy(layer: number, fill: string, rim: string): SVGSVGElement {
+  const r = rng(7 + layer * 31);
+  const leaves: string[] = [];
+  const count = 9 - layer * 2;
+  for (let i = 0; i < count; i++) {
+    const side = i % 3;
+    const len = 260 + r() * 300 + layer * 80;
+    const w = len * (0.16 + r() * 0.08);
+    let x: number;
+    let y: number;
+    let a: number;
+    if (side === 0) {
+      x = -60 + r() * 120;
+      y = 180 + r() * 820;
+      a = -40 + r() * 60;
+    } else if (side === 1) {
+      x = 1660 - r() * 120;
+      y = 120 + r() * 860;
+      a = 180 + (-30 + r() * 60);
+    } else {
+      x = 200 + r() * 1200;
+      y = -60 - r() * 40;
+      a = 60 + r() * 60;
+    }
+    leaves.push(
+      `<g transform="translate(${x.toFixed(0)} ${y.toFixed(0)}) rotate(${a.toFixed(1)})"><path d="${leafPath(len, w)}" fill="${fill}" stroke="${rim}" stroke-width="2"/><path d="M8 0H${(len * 0.92).toFixed(0)}" stroke="${rim}" stroke-width="2" fill="none"/></g>`,
+    );
+  }
+  return svg(`<svg class="canopy" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">${leaves.join("")}</svg>`);
 }
 
 const screen: ScreenDef = {
@@ -67,28 +68,30 @@ const screen: ScreenDef = {
   render(ctx) {
     preload("scan");
     const reduce = reducedMotion();
+    const r = rng(42);
 
-    const embers = Array.from({ length: 16 }, () => h("span", { class: "ember" }));
+    const fireflies = Array.from({ length: 14 }, () =>
+      h("span", { class: "firefly", style: { left: `${(6 + r() * 88).toFixed(1)}%`, top: `${(12 + r() * 76).toFixed(1)}%`, "--s": (0.5 + r() * 0.9).toFixed(2) } }),
+    );
     const stage = h(
       "div",
       { class: "stage", "aria-hidden": "true" },
       h(
         "div",
         { class: "stage-dolly" },
-        h("div", { class: "layer layer-far" }, h("div", { class: "stars ambient" })),
-        h("div", { class: "layer layer-mid" }, h("div", { class: "haze haze-a ambient" }), h("div", { class: "haze haze-b ambient" })),
-        h("div", { class: "layer layer-beam" }, h("div", { class: "beam" })),
-        h("div", { class: "layer layer-near" }, embers),
+        h("div", { class: "layer layer-far" }, canopy(0, "#03100a", "#0a2516")),
+        h("div", { class: "layer layer-mid" }, h("div", { class: "haze haze-a ambient" }), canopy(1, "#051a0e", "#0d3020")),
+        h("div", { class: "layer layer-near" }, canopy(2, "#020904", "#1a2a12"), fireflies),
       ),
-      h("div", { class: "grain ambient" }),
       h("div", { class: "vignette" }),
     );
-    const g = grain();
-    if (g) stage.style.setProperty("--grain", `url("${g}")`);
 
-    const mark = introMark();
-    const logo = h("div", { class: "intro-logo" }, h("div", { class: "bloom" }), h("div", { class: "bloom bloom-wide" }), mark);
-    const word = h("h1", { class: "intro-word" }, h("span", { class: "intro-word-text", text: "Guarana" }));
+    const theSeed = seed({ size: "intro", state: reduce ? "open" : "closed", follow: true, breathe: true, echoes: true, cls: "intro-mark" });
+    if (reduce) theSeed.ready(true);
+    const spark = h("span", { class: "intro-spark" });
+    const logo = h("div", { class: "intro-logo" }, h("div", { class: "bloom" }), theSeed.el, spark);
+    const letters = Array.from("Guarana").map((c) => h("span", { class: "intro-letter", text: c }));
+    const word = h("h1", { class: "intro-word", "aria-label": "Guarana" }, h("span", { class: "intro-word-text", "aria-hidden": "true" }, letters));
     const tag = h("p", { class: "intro-tag", text: "Switch 2 emulation, tuned for integrated GPUs." });
     const setUp = h(
       "button",
@@ -101,12 +104,17 @@ const screen: ScreenDef = {
     const el = h("div", { class: "intro", "data-phase": reduce ? "ready" : "intro" }, stage, center, skip);
 
     const anims: Animation[] = [];
+    const timers: number[] = [];
     let phase: "intro" | "ready" = reduce ? "ready" : "intro";
 
-    const finish = () => {
+    /** Ends the intro. A skip also lands the fireflies; the natural end lets them drift on. */
+    const finish = (skipped = true) => {
       if (phase === "ready") return;
       phase = "ready";
+      for (const t of timers) clearTimeout(t);
       for (const a of anims) {
+        if (!skipped && a.playState === "finished") continue;
+        if (!skipped && (a.effect?.getTiming().fill === "both")) continue;
         try {
           if (a.effect?.getTiming().iterations === Infinity) a.cancel();
           else a.finish();
@@ -114,6 +122,8 @@ const screen: ScreenDef = {
           a.cancel();
         }
       }
+      theSeed.setState("open");
+      theSeed.ready(true);
       el.dataset.phase = "ready";
       skip.hidden = true;
       if (el.isConnected) focusElement(setUp);
@@ -167,6 +177,9 @@ const screen: ScreenDef = {
           stage.style.setProperty("--my", my.toFixed(3));
         });
     });
+    ctx.signal.addEventListener("abort", () => {
+      for (const t of timers) clearTimeout(t);
+    });
 
     if (reduce) {
       skip.hidden = true;
@@ -180,86 +193,75 @@ const screen: ScreenDef = {
       anims.push(a);
       return a;
     };
-    const q = <T extends Element>(sel: string) => mark.querySelector<T>(sel);
-    const spring = "cubic-bezier(.3,1.35,.5,1)";
+    const at = (ms: number, fn: () => void) => timers.push(window.setTimeout(() => phase === "intro" && fn(), ms));
+    const jelly = "cubic-bezier(.3,1.6,.5,1)";
     const out = "cubic-bezier(.22,1,.36,1)";
 
-    run(stage, [{ opacity: 0 }, { opacity: 1 }], { duration: 800, easing: "ease-out" });
-    run(stage.querySelector(".stage-dolly"), [{ transform: "scale(1.14)" }, { transform: "scale(1)" }], { duration: 3800, easing: out });
-    run(stage.querySelector(".stars"), [{ opacity: 0 }, { opacity: 1 }], { duration: 1600, delay: 200, easing: "ease-out" });
-    for (const [i, hz] of Array.from(stage.querySelectorAll(".haze")).entries()) {
-      run(hz, [{ opacity: 0, transform: "scale(.8)" }, { opacity: 1, transform: "scale(1)" }], { duration: 1800, delay: 250 + i * 250, easing: out });
+    // The forest comes out of the dark, far layers first, and the camera eases back.
+    run(stage, [{ opacity: 0 }, { opacity: 1 }], { duration: 900, easing: "ease-out" });
+    run(stage.querySelector(".stage-dolly"), [{ transform: "scale(1.12)" }, { transform: "scale(1)" }], { duration: 3000, easing: out });
+    for (const [i, layer] of Array.from(stage.querySelectorAll(".canopy")).entries()) {
+      run(layer, [{ opacity: 0, transform: `translateY(${24 + i * 16}px)` }, { opacity: 1, transform: "none" }], { duration: 1300, delay: 100 + i * 140, easing: out });
     }
+    run(stage.querySelector(".haze"), [{ opacity: 0, transform: "scale(.8)" }, { opacity: 1, transform: "none" }], { duration: 1600, delay: 300, easing: out });
 
+    // One spark in the dark.
+    run(spark, [
+      { opacity: 0, transform: "scale(0)" },
+      { opacity: 1, transform: "scale(1.2)", offset: 0.25 },
+      { opacity: 1, transform: "scale(1)", offset: 0.55 },
+      { opacity: 0, transform: "scale(5)" },
+    ], { duration: 820, delay: 120, easing: out, fill: "both" });
+    // It swells into the closed fruit.
+    run(theSeed.el, [
+      { opacity: 0, transform: "scale(.12) rotate(-30deg)" },
+      { opacity: 1, transform: "none" },
+    ], { duration: 820, delay: 420, easing: jelly });
     run(logo.querySelector(".bloom"), [
-      { opacity: 0, transform: "scale(.4)" },
-      { opacity: 1, transform: "scale(1.2)", offset: 0.55 },
-      { opacity: 0.85, transform: "scale(1)" },
-    ], { duration: 1800, delay: 300, easing: out });
-    run(logo.querySelector(".bloom-wide"), [{ opacity: 0 }, { opacity: 1 }], { duration: 2200, delay: 1200, easing: "ease-out" });
+      { opacity: 0, transform: "scale(.3)" },
+      { opacity: 1, transform: "scale(1.15)", offset: 0.5 },
+      { opacity: 0.8, transform: "none" },
+    ], { duration: 1500, delay: 420, easing: out });
+    // The leaf unfurls.
+    run(theSeed.el.querySelector(".seed-leaf"), [
+      { opacity: 0, transform: "rotate(-70deg) scale(0)" },
+      { opacity: 1, transform: "none" },
+    ], { duration: 760, delay: 700, easing: jelly });
+    // The shell splits: the fruit opens like an eye, looks up at you, and blinks once.
+    at(980, () => theSeed.setState("open"));
+    at(1350, () => theSeed.lookAt(innerWidth / 2, 0));
+    at(1650, () => theSeed.lookAt(null));
 
-    // The ball appears, then stretches into the drop (tail overshoots and settles).
-    run(q(".intro-drop-wrap"), [{ opacity: 0, transform: "scale(.35)" }, { opacity: 1, transform: "scale(1)" }], { duration: 760, delay: 300, easing: spring });
-    const drop = q<SVGPathElement>(".intro-drop");
-    if (drop && CSS.supports("d", 'path("M0 0")')) {
-      const tips = [18.6, 18.6, 14, 8, 3, 1, 2.6, 4];
-      run(drop, tips.map((t, i) => ({ d: `path("${dropPath(t)}")`, offset: i / (tips.length - 1) })), { duration: 1150, delay: 650, easing: "cubic-bezier(.5,0,.3,1)" });
-    }
-    for (const [i, cut] of Array.from(mark.querySelectorAll(".intro-cut")).entries()) {
-      run(cut, [{ strokeDasharray: "1 1", strokeDashoffset: 1 }, { strokeDasharray: "1 1", strokeDashoffset: 0 }], { duration: 620, delay: 1150 + i * 90, easing: out });
-    }
-    run(q(".intro-leaf"), [
-      { opacity: 0, transform: "scale(0) rotate(-50deg)" },
-      { opacity: 1, transform: "scale(1) rotate(0)" },
-    ], { duration: 820, delay: 1500, easing: "cubic-bezier(.34,1.56,.64,1)" });
-    for (const [i, arc] of Array.from(mark.querySelectorAll(".intro-echo")).entries()) {
-      run(arc, [
-        { strokeDasharray: "1 1", strokeDashoffset: 1, transform: "translateX(-6px)" },
-        { strokeDasharray: "1 1", strokeDashoffset: 0, transform: "translateX(0)" },
-      ], { duration: 560, delay: 1800 + i * 150, easing: out });
-    }
-    run(q(".intro-sweep"), [
-      { transform: "translateX(0) skewX(-14deg)", opacity: 0 },
-      { opacity: 1, offset: 0.2 },
-      { transform: "translateX(118px) skewX(-14deg)", opacity: 0 },
-    ], { duration: 1000, delay: 2150, easing: "cubic-bezier(.45,0,.25,1)", fill: "both" });
-    run(stage.querySelector(".beam"), [
-      { transform: "translateX(-70vw) rotate(14deg)", opacity: 0 },
-      { opacity: 1, offset: 0.35 },
-      { transform: "translateX(70vw) rotate(14deg)", opacity: 0 },
-    ], { duration: 1700, delay: 1900, easing: "cubic-bezier(.45,0,.25,1)", fill: "both" });
-
-    // Embers burst out behind the moving drop, then fade.
-    embers.forEach((em, i) => {
-      const angle = Math.PI * (0.62 + Math.random() * 0.76);
-      const dist = 18 + Math.random() * 26;
-      const dx = Math.cos(angle) * dist;
-      const dy = Math.sin(angle) * dist * 0.55;
-      const size = 0.6 + Math.random() * 0.9;
-      run(em, [
-        { opacity: 0, transform: `translate(0, 0) scale(${size})` },
-        { opacity: 1, offset: 0.18 },
-        { opacity: 0, transform: `translate(${dx.toFixed(1)}vw, ${dy.toFixed(1)}vh) scale(${(size * 0.4).toFixed(2)})` },
-      ], { duration: 1500 + Math.random() * 1100, delay: 1050 + i * 28, easing: "cubic-bezier(.15,.7,.3,1)", fill: "both" });
-    });
-
-    run(word, [{ opacity: 0, transform: "translateY(16px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 760, delay: 2250, easing: spring });
-    run(word.firstElementChild, [{ backgroundPosition: "100% 0" }, { backgroundPosition: "0% 0" }], { duration: 1100, delay: 2450, easing: "ease-in-out" });
-    run(tag, [{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 640, delay: 2600, easing: out });
-    run(setUp, [{ opacity: 0, transform: "translateY(12px) scale(.92)" }, { opacity: 1, transform: "translateY(0) scale(1)" }], { duration: 700, delay: 2900, easing: spring })
+    letters.forEach((l, i) =>
+      run(l, [{ opacity: 0, transform: "translateY(.55em) rotate(8deg) scale(.9)" }, { opacity: 1, transform: "none" }], { duration: 640, delay: 1120 + i * 45, easing: jelly }),
+    );
+    run(tag, [{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 600, delay: 1420, easing: out });
+    // The echo arcs slide out ahead of the fruit: the predicted frames.
+    at(1500, () => theSeed.ready(true));
+    run(setUp, [{ opacity: 0, transform: "translateY(14px) scale(.9)" }, { opacity: 1, transform: "none" }], { duration: 640, delay: 1560, easing: jelly })
       ?.finished.then(() => (setUpVisible = true), () => undefined);
-    run(fine, [{ opacity: 0 }, { opacity: 1 }], { duration: 600, delay: 3200, easing: "ease-out" });
-    run(center, [{ transform: "scale(.97)" }, { transform: "scale(1)" }], { duration: 3600, easing: out });
+    // The fruit looks down at the button it wants you to press.
+    at(1900, () => {
+      const b = setUp.getBoundingClientRect();
+      theSeed.lookAt(b.left + b.width / 2, b.top + b.height / 2);
+    });
+    run(fine, [{ opacity: 0 }, { opacity: 1 }], { duration: 600, delay: 1800, easing: "ease-out" });
 
-    // Embers start at the drop's tail, wherever the layout put the logo.
-    requestAnimationFrame(() => {
-      const r = logo.getBoundingClientRect();
-      stage.style.setProperty("--ox", `${Math.round(r.left + r.width * 0.3)}px`);
-      stage.style.setProperty("--oy", `${Math.round(r.top + r.height * 0.56)}px`);
+    // The intro is "over" when the core timeline is; the fireflies finish in their own time.
+    const core = [...anims];
+    // Fireflies drift up once and come to rest, glowing faintly.
+    fireflies.forEach((f, i) => {
+      const dx = (r() - 0.5) * 60;
+      const dy = -20 - r() * 50;
+      run(f, [
+        { opacity: 0, transform: "translate(0, 0) scale(.6)" },
+        { opacity: 1, offset: 0.4 },
+        { opacity: 0.45, transform: `translate(${dx.toFixed(0)}px, ${dy.toFixed(0)}px) scale(1)` },
+      ], { duration: 2600 + r() * 1800, delay: 900 + i * 90, iterations: 1, easing: "ease-in-out", fill: "both", direction: "normal" });
     });
 
-    void Promise.all(anims.map((a) => a.finished.catch(() => undefined))).then(() => {
-      if (!ctx.signal.aborted) finish();
+    void Promise.all(core.map((a) => a.finished.catch(() => undefined))).then(() => {
+      if (!ctx.signal.aborted) finish(false);
     });
     return el;
   },

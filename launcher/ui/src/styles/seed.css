@@ -1,0 +1,272 @@
+/* The seed (ui/seed.ts): a guarana fruit split open like an eye. Geometry is a 200-unit box: the
+   fruit's circle is centred at (112, 100) with r 62, the eye (white flesh) is 88 x 84 around that
+   centre, the seed (pupil) 40 across. Every moving layer is HTML, moved by transform and opacity. */
+
+.seed {
+  --seed-size: 240px;
+  position: relative;
+  width: var(--seed-size);
+  height: var(--seed-size);
+  flex: none;
+  pointer-events: none;
+}
+.seed-mark { --seed-size: 46px; }
+.seed-stage { --seed-size: clamp(240px, min(52vh, 40vw), 620px); }
+.seed-launch { --seed-size: var(--launch-seed-size, clamp(180px, min(34vh, 30vw), 440px)); }
+.seed-intro { --seed-size: clamp(170px, 30vmin, 300px); }
+
+.seed > span,
+.seed-body > *,
+.seed-lid,
+.seed-eye,
+.seed-iris,
+.seed-pupil,
+.seed-glint { position: absolute; display: block; }
+
+/* A soft ember-and-shell glow behind the fruit: a pre-made gradient, only its opacity breathes. */
+.seed-aura {
+  left: 56%;
+  top: 50%;
+  width: 190%;
+  height: 190%;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 120, 50, 0.3) 0%, rgba(216, 50, 31, 0.14) 24%, rgba(60, 207, 126, 0.05) 44%, rgba(0, 0, 0, 0) 64%);
+  opacity: 0.85;
+  transition: opacity 900ms var(--ease-out);
+}
+:root[data-theme="light"] .seed-stage .seed-aura {
+  background: radial-gradient(circle, rgba(242, 133, 26, 0.26) 0%, rgba(216, 50, 31, 0.1) 26%, rgba(60, 207, 126, 0.08) 46%, rgba(0, 0, 0, 0) 64%);
+}
+.seed-mark .seed-aura { display: none; }
+
+.seed-body { inset: 0; transform-origin: 56% 50%; }
+.seed-shell { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.seed-leaf { transform-box: fill-box; transform-origin: 0% 100%; }
+
+/* The opening in the shell. The lid wrapper blinks; the eye inside opens and closes with the state. */
+/* The split in the shell: wider than tall, so it reads as a fruit opening, not a cartoon eye. */
+.seed-lid { left: 33%; top: 33%; width: 46%; height: 34%; }
+.seed-eye {
+  inset: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: radial-gradient(110% 120% at 50% 70%, #fffdf8 0%, #f4eee1 40%, #ddd0b6 74%, #a8936f 100%);
+  box-shadow:
+    0 0 0 calc(var(--seed-size) * 0.008) #3a0604,
+    0 0 0 calc(var(--seed-size) * 0.018) rgba(58, 6, 4, 0.3),
+    inset 0 calc(var(--seed-size) * 0.035) calc(var(--seed-size) * 0.035) rgba(110, 24, 12, 0.5);
+  transform: scaleY(1);
+  transition: transform 680ms var(--ease-jelly);
+}
+.seed-iris { inset: 0; transition: transform 560ms var(--ease-spring); }
+.seed-pupil {
+  left: 25%;
+  top: 14.7%;
+  width: 50%;
+  height: 67.6%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 34%, #3b1b12 0%, #160a07 30%, #060404 62%, #000 100%);
+  box-shadow: 0 0 0 calc(var(--seed-size) * 0.005) rgba(140, 40, 24, 0.55);
+  transition: transform 760ms var(--ease-spring);
+}
+.seed-glint {
+  left: 35%;
+  top: 24%;
+  width: 11%;
+  height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, rgba(255, 255, 255, 0.85) 40%, rgba(255, 255, 255, 0) 72%);
+  transition: transform 560ms var(--ease-spring);
+}
+.seed-glint-2 { left: 61%; top: 66%; width: 4.5%; height: 5.5%; opacity: 0.5; }
+
+/* States: how far the fruit has split open. */
+.seed[data-state="closed"] .seed-eye,
+.seed[data-state="shut"] .seed-eye { transform: scaleY(0.045); transition-duration: 420ms; transition-timing-function: var(--ease-out); }
+.seed[data-state="drowsy"] .seed-eye,
+.seed[data-state="open"][data-sleep] .seed-eye { transform: scaleY(0.42); transition-duration: 1400ms; transition-timing-function: var(--ease-emph); }
+.seed[data-state="wide"] .seed-eye { transform: scaleY(1.14); }
+.seed-shell { transition: opacity 600ms var(--ease-out); }
+.seed[data-state="shut"] .seed-shell { opacity: 0.5; }
+.seed[data-state="shut"] .seed-aura { opacity: 0.15; }
+.seed[data-state="closed"] .seed-aura { opacity: 0.5; }
+
+/* The echo arcs (predicted frames) slide out ahead of the fruit when it is ready to go. */
+.seed-echoes { inset: 0; }
+.seed-echo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+  transform: translateX(-7%);
+  transition: opacity 420ms var(--ease-out), transform 620ms var(--ease-spring);
+}
+.seed-echo-1 { transition-delay: 70ms; }
+.seed-echo-2 { transition-delay: 140ms; }
+.seed[data-ready] .seed-echo { transform: none; }
+.seed[data-ready] .seed-echo-0 { opacity: 0.75; }
+.seed[data-ready] .seed-echo-1 { opacity: 0.4; }
+.seed[data-ready] .seed-echo-2 { opacity: 0.18; }
+
+/* The session ring (Home): the last session's share of frames on time, as one leaf arc around the
+   fruit. Drawn in once (a transition of the dash), then still. The numeral beside it is its text. */
+.seed-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.seed-ring-track { stroke: var(--leaf); stroke-opacity: 0.13; stroke-width: 1.3; }
+.seed-ring-arc {
+  stroke: var(--leaf);
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-dasharray: 0 100;
+  transition: stroke-dasharray 1600ms var(--ease-bloom) 350ms;
+}
+:root[data-theme="light"] .seed-stage .seed-ring-arc { stroke: var(--leaf-ink); }
+:root[data-theme="light"] .seed-stage .seed-ring-track { stroke: var(--leaf-ink); stroke-opacity: 0.16; }
+.seed[data-state="closed"] .seed-ring,
+.seed[data-state="shut"] .seed-ring { opacity: 0.35; }
+.seed-ring { transition: opacity 600ms var(--ease-out); }
+
+/* Breath, only on the big seed while awake. Stepped to 24 fps: slow enough to cost nothing, smooth
+   enough to read as alive. html[data-idle] (.ambient) and html[data-paused] stop it; asleep
+   (data-sleep) removes it. The blink is a one-off animation from seed.ts, never a loop. */
+@keyframes seed-breathe {
+  0% { transform: scale(1); }
+  12.5% { transform: scale(1.0035); }
+  25% { transform: scale(1.012); }
+  37.5% { transform: scale(1.0205); }
+  50% { transform: scale(1.024); }
+  62.5% { transform: scale(1.0205); }
+  75% { transform: scale(1.012); }
+  87.5% { transform: scale(1.0035); }
+  100% { transform: scale(1); }
+}
+@keyframes seed-aura-breathe {
+  0%, 100% { opacity: 0.72; }
+  12.5%, 87.5% { opacity: 0.75; }
+  25%, 75% { opacity: 0.83; }
+  37.5%, 62.5% { opacity: 0.91; }
+  50% { opacity: 0.95; }
+}
+.seed.is-breathing[data-state="open"] .seed-body { animation: seed-breathe 6.4s infinite steps(19, jump-none); }
+.seed.is-breathing[data-state="open"] .seed-aura { animation: seed-aura-breathe 6.4s infinite steps(19, jump-none); }
+.seed[data-sleep] .seed-body,
+.seed[data-sleep] .seed-aura { animation: none !important; }
+
+/* ---- Orbit (launch): rings for the boot phases, sparks for the shader count ----------------------- */
+/* The fruit's circle is 0.62 of the seed box across; ring k is k times that, centred on the eye. */
+
+.orbit { position: absolute; left: 56%; top: 50%; width: 0; height: 0; }
+.orbit-ring,
+.orbit-ticks,
+.orbit-swarm { position: absolute; left: 0; top: 0; }
+.orbit-ring {
+  width: calc(var(--seed-size) * 0.62 * var(--k));
+  height: calc(var(--seed-size) * 0.62 * var(--k));
+  margin: calc(var(--seed-size) * -0.31 * var(--k)) 0 0 calc(var(--seed-size) * -0.31 * var(--k));
+  border: 1.5px solid rgba(255, 190, 90, 0.62);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 640ms var(--ease-out), transform 1100ms var(--ease-bloom), border-color 700ms var(--ease-out);
+}
+.orbit-ring.is-live { opacity: 1; transform: none; }
+.orbit-ring.is-settled { opacity: 0.75; transform: none; border-color: rgba(111, 227, 160, 0.45); }
+.orbit-spin {
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  opacity: 0;
+  /* A comet tail behind the spark: painted once, then only rotated. */
+  background: conic-gradient(from 0deg, rgba(255, 201, 74, 0) 0deg, rgba(255, 201, 74, 0) 250deg, rgba(255, 201, 74, 0.55) 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1.5px));
+  transition: opacity 500ms var(--ease-out);
+}
+.orbit-ring-1 .orbit-spin,
+.orbit-ring-3 .orbit-spin { background: conic-gradient(from 0deg, rgba(255, 201, 74, 0.55) 0deg, rgba(255, 201, 74, 0) 110deg, rgba(255, 201, 74, 0) 360deg); }
+.orbit-spark {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: max(7px, calc(var(--seed-size) * 0.034));
+  height: max(7px, calc(var(--seed-size) * 0.034));
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff7dc 0%, #ffc94a 38%, rgba(242, 133, 26, 0) 72%);
+}
+.orbit-ring.is-live .orbit-spin { opacity: 1; animation: orbit-spin var(--spin) linear infinite; }
+.orbit-ring-1.is-live .orbit-spin,
+.orbit-ring-3.is-live .orbit-spin { animation-direction: reverse; }
+@keyframes orbit-spin { to { transform: rotate(360deg); } }
+
+.orbit-ticks { width: 0; height: 0; transition: transform 640ms var(--ease-fold), opacity 520ms var(--ease-in); }
+.orbit-tick {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max(3px, calc(var(--seed-size) * 0.014));
+  height: max(3px, calc(var(--seed-size) * 0.014));
+  margin: calc(max(3px, calc(var(--seed-size) * 0.014)) / -2);
+  border-radius: 50%;
+  background: #ffd27a;
+  opacity: 0;
+  transform: rotate(var(--a)) translateX(calc(var(--seed-size) * 0.31 * var(--k))) scale(0.3);
+  transition: opacity 360ms var(--ease-out), transform 460ms var(--ease-bounce);
+}
+.orbit.is-counting .orbit-tick { opacity: 0.16; }
+.orbit.is-counting .orbit-tick.is-lit { opacity: 1; transform: rotate(var(--a)) translateX(calc(var(--seed-size) * 0.31 * var(--k))) scale(1); }
+
+.orbit-swarm { width: 0; height: 0; opacity: 0; transition: opacity 600ms var(--ease-out); }
+.orbit[data-phase="2"] .orbit-swarm { opacity: 1; animation: orbit-spin 11s linear infinite; }
+.orbit-mote {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--seed-size) * 0.02 * var(--s));
+  height: calc(var(--seed-size) * 0.02 * var(--s));
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff3c4 0%, #ffc94a 42%, rgba(242, 133, 26, 0) 72%);
+  transform: rotate(var(--a)) translateX(calc(var(--seed-size) * 0.31 * var(--k)));
+  transition: opacity 500ms var(--ease-out);
+}
+.orbit-mote.is-gone { opacity: 0; }
+.orbit-flight {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff7dc 0%, #ffc94a 45%, rgba(242, 133, 26, 0) 72%);
+  pointer-events: none;
+}
+
+/* Released: everything falls into the seed, and the iris opens. */
+.orbit.is-released .orbit-ring,
+.orbit.is-released .orbit-ticks,
+.orbit.is-released .orbit-swarm {
+  opacity: 0;
+  transform: scale(0.3);
+  transition: transform 620ms var(--ease-fold), opacity 520ms var(--ease-in);
+}
+.orbit.is-failed .orbit-ring { opacity: 0.22; transform: none; border-color: rgba(255, 139, 123, 0.35); }
+.orbit.is-failed .orbit-ticks { opacity: 0.25; }
+.orbit.is-failed .orbit-swarm { opacity: 0; animation: none; }
+
+/* Reduced motion: no breath, no blink, no spin; states change without travel. */
+html[data-reduced] .seed-body,
+html[data-reduced] .seed-aura,
+html[data-reduced] .seed-lid,
+html[data-reduced] .orbit-spin,
+html[data-reduced] .orbit-swarm { animation: none !important; }
+html[data-reduced] .orbit-spin { opacity: 0 !important; }
+html[data-reduced] .seed-ring-arc { transition: none; }
+
+@media (forced-colors: active) {
+  .seed-aura,
+  .orbit-spin,
+  .orbit-swarm { display: none !important; }
+}
