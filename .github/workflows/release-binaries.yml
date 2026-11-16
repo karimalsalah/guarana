@@ -270,8 +270,8 @@ jobs:
             runner: macos-15
           # Windows on ARM (Snapdragon X laptops): clang-cl for ARM64 on GitHub's Windows ARM64
           # runner, ThinLTO, dynarmic's ARM64 backend. Qt is Eden-CI's static bundle
-          # (LICHII_USE_BUNDLED_QT), which CMakeLists.txt links with the static runtime on ARM64. No PGO:
-          # the profile is x64's.
+          # (LICHII_USE_BUNDLED_QT), static libraries on the dynamic C runtime. No PGO: the profile
+          # is x64's.
           - platform: windows-arm64
             runner: windows-11-arm
 
@@ -542,8 +542,8 @@ jobs:
           # /Z7 keeps debug info in the objects (sccache caches it); the linker writes guarana.pdb,
           # published as a separate symbols archive so crash dumps from users can be symbolized.
           flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin /Z7"
-          # Windows ARM64 links Eden-CI's static Qt bundle (CMakeLists.txt then takes the static C
-          # runtime); the x64 builds use the Qt that install-qt-action put on PATH.
+          # Windows ARM64 links Eden-CI's static Qt bundle; the x64 builds use the Qt that
+          # install-qt-action put on PATH.
           bundled_qt=OFF
           if [ '${{ matrix.platform }}' = windows-arm64 ]; then bundled_qt=ON; fi
           if [ -n '${{ matrix.march }}' ]; then flags+=" -march=${{ matrix.march }}"; fi
@@ -764,9 +764,17 @@ jobs:
               throw "build/release/bin/$exe was not produced"
             }
           }
-          # Windows ARM64 links Qt statically (Configure Windows): there are no Qt DLLs to deploy.
+          # Windows ARM64 links Qt statically (Configure Windows): there are no Qt DLLs to deploy. It
+          # takes the dynamic C runtime, which a Windows on ARM laptop may lack for ARM64 programs, so
+          # the redistributable DLLs of the compiler it was built with go beside the programs.
           if ('${{ matrix.platform }}' -ne 'windows-arm64') {
             windeployqt --release --no-translations "build/release/bin/$gui"
+          } else {
+            $crt = Get-ChildItem -Directory (Join-Path $env:VCToolsRedistDir 'arm64') -Filter 'Microsoft.VC*.CRT' |
+              Select-Object -First 1
+            if (-not $crt) { throw "No ARM64 C runtime under $env:VCToolsRedistDir" }
+            Copy-Item (Join-Path $crt.FullName '*.dll') build/release/bin/
+            Get-ChildItem build/release/bin -Filter *.dll | ForEach-Object Name
           }
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
