@@ -21,14 +21,14 @@
         "version": "boost-1.91.0"
     },
     "catch2": {
-        "hash": "7eea385d79d88a5690cde131fe7ccda97d5c54ea09d6f515000d7bf07c828809d61c1ac99912c1ee507cf933f61c1c47ecdcc45df7850ffa82714034b0fccf35",
+        "hash": "a6b0f1d1bd9178382f06de9773b31e3efdcdfb20fc3b65b23d9675e0838da6f64c417a75e062bda918dd28781e5d11a78e7130cef2394e676c7bc2da9e49106b",
         "min_version": "3.0.1",
         "package": "Catch2",
         "patches": [
             "0001-solaris-isnan-fix.patch"
         ],
         "repo": "catchorg/Catch2",
-        "version": "v3.13.0"
+        "version": "v3.16.1"
     },
     "cpp-jwt": {
         "find_args": "CONFIG",
