@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::System::Threading::{
@@ -26,7 +26,7 @@ use crate::state::{self, AppState};
 use crate::timeline::Timeline;
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{autopilot, boot, controllers, install, modes, paths, profiles, system, warm};
+use crate::{appdir, autopilot, boot, controllers, install, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
 
@@ -126,12 +126,15 @@ pub fn launch(
     let st = app.state::<AppState>();
     let persisted = st.load();
     let current = state::current_version(&persisted).ok_or("Guarana is not installed yet")?;
-    let exe = paths::emulator_exe_in(Path::new(&current.path)).ok_or_else(|| {
+    let missing = || {
         format!(
             "{} is missing: reinstall this version",
             Path::new(&current.path).join(paths::EMULATOR_EXE).display()
         )
-    })?;
+    };
+    if paths::emulator_exe_in(Path::new(&current.path)).is_none() {
+        return Err(missing());
+    }
     if util::emulator_running() {
         return Err("Guarana is already running: close it first".into());
     }
@@ -206,6 +209,14 @@ pub fn launch(
     }
 
     timeline.mark("settings ready");
+    // The program folder switches now when an update or rollback waits for it (`appdir.rs`). The
+    // warm-up made way above, but its process can take a moment to end. Held until the emulator's
+    // process exists, so no switch moves the folder in between.
+    let run = appdir::run_dir(&current, Duration::from_secs(3));
+    if !run.stable {
+        timeline.mark("runs from the version folder");
+    }
+    let exe = paths::emulator_exe_in(&run.dir).ok_or_else(missing)?;
     let launch_on_battery = st.system().power.on_ac == Some(false);
     let mut cmd = Command::new(&exe);
     cmd.current_dir(exe.parent().unwrap_or(Path::new(".")));
@@ -240,6 +251,7 @@ pub fn launch(
             return Err(format!("Could not start Guarana: {e}"));
         }
     };
+    drop(run);
     let pid = child.id();
     timeline.mark(&format!("process spawned (pid {pid})"));
     // With EDEN_NX2_LAUNCHER_PAD_IDLE on, the launcher's controller polling stops until the game-watch

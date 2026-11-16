@@ -48,7 +48,8 @@ fullscreen.
 Windows Auto HDR applies to SDR output of DirectX 11 and 12 games and leaves an HDR swapchain
 alone. If you keep HDR output Off on an HDR desktop and Auto HDR engages for the emulator, turn
 Auto HDR off for `guarana.exe` / `guarana-cli.exe` in Settings > System > Display > Graphics, so SDR
-frames are shown as SDR.
+frames are shown as SDR. With the launcher, pick them in `%LOCALAPPDATA%\Guarana\app\`: every
+version runs from there, so the choice stays after updates.
 
 ### Anti-aliasing
 

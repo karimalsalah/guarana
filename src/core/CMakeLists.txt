@@ -149,6 +149,8 @@ add_library(core STATIC
     file_sys/partition_filesystem.h
     file_sys/patch_manager.cpp
     file_sys/patch_manager.h
+    file_sys/patch_pack.cpp
+    file_sys/patch_pack.h
     file_sys/program_metadata.cpp
     file_sys/program_metadata.h
     file_sys/registered_cache.cpp
@@ -1321,6 +1323,37 @@ target_link_libraries(core PRIVATE
     ZLIB::ZLIB)
 
 target_link_libraries(core PUBLIC httplib::httplib zstd::zstd nxformat_reader)
+
+# The patch packs (dist/patch-packs, docs/patch-packs.md) go next to every program that links
+# core: guarana, guarana-cli and tests are all built into CMAKE_RUNTIME_OUTPUT_DIRECTORY, and
+# FileSys::ShippedPatchPackDirectory looks there. Copied afresh on every build, so an edited or
+# removed pack never lingers.
+add_custom_target(patch_packs
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/patch-packs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/dist/patch-packs"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/patch-packs"
+    COMMENT "Copying the patch packs next to the programs"
+    VERBATIM)
+add_dependencies(core patch_packs)
+
+# The packs are compiled into core as well (FileSys::EmbeddedPatchPacks), so a program without the
+# folder beside it keeps them: Android, or guarana-cli inside a macOS bundle. A file in the folder
+# replaces the compiled-in copy of the same name (FileSys::LoadPatchPacks). The list file changes
+# only when a pack is added or removed; either, or an edited pack, writes the source again.
+file(GLOB patch_pack_files CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/dist/patch-packs/*.json")
+set(patch_pack_list "${CMAKE_CURRENT_BINARY_DIR}/patch_packs.cmake")
+file(CONFIGURE OUTPUT "${patch_pack_list}"
+    CONTENT "set(patch_pack_files [==[@patch_pack_files@]==])\n" @ONLY)
+set(embedded_patch_packs "${CMAKE_CURRENT_BINARY_DIR}/patch_packs_embedded.cpp")
+add_custom_command(
+    OUTPUT "${embedded_patch_packs}"
+    COMMAND ${CMAKE_COMMAND} -P "${PROJECT_SOURCE_DIR}/CMakeModules/EmbedPatchPacks.cmake"
+        "${patch_pack_list}" "${embedded_patch_packs}"
+    DEPENDS ${patch_pack_files} "${patch_pack_list}"
+        "${PROJECT_SOURCE_DIR}/CMakeModules/EmbedPatchPacks.cmake"
+    COMMENT "Compiling the patch packs into core"
+    VERBATIM)
+target_sources(core PRIVATE "${embedded_patch_packs}")
 
 if (ENABLE_WEB_SERVICE)
     target_compile_definitions(core PUBLIC ENABLE_WEB_SERVICE)

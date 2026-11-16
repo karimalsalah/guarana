@@ -100,17 +100,10 @@ private:
     std::vector<Counter> counters;
     std::vector<double> sums;
     u64 collected{};
-    u64 begin_calls{};
     u64 begin_opened{};
-    u64 begin_reject_unsupported{};
-    u64 begin_reject_noframes{};
-    u64 begin_reject_scopeopen{};
-    u64 begin_reject_collision{};
     u64 collect_calls{};
     u64 collect_not_ready{};
-    u64 end_calls{};
     u64 end_closed{};
-    u64 end_reject_noscope{};
     u64 drained{};
     u64 avail_yes{};
     u64 avail_no{};

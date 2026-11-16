@@ -867,7 +867,12 @@ pub fn switch_file_now(persisted: &Persisted, sys: &SystemInfo) -> Vec<Finding> 
         &RegKey::predef(HKEY_LOCAL_MACHINE),
         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
     );
-    let portable = installed_dir().map(|d| d.join("user")).filter(|d| d.is_dir());
+    // The version's folder, or the program folder it runs from (`appdir.rs`).
+    let portable = installed_dir()
+        .into_iter()
+        .chain([paths::app_dir()])
+        .map(|d| d.join("user"))
+        .find(|d| d.is_dir());
     let mode = modes::current(persisted);
     switch_file(&SwitchFileInput {
         text: text.as_deref(),

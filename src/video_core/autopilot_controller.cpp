@@ -69,7 +69,6 @@ AutopilotController::ShownSummary AutopilotController::Summarize(std::vector<dou
         return summary;
     }
     std::ranges::sort(intervals_ms);
-    summary.p5_ms = Percentile(intervals_ms, 5);
     summary.p50_ms = Percentile(intervals_ms, 50);
     summary.p95_ms = Percentile(intervals_ms, 95);
     const auto even = std::ranges::count_if(intervals_ms, [&summary](double interval) {

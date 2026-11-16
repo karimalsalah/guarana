@@ -8,18 +8,23 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include "common/common_funcs.h"
 #include "common/fs/path_util.h"
 #include "common/hex_util.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/patch_pack.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -334,6 +339,9 @@ TEST_CASE("Built-in patches that can be applied together never touch the same by
     // The hitstop hook writes 44 bytes and the turn speed hook 8.
     CHECK(has(FpsUnlock, Kind::Code, 0x2F53268, 44));
     CHECK(has(FpsUnlock, Kind::Code, 0x261EB18, 8));
+    // Ocarina's text speeds come from their patch pack (dist/patch-packs).
+    CHECK(has("Text Speed 2x (built-in)", Kind::Code, 0xAFE1B4, 4));
+    CHECK(has("Text Speed Instant (built-in)", Kind::CodeCave, 0x3C46F00, 20));
     for (const auto& range : ranges) {
         CAPTURE(range.patch, range.offset);
         CHECK(range.size != 0);
@@ -1437,5 +1445,576 @@ TEST_CASE("The patch list says what became of each built-in at the last start",
         // So does another module of Ocarina.
         void(context.Manager().PatchNSO(MakeDynamicMain(), "sdk"));
         CHECK(result_of(context, MaxResolution) == Result::Applied);
+    }
+}
+
+namespace {
+
+// A made-up game's main for the pack tests: text up to 0x1080 (its executable padding runs to
+// 0x2000), rodata from 0x2000, data from 0x3000 with its BSS at 0x3100..0x3200.
+constexpr size_t PackSiteOffset = 0x80;
+constexpr size_t PackOptionOffset = 0x90;
+constexpr size_t PackCaveOffset = 0x1100;
+constexpr size_t PackStateOffset = 0x3100;
+constexpr u32 PackSiteWord = 0x11223344;
+constexpr u32 PackNextWord = 0x55667788;
+constexpr u32 PackOptionWord = 0xAABBCCDD;
+constexpr u32 PackFixWord = 0x14000010;    // b +0x40
+constexpr u32 PackOptionNewWord = 0x14000000; // b +0
+constexpr std::string_view PackFix = "Other Fix (built-in)";
+constexpr std::string_view PackLite = "Other Fix Lite (built-in)";
+constexpr std::string_view PackOption = "Other Option (built-in)";
+
+std::vector<u8> MakePackMain(const FileSys::PatchManager::BuildID& build_id = OcarinaBuildId) {
+    std::vector<u8> nso(sizeof(Loader::NSOHeader) + 0x3200);
+    Loader::NSOHeader header{};
+    header.magic = Common::MakeMagic('N', 'S', 'O', '0');
+    header.build_id = build_id;
+    header.segments[0].size = 0x1080;
+    header.segments[1].location = 0x2000;
+    header.segments[1].size = 0x100;
+    header.segments[2].location = 0x3000;
+    header.segments[2].size = 0x100;
+    header.segments[2].bss_size = 0x100;
+    std::memcpy(nso.data(), &header, sizeof(header));
+    const auto put = [&nso](size_t offset, u32 word) {
+        std::memcpy(nso.data() + sizeof(Loader::NSOHeader) + offset, &word, sizeof(word));
+    };
+    put(PackSiteOffset, PackSiteWord);
+    put(PackSiteOffset + 4, PackNextWord);
+    put(PackOptionOffset, PackOptionWord);
+    return nso;
+}
+
+std::string Sha256Of(std::initializer_list<u32> words) {
+    std::vector<u8> bytes(words.size() * sizeof(u32));
+    size_t at = 0;
+    for (const u32 word : words) {
+        std::memcpy(bytes.data() + at, &word, sizeof(word));
+        at += sizeof(word);
+    }
+    std::array<u8, 32> digest{};
+    REQUIRE(FileSys::PatchPackSha256(bytes, digest));
+    return Common::HexToString(digest);
+}
+
+// A pack for OtherTitleId with every field in use: a fix with a code cave and state that
+// contains a lighter fix, and an option that is off until checked.
+nlohmann::json TestPackJson() {
+    auto pack = nlohmann::json::parse(R"json({
+  "document_type": "guarana_patch_pack",
+  "schema_version": 1,
+  "game": "A made-up game",
+  "title_id": "0100000000010000",
+  "module": "main",
+  "build_id": "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+  "offset_basis": "module",
+  "comment": ["Patches for the pack tests."],
+  "patches": [
+    {
+      "name": "Other Fix (built-in)",
+      "description": "Fixes the made-up game, with a routine in its padding and state in its BSS.",
+      "level": "recommended",
+      "replaces": "Other Fix Lite (built-in)",
+      "state": {"offset": "0x3100", "size": "0x10"},
+      "records": [
+        {"offset": "0x80", "bytes": "10000014", "original_size": "0x8", "comment": "b +0x40"},
+        {"offset": "0x1100", "bytes": "C0035FD6 1F2003D5", "cave": true}
+      ]
+    },
+    {
+      "name": "Other Fix Lite (built-in)",
+      "description": "The smaller fix the made-up game gets while the whole one cannot apply.",
+      "records": [{"offset": "0x80", "bytes": "1F2003D5"}]
+    },
+    {
+      "name": "Other Option (built-in)",
+      "description": "An option of the made-up game that stays off until it is checked.",
+      "level": "experimental",
+      "group": "Options",
+      "off_by_default": true,
+      "records": [{"offset": "0x90", "bytes": "00000014"}]
+    }
+  ]
+})json");
+    pack["patches"][0]["records"][0]["original_sha256"] = Sha256Of({PackSiteWord, PackNextWord});
+    pack["patches"][1]["records"][0]["original_sha256"] = Sha256Of({PackSiteWord});
+    pack["patches"][2]["records"][0]["original_sha256"] = Sha256Of({PackOptionWord});
+    return pack;
+}
+
+FileSys::PatchPack ParseTestPack(const nlohmann::json& json) {
+    std::vector<std::string> errors;
+    auto pack = FileSys::ParsePatchPack(json.dump(), "0100000000010000-test.json", errors);
+    CAPTURE(errors);
+    REQUIRE(errors.empty());
+    REQUIRE(pack.has_value());
+    return std::move(*pack);
+}
+
+std::span<const u8> TextBytes(std::string_view text) {
+    return {reinterpret_cast<const u8*>(text.data()), text.size()};
+}
+
+// A folder of packs for one test, removed when it ends.
+class TestPackFolder {
+public:
+    TestPackFolder() {
+        std::filesystem::create_directories(root);
+    }
+
+    ~TestPackFolder() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+
+    TestPackFolder(const TestPackFolder&) = delete;
+    TestPackFolder& operator=(const TestPackFolder&) = delete;
+
+    void Write(std::string_view file_name, std::string_view contents) const {
+        std::ofstream file{root / std::filesystem::path{file_name}, std::ios::binary};
+        file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        REQUIRE(file.good());
+    }
+
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("patch-pack-test-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+};
+
+} // Anonymous namespace
+
+TEST_CASE("Shipped patch packs pass the pack checks", "[patch_manager]") {
+    // CMake copies dist/patch-packs next to the programs, this one included.
+    const auto load = FileSys::LoadPatchPacks(FileSys::ShippedPatchPackDirectory());
+    for (const auto& error : load.errors) {
+        FAIL_CHECK(error);
+    }
+    REQUIRE_FALSE(load.packs.empty());
+    // Every pack is in use next to the built-ins compiled in: no name is taken twice.
+    for (const auto& error : FileSys::PatchPackErrors()) {
+        FAIL_CHECK(error);
+    }
+    for (const auto& pack : load.packs) {
+        CAPTURE(pack.source);
+        // <program id>-<what it does>.json: the file name says which game it is for.
+        CHECK(pack.source.starts_with(fmt::format("{:016X}-", pack.title_id)));
+        for (const auto& patch : pack.patches) {
+            CAPTURE(patch.name);
+            // Every pack patch is listed in Add-Ons, with a sentence for players.
+            CHECK(patch.description.size() >= 40);
+            CHECK(patch.description.ends_with('.'));
+        }
+    }
+    // The overlap check runs on the built-ins and the packs together: "Built-in patches that can
+    // be applied together never touch the same bytes".
+
+    // Ocarina's text speeds are this pack's, in the order that makes the fastest win.
+    const auto text_speed = std::ranges::find(
+        load.packs, std::string{"0400486024DEC000-text-speed.json"}, &FileSys::PatchPack::source);
+    REQUIRE(text_speed != load.packs.end());
+    CHECK(text_speed->title_id == OcarinaTitleId);
+    CHECK(text_speed->module == "main");
+    CHECK(text_speed->build_id == OcarinaBuildIdHex);
+    std::vector<std::string> names;
+    for (const auto& patch : text_speed->patches) {
+        names.push_back(patch.name);
+    }
+    CHECK(names == std::vector<std::string>{"Text Speed Instant (built-in)",
+                                            "Text Speed 4x (built-in)", "Text Speed 2x (built-in)"});
+}
+
+TEST_CASE("The shipped patch packs are compiled in as well", "[patch_manager]") {
+    // The folder CMake copied next to this program, and the same files compiled into it.
+    const auto directory = FileSys::ShippedPatchPackDirectory();
+    const auto folder = FileSys::LoadPatchPacks(directory);
+    for (const auto& error : folder.errors) {
+        FAIL_CHECK(error);
+    }
+    REQUIRE_FALSE(folder.packs.empty());
+    CHECK(FileSys::EmbeddedPatchPacks().size() == folder.packs.size());
+
+    // A program with no folder beside it (Android, guarana-cli inside a macOS bundle), or one
+    // that cannot find its own path, reads the compiled-in copies: the same packs, so every case
+    // here that uses the shipped packs holds for them as well.
+    const auto missing = directory / "not-here";
+    REQUIRE_FALSE(std::filesystem::exists(missing));
+    for (const auto& no_folder : {missing, std::filesystem::path{}}) {
+        INFO("folder: " << Common::FS::PathToUTF8String(no_folder));
+        const auto load = FileSys::LoadPatchPacks(no_folder, FileSys::EmbeddedPatchPacks());
+        for (const auto& error : load.errors) {
+            FAIL_CHECK(error);
+        }
+        REQUIRE(load.packs.size() == folder.packs.size());
+        for (size_t i = 0; i < load.packs.size(); ++i) {
+            const auto& compiled = load.packs[i];
+            const auto& shipped = folder.packs[i];
+            CAPTURE(shipped.source);
+            CHECK(compiled.compiled_in);
+            CHECK_FALSE(shipped.compiled_in);
+            CHECK(compiled.source == shipped.source);
+            CHECK(compiled.title_id == shipped.title_id);
+            CHECK(compiled.module == shipped.module);
+            CHECK(compiled.build_id == shipped.build_id);
+            CHECK(compiled.patches == shipped.patches);
+        }
+    }
+
+    // With the folder there, its files are the ones read, and no pack comes twice.
+    const auto both = FileSys::LoadPatchPacks(directory, FileSys::EmbeddedPatchPacks());
+    CHECK(both.errors.empty());
+    REQUIRE(both.packs.size() == folder.packs.size());
+    for (const auto& pack : both.packs) {
+        CHECK_FALSE(pack.compiled_in);
+    }
+}
+
+TEST_CASE("A pack in the folder replaces the compiled-in copy of its name", "[patch_manager]") {
+    const auto compiled_text = TestPackJson().dump();
+    const std::array compiled_in{
+        FileSys::EmbeddedPatchPack{"0100000000010000-test.json", TextBytes(compiled_text)}};
+    const TestPackFolder folder;
+
+    SECTION("An empty folder leaves the compiled-in copy") {
+        const auto load = FileSys::LoadPatchPacks(folder.root, compiled_in);
+        CHECK(load.errors.empty());
+        REQUIRE(load.packs.size() == 1);
+        CHECK(load.packs[0].compiled_in);
+        CHECK(load.packs[0].source == "0100000000010000-test.json");
+        CHECK(load.packs[0].patches.size() == 3);
+    }
+    SECTION("A copy edited in the folder is the one used") {
+        auto edited = TestPackJson();
+        const std::string description =
+            "The copy in the folder, edited after the build, is the one used.";
+        edited["patches"][0]["description"] = description;
+        folder.Write("0100000000010000-test.json", edited.dump());
+        const auto load = FileSys::LoadPatchPacks(folder.root, compiled_in);
+        CHECK(load.errors.empty());
+        REQUIRE(load.packs.size() == 1);
+        CHECK_FALSE(load.packs[0].compiled_in);
+        CHECK(load.packs[0].patches[0].description == description);
+    }
+    SECTION("A copy in the folder that cannot be used gives way to the compiled-in one") {
+        folder.Write("0100000000010000-test.json", "{");
+        const auto load = FileSys::LoadPatchPacks(folder.root, compiled_in);
+        REQUIRE(load.packs.size() == 1);
+        CHECK(load.packs[0].compiled_in);
+        CHECK(load.errors ==
+              std::vector<std::string>{
+                  "0100000000010000-test.json: is not valid JSON",
+                  "0100000000010000-test.json: the copy compiled into the program is used instead"});
+    }
+    SECTION("Packs of other names join the compiled-in ones in file name order") {
+        folder.Write("0100000000010000-a.json", compiled_text);
+        folder.Write("0100000000010000-z.json", compiled_text);
+        folder.Write("notes.txt", "Not a pack.");
+        const auto load = FileSys::LoadPatchPacks(folder.root, compiled_in);
+        CHECK(load.errors.empty());
+        std::vector<std::pair<std::string, bool>> order;
+        for (const auto& pack : load.packs) {
+            order.emplace_back(pack.source, pack.compiled_in);
+        }
+        CHECK(order == std::vector<std::pair<std::string, bool>>{
+                           {"0100000000010000-a.json", false},
+                           {"0100000000010000-test.json", true},
+                           {"0100000000010000-z.json", false},
+                       });
+    }
+}
+
+TEST_CASE("Patch packs are read field by field", "[patch_manager]") {
+    auto json = TestPackJson();
+    // The 64-digit form of the build id, in lower case, names the same build.
+    json["build_id"] = "e0f3ccfaf50065ae4ea01eb5aeb13b1a45da3348000000000000000000000000";
+    const auto pack = ParseTestPack(json);
+    CHECK(pack.source == "0100000000010000-test.json");
+    CHECK(pack.title_id == OtherTitleId);
+    CHECK(pack.module == "main");
+    CHECK(pack.build_id == OcarinaBuildIdHex);
+    REQUIRE(pack.patches.size() == 3);
+
+    const auto& fix = pack.patches[0];
+    CHECK(fix.name == PackFix);
+    CHECK(fix.level == FileSys::BuiltinPatchLevel::Recommended);
+    CHECK(fix.replaces == PackLite);
+    CHECK_FALSE(fix.off_by_default);
+    CHECK(fix.group.empty());
+    CHECK(fix.state_offset == PackStateOffset);
+    CHECK(fix.state_size == 0x10);
+    REQUIRE(fix.records.size() == 2);
+    CHECK(fix.records[0].offset == PackSiteOffset);
+    CHECK(fix.records[0].bytes == std::vector<u8>{0x10, 0x00, 0x00, 0x14});
+    CHECK_FALSE(fix.records[0].cave);
+    CHECK(fix.records[0].original_size == 8);
+    CHECK(Common::HexToString(fix.records[0].original_sha256) ==
+          Sha256Of({PackSiteWord, PackNextWord}));
+    CHECK(fix.records[1].offset == PackCaveOffset);
+    CHECK(fix.records[1].cave);
+    CHECK(fix.records[1].bytes ==
+          std::vector<u8>{0xC0, 0x03, 0x5F, 0xD6, 0x1F, 0x20, 0x03, 0xD5});
+
+    const auto& lite = pack.patches[1];
+    CHECK(lite.level == FileSys::BuiltinPatchLevel::Standard);
+    CHECK(lite.state_size == 0);
+    // Without original_size a record checks the bytes it writes.
+    CHECK(lite.records[0].original_size == 4);
+
+    const auto& option = pack.patches[2];
+    CHECK(option.off_by_default);
+    CHECK(option.group == "Options");
+    CHECK(option.level == FileSys::BuiltinPatchLevel::Experimental);
+}
+
+TEST_CASE("Patch packs are read strictly", "[patch_manager]") {
+    auto json = TestPackJson();
+    // The field the error must name, and the text to read when it is not json's.
+    std::string field;
+    std::string text;
+    SECTION("A field the format does not have") {
+        json["patches"][0]["off_by_defualt"] = true;
+        field = "patches[0].off_by_defualt";
+    }
+    SECTION("Another document type") {
+        json["document_type"] = "npln_patch_catalog";
+        field = "document_type";
+    }
+    SECTION("A newer schema") {
+        json["schema_version"] = 2;
+        field = "schema_version";
+    }
+    SECTION("A title id that is not 16 hex digits") {
+        json["title_id"] = "010000000001000";
+        field = "title_id";
+    }
+    SECTION("A module that is not an executable") {
+        json["module"] = "main.npdm";
+        field = "module";
+    }
+    SECTION("A build id of zeros") {
+        json["build_id"] = "0000";
+        field = "build_id";
+    }
+    SECTION("Offsets that count the NSO header") {
+        json["offset_basis"] = "nso_header_included";
+        field = "offset_basis";
+    }
+    SECTION("A comment that is not text") {
+        json["comment"] = 5;
+        field = "comment";
+    }
+    SECTION("A name without the built-in mark") {
+        json["patches"][0]["name"] = "Other Fix";
+        field = "patches[0].name";
+    }
+    SECTION("A name that reads as the key of a checked option") {
+        json["patches"][0]["name"] = "+Other Fix (built-in)";
+        field = "patches[0].name";
+    }
+    SECTION("Two patches of one name") {
+        json["patches"][2]["name"] = "Other Fix (built-in)";
+        field = "patches[2].name";
+    }
+    SECTION("A short description") {
+        json["patches"][0]["description"] = "Fixes it.";
+        field = "patches[0].description";
+    }
+    SECTION("A description without a full stop") {
+        json["patches"][1]["description"] =
+            "The smaller fix the made-up game gets while the whole one cannot apply";
+        field = "patches[1].description";
+    }
+    SECTION("An option off until checked that is recommended") {
+        json["patches"][2]["level"] = "recommended";
+        field = "patches[2].level";
+    }
+    SECTION("A level that does not exist") {
+        json["patches"][0]["level"] = "required";
+        field = "patches[0].level";
+    }
+    SECTION("A replaced patch that comes before the one that contains it") {
+        json["patches"][1]["replaces"] = "Other Fix (built-in)";
+        field = "patches[1].replaces";
+    }
+    SECTION("Bytes that are not hex") {
+        json["patches"][0]["records"][0]["bytes"] = "1000001G";
+        field = "patches[0].records[0].bytes";
+    }
+    SECTION("An odd number of hex digits") {
+        json["patches"][0]["records"][0]["bytes"] = "1000001";
+        field = "patches[0].records[0].bytes";
+    }
+    SECTION("A space inside a byte") {
+        json["patches"][0]["records"][0]["bytes"] = "1 0000014";
+        field = "patches[0].records[0].bytes";
+    }
+    SECTION("A write over the game's code that checks nothing") {
+        static_cast<void>(json["patches"][1]["records"][0].erase(std::string{"original_sha256"}));
+        field = "patches[1].records[0].original_sha256";
+    }
+    SECTION("A hash of another length") {
+        json["patches"][1]["records"][0]["original_sha256"] = "ABCD";
+        field = "patches[1].records[0].original_sha256";
+    }
+    SECTION("An original shorter than the bytes written") {
+        json["patches"][0]["records"][0]["original_size"] = "0x2";
+        field = "patches[0].records[0].original_size";
+    }
+    SECTION("A cave with a hash") {
+        json["patches"][0]["records"][1]["original_sha256"] = Sha256Of({0});
+        field = "patches[0].records[1]";
+    }
+    SECTION("An offset without 0x") {
+        json["patches"][0]["records"][0]["offset"] = "80";
+        field = "patches[0].records[0].offset";
+    }
+    SECTION("A record past 512 MiB into the module") {
+        json["patches"][0]["records"][0]["offset"] = "0x1FFFFFFC";
+        field = "patches[0].records[0].offset";
+    }
+    SECTION("An empty state block") {
+        json["patches"][0]["state"]["size"] = "0x0";
+        field = "patches[0].state";
+    }
+    SECTION("A patch without records") {
+        json["patches"][2]["records"] = nlohmann::json::array();
+        field = "patches[2].records";
+    }
+    SECTION("A key twice in one object") {
+        text = json.dump();
+        const auto module_pos = text.find("\"module\":\"main\"");
+        REQUIRE(module_pos != std::string::npos);
+        text.insert(module_pos, "\"module\":\"sdk\",");
+        field = "has the key \"module\" twice";
+    }
+    SECTION("Not JSON") {
+        text = "{";
+        field = "is not valid JSON";
+    }
+    SECTION("Larger than a pack may be") {
+        text = std::string(1024 * 1024 + 1, ' ');
+        field = "is 1048577 bytes";
+    }
+    REQUIRE_FALSE(field.empty());
+    std::vector<std::string> errors;
+    const auto pack =
+        FileSys::ParsePatchPack(text.empty() ? json.dump() : text, "test.json", errors);
+    CAPTURE(errors);
+    CHECK_FALSE(pack.has_value());
+    const auto prefix = fmt::format("test.json: {}", field);
+    CHECK(std::ranges::any_of(errors,
+                              [&prefix](const std::string& error) { return error.starts_with(prefix); }));
+}
+
+TEST_CASE("A patch pack gives a game built-ins without any C++", "[patch_manager]") {
+    using Kind = FileSys::BuiltinPatchRange::Kind;
+    using Result = FileSys::BuiltinPatchResult;
+    struct Restore {
+        ~Restore() {
+            FileSys::UsePatchPacksForTesting(std::nullopt);
+            Settings::values.disabled_addons.erase(OtherTitleId);
+        }
+    } restore;
+    PatchManagerTestContext context;
+    FileSys::UsePatchPacksForTesting(std::vector{ParseTestPack(TestPackJson())});
+    const auto manager = context.Manager(OtherTitleId);
+    const auto listed = [&](std::string_view name) {
+        const auto patches = manager.GetPatches();
+        const auto it = std::ranges::find(patches, name, &FileSys::Patch::name);
+        REQUIRE(it != patches.end());
+        return *it;
+    };
+    constexpr size_t Header = sizeof(Loader::NSOHeader);
+
+    SECTION("It reaches PatchNSO and is listed as a built-in") {
+        CHECK(manager.HasNSOPatch(OcarinaBuildId, "main"));
+        CHECK_FALSE(manager.HasNSOPatch(OcarinaBuildId, "sdk"));
+        const auto fix = listed(PackFix);
+        CHECK(fix.builtin);
+        CHECK(fix.enabled);
+        CHECK(fix.version == FileSys::BUILTIN_PATCH_LABEL);
+        CHECK(fix.level == FileSys::BuiltinPatchLevel::Recommended);
+        CHECK(fix.description.starts_with("Fixes the made-up game"));
+        CHECK(listed(PackLite).replaced_by == PackFix);
+        const auto option = listed(PackOption);
+        CHECK_FALSE(option.enabled);
+        CHECK(option.off_by_default);
+        // Checked, an option that is off by default is stored as its enabled key.
+        CHECK(FileSys::StoredDisabledAddons(OtherTitleId, {}) ==
+              std::vector<std::string>{FileSys::EnabledAddonKey(PackOption)});
+        // Ocarina's list does not get another game's patches.
+        const auto ocarina = context.Manager().GetPatches();
+        CHECK(std::ranges::find(ocarina, PackFix, &FileSys::Patch::name) == ocarina.end());
+    }
+
+    SECTION("It applies after the same checks as a built-in") {
+        auto nso = MakePackMain();
+        auto patched = manager.PatchNSO(nso, "main");
+        CHECK(WordAt(patched, Header + PackSiteOffset) == PackFixWord);
+        // The record writes 4 bytes and checks 8: the next word stays.
+        CHECK(WordAt(patched, Header + PackSiteOffset + 4) == PackNextWord);
+        CHECK(Common::HexToString(std::span{patched}.subspan(Header + PackCaveOffset, 8)) ==
+              "C0035FD61F2003D5");
+        CHECK(WordAt(patched, Header + PackOptionOffset) == PackOptionWord);
+        CHECK(listed(PackFix).last_result == Result::Applied);
+        CHECK(listed(PackLite).last_result == Result::Replaced);
+        CHECK(listed(PackOption).last_result == Result::Disabled);
+
+        // Checked, the option applies too.
+        Settings::values.disabled_addons[OtherTitleId] = {FileSys::EnabledAddonKey(PackOption)};
+        patched = manager.PatchNSO(nso, "main");
+        CHECK(WordAt(patched, Header + PackOptionOffset) == PackOptionNewWord);
+        CHECK(listed(PackOption).last_result == Result::Applied);
+
+        // A byte the fix checks but does not write differs: the whole fix is skipped, cave
+        // included, and the lighter fix it contains applies instead.
+        Settings::values.disabled_addons.erase(OtherTitleId);
+        nso[Header + PackSiteOffset + 5] ^= 1;
+        patched = manager.PatchNSO(nso, "main");
+        CHECK(WordAt(patched, Header + PackSiteOffset) == NopInstruction);
+        CHECK(WordAt(patched, Header + PackCaveOffset) == 0);
+        CHECK(listed(PackFix).last_result == Result::UnexpectedCode);
+        CHECK(listed(PackLite).last_result == Result::Applied);
+    }
+
+    SECTION("Another build of the game") {
+        auto other = OcarinaBuildId;
+        other[0] ^= 1;
+        const auto nso = MakePackMain(other);
+        CHECK(manager.PatchNSO(nso, "main") == nso);
+        CHECK(listed(PackFix).last_result == Result::WrongBuild);
+        CHECK(listed(PackLite).last_result == Result::WrongBuild);
+    }
+
+    SECTION("Its ranges are in the overlap check") {
+        const auto ranges = FileSys::BuiltinPatchRanges();
+        const auto has = [&](std::string_view patch, Kind kind, size_t offset, size_t size) {
+            return std::ranges::any_of(ranges, [&](const FileSys::BuiltinPatchRange& range) {
+                return range.patch == patch && range.kind == kind && range.offset == offset &&
+                       range.size == size && range.title_id == OtherTitleId &&
+                       range.module == "main" && range.build_id == OcarinaBuildIdHex;
+            });
+        };
+        // The site's range is what the record checks, 8 bytes, not the 4 it writes.
+        CHECK(has(PackFix, Kind::Code, PackSiteOffset, 8));
+        CHECK(has(PackFix, Kind::CodeCave, PackCaveOffset, 8));
+        CHECK(has(PackFix, Kind::State, PackStateOffset, 0x10));
+        // The fix and the lighter one share their site because one contains the other.
+        CHECK(FileSys::FindBuiltinPatchOverlaps(ranges).empty());
+    }
+
+    SECTION("A pack that reuses a built-in's name is left out") {
+        auto clashing = TestPackJson();
+        clashing["title_id"] = "0400486024DEC000";
+        clashing["patches"][1]["name"] = std::string{MaxResolution};
+        clashing["patches"][0]["replaces"] = std::string{MaxResolution};
+        FileSys::UsePatchPacksForTesting(std::vector{ParseTestPack(clashing)});
+        const auto errors = FileSys::PatchPackErrors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].find(MaxResolution) != std::string::npos);
+        const auto patches = context.Manager().GetPatches();
+        CHECK(std::ranges::count(patches, MaxResolution, &FileSys::Patch::name) == 1);
+        CHECK(std::ranges::find(patches, PackFix, &FileSys::Patch::name) == patches.end());
     }
 }

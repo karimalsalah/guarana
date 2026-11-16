@@ -709,6 +709,12 @@ jobs:
           export ARCH="$arch"
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses
           cp build/release/bin/nx2_switches.txt AppDir/usr/bin/
+          # The patch packs go next to the programs (FileSys::ShippedPatchPackDirectory); a tag
+          # from before them has none.
+          if [ -d dist/patch-packs ]; then
+            cp -r build/release/bin/patch-packs AppDir/usr/bin/
+            ls AppDir/usr/bin/patch-packs/*.json
+          fi
           # The emulator loads fsr4-vk from <exe dir>/../lib (FfxRuntime::PortLibrary).
           fsr4=amd_fidelityfx_upscaler_vk.so
           fsr4_library=()
@@ -767,6 +773,11 @@ jobs:
           # Windows ARM64 links Qt statically (Configure Windows): there are no Qt DLLs to deploy.
           if ('${{ matrix.platform }}' -ne 'windows-arm64') {
             windeployqt --release --no-translations "build/release/bin/$gui"
+          }
+          # The patch packs ship next to the programs; a tag from before them has none.
+          if ((Test-Path dist/patch-packs) -and
+              -not (Get-ChildItem build/release/bin/patch-packs -Filter *.json -ErrorAction SilentlyContinue)) {
+            throw 'build/release/bin/patch-packs holds no patch pack'
           }
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols

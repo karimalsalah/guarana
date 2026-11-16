@@ -103,7 +103,6 @@ public:
 
     struct ShownSummary {
         u32 samples{};
-        double p5_ms{};
         double p50_ms{};
         double p95_ms{};
         double even_percent{100.0};

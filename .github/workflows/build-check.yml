@@ -365,6 +365,11 @@ jobs:
               Where-Object { $_.Name -notmatch '(^|_)tests?\.exe$|_probe\.exe$|fuzzer|\.(pdb|ilk|lib|exp)$' } |
               Copy-Item -Destination $out
           Get-ChildItem build/bin -Directory | Copy-Item -Destination $out -Recurse
+          # The patch packs ship next to the programs (FileSys::ShippedPatchPackDirectory).
+          if ((Test-Path dist/patch-packs) -and
+              -not (Get-ChildItem (Join-Path $out 'patch-packs') -Filter *.json -ErrorAction SilentlyContinue)) {
+            throw 'The test build holds no patch pack'
+          }
           windeployqt --release --no-translations (Join-Path $out $gui)
 
       # The folder itself: GitHub zips an artifact on download, and uploading a zip gave a zip

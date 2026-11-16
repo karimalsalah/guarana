@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::{self, AppState};
 use crate::util::{self, CmdResult, Context};
-use crate::{notify, paths, system, taskbar};
+use crate::{appdir, notify, paths, system, taskbar};
 
 pub const EVENT: &str = "warm://progress";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -198,7 +198,9 @@ fn file_contains(path: &Path, needle: &[u8]) -> bool {
 
 fn cli_exe(app: &AppHandle) -> CmdResult<PathBuf> {
     let current = state::current_version(&app.state::<AppState>().load()).ok_or("Guarana is not installed yet")?;
-    let exe = paths::cli_exe_in(Path::new(&current.path))
+    // From the program folder, as the emulator (`appdir.rs`); a switch an update left waiting
+    // happens here when nothing runs.
+    let exe = paths::cli_exe_in(&appdir::run_dir(&current, Duration::ZERO).dir)
         .ok_or_else(|| format!("This Guarana build has no {}", paths::CLI_EXE))?;
     if !supports_warm_up(&exe) {
         return Err(NO_WARM_UP.into());

@@ -37,7 +37,7 @@ This section is the fork's. Everything under "Upstream Lichii guidance" is upstr
 | `scripts` | One-command build and test scripts for Windows and Linux (see "Build") |
 | `tools/windows`, `tools/ci` | CI toolchain installers; CI helper scripts such as `changelog-section.sh` |
 | `docs` | `switches.md`, `lifecycle.md` (what is stored and when it is flushed), `LANES.md`, `nx2/debug-mcp.md`, `Build.md`, `Coding.md`. `CI.md` describes Eglantine's pipeline, not ours; its PGO retraining steps still apply |
-| `dist` | `nx2_switches.txt` (shipped next to the executable), icons, desktop files |
+| `dist` | `nx2_switches.txt` (shipped next to the executable), `patch-packs/` (built-in patches as data, shipped next to the executable: [docs/patch-packs.md](docs/patch-packs.md)), icons, desktop files |
 | `.github` | Workflows, issue forms, `labels.yml` |
 | `*.profdata` | PGO profiles: `lichii-windows.profdata` (clang-cl), `eglantine.profdata` (Linux clang) |
 

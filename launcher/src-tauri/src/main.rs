@@ -7,6 +7,7 @@
 #[cfg(not(windows))]
 compile_error!("Guarana Launcher is a Windows application");
 
+mod appdir;
 mod args;
 mod autopilot;
 mod boot;

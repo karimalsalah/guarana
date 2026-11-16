@@ -71,6 +71,7 @@ Work taken from other forks of Lichii. Their authors as recorded in git; each fo
 | Fork | Commits | Author | Change |
 |---|---|---|---|
 | [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [58f55cb7d9](https://github.com/Frizti/Fritchii/commit/58f55cb7d9ee912931ce060ea8683694796e6ac3), [8627ff4233](https://github.com/Frizti/Fritchii/commit/8627ff4233323977fd5ead274867e4dd2ce66d5c) | [Frizti](https://github.com/Frizti) | The performance overlay's RAM and VRAM readouts: what the emulator holds and the room left, amber under 2 GB of RAM or 1 GB of video memory (hand port onto our overlay; the room of an integrated GPU's shared memory is also bounded by the free RAM) |
+| [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [c99790b878](https://github.com/Frizti/Fritchii/commit/c99790b8786cb6a5abc6a564a7115e2b8d15d937) | [Frizti](https://github.com/Frizti) | `EDEN_NX2_IR_POOL_CAP_MIB`: the shader recompiler's object pools free memory above a cap instead of keeping their largest shader's worth |
 | [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [a962f20533](https://github.com/Frizti/Fritchii/commit/a962f20533a1733375cadd0ec59ecf6f82d8ddaf) | [Frizti](https://github.com/Frizti) | `EDEN_NX2_ASYNC_DISCARD=2`: native draws with an unbuilt pipeline are skipped only into render targets cleared every frame; the others wait (hand port onto our pending-draw policy and texture cache) |
 
 ## Artwork

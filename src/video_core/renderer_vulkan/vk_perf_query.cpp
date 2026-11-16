@@ -301,24 +301,13 @@ bool PerfQuery::Sampling() const {
 
 void PerfQuery::Begin(vk::CommandBuffer cmdbuf) {
     std::scoped_lock lock{mutex};
-    ++begin_calls;
-    if (!supported) {
-        ++begin_reject_unsupported;
-        return;
-    }
-    if (frames_left == 0) {
-        ++begin_reject_noframes;
-        return;
-    }
-    if (scope_open) {
-        ++begin_reject_scopeopen;
+    if (!supported || frames_left == 0 || scope_open) {
         return;
     }
     // A restarted window may reach a slot whose earlier query is still pending on the
     // GPU; resetting it would be invalid, so that submission is simply not sampled.
     for (const PendingSlot& slot : pending_slots) {
         if (slot.index == next_slot) {
-            ++begin_reject_collision;
             return;
         }
     }
@@ -332,9 +321,7 @@ void PerfQuery::Begin(vk::CommandBuffer cmdbuf) {
 
 void PerfQuery::End(vk::CommandBuffer cmdbuf, u64 tick) {
     std::scoped_lock lock{mutex};
-    ++end_calls;
     if (!scope_open) {
-        ++end_reject_noscope;
         return;
     }
     cmdbuf.EndQuery(*pool, next_slot);

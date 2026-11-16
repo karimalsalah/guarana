@@ -417,6 +417,12 @@ if (APPLE)
     target_sources(lichii PRIVATE ${_icons})
 
     set_target_properties(lichii PROPERTIES MACOSX_BUNDLE TRUE)
+    # The bundle keeps the patch packs in Contents/Resources (FileSys::ShippedPatchPackDirectory).
+    add_custom_command(TARGET lichii POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_BUNDLE_CONTENT_DIR:lichii>/Resources/patch-packs"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/dist/patch-packs"
+            "$<TARGET_BUNDLE_CONTENT_DIR:lichii>/Resources/patch-packs"
+        VERBATIM)
     set_target_properties(lichii PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist)
 
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".dylib")

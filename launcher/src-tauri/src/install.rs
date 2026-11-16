@@ -1,5 +1,6 @@
 //! Releases, updates and installs. Versions live side by side in
-//! `%LOCALAPPDATA%\Guarana\versions\<version>\`; `current.json` names the one that runs.
+//! `%LOCALAPPDATA%\Guarana\versions\<version>\`; `current.json` names the one that runs, and it
+//! runs from `%LOCALAPPDATA%\Guarana\app\`, the same path for every version (`appdir.rs`).
 //!
 //! A release asset is `guarana-<tag without v | nightly>-windows-x86_64-pgo.zip` (the plain
 //! `-windows-x86_64.zip` when there is no PGO build), checked against the release's
@@ -19,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::state::{self, AppState};
 use crate::types::{InstallResult, InstalledVersion, LauncherState, Progress, UpdateInfo};
 use crate::util::{self, CmdResult, Context};
-use crate::{notify, paths, taskbar};
+use crate::{appdir, notify, paths, taskbar};
 
 const API: &str = "https://api.github.com/repos/karimalsalah/guarana";
 const DOWNLOAD_PREFIX: &str = "https://github.com/karimalsalah/guarana/releases/download/";
@@ -508,6 +509,7 @@ fn install_zip(app: &AppHandle, zip: &Path, label: &str, channel: Channel, verif
     })?;
     state::write_current(&entry)?;
     log::info!("Installed Guarana {folder} ({}) to {}", channel.as_str(), exe_dir.display());
+    appdir::switch_to(&entry);
     emit(app, "done", 1, 1, Some(format!("Guarana {folder} installed")));
     Ok(InstallResult {
         version: folder,
@@ -596,7 +598,18 @@ pub async fn ensure_bundled(app: &AppHandle) {
     }
     *checked = true;
     cleanup_leftovers();
-    if !st.load().installed.is_empty() {
+    // Before anything can start from the program folder: finish or undo a switch a crash cut
+    // short, then move an install from before the folder existed into it.
+    let persisted = st.load();
+    let current = state::current_version(&persisted);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        appdir::recover();
+        if let Some(v) = current {
+            appdir::switch_to(&v);
+        }
+    })
+    .await;
+    if !persisted.installed.is_empty() {
         return;
     }
     let Some(b) = bundled(app) else {
@@ -637,6 +650,7 @@ pub fn set_current(app: &AppHandle, version: &str) -> CmdResult<LauncherState> {
         .ok_or_else(|| format!("Guarana {version} is not installed"))?;
     state::write_current(v)?;
     log::info!("Current version is now {version}");
+    appdir::switch_to(v);
     Ok(state::snapshot(&persisted))
 }
 

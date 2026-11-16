@@ -1,7 +1,7 @@
 //! Every folder the launcher reads or writes. All per-user, nothing needs admin rights.
 //!
-//! - `%LOCALAPPDATA%\Guarana`: the launcher's own folder (`versions\<version>\`, `current.json`,
-//!   `launcher-state.json`, `launcher.log`, `downloads\`, `reports\`).
+//! - `%LOCALAPPDATA%\Guarana`: the launcher's own folder (`versions\<version>\`, `app\`,
+//!   `current.json`, `launcher-state.json`, `launcher.log`, `downloads\`, `reports\`).
 //! - `%APPDATA%\guarana`: the emulator's user folder (keys, config, caches, logs). The launcher
 //!   never moves it; it writes there only on Import and Apply profile, and deletes only stale
 //!   shader-cache temp files when the user asks the doctor to. The emulator copies `%APPDATA%\lichii`
@@ -173,6 +173,14 @@ pub fn is_within(path: &Path, base: &Path) -> bool {
 /// The launcher's small caches (the community best-settings file and its ETag).
 pub fn cache_dir() -> PathBuf {
     install_dir().join("cache")
+}
+
+/// The folder every version runs from (`appdir.rs`). Windows keys settings by this path: it never
+/// changes.
+pub const APP_DIR: &str = "app";
+
+pub fn app_dir() -> PathBuf {
+    install_dir().join(APP_DIR)
 }
 
 #[cfg(test)]

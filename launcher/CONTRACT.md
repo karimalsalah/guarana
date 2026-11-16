@@ -22,8 +22,8 @@ Hard rules (legal and trust):
 | `list_profiles` | – | `Profile[]` (with `recommended` set from `detect_system`) |
 | `get_state` | – | `LauncherState` |
 | `check_updates` | `{ channel?: "stable" \| "nightly" }` (default: the installed version's channel) | `UpdateInfo` |
-| `install_version` | `{ version: string, channel: "stable" \| "nightly" }` | `InstallResult`; streams `install://progress` events |
-| `set_current_version` | `{ version }` | `LauncherState` (rollback = set an older installed version) |
+| `install_version` | `{ version: string, channel: "stable" \| "nightly" }` | `InstallResult`; streams `install://progress` events. The version becomes current and the program folder switches to it (see "Program folder"); `path` is its own folder in `versions\` |
+| `set_current_version` | `{ version }` | `LauncherState` (rollback = set an older installed version). The program folder switches to it now, or at the next Play while Guarana or a warm-up runs (see "Program folder") |
 | `locate_files` | `{ scope: "quick" \| "deep", roots?: string[] }` | `Found`; streams `locate://progress`. A deep search with no `roots` covers every fixed drive |
 | `import_keys` | `{ path }` | `ImportResult` |
 | `add_game_folder` | `{ path }` | `Game[]` |
@@ -32,12 +32,12 @@ Hard rules (legal and trust):
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
-| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `<current>\guarana.exe --launcher-session -f -g <file>`, or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
+| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `%LOCALAPPDATA%\Guarana\app\guarana.exe --launcher-session -f -g <file>` (see "Program folder"), or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
 | `list_controllers` | – | `Controller[]` (connected pads); `controller://changed` carries the new `Controller[]` whenever one connects, disconnects or its battery moves; with `EDEN_NX2_LAUNCHER_PAD_IDLE=1` it is not refreshed while a game runs (see "Pads and the log while a game runs") |
-| `warm_shaders` | `{ title_id }` | `WarmResult`; streams `warm://progress` (`WarmProgress`). Runs `<current>\guarana-cli.exe --warm-pipelines <title_id> -c %APPDATA%\guarana\config\qt-config.ini` (`eden-cli.exe` in a build from before the rename) hidden at below-normal priority ("Prepare shaders" on a game card). Refused while `guarana.exe` (or `lichii.exe`) runs. The launcher also runs it by itself for every title with a shader cache after a GPU driver change (`auto: true` in the events) |
+| `warm_shaders` | `{ title_id }` | `WarmResult`; streams `warm://progress` (`WarmProgress`). Runs `%LOCALAPPDATA%\Guarana\app\guarana-cli.exe --warm-pipelines <title_id> -c %APPDATA%\guarana\config\qt-config.ini` (`eden-cli.exe` in a build from before the rename) hidden at below-normal priority ("Prepare shaders" on a game card). Refused while `guarana.exe` (or `lichii.exe`) runs. The launcher also runs it by itself for every title with a shader cache after a GPU driver change (`auto: true` in the events) |
 
 | `stop_warm_shaders` | – | `StopResult`. Ends the running warm-up (the process is ended; guarana-cli stops politely only on Ctrl+C), waits up to 15 s and reports. A stopped automatic run is not resumed and its driver counts as done. The pending `warm_shaders` call resolves with status `stopped` |
 | `pick_folder` | `{ title?: string }` | `string \| null` (Windows folder picker; `null` when cancelled) |
@@ -169,6 +169,53 @@ see "Boot progress and the hand-over"), `game://exited`
 `launch://request` (no payload: a `LaunchRequest` waits for `take_launch_request`),
 `booster://changed` (`BoosterStatus`, after the booster applies for a session, restores it, or the level changes).
 
+## Program folder
+
+Every version runs from one path, `%LOCALAPPDATA%\Guarana\app\guarana.exe` (`appdir.rs`). Windows
+keys several settings by a program's full path: the microphone permission (issue #199: the first
+open from a new path asks "Allow Guarana to access your microphone?" and blocks until answered),
+the GPU choice in Settings > System > Display > Graphics, Windows Firewall rules (network play)
+and Game Bar's game detection. Each version used to run from its own `versions\<version>\` folder,
+so after every update Windows saw a new program and all of these started over.
+
+- `versions\<version>\` stays the installed copy of each version, the one rollback goes back to,
+  and `current.json` names the current one. `installed[].path` and `current.json`'s `path` are
+  these folders, as before.
+- `app\` mirrors the current version's emulator folder (the one with `guarana.exe`) in a real
+  folder. `guarana.exe` and `guarana-cli.exe` (`lichii.exe` and `eden-cli.exe` in builds from
+  before the rename) are copies, about 100 MB; every other file is a hard link, which takes no
+  space, or a copy where the volume has no hard links (a version is about 190 MB in all).
+  `app-version.json` in it records the version, channel, `installed_at` and source folder. It is
+  written last; a folder whose record names another install (a reinstall of the same version has a
+  new `installed_at`) is switched before it is used.
+- A switch makes the new mirror in `.app-staging-<time>-<pid>\`, renames `app\` to
+  `.app-old-<time>-<pid>\` and the mirror to `app\`. When the second rename fails, the old folder
+  is renamed back. Each rename is tried 10 times, 200 ms apart, because a virus scanner can hold a
+  new file for a moment. So `app\` is never a half-made folder. The old folder is then deleted;
+  the installed copy keeps every file. At launcher start, a half-made mirror is deleted and an
+  `app\` a crash left aside between the two renames is put back.
+- When: after `install_version` and `set_current_version`; at launcher start, which also moves an
+  install from before the program folder into it; and at `launch_game` and `warm_shaders` when a
+  switch is waiting. Never while `guarana.exe`, `lichii.exe`, `guarana-cli.exe` or `eden-cli.exe`
+  runs, from any folder: the version is current at once and the next Play (or warm-up) switches.
+  `launch_game` waits up to 3 s for a warm-up it stopped to end.
+- When `launch_game` cannot switch (the switch failed, or the version folder has a `user` folder),
+  it starts the version from its own folder, as before: the launch timeline says "runs from the
+  version folder" and `launcher.log` says why. Windows may then ask for its permissions again for
+  that start.
+- `user\` (the emulator's portable mode) is never mirrored and never deleted. A version folder that
+  has one runs from that folder, where its data is. One made in `app\` moves into each new `app\`;
+  an old folder whose `user\` cannot move is left in place.
+- Not a junction or a symbolic link: Windows resolves those, so to the settings keyed by path the
+  process would still be `versions\<version>\guarana.exe`. The programs are not hard links either:
+  Windows keeps one image of a program file for all its names and can name a process after the
+  name that image was first loaded from, which is the version folder's when the program ran from
+  there before (every install from before this folder). A copy has only the `app\` name. A test
+  on a device confirms which path the settings record.
+- The first start from `app\` is a new path to Windows once: it asks for the microphone again, and
+  a GPU preference set for a `versions\` path has to be set again for `app\guarana.exe`. The
+  launcher copies neither. After that, updates and rollbacks keep them.
+
 ## Launcher session
 
 On Windows, games and shader warm-ups started by the launcher belong to an unnamed job owned
@@ -224,6 +271,7 @@ moment `launch_game` reached the backend):
     Launch timeline: Play pressed at +0.0 ms
     Launch timeline: install checked at +0.4 ms
     Launch timeline: settings ready at +31.0 ms
+    Launch timeline: runs from the version folder at +31.1 ms   (only when the program folder could not switch)
     Launch timeline: command built at +31.2 ms
     Launch timeline: Game Booster prepared at +60.8 ms        (only with the booster on)
     Launch timeline: process spawned (pid 1234) at +75.3 ms
@@ -482,7 +530,7 @@ type `number` or `word` (warn after a word, which is compared whole; info after 
 the emulator reads up to the blank; `EDEN_NX2_PIPELINE_STATS=C:\runs #2` is a folder, not a note), and,
 with the registry only, an `EDEN_NX2_*` name it does not list (info); `EDEN_NX2_*` variables kept
 for the user (`HKCU\Environment`) or the system (warn); a block in Custom mode without a saved
-profile this launcher knows, which nobody rewrites (warn); a portable install (`<version>\user`),
+profile this launcher knows, which nobody rewrites (warn); a portable install (`<version>\user` or `app\user`),
 whose files the launcher does not write (warn). `settings_file`: `use_disk_shader_cache` or
 `use_vulkan_driver_pipeline_cache` off in `qt-config.ini` (with `\default=false`) or in a game's
 `custom\<id>.ini` that does not follow the global value (warn); saved overrides that name a toggle

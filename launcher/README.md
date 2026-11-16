@@ -11,6 +11,11 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   the current emulator build (`src-tauri/resources/emulator.zip`), so the first run works offline.
 - **Keeps emulator versions side by side** in `%LOCALAPPDATA%\Guarana\versions\<version>\`;
   `current.json` names the one that runs, and an older one can be made current again (rollback).
+- **Runs every version from one path**, `%LOCALAPPDATA%\Guarana\app\guarana.exe`: the launcher
+  fills `app\` with copies of the current version's programs and hard links to its other files,
+  and swaps it whole with two renames, never while Guarana runs. Windows keeps the microphone permission, the GPU choice in Settings,
+  firewall rules and Game Bar's game detection by that path, so they survive updates and rollbacks
+  (see [CONTRACT.md](CONTRACT.md#program-folder)).
 - **Updates from GitHub releases**: the stable channel is the newest release, the nightly channel is
   the rolling `nightly` pre-release. It takes `guarana-<version>-windows-x86_64-pgo.zip` (or the
   plain `-windows-x86_64.zip`) and refuses to install it unless its SHA-256 matches the release's
@@ -63,7 +68,7 @@ It never downloads, bundles or uploads keys, firmware or games.
 
 | Folder | Holds |
 | --- | --- |
-| `%LOCALAPPDATA%\Guarana` | `versions\`, `current.json`, `launcher-state.json`, `launcher.log`, `booster-journal.json` (the Game Booster's undo record), `downloads\`, `reports\` |
+| `%LOCALAPPDATA%\Guarana` | `versions\`, `app\` (the current version, the folder it runs from; `app-version.json` says which), `current.json`, `launcher-state.json`, `launcher.log`, `booster-journal.json` (the Game Booster's undo record), `downloads\`, `reports\` |
 | `%APPDATA%\guarana` | The emulator's own user folder (keys, config, caches, logs), copied from `%APPDATA%\lichii` by the emulator on its first start. The launcher does not move it, and keeps using `lichii` until then or with an emulator from before the rename. |
 
 ## Windows integration
