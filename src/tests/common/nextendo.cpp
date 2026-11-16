@@ -6,14 +6,17 @@
 #include <ctime>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <random>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 
 #include "common/fs/path_util.h"
@@ -186,6 +189,7 @@ public:
             ++hits[request.path];
             authorization[request.path] = request.get_header_value("Authorization");
             forms[request.path] = request.params;
+            bodies[request.path] = request.body;
             auto& queue = replies[request.path];
             const Canned reply = queue.empty() ? Canned{404, "{}"} : queue.front();
             if (queue.size() > 1) {
@@ -239,6 +243,11 @@ public:
         return authorization[path];
     }
 
+    std::string Body(const std::string& path) {
+        std::scoped_lock lock{mutex};
+        return bodies[path];
+    }
+
     std::string Param(const std::string& path, const std::string& key) {
         std::scoped_lock lock{mutex};
         const auto& form = forms[path];
@@ -263,6 +272,7 @@ private:
     std::map<std::string, int> hits;
     std::map<std::string, std::string> authorization;
     std::map<std::string, httplib::Params> forms;
+    std::map<std::string, std::string> bodies;
 };
 
 constexpr const char* ClientId = "nxc_test";
@@ -455,6 +465,104 @@ TEST_CASE("Nextendo: sign-in takes a free port when the callback port is busy", 
     REQUIRE(result.online_status->reason == "discord_unlinked");
 }
 
+namespace {
+
+// Answers each authorize URL a sign-in opens with the next callback query, as the browser would.
+class FakeBrowser {
+public:
+    explicit FakeBrowser(std::vector<std::string> queries_) : queries{std::move(queries_)} {}
+
+    ~FakeBrowser() {
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+
+    std::function<void(const std::string&)> Opener() {
+        return [this](const std::string& url) {
+            const auto field = [&url](std::string_view key) {
+                const auto start = url.find(key) + key.size();
+                return url.substr(start, url.find('&', start) - start);
+            };
+            const std::string redirect = field("&redirect_uri=http%3A%2F%2F127.0.0.1%3A");
+            const int port = std::stoi(redirect.substr(0, redirect.find('%')));
+            const std::string query = queries.at(scopes.size());
+            scopes.push_back(field("&scope="));
+            threads.emplace_back([port, query, state = field("&state=")] {
+                httplib::Client client{"127.0.0.1", port};
+                void(client.Get("/callback?" + query + "&state=" + state));
+            });
+        };
+    }
+
+    // The scope each authorize URL asked for, percent-encoded.
+    std::vector<std::string> scopes;
+
+private:
+    std::vector<std::string> queries;
+    std::vector<std::thread> threads;
+};
+
+constexpr const char* FullScope = "identity%20game.matchmaking%20friends%20presence";
+constexpr const char* OnlineScope = "identity%20game.matchmaking";
+
+} // namespace
+
+TEST_CASE("Nextendo: a sign-in refused the social scopes signs in without them", "[common]") {
+    FakeNextendo fake;
+    fake.Answer(NexTokenPath, 200, NewGameToken);
+    SECTION("when the authorize step refuses them") {
+        fake.Answer(TokenPath, 200, NewAccessToken);
+        FakeBrowser browser{{"error=invalid_scope", "code=abc"}};
+        const auto result = Nextendo::SignIn(ClientId, browser.Opener(), {});
+        INFO(result.error);
+        REQUIRE(result.ok);
+        REQUIRE(browser.scopes == std::vector<std::string>{FullScope, OnlineScope});
+        REQUIRE(fake.Hits(TokenPath) == 1);
+    }
+    SECTION("when the token exchange refuses them") {
+        fake.Answer(TokenPath, 400,
+                    R"({"error":"invalid_request","error_description":"scope)"
+                    R"( friends is not allowed for this client"})");
+        fake.Answer(TokenPath, 200, NewAccessToken);
+        FakeBrowser browser{{"code=abc", "code=def"}};
+        const auto result = Nextendo::SignIn(ClientId, browser.Opener(), {});
+        INFO(result.error);
+        REQUIRE(result.ok);
+        REQUIRE(browser.scopes == std::vector<std::string>{FullScope, OnlineScope});
+        REQUIRE(fake.Hits(TokenPath) == 2);
+        REQUIRE(fake.Param(TokenPath, "code") == "def");
+    }
+
+    const auto account = Nextendo::LoadAccount();
+    REQUIRE(account->scope == Nextendo::OnlineScopes);
+    REQUIRE(account->social_unavailable);
+    REQUIRE_FALSE(Nextendo::HasSocialScopes(*account));
+    REQUIRE(account->nex_token == "nx2.new");
+    const int hits = fake.TotalHits();
+    REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::MissingScope);
+    REQUIRE(Nextendo::UpdatePresence(ClientId, 0x0100152000022000).status ==
+            Nextendo::SocialStatus::MissingScope);
+    REQUIRE(fake.TotalHits() == hits);
+
+    FakeBrowser again{{"code=ghi"}};
+    REQUIRE(Nextendo::SignIn(ClientId, again.Opener(), {}).ok);
+    REQUIRE(again.scopes == std::vector<std::string>{FullScope});
+    REQUIRE(Nextendo::HasSocialScopes(*Nextendo::LoadAccount()));
+    REQUIRE_FALSE(Nextendo::LoadAccount()->social_unavailable);
+}
+
+TEST_CASE("Nextendo: a declined sign-in is not asked again", "[common]") {
+    FakeNextendo fake;
+    FakeBrowser browser{
+        {"error=access_denied&error_description=The%20player%20declined%20the%20scopes"}};
+    const auto result = Nextendo::SignIn(ClientId, browser.Opener(), {});
+    REQUIRE_FALSE(result.ok);
+    REQUIRE(result.error == "access_denied: The player declined the scopes");
+    REQUIRE(browser.scopes == std::vector<std::string>{FullScope});
+    REQUIRE(fake.TotalHits() == 0);
+}
+
 TEST_CASE("Nextendo: the BAAS user id is the account id only in Animal Crossing", "[common]") {
     REQUIRE(Nextendo::ParseBaasNsa("0123456789abcDEF") == 0x0123456789ABCDEF);
     REQUIRE(Nextendo::ParseBaasNsa("123456789abcdef") == 0);
@@ -559,7 +667,230 @@ std::string CatalogPayload(s64 expires_at, std::string_view type = "game_catalog
         type, revision, Timestamp(expires_at - 86400), Timestamp(expires_at));
 }
 
+constexpr const char* FriendsPath = "/api/friends";
+constexpr const char* PresencePath = "/api/presence";
+constexpr const char* Friends =
+    R"({"friends":[{"pid":11,"username":"amy","name":"Amy","friend_code":"SW-1111-1111-1111",)"
+    R"("nsa":"00000000000000AB","pf":1,"favorite":true,"presence":{"status":2,"app_id":"0100152000022000",)"
+    R"("app_detail":"Racing","app_field":"S2V5AFZhbHVl"}},)"
+    R"({"pid":12,"username":"bob","presence":{"status":0}}],)"
+    R"("requests":[{"pid":13,"name":"Cat"}],"sent":[{"pid":14,"name":"Dan"},{"pid":0}]})";
+
+Nextendo::Account SocialSignedIn(s64 access_token_left = 30 * 60) {
+    auto account = SignedIn(2 * 60 * 60, access_token_left);
+    account.scope = std::string{Nextendo::Scopes};
+    return account;
+}
+
 } // namespace
+
+TEST_CASE("Nextendo: friend list", "[common]") {
+    const auto list = Nextendo::ParseFriendList(Friends);
+    REQUIRE(list.has_value());
+    REQUIRE(list->friends.size() == 2);
+    const auto& amy = list->friends[0];
+    REQUIRE(amy.pid == 11);
+    REQUIRE(amy.name == "Amy");
+    REQUIRE(amy.friend_code == "SW-1111-1111-1111");
+    REQUIRE(amy.nsa == 0xAB);
+    REQUIRE(amy.console);
+    REQUIRE(amy.favorite);
+    REQUIRE(amy.status == 2);
+    REQUIRE(amy.app_id == 0x0100152000022000);
+    REQUIRE(amy.app_detail == "Racing");
+    REQUIRE(amy.app_field == std::string("Key\0Value", 9));
+    REQUIRE(list->friends[1].name == "bob");
+    REQUIRE_FALSE(list->friends[1].console);
+    REQUIRE(list->requests.size() == 1);
+    REQUIRE(list->sent.size() == 1);
+    REQUIRE_FALSE(Nextendo::ParseFriendList("[]").has_value());
+}
+
+TEST_CASE("Nextendo: older sign-ins are asked to sign in again for friends", "[common]") {
+    FakeNextendo fake;
+    fake.Answer(NexTokenPath, 200, NewGameToken);
+    fake.Answer(FriendsPath, 200, Friends);
+
+    Nextendo::SaveAccount(SignedIn(60, -10));
+    REQUIRE_FALSE(Nextendo::HasSocialScopes(*Nextendo::LoadAccount()));
+    REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::MissingScope);
+    REQUIRE(fake.TotalHits() == 0);
+
+    // Online play keeps working, and a refresh that grants the scopes is kept.
+    fake.Answer(TokenPath, 200,
+                R"({"access_token":"access.new","refresh_token":"refresh.new","expires_in":3600,)"
+                R"("scope":"identity game.matchmaking friends presence"})");
+    REQUIRE(Nextendo::EnsureGameToken(ClientId)->nex_token == "nx2.new");
+    REQUIRE(Nextendo::HasSocialScopes(*Nextendo::LoadAccount()));
+}
+
+TEST_CASE("Nextendo: friends refresh with the access token", "[common]") {
+    SECTION("and are cached until a sign-out") {
+        FakeNextendo fake;
+        fake.Answer(FriendsPath, 200, Friends);
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::Ok);
+        REQUIRE(fake.Authorization(FriendsPath) == "Bearer access.old");
+        REQUIRE(fake.Param(FriendsPath, "images") == "0");
+        REQUIRE(Nextendo::CachedFriends().friends.size() == 2);
+        Nextendo::ClearAccount();
+        REQUIRE(Nextendo::CachedFriends().friends.empty());
+    }
+    SECTION("and are dropped when another sign-in replaces the account") {
+        FakeNextendo fake;
+        fake.Answer(FriendsPath, 200, Friends);
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::Ok);
+        Nextendo::SaveAccount(SignedIn(2 * 60 * 60, 30 * 60));
+        REQUIRE(Nextendo::CachedFriends().friends.empty());
+    }
+    SECTION("refreshing an access token about to expire") {
+        FakeNextendo fake;
+        fake.Answer(TokenPath, 200, NewAccessToken);
+        fake.Answer(FriendsPath, 200, Friends);
+
+        Nextendo::SaveAccount(SocialSignedIn(30));
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::Ok);
+        REQUIRE(fake.Hits(TokenPath) == 1);
+        REQUIRE(fake.Authorization(FriendsPath) == "Bearer access.new");
+    }
+    SECTION("a 401 refreshes the access token once") {
+        FakeNextendo fake;
+        fake.Answer(FriendsPath, 401, "{}");
+        fake.Answer(FriendsPath, 200, Friends);
+        fake.Answer(TokenPath, 200, NewAccessToken);
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::Ok);
+        REQUIRE(fake.Hits(TokenPath) == 1);
+        REQUIRE(fake.Hits(FriendsPath) == 2);
+        REQUIRE(fake.Authorization(FriendsPath) == "Bearer access.new");
+    }
+    SECTION("a second 401 stops asking until a new sign-in") {
+        FakeNextendo fake;
+        fake.Answer(FriendsPath, 401, "{}");
+        fake.Answer(TokenPath, 200, NewAccessToken);
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::MissingScope);
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::MissingScope);
+        REQUIRE(fake.Hits(TokenPath) == 1);
+        REQUIRE(fake.Hits(FriendsPath) == 2);
+        const auto account = Nextendo::LoadAccount();
+        REQUIRE(account.has_value());
+        REQUIRE_FALSE(Nextendo::HasSocialScopes(*account));
+    }
+    SECTION("a 403 is a missing scope, without a refresh") {
+        FakeNextendo fake;
+        fake.Answer(FriendsPath, 403, R"({"error":"insufficient_scope"})");
+        fake.Answer(PresencePath, 200, R"({"ok":true})");
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::RefreshFriends(ClientId).status == Nextendo::SocialStatus::MissingScope);
+        REQUIRE(fake.Hits(TokenPath) == 0);
+        REQUIRE(Nextendo::LoadAccount()->scope == "identity game.matchmaking presence");
+        REQUIRE(Nextendo::UpdatePresence(ClientId, 0x0100152000022000).status ==
+                Nextendo::SocialStatus::Ok);
+        REQUIRE(fake.Hits(PresencePath) == 1);
+    }
+    SECTION("friend requests post the pid") {
+        FakeNextendo fake;
+        fake.Answer("/api/friends/accept", 200, R"({"friend":{}})");
+
+        Nextendo::SaveAccount(SocialSignedIn());
+        REQUIRE(Nextendo::AnswerFriend(ClientId, Nextendo::FriendAction::Accept, 13).status ==
+                Nextendo::SocialStatus::Ok);
+        REQUIRE(nlohmann::json::parse(fake.Body("/api/friends/accept")) ==
+                nlohmann::json{{"pid", 13}});
+    }
+}
+
+TEST_CASE("Nextendo: presence", "[common]") {
+    using namespace std::chrono_literals;
+    const Nextendo::Presence playing{.status = 2, .app_id = 0x0100152000022000};
+    const Nextendo::Presence offline{};
+    const auto body = nlohmann::json::parse(Nextendo::PresenceBody(playing));
+    REQUIRE(body == nlohmann::json{
+                        {"status", 2}, {"app_id", "0100152000022000"}, {"platform", "emulator"}});
+
+    REQUIRE(Nextendo::PresenceDue(std::nullopt, 0s, playing));
+    REQUIRE_FALSE(Nextendo::PresenceDue(std::nullopt, 0s, offline));
+    REQUIRE_FALSE(Nextendo::PresenceDue(playing, 30s, playing));
+    REQUIRE(Nextendo::PresenceDue(playing, 60s, playing));
+    REQUIRE(Nextendo::PresenceDue(playing, 1s, offline));
+    REQUIRE_FALSE(Nextendo::PresenceDue(offline, 10min, offline));
+    auto changed = playing;
+    changed.app_field = "Mode";
+    REQUIRE_FALSE(Nextendo::PresenceDue(playing, 10s, changed));
+    REQUIRE(Nextendo::PresenceDue(playing, 30s, changed));
+
+    FakeNextendo fake;
+    fake.Answer(PresencePath, 200, R"({"ok":true})");
+    Nextendo::SaveAccount(SocialSignedIn());
+    Nextendo::SetGameAppField(playing.app_id, std::string(0xC0, '\0'));
+    REQUIRE(Nextendo::UpdatePresence(ClientId, playing.app_id).status ==
+            Nextendo::SocialStatus::Ok);
+    REQUIRE(nlohmann::json::parse(fake.Body(PresencePath)) == body);
+    REQUIRE(fake.Authorization(PresencePath) == "Bearer access.old");
+    REQUIRE(Nextendo::UpdatePresence(ClientId, playing.app_id).status ==
+            Nextendo::SocialStatus::Ok);
+    REQUIRE(fake.Hits(PresencePath) == 1);
+    REQUIRE(Nextendo::UpdatePresence(ClientId, 0).status == Nextendo::SocialStatus::Ok);
+    REQUIRE(fake.Hits(PresencePath) == 2);
+    REQUIRE(nlohmann::json::parse(fake.Body(PresencePath))["status"] == 0);
+}
+
+TEST_CASE("Nextendo: nicknames fit the guest profile", "[common]") {
+    const std::string a31(31, 'a');
+    const std::string e_acute = "\xC3\xA9";
+    const std::string hiragana = "\xE3\x81\x82";
+    REQUIRE(Nextendo::ProfileNickname("tester", 32) == "tester");
+    REQUIRE(Nextendo::ProfileNickname(std::string(40, 'a'), 32) == std::string(32, 'a'));
+    REQUIRE(Nextendo::ProfileNickname(a31 + e_acute, 32) == a31);
+    REQUIRE(Nextendo::ProfileNickname(a31 + "b" + e_acute, 32) == a31 + "b");
+    std::string eleven;
+    for (int i = 0; i < 11; ++i) {
+        eleven += hiragana;
+    }
+    REQUIRE(Nextendo::ProfileNickname(eleven, 32) == eleven.substr(0, 30));
+}
+
+TEST_CASE("Nextendo: the profile picture is pulled when it changes", "[common]") {
+    constexpr const char* AvatarPath = "/api/avatar";
+    const auto user = Common::UUID::MakeRandom();
+    FakeNextendo fake;
+    for (const char* picture : {"one", "one", "one", "two", "two", "two"}) {
+        fake.Answer(AvatarPath, 200, picture);
+    }
+    fake.Answer(AvatarPath, 404, "{}");
+    Settings::values.nextendo_enabled = true;
+    Nextendo::SaveAccount(SignedIn(2 * 60 * 60, 30 * 60));
+
+    REQUIRE_FALSE(Nextendo::PullProfile(ClientId, user, false).has_value());
+    REQUIRE(fake.TotalHits() == 0);
+
+    Settings::values.nextendo_sync_profile = true;
+    const auto first = Nextendo::PullProfile(ClientId, user, false);
+    REQUIRE(first->nickname == "tester");
+    REQUIRE(first->avatar == "one");
+    REQUIRE(fake.Param(AvatarPath, "pid") == "1");
+    REQUIRE(fake.Authorization(AvatarPath).empty());
+    REQUIRE_FALSE(Nextendo::PullProfile(ClientId, user, false)->avatar.has_value());
+    REQUIRE(Nextendo::PullProfile(ClientId, user, true)->avatar == "one");
+    REQUIRE(Nextendo::PullProfile(ClientId, user, false)->avatar == "two");
+    REQUIRE(Nextendo::PullProfile(ClientId, Common::UUID::MakeRandom(), false)->avatar == "two");
+    Nextendo::SaveAccount(SignedIn(2 * 60 * 60, 30 * 60));
+    REQUIRE(Nextendo::PullProfile(ClientId, user, false)->avatar == "two");
+    const auto unreachable = Nextendo::PullProfile(ClientId, user, false);
+    REQUIRE(unreachable->nickname == "tester");
+    REQUIRE_FALSE(unreachable->avatar.has_value());
+    REQUIRE(fake.Hits(AvatarPath) == 7);
+
+    Settings::values.nextendo_sync_profile = false;
+    Settings::values.nextendo_enabled = false;
+}
 
 TEST_CASE("Nextendo: the game catalogue is checked before it is used", "[common]") {
     const CatalogSigner signer;

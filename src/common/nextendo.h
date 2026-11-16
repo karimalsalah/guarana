@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <ctime>
 #include <functional>
@@ -18,13 +19,15 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "common/uuid.h"
 
 namespace httplib {
 class Client;
 }
 
 // Nextendo Network sign-in and the linked account, ported from citron-nextendo's
-// src/common/nextendo_account.cpp and src/web_service/nextendo_api.cpp (SignInWithBrowser).
+// src/common/nextendo_account.cpp and src/web_service/nextendo_api.cpp (SignInWithBrowser,
+// GetAvatarByPid).
 namespace Common::Nextendo {
 
 constexpr std::string_view ApiBase = "https://nextendo.network";
@@ -39,9 +42,14 @@ constexpr std::string_view OnlineStatusPath = "/api/online-status";
 constexpr std::string_view NexSessionPath = "/api/nex-session";
 constexpr std::string_view SessionStatusPath = "/api/session-status";
 constexpr std::string_view RevokePath = "/api/oauth/revoke";
+// The friend list, friend requests and the player's presence, read and sent with the access token.
+constexpr std::string_view FriendsPath = "/api/friends";
+constexpr std::string_view PresencePath = "/api/presence";
 // Public, signed with GameCatalogKey (nextendo_game_catalog.h).
 constexpr std::string_view GameCatalogPath = "/service-catalog/v1/game-catalog";
-constexpr std::string_view Scopes = "identity game.matchmaking";
+constexpr std::string_view Scopes = "identity game.matchmaking friends presence";
+// What a sign-in asks for after nextendo.network refuses the social scopes for the app.
+constexpr std::string_view OnlineScopes = "identity game.matchmaking";
 constexpr u16 CallbackPort = 47823;
 
 // nextendo.network allows 20 API calls a minute per client; Lichii keeps to fewer.
@@ -49,6 +57,11 @@ constexpr std::size_t RequestsPerMinute = 15;
 // The game token is renewed this long before it expires. More than the session heartbeat's
 // two minutes, so a heartbeat always renews it in time.
 constexpr s64 RenewAheadSeconds = 10 * 60;
+// While a game runs. nextendo.network shows a player offline 90 s after their last presence.
+constexpr auto FriendsRefreshInterval = std::chrono::seconds{30};
+constexpr auto PresenceInterval = std::chrono::seconds{60};
+// A changed presence waits this long after the last one, so a game can't spend the budget.
+constexpr auto PresenceMinInterval = std::chrono::seconds{30};
 
 // True when the user turned on online play through Nextendo.
 bool OnlinePlayActive();
@@ -68,9 +81,18 @@ struct Account {
     // Unix times; the access token lasts an hour and the game token a day.
     s64 access_expires{};
     s64 nex_expires{};
+    // What the sign-in granted, space separated. Empty for sign-ins from before Lichii kept it.
+    std::string scope;
     // The account's BAAS user id ("nsa" from /api/me), the account id a Switch has. 0 when unknown.
     u64 baas_nsa{};
+    // The sign-in asked for friends and presence and nextendo.network didn't grant them to the
+    // app, so signing in again doesn't help.
+    bool social_unavailable{};
 };
+
+// True when the sign-in granted friends and presence. Older sign-ins didn't and need a new one;
+// online play works without them.
+bool HasSocialScopes(const Account& account);
 
 constexpr u64 AnimalCrossingNewHorizons = 0x01006F8002326000;
 
@@ -122,13 +144,16 @@ std::optional<Pkce> MakePkce();
 
 std::string RedirectUri(u16 port);
 std::string BuildAuthorizeUrl(std::string_view client_id, std::string_view state,
-                              std::string_view challenge, u16 port);
+                              std::string_view challenge, u16 port,
+                              std::string_view scope = Scopes);
 
 struct Callback {
     // False when the request doesn't carry this sign-in's state, so it is not its answer.
     bool matched{};
     std::string code;
     std::string error;
+    // The error is about the scope asked for, not the player's answer.
+    bool scope_rejected{};
 };
 
 // Checks the loopback callback's query against the state the authorize request carried.
@@ -145,6 +170,7 @@ struct TokenResponse {
     u64 pid{};
     std::string username;
     std::string friend_code;
+    std::string scope;
 };
 
 // Reads both the OAuth token response and the /api/nex-token response.
@@ -197,5 +223,88 @@ void RevokeToken(std::string_view client_id, const std::string& refresh_token);
 // nextendo.network and signs out when the site has ended its session. Returns why it signed
 // the account out, or None when it didn't.
 SignOutReason KeepSessionAlive(std::string_view client_id);
+
+struct Friend {
+    u64 pid{};
+    std::string name;
+    std::string friend_code;
+    // The account's BAAS id (nsa), which consoles and NPLN titles go by. 0 when not sent.
+    u64 nsa{};
+    bool console{};
+    bool favorite{};
+    // nn::friends PresenceStatus: 0 offline, 1 online, 2 playing.
+    s32 status{};
+    u64 app_id{};
+    std::string app_detail;
+    // The game's presence data (nn::friends AppKeyValue), decoded.
+    std::string app_field;
+};
+
+struct FriendList {
+    std::vector<Friend> friends;
+    // Requests other players sent, and the ones this account sent.
+    std::vector<Friend> requests;
+    std::vector<Friend> sent;
+};
+
+std::optional<FriendList> ParseFriendList(std::string_view body);
+
+enum class SocialStatus {
+    Ok,
+    // Unreachable, over the request budget or refused for another reason.
+    Failed,
+    NotSignedIn,
+    // The sign-in lacks friends or presence (an older sign-in, or nextendo.network refused it).
+    MissingScope,
+};
+
+struct SocialResult {
+    SocialStatus status{};
+    // The HTTP status nextendo.network answered with, 0 when it wasn't reached.
+    int http_status{};
+};
+
+// Fetches the friend list with the access token for CachedFriends.
+SocialResult RefreshFriends(std::string_view client_id);
+// The friend list from the last refresh, empty after a sign-out. Never waits on the network, so
+// the friend service reads it during IPC.
+FriendList CachedFriends();
+
+SocialResult AddFriend(std::string_view client_id, std::string_view friend_code);
+enum class FriendAction { Accept, Decline, Remove };
+SocialResult AnswerFriend(std::string_view client_id, FriendAction action, u64 pid);
+
+struct Presence {
+    // nn::friends PresenceStatus; Lichii sends 2 while a game runs and 0 when it stops.
+    s32 status{};
+    u64 app_id{};
+    std::string app_field;
+
+    bool operator==(const Presence&) const = default;
+};
+
+std::string PresenceBody(const Presence& presence);
+// A change is sent PresenceMinInterval after the last post (an offline one at once), the same
+// presence every PresenceInterval while a game runs.
+bool PresenceDue(const std::optional<Presence>& last,
+                 std::chrono::steady_clock::duration since_last, const Presence& next);
+// The presence data the game set with UpdateUserPresence, sent while app_id runs.
+void SetGameAppField(u64 app_id, std::string app_field);
+// Sends that app_id is being played, or offline when it is 0, when PresenceDue says so.
+SocialResult UpdatePresence(std::string_view client_id, u64 app_id);
+
+// A username as a guest profile nickname: at most size bytes, without a split UTF-8 character.
+std::string ProfileNickname(std::string_view username, std::size_t size);
+
+struct ProfilePull {
+    std::string nickname;
+    // The picture as nextendo.network sent it. Unset when it can't be reached, and when the
+    // picture is the one the last pull for this guest profile returned.
+    std::optional<std::string> avatar;
+};
+// With nextendo_sync_profile on and an account signed in: its username and, from the public
+// GET /api/avatar, its picture for the guest profile user, even an unchanged one when force is
+// set. nullopt when another sign-in or a sign-out happened meanwhile. Blocks on the request.
+std::optional<ProfilePull> PullProfile(std::string_view client_id, const UUID& user, bool force);
 
 } // namespace Common::Nextendo

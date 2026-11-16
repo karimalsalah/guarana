@@ -5,8 +5,8 @@ where things stand, how to pick up each lane, and how a change is measured. The 
 [AGENTS.md](AGENTS.md), and how an agent finds and claims work is in
 [docs/agents/README.md](docs/agents/README.md).
 
-**Last checked: 2026-11-16, 16:30 UTC**, from branch `merge/upstream-20261116b` (the upstream
-merge to `7c7f723b68`; the measurements below are older and say when they were taken). "Observed" below means
+**Last checked: 2026-11-16, 19:20 UTC**, from branch `merge/upstream-20261116c` (the upstream
+merge to `0a15f2ce07`; the measurements below are older and say when they were taken). "Observed" below means
 what `git` and `gh` showed at that time. Anything this file could not confirm is marked
 **(unsure)**. If you change the state of a lane, update its row in the same pull request.
 
@@ -28,13 +28,14 @@ what `git` and `gh` showed at that time. Anything this file could not confirm is
   a part of Eglantine #837), the overlay's live trace (#209) and the replay's refusal of a trace
   without presents (#207). None of them has been tried in the game yet. The upstream merge below
   came after the tag and goes into the next candidate.
-- **`main` holds zortos293/Lichii `nx2` up to `7c7f723b68`** (50 commits after `99e89096cb`); the
-  resolutions are listed in the merge's pull request. The `upstream` mirror is at `7c7f723b68`
-  too. GitHub deletes a pull request's head branch when it merges it, so merging the sync's own
-  pull request (head `upstream`) deletes the mirror and the next sync fails (#201, closed by the
-  run of 16 November 13:55 UTC after the branch was pushed again by hand). Leave the sync's pull
-  request alone: merge upstream on a `merge/upstream-<date>` branch, and the sync's pull request is
-  marked merged once `main` has its commits ([docs/LANES.md](docs/LANES.md), "Upstream").
+- **`main` holds zortos293/Lichii `nx2` up to `0a15f2ce07`**: 50 commits after `99e89096cb` came
+  with #220 (to `7c7f723b68`), 9 more with the merge from `merge/upstream-20261116c`; each pull
+  request lists its resolutions. The `upstream` mirror is at `0d98e37f9a`, behind: that merge took
+  `nx2`'s tip. GitHub deletes a pull request's head branch when it merges it, so merging the
+  sync's own pull request (head `upstream`) deletes the mirror and the next sync fails (#201,
+  closed by the run of 16 November 13:55 UTC after the branch was pushed again by hand). Never
+  merge the sync's pull request: merge upstream on a `merge/upstream-<date>` branch, then close
+  the sync's pull request as superseded, as #210 was ([docs/LANES.md](docs/LANES.md), "Upstream").
 - **What the merges changed for our own code**, for whoever merges upstream next:
   - To `99e89096cb`: upstream routes each global memory access among its own candidate buffers,
     and `EDEN_NX2_GM` bits 2 and 4 sit on top (a load takes its narrowed list when it has one, its
@@ -61,6 +62,14 @@ what `git` and `gh` showed at that time. Anything this file could not confirm is
     `nsight_aftermath` input of `release-binaries.yml` is refused only for a build that would
     publish. New user-visible "Lichii" strings were renamed Guarana; the User-Agent sent to
     nextendo.network stays "Lichii", as it was.
+  - To `0a15f2ce07`: upstream merged Lichii #1890, which we carried; the merge left one copy.
+    The staging pool's `ReleaseMemory` waits only for submitted ticks instead of calling
+    `Scheduler::Finish` mid-draw (Lichii #1997), and our `RetainUntilCurrentTick` still treats a
+    buffer in its level's deferred map as pinned. A present fenced by a service thread (the nx2
+    video decoder, the CDMA pusher) is composited on the scheduler owner, in order (Lichii
+    #1996). Nextendo adds friends, friend requests and presence (Lichii #1983) and an opt-in
+    profile name and picture sync (Lichii #1990), all only with online play on; Switch 1 add-ons
+    show on Switch 2 Edition titles in the game list (Lichii #2001).
 - **Upstream's signed NPLN patches (Lichii #1358) and our built-in patches** do not go through the
   same code. Ours live in `PatchManager` (all ten are Ocarina of Time's), show in Add-Ons, are
   turned off as `+<name>` in `[DisabledAddOns]` and apply in `PatchNSO`. An NPLN patch is a
@@ -74,8 +83,8 @@ what `git` and `gh` showed at that time. Anything this file could not confirm is
   cannot turn it off, and the #205 overlap test does not see it. No built-in patches an NPLN title
   today, so nothing collides yet; patch packs that patch online games should check the NPLN
   guards first.
-- **Open pull requests:** #210, the sync's own (head `upstream`): it is marked merged once `main`
-  has its commits; never merge it.
+- **Open pull requests:** `gh pr list -R karimalsalah/guarana`. A sync pull request (head
+  `upstream`) is never merged by hand: see the `main` bullet above.
 - **Shown-frame pacing was settled on 16 November: the upstream merge cost none.** In Hyrule
   Field, counting only runs with no compiler running in any 5 s sample. The baseline is `main`
   just before the merge (`7ba919b7a8`, 417 commits after v20.3.0), so the runs say what the

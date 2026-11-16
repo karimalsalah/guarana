@@ -47,6 +47,7 @@ add_executable(tests
     core/key_derivation.cpp
     common/boot_split.cpp
     core/eticket_title_key.cpp
+    core/keyblob_cmac.cpp
     core/aes_xts.cpp
     common/display_hdr.cpp
     common/dkb_cpu_trace.cpp
@@ -98,6 +99,7 @@ add_executable(tests
     frontend_common/problem_report.cpp
     core/vfs_vector.cpp
     core/kip_ini.cpp
+    core/add_on_application_id.cpp
     core/ncz_cache.cpp
     core/kip_truncated.cpp
     core/ncz_decompressor.cpp
@@ -216,6 +218,7 @@ add_executable(tests
     video_core/fast_draw.cpp
     video_core/gpu_command_safety.cpp
     video_core/syncpoint_actions.cpp
+    video_core/due_composites.cpp
     video_core/nx2_video_av1.cpp
     video_core/nx2_video_render.cpp
     video_core/ampere_matrix.cpp
