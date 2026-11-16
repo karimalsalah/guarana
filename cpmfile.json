@@ -116,7 +116,7 @@
     },
     "httplib": {
         "find_args": "MODULE GLOBAL",
-        "hash": "159ed94965018f2a371d45a3bfc1961e5fb1549e501ded70a6b4532d7fe99d0579c18b5195aff6e35f96f399b426cea2650ec9fb75ef80d4c9edeccb51f2e6c9",
+        "hash": "e131018fed8bd9bd857bc3037cf800ba47253ea05412dd53a97415d66e7e3fa846ebb91525b1ea8b6e97a5ef16e999122a47a9a7ade404501df5d79bff47a902",
         "options": [
             "HTTPLIB_REQUIRE_OPENSSL ON",
             "HTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES ON"
@@ -125,7 +125,7 @@
             "0001-mingw.patch"
         ],
         "repo": "yhirose/cpp-httplib",
-        "version": "v0.46.0"
+        "version": "v0.66.0"
     },
     "lagoon": {
         "hash": "b9380f99c6effaeccc6d8f81d4942e852c11ad28613df637e155451556ae5826f93765bee57a5c87a9740d2bd1db463ad0f55a947772fe9d57eeabae3efa373e",
