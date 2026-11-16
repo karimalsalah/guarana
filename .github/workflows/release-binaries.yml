@@ -240,38 +240,6 @@ jobs:
         # scripts/build-windows.ps1 and scripts/build-linux.sh build them; remove it from a row to
         # build for any x86-64 CPU.
         include:
-          - platform: linux-x86_64
-            runner: ubuntu-24.04
-            march: x86-64-v3
-          # The Linux -pgo builds are the same programs compiled by clang against the repo's
-          # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
-          # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
-          # about the same speed. Both Windows builds are clang-cl with ThinLTO; windows-x86_64-pgo
-          # adds lichii-windows.profdata, an MSVC-ABI profile trained on Ocarina of Time (see
-          # docs/CI.md). MSVC still builds for development.
-          - platform: linux-x86_64-pgo
-            runner: ubuntu-24.04
-            pgo: true
-            march: x86-64-v3
-          - platform: windows-x86_64
-            runner: windows-2022
-            march: x86-64-v3
-          - platform: windows-x86_64-pgo
-            runner: windows-2022
-            pgo: true
-            profile: lichii-windows.profdata
-            march: x86-64-v3
-          - platform: linux-aarch64
-            runner: ubuntu-24.04-arm
-          - platform: linux-aarch64-pgo
-            runner: ubuntu-24.04-arm
-            pgo: true
-          - platform: macos-arm64
-            runner: macos-15
-          # Windows on ARM (Snapdragon X laptops): clang-cl for ARM64 on GitHub's Windows ARM64
-          # runner, ThinLTO, dynarmic's ARM64 backend. Qt is Eden-CI's static bundle
-          # (LICHII_USE_BUNDLED_QT), static libraries on the dynamic C runtime. No PGO: the profile
-          # is x64's.
           - platform: windows-arm64
             runner: windows-11-arm
 
@@ -620,7 +588,7 @@ jobs:
         shell: bash
         run: |
           if command -v ccache > /dev/null; then ccache --zero-stats; else sccache --zero-stats; fi
-          cmake --build build/release --target lichii lichii-cmd --parallel
+          cmake --build build/release --target lichii lichii-cmd --parallel -- -k 0
           if command -v ccache > /dev/null; then ccache --show-stats; else sccache --show-stats; fi
 
       - name: Stop sccache on Windows
@@ -975,26 +943,11 @@ jobs:
   # The Android APK (android.yml: Eden's .ci/android/build.sh with the NDK). It is uploaded as
   # guarana-android-arm64-<commit> and published with the other files; its failure does not stop
   # the release. Caches are saved as the build job's are: by tags, the nightly and runs on main.
-  android:
-    name: android-arm64
-    needs: prepare
-    uses: ./.github/workflows/android.yml
-    # The optional release-key secrets (docs/SIGNING.md).
-    secrets: inherit
-    with:
-      sha: ${{ needs.prepare.outputs.sha }}
-      version: ${{ needs.prepare.outputs.version }}
-      build_tag: ${{ needs.prepare.outputs.build_tag }}
-      channel: ${{ needs.prepare.outputs.channel }}
-      tag: ${{ needs.prepare.outputs.tag }}
-      refspec: ${{ needs.prepare.outputs.refspec }}
-      save_caches: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || contains(github.ref, '/tags/') }}
-
   # Publishes every platform's files, SHA256SUMS.txt and the notes once every platform built: a
   # tag's release (a pre-release for vX.Y.Z-<pre>), or the rolling nightly pre-release.
   publish:
     name: Publish release
-    needs: [prepare, build, android]
+    needs: [prepare, build]
     # Publishes what built: one platform failing (say a Linux toolchain break) does not hold back the
     # rest. A release without a Windows x86_64 binary is refused below.
     if: ${{ !cancelled() && needs.prepare.outputs.publish == 'true' && needs.build.result != 'skipped' }}
