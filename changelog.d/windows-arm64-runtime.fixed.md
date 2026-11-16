@@ -1,0 +1,1 @@
+- Windows ARM64: link the native programs with the same C++ runtime as their Qt and shader libraries, and include the ARM64 runtime DLLs in the zip.

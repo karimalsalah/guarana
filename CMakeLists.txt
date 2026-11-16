@@ -251,13 +251,11 @@ endif()
 
 # Set runtime library to MD/MDd for all configurations
 if(MSVC)
-    if (LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set(libflag MT)
-    else()
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-        set(libflag MD)
-    endif()
+    # Windows ARM64 takes /MD as x64 does. The static runtime this picked for a bundled Qt on ARM64
+    # failed every link (/failifmismatch): Eden-CI's Qt 6.11.1 windows-arm64 bundle and sirit-ci
+    # are built against the dynamic runtime.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    set(libflag MD)
 
     # Force all projects (including external dependencies) to use the same runtime
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /${libflag}")
