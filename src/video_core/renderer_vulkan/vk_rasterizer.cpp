@@ -1243,8 +1243,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         return;
     }
-    // Upstream's bypass reads its source from the output pass (#1875); EDEN_NX2_OOT_BYPASS_ANY
-    // still copies from the tonemap tracked here.
+    // No sharpening copies the tonemap tracked here while it is fresh; upstream's source, the
+    // image the output pass samples (#1875), is the fallback.
     if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID())) {
         TrackOotTonemappedImage(*pipeline);
     }
@@ -2255,6 +2255,7 @@ void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline)
     }
     oot_network_bypass.tonemapped = target;
     oot_network_bypass.tonemapped_area = area;
+    oot_network_bypass.tonemapped_fresh = true;
 }
 
 void RasterizerVulkan::TraceDrawFailure(std::string_view reason) {

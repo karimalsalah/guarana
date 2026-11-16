@@ -143,11 +143,14 @@ inline Area DrawArea(const Tegra::Engines::Maxwell3D::Regs& regs) {
 struct BypassState {
     std::mutex mutex;
     /// Render target 0 of the latest tonemap draw (address 0 until one is seen), under mutex.
-    /// Only EDEN_NX2_OOT_BYPASS_ANY copies from it; without the switch the copy reads the image
-    /// the output pass samples (InputImageHandleOffset).
+    /// No sharpening copies from it while it is fresh (CopiesTrackedTonemap), and always with
+    /// EDEN_NX2_OOT_BYPASS_ANY; otherwise the copy reads the image the output pass samples
+    /// (InputImageHandleOffset).
     Tegra::Engines::Maxwell3D::Regs::RenderTargetConfig tonemapped{};
     /// What that draw could reach of it (DrawArea), under mutex.
     Area tonemapped_area{};
+    /// A tonemap draw was tracked since the last replacement that copied it, under mutex.
+    bool tonemapped_fresh{};
     std::atomic<bool> output_replaced{}; ///< the latest output pass was replaced
     /// EDEN_NX2_OOT_BYPASS_STEP_GUARD: the tonemapped image's address and drawn area at the last
     /// successful replacement, under mutex (written only with the switch).
@@ -158,6 +161,17 @@ struct BypassState {
     /// The first native program dispatched after the network, 0 until one is seen.
     std::atomic<u64> after_network{};
 };
+
+/// Whether No sharpening copies the tonemap the rasterizer tracked rather than the image the
+/// output pass samples: a tonemap drawn since the last replacement, as a B10G11R11 block-linear
+/// image. On the Hyrule Field trace the output pass samples another image than the tonemap's
+/// target, and copying that came out hazier: 26 dB from the network's own output, against 32 dB
+/// for the tonemap. A frame whose tonemap shader is not known (#1688) leaves no fresh tonemap, so
+/// its copy reads the sampled image.
+[[nodiscard]] constexpr bool CopiesTrackedTonemap(bool fresh, u64 address, bool b10g11r11,
+                                                  bool block_linear, u32 width, u32 height) {
+    return fresh && address != 0 && b10g11r11 && block_linear && width != 0 && height != 0;
+}
 
 /// EDEN_NX2_OOT_BYPASS_STEP_GUARD: the prepass and the network may be skipped only while the
 /// current tonemap is the one whose output pass was last replaced, same image and same drawn

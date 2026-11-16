@@ -23,6 +23,16 @@ TEST_CASE("Unused AA dispatch requires confirmed output replacement and a skippe
     }
 }
 
+TEST_CASE("No sharpening copies a tonemap drawn since the last replacement",
+          "[video_core][oot_network]") {
+    STATIC_REQUIRE(CopiesTrackedTonemap(true, 0x8128876000ULL, true, true, 1920, 1080));
+    STATIC_REQUIRE_FALSE(CopiesTrackedTonemap(false, 0x8128876000ULL, true, true, 1920, 1080));
+    STATIC_REQUIRE_FALSE(CopiesTrackedTonemap(true, 0, true, true, 1920, 1080));
+    STATIC_REQUIRE_FALSE(CopiesTrackedTonemap(true, 0x8128876000ULL, false, true, 1920, 1080));
+    STATIC_REQUIRE_FALSE(CopiesTrackedTonemap(true, 0x8128876000ULL, true, false, 1920, 1080));
+    STATIC_REQUIRE_FALSE(CopiesTrackedTonemap(true, 0x8128876000ULL, true, true, 0, 1080));
+}
+
 TEST_CASE("Ocarina of Time tonemap shaders are recognized", "[video_core][oot_network]") {
     STATIC_REQUIRE(IsTonemapShader(0xbded5ce917183214ULL));
     STATIC_REQUIRE(IsTonemapShader(0x6cb06edf14be1d79ULL));
