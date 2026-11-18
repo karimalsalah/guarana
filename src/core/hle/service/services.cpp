@@ -168,7 +168,7 @@ Services::Services(std::shared_ptr<SM::ServiceManager>& sm, Core::System& system
         {"gpio",        &GPIO::LoopProcess},
     })
         kernel.RunOnGuestCoreProcess(std::string(name),
-                                     [&system, run = std::move(run)] { run(system); });
+                                     [&system, run_service = std::move(run)] { run_service(system); });
 }
 
 } // namespace Service
