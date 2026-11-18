@@ -252,8 +252,10 @@ endif()
 # Set runtime library to MD/MDd for all configurations
 if(MSVC)
     if (LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set(libflag MT)
+        # The bundled Windows ARM64 Qt package is built against the dynamic CRT (/MD); the tree
+        # must match it or linking fails /failifmismatch on the Qt style/platform plugins.
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set(libflag MD)
     else()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set(libflag MD)
