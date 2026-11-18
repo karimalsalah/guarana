@@ -216,7 +216,10 @@ endif()
 AddJsonPackage(spirv-headers)
 
 # Sirit
-if (LICHII_USE_BUNDLED_SIRIT)
+# The prebuilt sirit-ci package is linked against the dynamic CRT (/MD). The Windows ARM64
+# bundled-Qt build uses the static CRT (/MT), so a prebuilt /MD sirit fails /failifmismatch at
+# link; build sirit from source there so it inherits the same runtime as the rest of the tree.
+if (LICHII_USE_BUNDLED_SIRIT AND NOT (MSVC AND LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64))
     AddJsonPackage(sirit-ci)
 else()
     AddJsonPackage(sirit)
