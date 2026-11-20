@@ -1009,7 +1009,7 @@
   }
 
   // ---------------------------------------------------------------- scene: every device
-  const CHIPS = ['Intel Arc 140T', 'Intel Arc 140V', 'Meteor Lake', 'Panther Lake', 'Radeon 780M', 'Radeon 890M', 'Radeon 8060S', 'ROG Ally X', 'Legion Go 2', 'MSI Claw', 'Steam Deck', 'NVIDIA desktop'];
+  const CHIPS = ['Intel Arc 140T', 'Intel Arc 140V', 'Meteor Lake', 'Panther Lake', 'Radeon 780M', 'Radeon 890M', 'Radeon 8060S', 'ROG Ally X', 'Legion Go 2', 'MSI Claw', 'Steam Deck', 'Android ARM64'];
   function sDevices(c, t) {
     G('devices');
     const kS = (PORTRAIT ? 66 : SQUARE ? 56 : 70) * u;
@@ -1070,20 +1070,18 @@
       str(c, CHIPS[i], -chipW / 2 + 50 * u, 0, { size: fs, weight: 800, fill: '#F4F5F7', align: 'left', grp: `chip${i}`, chk: k >= 1 });
       c.restore();
     }
-    // Windows, Linux and macOS
     if (t >= tB) {
       const dt = t - tB;
-      const lines = LAND ? [['Runs on Windows,'], ['Linux and macOS.']] : [['Runs on Windows,'], ['Linux and macOS.']];
-      const os = fit('Linux and macOS.', textW, (PORTRAIT ? 78 : SQUARE ? 62 : 80) * u, 800);
+      const lines = ['Measured on', 'Windows 11 x64.'];
+      const os = fit(lines[1], textW, (PORTRAIT ? 78 : SQUARE ? 62 : 80) * u, 800);
       const y0 = LAND ? TOP + kS * 1.25 + hs + 90 * u : PORTRAIT ? box.y1 + 72 * u : box.y1 + 66 * u;
-      lines.forEach((ln, i) => {
-        const parts = ln[0].split(/(Windows|Linux|macOS)/).filter(Boolean).map((s) => ({ s, fill: /^(Windows|Linux|macOS)$/.test(s) ? '#FFC94A' : PAPER }));
-        mixed(c, parts, AX, y0 + i * os * 1.2, { size: os, weight: 800, align: AL, sc: slamSc(dt - i * 0.08), alpha: popA(dt - i * 0.08), grp: `os${i}` });
+      lines.forEach((line, i) => {
+        str(c, line, AX, y0 + i * os * 1.2, { size: os, weight: 800, fill: i === 0 ? PAPER : '#FFC94A', align: AL, sc: slamSc(dt - i * 0.08), alpha: popA(dt - i * 0.08), grp: `os${i}` });
       });
     }
     // honesty line
     const fa = popA(t - tA - 0.4, 0.3);
-    str(c, 'Numbers in this film: Intel Arc 140T', LAND ? safe.x0 : CX, safe.y1 - 14 * u, { size: 23 * u, weight: 500, fam: MONO, fill: '#7C88A8', align: LAND ? 'left' : 'center', alpha: fa, grp: 'devnote' });
+    str(c, 'Only the Intel Arc 140T was measured', LAND ? safe.x0 : CX, safe.y1 - 14 * u, { size: 23 * u, weight: 500, fam: MONO, fill: '#7C88A8', align: LAND ? 'left' : 'center', alpha: fa, grp: 'devnote' });
   }
 
   // ---------------------------------------------------------------- scene: plug and play

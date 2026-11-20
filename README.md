@@ -10,7 +10,7 @@ Intel Arc iGPUs and Radeon handhelds are the measured home ground; NVIDIA and AM
 
 <a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Download Guarana" src="https://img.shields.io/badge/Download-latest_release-F2851A?style=for-the-badge&labelColor=16181D"></a>
 
-<a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/karimalsalah/guarana?include_prereleases&sort=semver&label=release&style=flat-square"></a>
+<a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Latest stable release" src="https://img.shields.io/github/v/release/karimalsalah/guarana?sort=semver&label=release&style=flat-square"></a>
 <a href="https://github.com/karimalsalah/guarana/actions/workflows/build-check.yml"><img alt="Build check status" src="https://img.shields.io/github/actions/workflow/status/karimalsalah/guarana/build-check.yml?label=CI&style=flat-square"></a>
 <a href="LICENSE.txt"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square"></a>
 <a href="https://discord.gg/urz7vMdRM"><img alt="Discord: discord.gg/urz7vMdRM" src="https://img.shields.io/badge/discord-urz7vMdRM-5865F2?style=flat-square"></a>
@@ -42,17 +42,17 @@ Intel Arc iGPUs and Radeon handhelds are the measured home ground; NVIDIA and AM
 
 ## Get it
 
-1. **Download** `Guarana-Setup-<version>.exe` from [Releases](https://github.com/karimalsalah/guarana/releases/latest), the only official download. It installs for your user, without admin rights. Linux and macOS builds are there too.
+1. **Choose a download.** Open **Assets** on the [latest stable release](https://github.com/karimalsalah/guarana/releases/latest) or the [nightly prerelease](https://github.com/karimalsalah/guarana/releases/tag/nightly). On Windows x64, pick `Guarana-Setup-<version>.exe`; it installs without admin rights. On Android, Linux, macOS or Windows on Arm, see [which file to look for](#install-in-detail).
 2. **Bring your own keys, firmware and games**, dumped from hardware you own. Guarana Setup finds them on your PC with your consent; in the emulator they are *Tools → Install Decryption Keys* and *Tools → Install Firmware*.
 3. **Play.** On a Windows integrated GPU, Ocarina of Time sets up its own frame pacing; on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (since v20.2). The first visit to each area hitches once while shaders compile.
 
-The zip install, every platform, the data folders and the guides: [Install in detail](#install-in-detail). Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
+The portable Windows install, other packages, data folders and guides: [Install in detail](#install-in-detail). Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
 
 ## Devices
 
-Guarana is tuned for integrated GPUs: **Intel Arc first, AMD handhelds next, and every Windows PC welcome.** Measured first on the Arc 140T; every other device's numbers come from your reports.
+Guarana is tuned for integrated GPUs: **Intel Arc first, AMD handhelds next.** Measured first on the Arc 140T, in Ocarina of Time on **Windows 11 x64**; every other device's numbers come from reports. A [published package](#install-in-detail) for another system does not mean we have booted a game on it.
 
-**Windows x64 is the tested platform** (Linux and macOS builds are on Releases, untested on these devices); you need an x86-64 CPU with AVX2 and a Vulkan driver. 16 GB of RAM is below the comfortable floor, because the GPU shares it: with 16 GB, enlarge the page file before the first run ([requirements](docs/DEVICES.md#requirements-v20)).
+The Windows x64 build needs an x86-64-v3 CPU (including AVX2) and a Vulkan driver. With 16 GB of RAM, the integrated GPU shares that memory; enlarge the Windows page file before the first run ([requirements](docs/DEVICES.md#requirements-v20)).
 
 | GPU | Example devices | Status |
 |---|---|---|
@@ -390,21 +390,31 @@ bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
 
 Send each coin on its matching network. Coins sent on the wrong network can't be recovered.
 
+Use GitHub Releases: the [latest stable release](https://github.com/karimalsalah/guarana/releases/latest) for regular use, or the [rolling nightly prerelease](https://github.com/karimalsalah/guarana/releases/tag/nightly) for testing. Under **Assets**, match the operating system **and** CPU. Filenames use the version number on stable releases and `nightly` on the prerelease.
+
+| Your system | What to look for in Assets |
+|---|---|
+| Windows x64, x86-64-v3 CPU (including AVX2) | `Guarana-Setup-<version>.exe` or a portable ZIP ending in `-windows-x86_64.zip` or `-windows-x86_64-pgo.zip`. We measure games on Windows 11 x64. |
+| Android 13 or newer, 64-bit Arm (`arm64-v8a`) | The APK ending in `-android-arm64.apk`. It needs a compatible Vulkan 1.1 driver and has not been boot-tested on a device by the project. No 32-bit or x86 Android APK. |
+| Linux, glibc 2.39 or newer | Choose `linux-x86_64` (x86-64-v3) or `linux-aarch64` (64-bit Arm). AppImage and tar.gz packages have standard and PGO variants. Steam Deck uses x86_64; we haven't tested SteamOS. |
+| macOS 15 or newer on Apple silicon | The `macos-arm64` DMG or ZIP. There is no Intel Mac package. |
+| Windows on Arm (Snapdragon X) | Look specifically for `-windows-arm64.zip`. CI targets native ARM64, but neither v20.5.1 nor the November 17, 2026 nightly published this ZIP. The Windows x64 installer is not a native ARM64 build. |
+
+For example, v20.5.1 has `guarana-20.5.1-android-arm64.apk` and the November 17 nightly has `guarana-nightly-android-arm64.apk`. Both identify as **Guarana Preview**. Check your download against `SHA256SUMS.txt` on its own release page; see [checksums, provenance and APK signing](docs/SIGNING.md). To help test a device, [report what booted or failed](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) with the build, device, OS and GPU driver.
+
 > [!NOTE]
-> **Guarana Setup** (since v20.1), the Windows installer and launcher, about 92 MB with WebView2 included, one click:
+> **Guarana Setup** (since v20.1), the Windows x64 installer and launcher:
 > - **One switch** for how it runs: Auto, Smooth, Quality or Battery.
 > - **Finds your own keys, firmware and games** on your own PC, with your consent, and sets up your controller automatically.
 > - **Autopilot** retunes after each session, with undo.
 > - **Doctor** finds common problems and offers fixes.
 > - **"Ask AI" buttons** open a prefilled Claude or ChatGPT chat with scrubbed diagnostics (you press send).
 >
-> Download `Guarana-Setup-<version>.exe` from [Releases](https://github.com/karimalsalah/guarana/releases/latest). Prefer no installer? The zip below is the whole install.
+> Prefer no installer? The Windows x64 ZIP contains the standalone emulator.
 
-**[Releases](https://github.com/karimalsalah/guarana/releases/latest)** is the only official download, for every platform:
-Windows x86-64 zips (plain and PGO), Linux x86-64 and ARM64 (AppImage and tar.gz, plain and PGO), macOS Apple silicon (dmg and zip),
-and `SHA256SUMS.txt` to check them ([how to verify a download](docs/SIGNING.md), build provenance and signatures included). Our own numbers on this page were measured on Windows, with a CPU with AVX2 and a current GPU driver.
+**Installing the portable Windows x64 ZIP:**
 
-1. **Download** the build for your system from [Releases](https://github.com/karimalsalah/guarana/releases/latest). To build it yourself: [docs/Build.md](docs/Build.md), or one command: `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` / `bash scripts/build-linux.sh`.
+1. **Download** the ZIP from your chosen release. To build from source instead: [docs/Build.md](docs/Build.md), or one command: `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` / `bash scripts/build-linux.sh`.
 2. **Extract** it to a writable folder and run **`guarana.exe`**.
 3. **Install your keys and firmware:** *Tools → Install Decryption Keys*, then *Tools → Install Firmware*.
 4. **Add your games folder** (double-click the empty game list) and start a game. Each new area compiles shaders and hitches once; later visits use the cache. `guarana-cli --warm-pipelines <title id>` builds the cached ones ahead of time ([docs/warm-up.md](docs/warm-up.md)).

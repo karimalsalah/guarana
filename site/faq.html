@@ -42,7 +42,7 @@
       "isPartOf": {
         "@id": "https://karimalsalah.github.io/guarana/#website"
       },
-      "dateModified": "2026-11-13",
+      "dateModified": "2026-11-18",
       "breadcrumb": {
         "@id": "https://karimalsalah.github.io/guarana/faq.html#breadcrumb"
       },
@@ -84,7 +84,7 @@
           "name": "How does frame generation work, and does it add input lag?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Guarana extrapolates: after the game renders a frame, it predicts the following frames by moving pixels along the game's own motion vectors. Nothing waits for a future frame, so it adds no latency, unlike interpolation, which has to hold the newest frame back. The HUD is handled separately so text and menus don't smear. Motion data is wired up for Ocarina of Time only so far, and frame generation pauses while HDR output is active."
+            "text": "In the 60 Hz setup for Ocarina of Time, Guarana extrapolates: it predicts a frame from the last real frame and the game's motion vectors without waiting for the next one. The locked 120 Hz and 144 Hz setups interpolate and do wait for the next frame. We have not published an end-to-end input latency measurement."
           }
         },
         {
@@ -124,7 +124,7 @@
           "name": "What do I need to run it?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file."
+            "text": "On Windows x64, the release needs an x86-64-v3 CPU (including AVX2), a Vulkan-capable GPU and a current driver. Our test system is a Windows 11 Core Ultra 9 285H laptop with Arc 140T, not a measured minimum. Other builds have different requirements. On any platform, bring your own keys, firmware and games."
           }
         },
         {
@@ -132,7 +132,7 @@
           "name": "Which graphics driver should I use?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "A current stable driver from Intel or AMD. Our Intel numbers use 32.0.101.9175, and a fix for an Intel driver cache race is in progress. Results can change between driver versions, so put your exact version in every report."
+            "text": "On Windows x64 with Intel or AMD graphics, use a current stable driver from the GPU vendor. Our Intel measurements used 32.0.101.9175. On another platform, report the driver you actually used (for example Mesa on Linux, or the stock driver or Turnip on Android), with its version."
           }
         },
         {
@@ -153,10 +153,10 @@
         },
         {
           "@type": "Question",
-          "name": "Does it run on Linux, SteamOS or macOS?",
+          "name": "Which platforms have downloads and which have been tested?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "We test on Windows 11 only. If a release lists builds for other systems, we haven't tested them; reports from Linux and Steam Deck users are welcome."
+            "text": "Only a Windows 11 x64 laptop with Intel Arc 140T has been measured by the project. Packages also exist for Android 13 or newer (arm64-v8a), Linux (x86_64 and aarch64, glibc 2.39 or newer) and macOS 15 or newer (Apple silicon). The Android APK has not been boot-tested by us, and SteamOS is untested. Windows on Arm is a build target: v20.5.1 and the November 17, 2026 nightly did not include a native Windows ARM64 ZIP."
           }
         },
         {
@@ -196,7 +196,7 @@
           "name": "Where is the official download?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Only on the GitHub releases page of github.com/karimalsalah/guarana. This website links there and never hosts downloads itself. Ignore other sites that offer Guarana downloads."
+            "text": "Open Assets on Guarana's latest stable GitHub release or on the nightly prerelease for testing. Match the file to your operating system and CPU, then verify it against SHA256SUMS.txt on that same release. This site does not host binaries."
           }
         }
       ]
@@ -276,7 +276,7 @@
 <li><a href="#drivers">Which graphics driver should I use?</a></li>
 <li><a href="#games">Which games work?</a></li>
 <li><a href="#stutter">Why does it stutter the first time I enter an area?</a></li>
-<li><a href="#platforms">Does it run on Linux, SteamOS or macOS?</a></li>
+<li><a href="#platforms">Which platforms have downloads and which have been tested?</a></li>
 <li><a href="#vs-lichii">How is Guarana different from Lichii?</a></li>
 <li><a href="#device-report">How do I send a device report?</a></li>
 <li><a href="#ai-agents">Can AI coding agents contribute?</a></li>
@@ -304,7 +304,7 @@
 </div>
 <div class="faq-item">
   <h3 id="frame-generation">How does frame generation work, and does it add input lag?</h3>
-  <p>Guarana extrapolates: after the game renders a frame, it predicts the following frames by moving pixels along the game's own motion vectors. Nothing waits for a future frame, so it adds no latency, unlike interpolation, which has to hold the newest frame back. The HUD is handled separately so text and menus don't smear. Motion data is wired up for Ocarina of Time only so far, and frame generation pauses while HDR output is active.</p>
+  <p>In the 60 Hz setup for Ocarina of Time, Guarana extrapolates: it predicts a frame from the last real frame and the game's motion vectors without waiting for the next one. The locked 120 Hz and 144 Hz setups interpolate and do wait for the next frame. We have not published an end-to-end input latency measurement.</p>
 </div>
 <div class="faq-item">
   <h3 id="frame-pacing">Does Guarana have smooth frame pacing?</h3>
@@ -324,11 +324,11 @@
 </div>
 <div class="faq-item">
   <h3 id="requirements">What do I need to run it?</h3>
-  <p>A Windows 11 x64 PC or handheld with a Vulkan-capable GPU and a current graphics driver, plus your own keys, firmware and games. Our measurements come from a Core Ultra 9 285H laptop with Arc 140T. There is no measured minimum yet. On Windows with 16 GB of RAM, enlarge the page file.</p>
+  <p>On Windows x64, the release needs an x86-64-v3 CPU (including AVX2), a Vulkan-capable GPU and a current driver. Our test system is a Windows 11 Core Ultra 9 285H laptop with Arc 140T, not a measured minimum. Other builds have <a href="./#get-it">different requirements</a>. On any platform, bring your own keys, firmware and games.</p>
 </div>
 <div class="faq-item">
   <h3 id="drivers">Which graphics driver should I use?</h3>
-  <p>A current stable driver from Intel or AMD. Our Intel numbers use 32.0.101.9175, and a fix for an Intel driver cache race is in progress. Results can change between driver versions, so put your exact version in every report.</p>
+  <p>On Windows x64 with Intel or AMD graphics, use a current stable driver from the GPU vendor. Our Intel measurements used 32.0.101.9175. On another platform, report the driver you actually used (for example Mesa on Linux, or the stock driver or Turnip on Android), with its version.</p>
 </div>
 <div class="faq-item">
   <h3 id="games">Which games work?</h3>
@@ -339,8 +339,9 @@
   <p>The emulator compiles shaders the first time it meets each effect, and the first visit pays for that. Later visits load them from the cache. A remaining pacing micro-stutter has its own fix in progress.</p>
 </div>
 <div class="faq-item">
-  <h3 id="platforms">Does it run on Linux, SteamOS or macOS?</h3>
-  <p>We test on Windows 11 only. If a release lists builds for other systems, we haven't tested them; reports from Linux and Steam Deck users are welcome.</p>
+  <h3 id="platforms">Which platforms have downloads and which have been tested?</h3>
+  <p>Only <a href="devices/arc-140t.html">a Windows 11 x64 laptop with Intel Arc 140T</a> has been measured by the project. Packages also exist for Android 13 or newer (<code>arm64-v8a</code>), Linux (x86_64 and aarch64, glibc 2.39 or newer) and macOS 15 or newer (Apple silicon). The Android APK has not been boot-tested by us, and SteamOS is untested.</p>
+  <p>Windows on Arm is a build target: v20.5.1 and the November 17, 2026 nightly did not include a native Windows ARM64 ZIP. <a href="./#get-it">See which file to look for</a> on the release you choose.</p>
 </div>
 <div class="faq-item">
   <h3 id="vs-lichii">How is Guarana different from Lichii?</h3>
@@ -360,7 +361,7 @@
 </div>
 <div class="faq-item">
   <h3 id="official-download">Where is the official download?</h3>
-  <p>Only on the GitHub releases page of github.com/karimalsalah/guarana. This website links there and never hosts downloads itself. Ignore other sites that offer Guarana downloads.</p>
+  <p>Open Assets on Guarana&rsquo;s <a href="https://github.com/karimalsalah/guarana/releases/latest">latest stable GitHub release</a> or on the <a href="https://github.com/karimalsalah/guarana/releases/tag/nightly">nightly prerelease</a> for testing. Match the file to your operating system and CPU, then verify it against <code>SHA256SUMS.txt</code> on that same release. This site does not host binaries.</p>
 </div>
 </section>
 <section class="section" aria-labelledby="guides">

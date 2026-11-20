@@ -9,12 +9,12 @@ Key facts:
 - Measured: the global-memory routing fix (EDEN_NX2_GM=11) took The Legend of Zelda: Ocarina of Time, Hyrule Field, from 14.75 to 22.83 game fps with frame generation off; the foliage draw fell from 15.7 to 5.8 ms of GPU time. One laptop, one scene.
 - Play configuration (frame generation on): previous build 19.6 game fps, v20 about 26.7. Measured at different spots: not an A/B comparison.
 - "Game fps" counts only frames the game renders, never generated frames.
-- Frame generation extrapolates new frames forward from the game's motion vectors, so it adds no latency; the HUD is handled separately. Motion data is wired up for Ocarina of Time only so far.
-- Release builds use ThinLTO and profile-guided optimization (PGO).
+- For Ocarina of Time the 60 Hz set extrapolates without waiting for a future real frame; the locked 120 and 144 Hz sets interpolate. No end-to-end input latency measurement has been published.
+- Windows x64 and Linux have standard and profile-guided optimization (PGO) packages.
 - Known issues: pacing micro-stutter (fix in progress: vblank-locked 16.67 ms presenter); first-visit shader compilation hitches; Intel driver cache race (fix in progress).
 - Third-party reports, not verified by us: about 30 fps in Ocarina of Time on a ROG Xbox Ally X (Ryzen Z2 Extreme, Radeon 890M-class GPU; Lichii issue #1433); Arc 140V 22-24 fps in gameplay (AlfaDev23's build).
 - No handheld has been measured by the maintainers yet. Device statuses: Tested (measured by maintainers), Community reports (others, other builds), Untested.
-- Official download: https://github.com/karimalsalah/guarana/releases/latest (GitHub Releases only).
+- Published packages in stable v20.5.1 and the November 17, 2026 nightly: Windows x64 (x86-64-v3), Android 13 or newer (arm64-v8a APK), Linux x86_64 and aarch64 (glibc 2.39 or newer), and macOS 15 or newer (Apple silicon). The Android APK is not device-tested by the project. Windows on Arm is a CI target, but neither release included a native Windows ARM64 ZIP.
 
 ## Pages
 
@@ -37,7 +37,7 @@ Key facts:
 ## Repository
 
 - [Source code](https://github.com/karimalsalah/guarana): GPL-3.0-or-later
-- [Latest release](https://github.com/karimalsalah/guarana/releases/latest): the only official download
+- [Latest stable release](https://github.com/karimalsalah/guarana/releases/latest) and [nightly prerelease](https://github.com/karimalsalah/guarana/releases/tag/nightly): official downloads. Check Assets on the chosen release against the [download guide](https://karimalsalah.github.io/guarana/#get-it).
 - [Device report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml): how to report results for any device
 - [AGENTS.md](https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md): rules for AI coding agents
 - [Testing protocol](https://github.com/karimalsalah/guarana/blob/HEAD/docs/TESTING.md): the 10-minute path for testers: install, stand in Hyrule Field, send a device report (the launcher can prefill it)

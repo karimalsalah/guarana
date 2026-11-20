@@ -48,7 +48,7 @@
       "headline": "Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED",
       "description": "Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.",
       "datePublished": "2026-11-13",
-      "dateModified": "2026-11-13",
+      "dateModified": "2026-11-18",
       "author": {
         "@type": "Organization",
         "name": "Guarana contributors",
@@ -176,7 +176,7 @@
 
 <h2 id="smooth">What smooth means</h2>
 <p>A display refreshes on a fixed beat. At 60 Hz that beat is 16.67 ms. The panel on our test laptop is a 120 Hz OLED, so it refreshes twice in every 16.67 ms slot. Pacing is about evenness: if one frame stays up for one slot and the next for two, motion visibly hitches, even when the average frame rate looks fine. A panel that switches pixels as fast as an OLED does nothing to blur that away.</p>
-<p>Frame generation fills the slots the game did not render. In Guarana it predicts instead of interpolating: each generated frame moves the newest real frame's pixels forward along the game's own motion vectors, using depth to decide which surface is in front. Because it never waits for a future frame, it adds no latency. The HUD is kept apart, so text and menus are not dragged along with the scenery.</p>
+<p>Frame generation fills the slots the game did not render. In the setup measured here it predicts instead of interpolating: each generated frame moves the newest real frame's pixels forward along the game's own motion vectors, using depth to decide which surface is in front. Extrapolation does not wait for a future frame. These frame times are not a measurement of input latency. The HUD is kept apart, so text and menus are not dragged along with the scenery.</p>
 
 <h2 id="today">Where v20 stands</h2>
 <p>In the frame-generation play config, the previous build was locked to 50 ms frames, 19.6 game fps. v20 reads about 26.7 game fps live. That is a live reading, not a same-spot A/B, so treat it as a sign rather than a measurement. Game fps counts only the frames the game renders.</p>

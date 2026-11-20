@@ -42,7 +42,7 @@
       "isPartOf": {
         "@id": "https://karimalsalah.github.io/guarana/#website"
       },
-      "dateModified": "2026-11-13",
+      "dateModified": "2026-11-18",
       "about": {
         "@type": "SoftwareApplication",
         "name": "Guarana",
@@ -177,9 +177,9 @@
 <div class="wrap">
 <section class="section" aria-labelledby="path">
   <h2 id="path">The 5-minute path</h2>
-  <p class="section-intro">On Windows, Guarana Setup (since v20.1) installs and updates the emulator in one click; the zip is the same emulator without an installer.</p>
+  <p class="section-intro">On Windows x64, Guarana Setup installs and updates the emulator; the ZIP is the standalone emulator without an installer.</p>
 <ol class="steps">
-<li><h3>Download</h3><p>Get the Windows x86-64 zip from the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest release</a>, the only official download. Check it against <code>SHA256SUMS</code> on the same page.</p></li>
+<li><h3>Download</h3><p>Get the ZIP ending in <code>-windows-x86_64.zip</code> from Assets on the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest stable release</a>. Check it against <code>SHA256SUMS.txt</code> on that same release.</p></li>
 <li><h3>Extract and run</h3><p>Extract to a writable folder and start <code>guarana.exe</code>.</p></li>
 <li><h3>Bring your own keys and firmware</h3><p><em>Tools &rarr; Install Decryption Keys</em>, then <em>Tools &rarr; Install Firmware</em>, with files you dumped from hardware you own. Guarana includes neither and will not tell you where to find them.</p></li>
 <li><h3>Add your game</h3><p>Double-click the empty game list, pick the folder with your own game dump, start <em>The Legend of Zelda: Ocarina of Time</em>. Each new area compiles shaders and hitches once; later visits use the cache (<a href="fix-stutter-switch-2-emulator.html">why, and what helps</a>).</p></li>
@@ -265,7 +265,7 @@
     <p>Guarana is free and open source (GPL-3.0-or-later). It ships no keys, firmware or games: you bring your own, dumped from hardware you own.</p>
     
     <ul>
-      <li><strong>Download:</strong> the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest release</a> is the only official download.</li>
+      <li><strong>Download:</strong> <a href="./#get-it">choose the package for your device</a> on the <a href="https://github.com/karimalsalah/guarana/releases/latest">stable release</a> or <a href="https://github.com/karimalsalah/guarana/releases/tag/nightly">nightly prerelease</a>.</li>
       <li><strong>Stuck?</strong> Ask in the <a href="https://discord.gg/urz7vMdRM">Discord</a> (bugs and device reports stay on GitHub so they are tracked).</li>
       <li><strong>Test:</strong> a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> needs no code and puts your device on the <a href="benchmarks.html">leaderboard</a>.</li>
       <li><strong>Contribute with your AI agent:</strong> one sentence gets Claude Code, Codex, Gemini CLI, Cursor or Copilot to a pull request. Start at the <a href="agents.html">agents page</a>, or see <a href="wins.html">open wins</a> with numbers.</li>
