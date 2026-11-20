@@ -7,9 +7,15 @@ It needs no code: [fill the form](https://github.com/karimalsalah/guarana/issues
 [`tools/ingest`](tools/ingest) parses it → CI validates the row and updates the
 [leaderboard](https://karimalsalah.github.io/guarana/benchmarks.html) pull request; verified reports earn a row in
 [docs/DEVICES.md](docs/DEVICES.md).
+After you submit, a bot comments the row it parsed on your issue and opens the leaderboard pull
+request; a maintainer merges it, and the row shows on the benchmarks page. Even "it does not run"
+is a useful report: it tells the next person with that device what to expect.
 Join the [call for testers (#55)](https://github.com/karimalsalah/guarana/issues/55).
 
 Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Chat, setup help and "is anyone on this?" go to the Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM); questions that deserve a lasting answer go to [Discussions](https://github.com/karimalsalah/guarana/discussions). Bugs and device reports stay on GitHub so they can be tracked.
+Report Guarana bugs here even when you suspect the shared engine: maintainers track upstream
+[Lichii](https://github.com/zortos293/Lichii) and port fixes back. If you also reported upstream,
+link the two issues in both places so nobody debugs the same crash alone.
 
 Using an AI tool? [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md) gets Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline or a plain web chat from zero to a pull request, one command each.
 
@@ -22,6 +28,26 @@ Using an AI tool? [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md) gets Claude Cod
 5. Open a pull request into `main` and fill in the template. CI builds Linux and Windows, runs the tests, and comments a Windows test build on your pull request.
 
 Do not have a compiler set up? Skip step 4's build: CI builds every pull request for you, and the test build it links is what testers run.
+
+Building by hand instead of the one-line commands? [docs/Build.md](docs/Build.md) is the guided
+path per platform, and [docs/Deps.md](docs/Deps.md) lists every dependency and where to get it.
+
+## Find work
+
+The issue tracker is the queue. Labels say what kind of help an issue needs:
+
+| Label | Meaning | Queue |
+|---|---|---|
+| `good first issue` | Small, well defined, acceptance test written down | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22%20-label%3Aclaimed) |
+| `help wanted` | A pull request (or a device report) would be welcomed | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22%20-label%3Aclaimed) |
+| `agent-ready` | Goal, files, acceptance test and measurement are in the issue; comment `/claim` first | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aclaimed) |
+| `needs-device-data` | Needs measurements from hardware the maintainers do not have | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aneeds-device-data) |
+| `device-report` | A report that came in from a device; read it before buying that hardware | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevice-report) |
+| `experiment` | Measurement first: no verified gain yet, results may be negative | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aexperiment) |
+| `needs-triage` | Not looked at by a maintainer yet; reproducing it is already a contribution | [open](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aneeds-triage) |
+
+`claimed` means someone is on it (released after 72 h without a pull request). If no queue fits,
+open an issue describing what you want to do; a maintainer will scope it with you.
 
 ## The quality bar
 
@@ -82,6 +108,16 @@ Its row in [docs/switches.md](docs/switches.md) is part of the same pull request
 
 - Commit subjects are `area: change`, in the imperative: `vulkan: keep vertex input dynamic state on Intel 101.x drivers`. The body says why, and for a performance change the device, scene, before and after numbers, and how many runs.
 - One topic per pull request, with its tests, its switch rows and a changelog entry: a small file `changelog.d/<slug>.<section>.md` (see [changelog.d/README.md](changelog.d/README.md)), so pull requests do not conflict in `CHANGELOG.md`.
+- The fragment format at a glance: `<slug>` is lower-case letters, digits and hyphens; `<section>` is
+  `added`, `changed`, `fixed`, `removed`, `deprecated` or `security`; the first line starts with `- `
+  and continuation lines indent two spaces. Example, `changelog.d/flush-cache-on-exit.fixed.md`:
+
+  ```md
+  - Shader cache: the driver cache is flushed once at exit, not on every pipeline
+    ([#106](https://github.com/karimalsalah/guarana/issues/106)).
+  ```
+
+  Documentation-only pull requests need no fragment: CI skips the builds and the changelog check.
 - Lanes (`main`, `release/vX.Y`, `hotfix/*`, `exp/*`, `upstream`) and releases are in [docs/LANES.md](docs/LANES.md).
 
 ## Upstream first
