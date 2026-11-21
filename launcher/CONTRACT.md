@@ -28,7 +28,7 @@ Hard rules (legal and trust):
 | `import_keys` | `{ path }` | `ImportResult` |
 | `add_game_folder` | `{ path }` | `Game[]` |
 | `list_games` | – | `Game[]` |
-| `apply_profile` | `{ profile_id, overrides?: Record<string,string\|number\|boolean> }` | `AppliedProfile`. `overrides` holds only the toggles that differ from `Toggle.default`. A manual apply sets the mode to `custom` |
+| `apply_profile` | `{ profile_id, overrides?: Record<string,string\|number\|boolean> }` | `AppliedProfile`. `overrides` holds only the toggles that differ from `Toggle.default`. A manual apply sets the mode to `custom`. Every apply (also a mode's at each start) removes the emulator settings page's mode block (`# >>> Guarana mode`) from `nx2_switches.txt` and sets the page's `[UI] guarana_mode` to `custom`, so the launcher is the one place the mode is set; `changed` says so. Custom mode's rewrite of the launcher's block at each start leaves them |
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
