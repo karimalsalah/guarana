@@ -32,7 +32,7 @@ Hard rules (legal and trust):
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
-| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `%LOCALAPPDATA%\Guarana\app\guarana.exe --launcher-session -f -g <file>` (see "Program folder"), or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
+| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `%LOCALAPPDATA%\Guarana\app\guarana.exe --launcher-session -f -g <file>` (see "Program folder"), or `-f -g <file>` for a build whose program does not know the option, 20.2.0 and older (see "Launcher session") |
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
@@ -354,14 +354,16 @@ A code of 1 can arrive late (the player may leave the load error open for minute
 alone does not tell a failed start from a session; the autopilot ignores a code-1 session that
 showed no frame (`autopilot::decide`).
 
-Only versions that understand the flag get it: a stable version of 20.3.0 or later
-(`LAUNCHER_SESSION_SINCE` in `launch.rs`, compared with `current.json`). The flag was added when the
-repository's `VERSION` read 20.2.0; the assumption is that the next release is 20.3.0 or later. A
-nightly, a pre-release or any other label gets `-f -g <file>` only, as do older versions the
-launcher installs or rolls back to: they show the emulator's window around the game and go back to
-its game list when the game stops, until the player closes it. An older build that receives it
-ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the gate is
-about behaviour, not safety.
+Only builds that understand the flag get it. The launcher reads that from the program: the
+option's name, `launcher-session`, is in the emulator's option table (`src/core/launch_params.cpp`),
+and `understands_launcher_session` in `launch.rs` looks for it in the executable, once per file, size
+and time (`util::program_knows`, the same check `warm_shaders` makes for `--warm-pipelines`). So
+every build since the flag was added gets it, nightlies and release candidates included, whatever
+their version label says. Builds from before it (20.2.0 and older), which the launcher can install
+or roll back to, get `-f -g <file>` only: they show the emulator's window around the game and go
+back to its game list when the game stops, until the player closes it. An older build that receives
+the flag ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the
+gate is about behaviour, not safety.
 
 ## Opening games from Windows
 
