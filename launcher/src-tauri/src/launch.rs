@@ -281,6 +281,9 @@ pub fn launch(
     // and from the foreground watcher; both stop once the game is shown or the process is gone.
     let boot_done = Arc::new(AtomicBool::new(false));
     let exit_done = boot_done.clone();
+    // The launcher's window steps aside while the game plays and comes back at its exit.
+    let stage = boot::Stage::default();
+    let exit_stage = stage.clone();
     let boot_out = if had_game { child.stdout.take() } else { None };
     std::thread::Builder::new()
         .name("game-watch".into())
@@ -295,14 +298,17 @@ pub fn launch(
             log::info!("Guarana (pid {pid}) exited with {code} after {seconds:.0} s");
             let _ = app2.emit(EXITED_EVENT, GameExited { code, seconds });
             if had_game {
-                // Back to the launcher at once; to the front only if the player was not in another app.
-                if let Some(window) = app2.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
-                        let _ = window.set_focus();
+                // Back to the launcher at once, under the stage's lock so a late hide cannot follow; to
+                // the front only if the player was not in another app.
+                exit_stage.end(|| {
+                    if let Some(window) = app2.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
+                            let _ = window.set_focus();
+                        }
                     }
-                }
+                });
                 let info = autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery };
                 crate::share::after_session(&app2, &info);
                 autopilot::after_session(&app2, info);
@@ -317,9 +323,9 @@ pub fn launch(
     // After the game-watch thread exists, so `boot_done` is always set when the process ends.
     if had_game {
         if let Some(out) = boot_out {
-            boot::follow(app, out, boot_done.clone(), timeline);
+            boot::follow(app, out, boot_done.clone(), stage.clone(), timeline);
         }
-        boot::watch_foreground(app, pid, boot_done, timeline);
+        boot::watch_foreground(app, pid, boot_done, stage, !follow_boot, timeline);
     }
 
     // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on

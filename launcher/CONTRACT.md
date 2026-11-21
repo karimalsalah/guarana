@@ -284,6 +284,7 @@ moment `launch_game` reached the backend):
     Launch timeline: process spawned (pid 1234) at +75.3 ms
     Launch timeline: boot phase starting at +410.2 ms          (each boot phase, once, with the counts for shaders and precache)
     Launch timeline: emulator window has the foreground at +980.0 ms
+    Launch timeline: launcher hidden while the game plays at +9310.4 ms
     Launch timeline: process exited with 0 at +612345.6 ms
 
 The boot phases are the ones in the table below, logged when the launcher first sees them (the
@@ -346,9 +347,19 @@ first frame (a topmost launcher, or the emulator cloaking its window) is not don
 launcher would hide the emulator's dialogs (load errors, user selection, the software keyboard)
 behind it, and the cloaked window needs a check on a device first.
 
+While a game plays, the launcher's window steps aside: it is hidden (`boot::Stage`), so the game
+is the one window on screen, in Alt+Tab and on the taskbar. That happens at the boot phase
+`first-frame` or `shown`, whichever comes first; for a build that writes no boot, when its window
+has the foreground (`window`). Until then the launch stage stays reachable with Alt+Tab while the
+shaders load, and an emulator dialog before the first frame (a load error, a missing key) leaves it
+in place. A second start of the launcher (its Start menu entry, a game file, a `guarana://` link)
+shows it at any time.
+
 `game://exited` brings the launcher back as soon as the process is gone: it is restored if
 minimized and shown, and brought to the front (`set_focus`) only when the foreground window at the
 exit belongs to the emulator, the launcher or nobody: a player who moved to another app keeps it.
+The hide and this show take one lock, and no hide follows the exit, so a watcher that sees the
+game's window in its last moment never leaves the launcher hidden with no game running.
 `code` is that exit code.
 A code of 1 can arrive late (the player may leave the load error open for minutes), so `seconds`
 alone does not tell a failed start from a session; the autopilot ignores a code-1 session that

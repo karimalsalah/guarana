@@ -39,7 +39,8 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   While the game boots, the launch screen shows what the emulator is doing (loading the game,
   loading shaders with the real count, starting the game), read from the boot marks the emulator
   writes to the launcher in a launcher session, and it switches to "Playing" once the game is on
-  screen. When the game exits, the launcher comes back to the front.
+  screen. From the game's first frame the launcher hides, so the game is the one window and taskbar
+  button while it plays; when the game exits, the launcher comes back to the front.
   `launcher.log` stamps its lines to the millisecond and records each start's timeline (Play
   pressed, command built, process spawned, each boot phase, the exit). With the environment switch
   `EDEN_NX2_LAUNCHER_PAD_IDLE=1` (off by default, not measured) the launcher stops polling
