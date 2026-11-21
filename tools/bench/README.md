@@ -231,10 +231,11 @@ client size; a fullscreen swapchain that differs from the window's size gives th
 or `exclusive`; `fullscreen_mode_from` says whether it was the platform default, Borderless on
 Windows and Exclusive elsewhere, or set in the settings file; a per-game config can still override
 it and is not read). A fullscreen row without a size is invalid (`output_size_unknown`):
-nobody could tell what the output step cost. `table`, `compare` and the suite table keep windowed
-and fullscreen rows apart: they add a `display` column when any row is fullscreen, match rows
-by scene, variant and display mode, and never give a percentage between a windowed and a
-fullscreen row (the suite table says `not compared` instead).
+nobody could tell what the output step cost. `table`, `compare` and the suite's fps table keep
+different output sizes apart, even within one display mode: a 720p fullscreen run is not a
+4K fullscreen baseline. The `display` column appears when any row is fullscreen or the sizes
+differ. Older windowed rows can use the recorded window size; if no size was recorded their fps
+is still shown, without a percentage. The monitor's desktop resolution is not the window size.
 
 ### Pacing
 
@@ -330,7 +331,8 @@ A row has `"valid": true` only when all of these hold; otherwise `invalid_reason
 `fullscreen_off_in_settings` (fullscreen was asked for; the scene's or the variant's settings ran
 it windowed), `output_size_not_window_size` (a fullscreen swapchain of another size than the window).
 
-Invalid rows stay in the file; `table` shows the newest valid row per scene and variant.
+Invalid rows stay in the file; `table` shows the newest valid row per scene, variant, display mode
+and output size (also per cache state for boot suites).
 
 ## Row schema (`schema_version` 1)
 
@@ -413,9 +415,11 @@ python -I tools/bench/bench.py table results [--all] [--out RESULTS.md | --check
 ```
 
 Both print markdown: variant, fps, p50, p99, sustained min / avg fps, watts and `scene_ok`; the
-display mode when any row is fullscreen, and the shown frames when any row has `pacing`.
-`compare` gives a percentage only where both rows are valid and matches rows by scene, variant
-and display mode. `table` leaves probe rows out.
+display mode and size when any row is fullscreen or the sizes differ, and the shown frames when
+any row has `pacing`. `compare` matches rows by scene, variant, display mode and output size. Its
+percentage requires two valid, scene-verified rows with a known size. Across machines or sessions
+it describes the fps difference; to measure a switch, run both variants on the same device in one
+session. `table` leaves probe rows out.
 
 ## Play
 

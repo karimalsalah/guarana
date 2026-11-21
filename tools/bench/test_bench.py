@@ -1066,9 +1066,10 @@ class TableTest(unittest.TestCase):
     def test_compare(self):
         other = json.loads(json.dumps(HARDWARE))
         other["gpus"][0]["name"] = "Other GPU"
-        fast = dict(good_row(), hardware=other, machine_id=bench.machine_id(other), fps=66.0, watts=45.0)
+        base = dict(good_row(), window="1280x720")
+        fast = dict(base, hardware=other, machine_id=bench.machine_id(other), fps=66.0, watts=45.0)
         only_b = dict(fast, variant="extra")
-        text = bench.render_compare(self.write("a.jsonl", [good_row()]), self.write("b.jsonl", [fast, only_b]))
+        text = bench.render_compare(self.write("a.jsonl", [base]), self.write("b.jsonl", [fast, only_b]))
         self.assertIn("**A**: `a.jsonl`, machine `" + bench.machine_id(HARDWARE), text)
         self.assertIn("| oot-hyrule-field | baseline | 55.0 | 66.0 | +20.0% | 18.2 / 18.2 | 27.3 / 27.3 | - | - | "
                       "- / 45.0 | yes / yes |", text)
@@ -1993,12 +1994,13 @@ class SuiteTest(RunCase):
         self.assert_left_clean()
 
     def test_comparison_table(self):
-        rows = [dict(good_row(), variant="baseline", fps=50.0),
-                dict(good_row(), variant="fast", fps=60.0, watts=27.5, gpu_mhz=2200, gpu_limited_by="Power",
+        base = dict(good_row(), window="1280x720")
+        rows = [dict(base, variant="baseline", fps=50.0),
+                dict(base, variant="fast", fps=60.0, watts=27.5, gpu_mhz=2200, gpu_limited_by="Power",
                      late={"fps": 41.0}),
-                dict(good_row(), variant="broken", fps=70.0, valid=False, invalid_reasons=["wrong_scene"]),
-                dict(good_row(), variant="probe", fps=75.0, probe=True, reject=["78134ce8125d5959"]),
-                dict(good_row(), variant="alone", fps=80.0)]
+                dict(base, variant="broken", fps=70.0, valid=False, invalid_reasons=["wrong_scene"]),
+                dict(base, variant="probe", fps=75.0, probe=True, reject=["78134ce8125d5959"]),
+                dict(base, variant="alone", fps=80.0)]
         compare_to = {("oot-hyrule-field", name): "baseline" for name in ("baseline", "fast", "broken", "probe")}
         text = bench.render_suite(rows, compare_to)
         self.assertIn("| oot-hyrule-field | baseline | 50.0 | baseline |", text)
@@ -2519,8 +2521,8 @@ class DisplayTableTest(unittest.TestCase):
     setUp = TableTest.setUp
     write = TableTest.write
 
-    def fullscreen(self, **fields):
-        return dict(good_row(), fullscreen=True, output={"size": "2880x1800", "size_from": "swapchain"}, **fields)
+    def fullscreen(self, size="2880x1800", **fields):
+        return dict(good_row(), fullscreen=True, output={"size": size, "size_from": "swapchain"}, **fields)
 
     def test_header_is_the_old_one_without_new_fields(self):
         self.assertEqual(bench.table_header(), bench.TABLE_HEADER)
@@ -2576,11 +2578,46 @@ class DisplayTableTest(unittest.TestCase):
         self.assertIn("| 112.4 | 8.3 / 16.6 | 82% | 1136 / 1199 |", text)
 
     def test_compare_never_crosses_display_modes(self):
-        text = bench.render_compare(self.write("a.jsonl", [good_row()]),
+        text = bench.render_compare(self.write("a.jsonl", [dict(good_row(), window="2880x1800")]),
                                     self.write("b.jsonl", [self.fullscreen(fps=66.0)]))
-        self.assertIn("| oot-hyrule-field | baseline | fullscreen | - | 66.0 | - |", text)
-        self.assertIn("| oot-hyrule-field | baseline | windowed | 55.0 | - | - |", text)
+        self.assertIn("| oot-hyrule-field | baseline | fullscreen 2880x1800 | - | 66.0 | - |", text)
+        self.assertIn("| oot-hyrule-field | baseline | windowed 2880x1800 | 55.0 | - | - |", text)
         self.assertIn(bench.MIXED_NOTE, text)
+
+    def test_compare_keeps_the_matching_output_on_another_gpu(self):
+        base = self.fullscreen("3840x2160")
+        control = self.fullscreen("3840x2160")
+        control["hardware"]["gpus"][0]["name"] = "Other GPU"
+        control["machine_id"] = bench.machine_id(control["hardware"])
+        smaller = dict(control, timestamp_utc="2026-11-11T12:10:00Z", fps=66.0, windows_fps=[66.0] * 3,
+                       window="3840x2160", output={"size": "1280x720", "size_from": "swapchain"})
+        self.assertEqual([bench.validate_row(row) for row in (base, control, smaller)], [[], [], []])
+        text = bench.render_compare(self.write("a.jsonl", [base]), self.write("b.jsonl", [control, smaller]))
+        self.assertIn("| fullscreen 3840x2160 | 55.0 | 55.0 | +0.0% |", text)
+        self.assertIn("| fullscreen 1280x720 | - | 66.0 | - |", text)
+        self.assertNotIn("+20.0%", text)
+        page = bench.render_table(self.folder)
+        self.assertEqual(page.count("| baseline | fullscreen 3840x2160 | 55.0 |"), 2)
+        self.assertIn("| baseline | fullscreen 1280x720 | 66.0 |", page)
+
+    def test_unknown_window_sizes_are_not_a_match_for_a_percentage(self):
+        base = good_row()
+        known = dict(base, window="1280x720")
+        modern = dict(base, output={"size": "1280x720", "size_from": "swapchain"})
+        text = bench.render_compare(self.write("a.jsonl", [base, known]),
+                                    self.write("b.jsonl", [dict(base, window="unknown"), modern]))
+        self.assertIn("| windowed | 55.0 | 55.0 | - |", text)
+        self.assertIn("| windowed 1280x720 | 55.0 | 55.0 | +0.0% |", text)
+
+    def test_suite_matches_its_baseline_at_the_actual_output_size(self):
+        rows = [self.fullscreen("3840x2160"), self.fullscreen("3840x2160", variant="match"),
+                self.fullscreen("1280x720"), self.fullscreen("1920x1080", variant="alone", fps=66.0)]
+        compare_to = {(row["scene"], row["variant"]): "baseline" for row in rows}
+        text = bench.render_suite(rows, compare_to)
+        self.assertIn("| match | fullscreen 3840x2160 | 55.0 | +0.0% vs baseline |", text)
+        self.assertIn("| alone | fullscreen 1920x1080 | 66.0 | not compared: baseline ran "
+                      "fullscreen 3840x2160, fullscreen 1280x720 |", text)
+        self.assertNotIn("+20.0%", text)
 
     def test_suite_says_when_it_does_not_compare(self):
         rows = [good_row(), self.fullscreen(variant="full", fps=60.0, pacing=PACING)]

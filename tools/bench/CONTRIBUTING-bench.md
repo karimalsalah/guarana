@@ -44,8 +44,8 @@ shows whether the GPU keeps its clock once warm. Do not add `--base-ini`, `--mod
 `--power-policy` unless you say so in the PR: they make your baseline a different one.
 
 If you play fullscreen, run the suite a second time with `--fullscreen`: that measures what you
-see, the screen output step at your display's size included. Fullscreen rows are listed apart from
-windowed ones and never compared with them. Add `--pacing` to record the presenter's pacing; it
+see, the screen output step at your display's size included. Compare fps at the same output size
+and in the same display mode. Add `--pacing` to record the presenter's pacing; it
 changes the measured path (see the README, "Pacing"), so say so in the PR.
 
 ## 4. Validate
@@ -72,9 +72,10 @@ A row is invalid (`"valid": false`, with the reason in `invalid_reasons`) when
 - `error`: boot, input or measurement failed; `error` says what;
 - `schema`: the row itself is malformed. That is a bug: report it.
 
-Rerunning appends rows; `table` picks the newest valid one per variant. Keep the invalid rows in
-the file, and never edit a row by hand: `validate` checks the median, the machine id and the
-consistency of `valid`, and a reviewer will ask for a rerun.
+Rerunning appends rows; `table` picks the newest valid one for each machine, scene, variant,
+display mode and output size, keeping boot cache states apart. Keep the invalid rows in the file,
+and never edit a row by hand: `validate` checks the median, the machine id and the consistency of
+`valid`, and a reviewer will ask for a rerun.
 
 Rows with warnings are accepted. `on_battery` rows are not comparable with plugged-in ones, so
 rerun on AC if you can. `no_power_reading` only means the `watts` column stays empty.
