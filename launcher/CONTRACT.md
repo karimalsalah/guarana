@@ -147,7 +147,9 @@ interface StopResult { was_running: boolean; title_id: string | null; stopped: b
 interface AskAi { service: "claude" | "chatgpt"; url: string; prompt: string; url_chars: number; }
 interface LaunchRequest { source: "file" | "link";  // Explorer, a shortcut or a second start; or guarana://
   game: Game | null;                  // checked; `container` is "other" and `title_id` may be "" for an .nca
-  error: string | null; }             // why it can't start, to show as is
+  error: string | null;               // why it can't start, to show as is
+  screen?: "updates";                 // guarana://updates: show the Updates screen instead of a game
+  channel?: "stable" | "nightly"; }   // the channel that link names
 interface Notifications { enabled: boolean; }
 
 interface BoosterLevelInfo { level: number; title: string; summary: string;
@@ -387,9 +389,14 @@ launcher.
     (`CON`, `NUL`, `COM1` …), extension `.nsp` `.xci` `.nup` or `.nca`; it must sit inside one of the
     game folders the user added, and only then is the disk read: a regular file, not a link to one.
     `%20` is a space and `+` stays a plus.
+  - `guarana://updates` (optionally `?channel=stable` or `?channel=nightly`): shows the Updates
+    screen, which checks for an update as it opens. The emulator's Help > Check for Updates opens it
+    on Windows (`src/lichii/main_window.cpp`; the releases page when the scheme is not registered).
+    It never installs anything by itself.
   - Refused: any other scheme, action or parameter, a user name, password, port or fragment, repeated
     parameters, both or neither of a title id and a path, links over 2048 characters. A link only
-    ever picks a game for `launch_game`; it never names a program, an argument or a setting.
+    ever picks a game for `launch_game` or shows the Updates screen; it never names a program, an
+    argument or a setting.
 - **The UI** takes the request with `take_launch_request` and opens the launch screen, which calls
   `launch_game` with the `path` (and `title_id` when known), the same start as a library game. It
   shows `error` instead, and does not navigate while a game starts or runs, before the first run is

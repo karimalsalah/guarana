@@ -64,6 +64,49 @@ pub enum Link {
 
 const NOT_A_LINK: &str = "Not a Guarana link. Use guarana://launch/<title id> or guarana://launch?path=<file>";
 
+/// What a `guarana://` link asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Start this game.
+    Launch(Link),
+    /// Show the Updates screen, on this channel (`stable` or `nightly`) when the link names one.
+    Updates(Option<String>),
+}
+
+/// Reads a link: `guarana://updates` (optionally `?channel=stable|nightly`), which the emulator's
+/// Help > Check for Updates opens, or a game link (`parse_link`). An updates link takes nothing
+/// else: no path, no other parameter, no user name, password, port or fragment.
+pub fn parse_request(text: &str) -> Result<Request, String> {
+    let text = text.trim();
+    let Ok(url) = url::Url::parse(text) else { return parse_link(text).map(Request::Launch) };
+    if url.scheme() != SCHEME || !url.host_str().is_some_and(|h| h.eq_ignore_ascii_case("updates")) {
+        return parse_link(text).map(Request::Launch);
+    }
+    if text.chars().count() > MAX_LINK_CHARS
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.fragment().is_some()
+        || url.path().split('/').any(|s| !s.is_empty())
+    {
+        return Err(NOT_A_LINK.into());
+    }
+    let mut channel = None;
+    for (key, value) in query_params(url.query().unwrap_or(""))? {
+        if key != "channel" {
+            return Err(format!("Unknown link parameter {key}: use channel"));
+        }
+        if channel.replace(value).is_some() {
+            return Err("The link gives channel twice".into());
+        }
+    }
+    match channel.map(|c| c.trim().to_ascii_lowercase()) {
+        None => Ok(Request::Updates(None)),
+        Some(c) if c == "stable" || c == "nightly" => Ok(Request::Updates(Some(c))),
+        Some(other) => Err(format!("Unknown channel {other}: use stable or nightly")),
+    }
+}
+
 /// Reads `guarana://launch/<title id>`, `guarana://launch?title_id=<title id>` or
 /// `guarana://launch?path=<percent-encoded full path>`. Everything else is refused: another scheme
 /// or action, a user name, password, port or fragment, more path segments, unknown or repeated
@@ -246,6 +289,30 @@ mod tests {
         assert_eq!(parse_link("guarana://launch?path=D:%5CMy%20Games%5CA+B.nsp"), link_path(r"D:\My Games\A+B.nsp"));
         assert_eq!(parse_link(r"guarana://launch?path=D:\My Games\A%2BB.nup"), link_path(r"D:\My Games\A+B.nup"));
         assert_eq!(parse_link("guarana://launch?path=D:%5CSpi%C3%A9le%5Cg.nca"), link_path("D:\\Spi\u{e9}le\\g.nca"));
+    }
+
+    #[test]
+    fn update_links() {
+        assert_eq!(parse_request("guarana://updates"), Ok(Request::Updates(None)));
+        assert_eq!(parse_request("guarana://updates/"), Ok(Request::Updates(None)));
+        assert_eq!(parse_request("GUARANA://Updates?channel=Nightly"), Ok(Request::Updates(Some("nightly".into()))));
+        assert_eq!(parse_request("guarana://updates?channel=stable"), Ok(Request::Updates(Some("stable".into()))));
+        assert_eq!(
+            parse_request("guarana://launch/0400486024DEC000"),
+            Ok(Request::Launch(Link::TitleId("0400486024dec000".into())))
+        );
+        for bad in [
+            "guarana://updates?channel=beta",
+            "guarana://updates?channel=stable&channel=nightly",
+            "guarana://updates?path=D:%5Cg.nsp",
+            "guarana://updates/install",
+            "guarana://updates#x",
+            "guarana://user@updates",
+            "guarana://updates:8080",
+            "guarana://update",
+        ] {
+            assert!(parse_request(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

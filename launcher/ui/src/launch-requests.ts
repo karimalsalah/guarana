@@ -20,6 +20,10 @@ export function initLaunchRequests(): void {
 async function claim(): Promise<void> {
   const request = await api.takeLaunchRequest().catch(() => null);
   if (!request) return;
+  if (request.screen === "updates") {
+    await showUpdates(request.channel);
+    return;
+  }
   const game = request.game;
   if (!game) {
     toast(request.error ?? "That game can't be started.", { tone: "fail" });
@@ -40,4 +44,21 @@ async function claim(): Promise<void> {
     return;
   }
   await go("launch", { params: { game, byPath: true }, transition: "fade" });
+}
+
+/** guarana://updates: the emulator's Help > Check for Updates. The Updates screen checks when it opens. */
+async function showUpdates(channel?: "stable" | "nightly"): Promise<void> {
+  if (currentScreen() === "launch" && !document.querySelector(".launch.is-failed")) {
+    toast("Updates can be checked once the game is closed.", { tone: "info" });
+    return;
+  }
+  if (channel) {
+    try {
+      // The Updates screen keeps its channel here.
+      localStorage.setItem("guarana.channel", channel);
+    } catch {
+      /* ignore */
+    }
+  }
+  await go("updates", { transition: "fade" });
 }

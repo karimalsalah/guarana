@@ -241,11 +241,26 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 
 #include <QPlatformSurfaceEvent>
 #include <QSettings>
+#include <QUrl>
 #include <dwmapi.h>
 #include <windows.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "Dwmapi.lib")
 #endif
+
+// Help > Check for Updates hands off to the Guarana launcher, which installs and switches versions
+// (issue #44): its Updates screen, through the guarana:// link its installer registers for the
+// current user. Without the launcher, the releases page.
+static void OpenLauncherUpdates() {
+    const QSettings scheme(QStringLiteral("HKEY_CURRENT_USER\\Software\\Classes\\guarana"),
+                           QSettings::NativeFormat);
+    if (scheme.contains(QStringLiteral("URL Protocol")) &&
+        QDesktopServices::openUrl(QUrl(QStringLiteral("guarana://updates")))) {
+        return;
+    }
+    QDesktopServices::openUrl(
+        QUrl(QStringLiteral("https://github.com/karimalsalah/guarana/releases/latest")));
+}
 
 static inline void ApplyWindowsTitleBarDarkMode(HWND hwnd, bool enabled) {
     if (!hwnd)
@@ -2035,7 +2050,9 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_Folder, &MainWindow::OnInstallFirmware);
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
-#ifdef ENABLE_UPDATE_CHECKER
+#if defined(_WIN32)
+    connect_menu(ui->action_Check_For_Updates, [] { OpenLauncherUpdates(); });
+#elif defined(ENABLE_UPDATE_CHECKER)
     connect_menu(ui->action_Check_For_Updates, [this] { CheckForUpdates(true); });
 #else
     ui->action_Check_For_Updates->setVisible(false);
