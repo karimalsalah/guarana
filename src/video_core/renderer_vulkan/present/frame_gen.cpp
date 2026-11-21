@@ -68,7 +68,7 @@ constexpr u32 CADENCE_MAX_DIVISOR = 4;
 constexpr auto ACTIVITY_LOG_INTERVAL = std::chrono::seconds(10);
 
 [[nodiscard]] std::string ModeText(Settings::FrameGenType active) {
-    const char* type = active == Settings::FrameGenType::Fsr3 ? "FSR3" : "LSFG";
+    const char* type = active == Settings::FrameGenType::OpticalFlow ? "optical flow" : "LSFG";
     const u32 target_rate = Settings::FrameGenTargetRate();
     if (target_rate != 0) {
         return fmt::format("{} up to {}x towards {} FPS", type, Settings::MAX_FRAME_GEN_MULTIPLIER,
@@ -303,10 +303,10 @@ void FrameGen::SetExtrapolationSource(const std::optional<ExtrapolationSource>& 
 }
 
 void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat format) {
-    if (chain || fsr3_chain) {
+    if (chain || optical_flow_chain) {
         scheduler.Finish();
         chain.reset();
-        fsr3_chain.reset();
+        optical_flow_chain.reset();
     }
     frame_count = 0;
     warm_streak = 0;
@@ -393,10 +393,10 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         } else if (nvidia_frame_gen) {
             SetState(VideoCore::FrameGenState::NvidiaFrameGen, format);
         }
-        if (chain || fsr3_chain) {
+        if (chain || optical_flow_chain) {
             scheduler.Finish();
             chain.reset();
-            fsr3_chain.reset();
+            optical_flow_chain.reset();
         }
         warm_streak = 0;
         if (unavailable && Settings::values.frame_gen.GetValue()) {
@@ -424,9 +424,9 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
 
     const VkExtent2D extent{.width = frame->width, .height = frame->height};
     const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, extent);
-    if ((!chain && !fsr3_chain) || built_type != type || built_extent.width != extent.width ||
-        built_extent.height != extent.height || built_format != format ||
-        built_flow_scale != flow_scale) {
+    if ((!chain && !optical_flow_chain) || built_type != type ||
+        built_extent.width != extent.width || built_extent.height != extent.height ||
+        built_format != format || built_flow_scale != flow_scale) {
         Rebuild(device, extent, format, flow_scale, type);
     }
 
@@ -440,13 +440,13 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
     LogActivity();
 
-    const bool use_fsr3 = type == Settings::FrameGenType::Fsr3;
+    const bool use_optical_flow = type == Settings::FrameGenType::OpticalFlow;
 
     // gpu_costs frame_gen_process: timed only in sampled frames (Scheduler::RecordEmuBegin).
-    if (use_fsr3 && fsr3_chain) {
+    if (use_optical_flow && optical_flow_chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.RecordEmuBegin(TraceCategory::FrameGenProcess, {extent.width, extent.height, 0});
-        fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+        optical_flow_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
         // EDEN_NX2_FG_GAME_MOTION: this real frame's guide, beside the chain's copy of the frame;
         // none when no source came with it (HDR output, no motion this frame).
         if (GameMotionRequested()) {
@@ -505,8 +505,8 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
         if (Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::NvidiaDlssG) {
             LOG_INFO(Render_Vulkan,
                      "Frame generation: NVIDIA DLSS-G unavailable ({}), using {}, presenting {}",
-                     DlssgBlockedText(DlssgBlocked()), ModeText(Settings::FrameGenType::Fsr3),
-                     string_VkFormat(format));
+                     DlssgBlockedText(DlssgBlocked()),
+                     ModeText(Settings::FrameGenType::OpticalFlow), string_VkFormat(format));
             break;
         }
         LOG_INFO(Render_Vulkan, "Frame generation on: {}, presenting {}",
@@ -530,12 +530,12 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
     case VideoCore::FrameGenState::MissingLosslessDll:
         LOG_WARNING(Render_Vulkan,
                     "Frame generation is on but not running: LSFG needs Lossless.dll in the "
-                    "lossless folder of the user directory. FSR3 needs nothing");
+                    "lossless folder of the user directory. Optical flow needs nothing");
         break;
     case VideoCore::FrameGenState::UnsupportedGpu:
         LOG_WARNING(Render_Vulkan,
                     "Frame generation is on but not running: this GPU lacks Vulkan features LSFG "
-                    "needs. FSR3 may still work");
+                    "needs. Optical flow may still work");
         break;
     default:
         break;
@@ -645,8 +645,8 @@ bool FrameGen::CanPredict() const {
 }
 
 bool FrameGen::CanBlend() const {
-    return !extrapolating && generated && built_type == Settings::FrameGenType::Fsr3 &&
-           fsr3_chain.has_value();
+    return !extrapolating && generated && built_type == Settings::FrameGenType::OpticalFlow &&
+           optical_flow_chain.has_value();
 }
 
 bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend) {
@@ -662,14 +662,14 @@ bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend
         scheduler.RecordEmuEnd();
         return true;
     }
-    fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
+    optical_flow_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
                          std::clamp(blend, 0.0f, 1.0f), flow_scale);
     scheduler.RecordEmuEnd();
     return true;
 }
 
 bool FrameGen::GenerateFromGameMotion(const Device& device, Frame* destination, f32 t) {
-    const Fsr3FrameGen::FrameViews frames = fsr3_chain->Frames();
+    const OpticalFlowFrameGen::FrameViews frames = optical_flow_chain->Frames();
     const bool ready = game_motion && game_motion->Ready() && frames.newest != VK_NULL_HANDLE &&
                        frames.previous != VK_NULL_HANDLE &&
                        extrapolation_screen.extent.width != 0 &&
@@ -855,16 +855,16 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         return;
     }
 
-    const bool use_fsr3 = built_type == Settings::FrameGenType::Fsr3;
+    const bool use_optical_flow = built_type == Settings::FrameGenType::OpticalFlow;
 
-    if (use_fsr3 && fsr3_chain) {
+    if (use_optical_flow && optical_flow_chain) {
         const f32 blend = static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
         const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
 
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
                                  {destination->width, destination->height, 0});
-        fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
+        optical_flow_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
                              blend, flow_scale);
         scheduler.RecordEmuEnd();
     } else if (chain) {
@@ -895,15 +895,15 @@ void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format,
                        Settings::FrameGenType type) {
     scheduler.Finish();
     chain.reset();
-    fsr3_chain.reset();
+    optical_flow_chain.reset();
     // The guides pair with the chain's frame copies, which start again.
     game_motion.reset();
 
     built_flow_scale = flow_scale;
     built_type = type;
 
-    if (built_type == Settings::FrameGenType::Fsr3) {
-        fsr3_chain.emplace(device, memory_allocator, extent, format);
+    if (built_type == Settings::FrameGenType::OpticalFlow) {
+        optical_flow_chain.emplace(device, memory_allocator, extent, format);
     } else {
         chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
     }

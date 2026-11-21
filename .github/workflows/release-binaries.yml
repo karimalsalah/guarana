@@ -23,6 +23,10 @@ on:
         description: Publish the tag's binaries as its GitHub release (branches are never published)
         type: boolean
         default: true
+      include_whats_new:
+        description: Include the staged What's New notes for this release
+        type: boolean
+        default: false
       nsight_aftermath:
         description: Build Windows with Nsight Aftermath GPU crash dumps (test builds only, no NVIDIA files shipped)
         type: boolean
@@ -217,7 +221,11 @@ jobs:
     name: ${{ matrix.platform }} binary
     needs: prepare
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      actions: write
     env:
+      LICHII_USE_PENDING_RELEASE_NOTES: ${{ inputs.publish_release && inputs.include_whats_new && 'ON' || 'OFF' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
       CCACHE_COMPILERCHECK: content
@@ -297,10 +305,26 @@ jobs:
           printf '%s' "${TAG:-$REFSPEC}" > GIT-TAG
           if [ "$CHANNEL" = release ]; then printf '%s' "$TAG" > GIT-RELEASE; fi
 
+      # The Azure Ubuntu mirror the x86-64 runners use sometimes serves these packages at a few
+      # hundred KB/s, which made this step take 20 to 40 minutes, so their .deb files are cached.
+      - name: Restore apt packages
+        if: startsWith(matrix.platform, 'linux-x86_64')
+        id: apt-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: apt-${{ matrix.platform }}-v1-${{ github.run_id }}
+          restore-keys: |
+            apt-${{ matrix.platform }}-v1-
+
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'linux')
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/apt-archives/partial"
+          echo "APT_DEBS_RESTORED=$(find "$RUNNER_TEMP/apt-archives" -maxdepth 1 -name '*.deb' | wc -l)" >> "$GITHUB_ENV"
+          echo "Dir::Cache::Archives \"$RUNNER_TEMP/apt-archives\";" |
+            sudo tee /etc/apt/apt.conf.d/90lichii-archives > /dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             autoconf cmake g++ gcc git glslang-tools libglu1-mesa-dev \
@@ -384,6 +408,30 @@ jobs:
             "clang-$PGO_LLVM_VERSION" "lld-$PGO_LLVM_VERSION"
           "clang-$PGO_LLVM_VERSION" --version
 
+      # Branch builds restore nx2's caches without saving their own, which no other branch can
+      # restore: only nx2 saves and keeps one entry per cache family (docs/CI.md).
+      # A new snapshot is saved only when this run downloaded packages the cache lacked.
+      - name: Drop superseded apt packages
+        if: startsWith(matrix.platform, 'linux-x86_64') && github.ref == 'refs/heads/nx2'
+        id: apt-trim
+        shell: bash
+        run: |
+          if [ "$(find "$RUNNER_TEMP/apt-archives" -maxdepth 1 -name '*.deb' | wc -l)" = "$APT_DEBS_RESTORED" ]; then
+            echo "save=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sudo apt-get autoclean
+          sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"
+          sudo chown -R "$USER" "$RUNNER_TEMP/apt-archives"
+          echo "save=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save apt packages
+        if: steps.apt-trim.outputs.save == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
+
       # The profiles are in the source tree, where the Linux and Windows configure steps read them.
       - name: Check PGO profile
         if: matrix.pgo
@@ -417,10 +465,9 @@ jobs:
           modules: qtcharts qtimageformats
           cache: true
 
-      # ccache does not handle MSVC-style command lines well, so the clang-cl job uses sccache. The
-      # other jobs use ccache, which CMake enables through USE_CCACHE
-      # (externals/cmake-modules/UseCcache.cmake).
-      - name: Install sccache on Windows
+      # ccache rather than sccache, as in build-check: sccache has no direct mode for clang-cl, so
+      # every hit still ran the preprocessor and a build with 96% hits compiled for 13 minutes.
+      - name: Install ccache on Windows
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
@@ -484,13 +531,13 @@ jobs:
         with:
           path: |
             .ccache
-            .sccache
+            .lto-cache
           # The profile's hash is part of the key, so objects built against an older profile are
           # never restored.
-          key: objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v3-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-${{ github.sha }}-
-            objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-
+            objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v3-${{ github.sha }}-
+            objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v3-
 
       # The update checker stays off: it asks zortos293/Lichii for releases (GenerateSCMRev.cmake)
       # and understands only build-N tags, so it could offer upstream's builds to this fork's users.
@@ -557,6 +604,10 @@ jobs:
             flags+=" -Wno-error=profile-instr-out-of-date -Wno-error=profile-instr-unprofiled"
             flags+=" -Wno-error=backend-plugin"
           fi
+          # The ThinLTO backend runs at link time, which ccache doesn't cover; lld caches each
+          # module's native code, so a link only recompiles the modules that changed. One build's
+          # entries take 1.3 GB.
+          lto_cache="/lldltocache:$(cygpath -m "$PWD/.lto-cache") /lldltocachepolicy:cache_size_bytes=1500m"
           aftermath=()
           if [ '${{ inputs.nsight_aftermath }}' = true ]; then
             aftermath=(-DENABLE_NSIGHT_AFTERMATH=ON)
@@ -576,14 +627,13 @@ jobs:
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
             "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DUSE_CCACHE=ON \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
             "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
             "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
             "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
-            "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG:FULL /OPT:REF /OPT:ICF" \
+            "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG:FULL /OPT:REF /OPT:ICF $lto_cache" \
             "-DCMAKE_C_FLAGS=$flags" \
             "-DCMAKE_CXX_FLAGS=-EHsc $flags" \
             "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG:FULL /OPT:REF /OPT:ICF"
@@ -623,6 +673,8 @@ jobs:
       # lichii-updater exists only with ENABLE_UPDATE_CHECKER (src/CMakeLists.txt), which is off.
       - name: Build
         shell: bash
+        env:
+          CCACHE_COMPILERCHECK: ${{ startsWith(matrix.platform, 'windows') && format('string:{0}', hashFiles('tools/windows/install-llvm.ps1')) || 'content' }}
         run: |
           if command -v ccache > /dev/null; then ccache --zero-stats; else sccache --zero-stats; fi
           cmake --build build/release --target lichii lichii-cmd --parallel
@@ -639,8 +691,21 @@ jobs:
         with:
           path: |
             .ccache
-            .sccache
+            .lto-cache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      - name: Delete superseded caches
+        if: github.ref == 'refs/heads/nx2' && !cancelled()
+        continue-on-error: true
+        shell: bash
+        # The platform is spelled out rather than passed as PLATFORM: Windows variable names ignore
+        # case, and the MSVC environment's Platform=x64 replaced it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tools/ci/prune-caches.sh '^objects-${{ matrix.platform }}(-[0-9a-f]{64})?-v[0-9]+-' '${{ steps.compiler-cache.outputs.cache-primary-key }}'
+          tools/ci/prune-caches.sh '^cpm-${{ matrix.platform }}-v[0-9]+-' '${{ steps.cpm-cache.outputs.cache-primary-key }}'
+          tools/ci/prune-caches.sh '^apt-${{ matrix.platform }}-v[0-9]+-' '${{ steps.apt-cache.outputs.cache-primary-key }}'
 
       # fsr4-vk, the community Vulkan port of FSR 4 that the x86-64 Linux packages ship
       # (tools/fsr4-vk/build.sh pins its commit and AMD's DLL it is built from). The build's inputs

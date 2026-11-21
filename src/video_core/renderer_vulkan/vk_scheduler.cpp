@@ -408,15 +408,6 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .pipelineStatistics = 0,
                 });
                 if (Common::DkbFrameTrace::Enabled()) {
-                    trace_site_pool = device.GetLogical().CreateQueryPool({
-                        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-                        .pNext = nullptr,
-                        .flags = 0,
-                        .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                        .queryCount = TraceMaxSites + 1,
-                        .pipelineStatistics = 0,
-                    });
-                    trace_site_items.resize(TraceMaxSites + 1);
                     trace_pass_pool = device.GetLogical().CreateQueryPool({
                         .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                         .pNext = nullptr,
@@ -429,6 +420,17 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     trace_pass_tails.resize(TraceMaxSubmissions);
                 }
                 cost_sampling = cost_on || vrs_auto;
+            }
+            if (Common::DkbFrameTrace::GpuSitesEnabled()) {
+                trace_site_pool = device.GetLogical().CreateQueryPool({
+                    .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                    .queryCount = TraceMaxSites + 1,
+                    .pipelineStatistics = 0,
+                });
+                trace_site_items.resize(TraceMaxSites + 1);
             }
         } catch (const vk::Exception& error) {
             LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());

@@ -20,9 +20,12 @@ guarana_contributors_header("${CMAKE_CURRENT_SOURCE_DIR}/../../CONTRIBUTORS.md"
                             "${CMAKE_CURRENT_SOURCE_DIR}/guarana_contributors.h.in"
                             "${CMAKE_CURRENT_BINARY_DIR}/guarana_contributors.h")
 
+option(LICHII_USE_PENDING_RELEASE_NOTES "Show the staged What's new notes for this build" OFF)
+
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
     add_subdirectory(../tests/qt_iidb ${CMAKE_BINARY_DIR}/qt_iidb_tests)
+    add_subdirectory(../tests/qt_whats_new ${CMAKE_BINARY_DIR}/qt_whats_new_tests)
 endif()
 
 add_executable(lichii
@@ -279,6 +282,8 @@ add_executable(lichii
 )
 
 set_target_properties(lichii PROPERTIES OUTPUT_NAME "guarana")
+target_compile_definitions(lichii PRIVATE
+    LICHII_USE_PENDING_RELEASE_NOTES=$<BOOL:${LICHII_USE_PENDING_RELEASE_NOTES}>)
 
 # Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
 # startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\guarana overrides it.
