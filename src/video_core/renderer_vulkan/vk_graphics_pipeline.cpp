@@ -255,7 +255,8 @@ bool Passes(const std::array<bool, NUM_STAGES>& stages,
     return true;
 }
 
-using ConfigureFuncPtr = bool (*)(GraphicsPipeline*, bool);
+using ConfigureFuncPtr = bool (*)(GraphicsPipeline*, bool,
+                                  std::optional<GraphicsPipeline::PreparedBinding>*);
 
 template <typename Spec, typename... Specs>
 ConfigureFuncPtr FindSpec(const std::array<bool, NUM_STAGES>& stages,
@@ -912,7 +913,7 @@ void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
 }
 
 template <typename Spec>
-bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+bool GraphicsPipeline::ConfigureImpl(bool is_indexed, std::optional<PreparedBinding>* deferred) {
     boost::container::small_vector<VideoCommon::ImageViewInOut, 160> views;
     boost::container::small_vector<VideoCommon::SamplerId, 96> samplers;
     boost::container::small_vector<ComputedHandle, 16> computed_handles;
@@ -1531,7 +1532,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
-    return ConfigureDraw(rescaling, render_area);
+    return ConfigureDraw(rescaling, render_area, deferred);
 }
 
 bool GraphicsPipeline::DeltaImagesChange() const noexcept {
@@ -1576,7 +1577,7 @@ bool GraphicsPipeline::ComputedHandlesChanged() const {
     return false;
 }
 
-bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
+bool GraphicsPipeline::ConfigureDelta(bool is_indexed, std::optional<PreparedBinding>* deferred) {
     namespace Profile = VideoCommon::Nx2Profile;
     // ConfigureImpl without reading handles and resolving image views, samplers and texture
     // buffers: the buffers are resolved, synchronized and bound as it does.
@@ -1713,7 +1714,7 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
-    return ConfigureDraw(rescaling, render_area);
+    return ConfigureDraw(rescaling, render_area, deferred);
 }
 
 void GraphicsPipeline::KeepDrawTemplate(DrawTemplate* verified,
@@ -1864,13 +1865,17 @@ void GraphicsPipeline::CheckColorFeedbackLoop(std::span<const VideoCommon::Image
 /// and bindings. Returns false, and the draw is skipped, when the queued descriptor count does not
 /// match the pipeline or no descriptor memory can be reserved.
 bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
-                                     const RenderAreaPushConstant& render_area) {
+                                     const RenderAreaPushConstant& render_area,
+                                     std::optional<PreparedBinding>* deferred) {
+    if (guest_descriptor_queue.HasRejectedTexelBuffer()) {
+        return false;
+    }
     if (guest_descriptor_queue.UpdateCount() != num_descriptor_entries) {
         LOG_CRITICAL(Render_Vulkan, "Graphics descriptor count mismatch: expected {}, got {}",
                      num_descriptor_entries, guest_descriptor_queue.UpdateCount());
         return false;
     }
-    const void* const descriptor_data{guest_descriptor_queue.UpdateData()};
+    const DescriptorUpdateEntry* const descriptor_data{guest_descriptor_queue.UpdateData()};
 
     VkDeviceSize descriptor_buffer_offset{};
     u32 descriptor_buffer_chunk{};
@@ -2072,7 +2077,39 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             scheduler.Record(std::move(mesh_work));
         }
     }
+    const u64 render_pass = deferred != nullptr ? scheduler.RenderPassSerial() : 0;
     scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
+    const bool can_defer = deferred != nullptr && IsBuilt() && !Failed() && !IsMeshPipeline() &&
+                           !writes_storage && scheduler.RenderPassSerial() == render_pass &&
+                           scheduler.BoundGraphicsPipeline() == this &&
+                           (!descriptor_set_layout || num_descriptor_entries != 0);
+    const PreparedBinding binding{
+        .rescaling = rescaling.Data(),
+        .render_area = render_area,
+        .descriptor_buffer_offset = descriptor_buffer_offset,
+        .descriptor_buffer_chunk = descriptor_buffer_chunk,
+        .is_rescaling = texture_cache.IsRescaling(),
+    };
+    if (can_defer) {
+        deferred->emplace(binding);
+        (*deferred)->bind_pipeline = scheduler.UpdateGraphicsPipeline(this);
+        (*deferred)->down_factor = Settings::values.resolution_info.down_factor;
+        if (descriptor_set_layout && !uses_descriptor_buffer && num_descriptor_entries != 0) {
+            (*deferred)->descriptors = std::make_shared<const std::vector<DescriptorUpdateEntry>>(
+                descriptor_data, descriptor_data + num_descriptor_entries);
+        }
+    } else {
+        RecordBinding(binding, descriptor_data);
+    }
+    return true;
+}
+
+void GraphicsPipeline::RecordPreparedBinding(const PreparedBinding& binding) {
+    RecordBinding(binding, binding.descriptors ? binding.descriptors->data() : nullptr);
+}
+
+void GraphicsPipeline::RecordBinding(const PreparedBinding& binding,
+                                     const DescriptorUpdateEntry* descriptor_data) {
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }
@@ -2159,14 +2196,15 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             }
         });
     }
-    const bool is_rescaling{texture_cache.IsRescaling()};
+    const bool is_rescaling = binding.is_rescaling;
     // A later draw's hoisted dispatch can overwrite the down factor before this draw runs.
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline()) ||
                                 Scheduler::MeshBeforePassEnabled()};
-    const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
+    const bool bind_pipeline = binding.bind_pipeline ? *binding.bind_pipeline
+                                                     : scheduler.UpdateGraphicsPipeline(this);
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
-        scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
+        scheduler.UpdateDescriptorBufferChunk(binding.descriptor_buffer_chunk)};
 
     // Log graphics pipeline binding
     if (bind_pipeline && GPU::Logging::IsActive() &&
@@ -2187,14 +2225,13 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             last_descriptor_payload.assign(entries, entries + num_descriptor_entries);
         }
     }
-    scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
-                      descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
-                      rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
-                      uses_render_area = render_area.uses_render_area,
-                      render_area_data = render_area.words, mesh_set](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors, binding,
+                      bind_descriptor_buffer, is_rescaling, update_rescaling,
+                      uses_render_area = binding.render_area.uses_render_area,
+                      render_area_data = binding.render_area.words](vk::CommandBuffer cmdbuf) {
         if (bind_descriptor_buffer) {
             const VkDescriptorBufferBindingInfoEXT binding_info{
-                descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
+                descriptor_buffer_ring.BindingInfo(binding.descriptor_buffer_chunk)};
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
         }
         if (bind_pipeline) {
@@ -2211,9 +2248,10 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                       VK_SHADER_STAGE_MESH_BIT_EXT
                 : VK_SHADER_STAGE_ALL_GRAPHICS;
         cmdbuf.PushConstants(*pipeline_layout, push_stages, RESCALING_LAYOUT_WORDS_OFFSET,
-                             sizeof(rescaling_data), rescaling_data.data());
+                             sizeof(binding.rescaling), binding.rescaling.data());
         if (update_rescaling || mesh_emulation) {
-            const f32 config_down_factor{Settings::values.resolution_info.down_factor};
+            const f32 config_down_factor{binding.down_factor ? *binding.down_factor
+                                                           : Settings::values.resolution_info.down_factor};
             const f32 scale_down_factor{is_rescaling ? config_down_factor : 1.0f};
             cmdbuf.PushConstants(*pipeline_layout, push_stages,
                                  RESCALING_LAYOUT_DOWN_FACTOR_OFFSET, sizeof(scale_down_factor),
@@ -2233,7 +2271,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                     }
                     const VkDescriptorSet descriptor_set{stage_allocators[stage].Commit()};
                     dev.UpdateDescriptorSet(descriptor_set, *stage_templates[stage],
-                                            static_cast<const u8*>(descriptor_data) +
+                                            reinterpret_cast<const u8*>(descriptor_data) +
                                                 stage_descriptor_offsets[stage]);
                     cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout,
                                               static_cast<u32>(stage), descriptor_set, nullptr);
@@ -2246,7 +2284,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
         if (mesh_emulation) {
             // The set the emulation's dispatch committed (see above).
-            const VkDescriptorSet descriptor_set{mesh_set ? *mesh_set : mesh_descriptor_set};
+            const VkDescriptorSet descriptor_set{mesh_descriptor_set};
             if (descriptor_set) {
                 cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, 0,
                                           descriptor_set, nullptr);
@@ -2256,7 +2294,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         if (uses_descriptor_buffer) {
             const u32 buffer_index{};
             cmdbuf.SetDescriptorBufferOffsetsEXT(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout,
-                                                 0, buffer_index, descriptor_buffer_offset);
+                                                 0, buffer_index, binding.descriptor_buffer_offset);
         } else if (uses_push_descriptor) {
             cmdbuf.PushDescriptorSetWithTemplateKHR(*descriptor_update_template, *pipeline_layout,
                                                     0, descriptor_data);
@@ -2268,7 +2306,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                                       descriptor_set, nullptr);
         }
     });
-    return true;
 }
 
 void GraphicsPipeline::MakePrepassPipelines(VkRenderPass render_pass) {

@@ -69,6 +69,27 @@ struct BuiltinPatchRecord {
     size_t original_size = 0;
 };
 
+// A hook at an instruction known only by its function: `pattern` must occur once, word-aligned,
+// in [function_offset, function_offset + function_size); its first instruction becomes a branch to
+// `cave`, whose last word becomes the branch back to the next one. A hook whose site is not found
+// is left out while the rest of its patch applies: the game keeps its own code there and the cave
+// is never reached.
+struct BuiltinPatchHook {
+    std::string_view name;
+    size_t function_offset;
+    size_t function_size;
+    std::span<const u8> pattern;
+    size_t cave_offset;
+    std::span<const u8> cave;
+};
+
+struct InstalledBuiltinHook {
+    std::string_view patch;
+    u64 site;
+    u64 cave;
+    size_t cave_size;
+};
+
 struct BuiltinPatchState {
     size_t offset;
     size_t size;
@@ -82,6 +103,7 @@ struct BuiltinPatch {
     std::span<const BuiltinPatchRecord> records;
     // Zero-initialized BSS ranges the routines keep their state in.
     std::span<const BuiltinPatchState> states{};
+    std::span<const BuiltinPatchHook> hooks{};
     // Another built-in this one contains; it is skipped once this one is applied.
     std::string_view replaces{};
     std::string_view requires_patch{};
@@ -93,6 +115,7 @@ struct BuiltinPatch {
     // Off until checked in Add-Ons (stored as EnabledAddonKey(name)), for game options rather
     // than fixes.
     bool off_by_default = false;
+    bool skip_on_cheat_overlap = false;
     // Built-ins that patch the same place: the first one applied (in this list's order) wins.
     std::string_view group{};
     // What the patch does, for a player: Add-Ons shows it. Every listed built-in has one.
@@ -418,6 +441,38 @@ constexpr std::array EPONA_JUMP_RECORDS{
     BuiltinPatchRecord{EPONA_JUMP_CAVE_OFFSET, EPONA_JUMP_ROUTINE, {}, true},
 };
 
+// The physics world's solver steps (port of Hookshot's fix by hckrman101, Z-TOON/Hookshot
+// 8fcc8c22b9, GPL-3.0): each update the game sets them to (int)(step * the steps of a 60 fps
+// frame + 0.001), stored at the solver's +0x2C8 (main+0x38AEB80 and main+0x38AFC10, the same code
+// in both). Below a step of 1 that is cut short, and it is 0 above 480 fps with 8 steps a frame:
+// Link slides off moving platforms, and Hookshot saw a null read in the collision code at 640-700
+// fps in the quick menu, which may be the crash after the R1 menu at ~580 fps in ZOR-455. The
+// routine rounds the count up while the step is under 1, with 0.1 of leeway for frame-time jitter,
+// and keeps it at least 1 and never below the game's. Each function's site, fcvtzs w1, s0 ;
+// str w1, [x0, #0x2c8], is found by those two instructions, as Hookshot's lifted code has them.
+constexpr size_t SOLVER_STEPS_FUNCTION_SIZE = 0x1090;
+constexpr std::array<u8, 8> SOLVER_STEPS_SITE{0x01, 0x00, 0x38, 0x1E, 0x01, 0xC8, 0x02, 0xB9};
+// fcvtzs w1, s0 ; stp x2, x3, [sp, #-16]! ; stp q2, q3, [sp, #-32]! ; mrs x2, nzcv ;
+// s2 = s0 - 0.001 (the cut float) ; to done unless 0 < s2 < s1 (the steps of a 60 fps frame) and
+// s1 <= 1000 ; w3 = ceil(s2 - 0.1), at least 1 ; w1 = max(w3, w1) ;
+// done: msr nzcv, x2 ; ldp q2, q3, [sp], #32 ; ldp x2, x3, [sp], #16 ; b back
+constexpr std::array<u8, 124> SOLVER_STEPS_ROUTINE{
+    0x01, 0x00, 0x38, 0x1E, 0xE2, 0x0F, 0xBF, 0xA9, 0xE2, 0x0F, 0xBF, 0xAD, 0x02, 0x42, 0x3B, 0xD5,
+    0xE3, 0x4D, 0x82, 0x52, 0x63, 0x50, 0xA7, 0x72, 0x62, 0x00, 0x27, 0x1E, 0x02, 0x38, 0x22, 0x1E,
+    0x48, 0x20, 0x20, 0x1E, 0x4D, 0x02, 0x00, 0x54, 0x28, 0x20, 0x20, 0x1E, 0x0D, 0x02, 0x00, 0x54,
+    0x40, 0x20, 0x21, 0x1E, 0xCA, 0x01, 0x00, 0x54, 0x43, 0x8F, 0xA8, 0x52, 0x63, 0x00, 0x27, 0x1E,
+    0x20, 0x20, 0x23, 0x1E, 0x4C, 0x01, 0x00, 0x54, 0xA3, 0x99, 0x99, 0x52, 0x83, 0xB9, 0xA7, 0x72,
+    0x63, 0x00, 0x27, 0x1E, 0x42, 0x38, 0x23, 0x1E, 0x43, 0x00, 0x28, 0x1E, 0x7F, 0x04, 0x00, 0x71,
+    0x63, 0xA4, 0x9F, 0x1A, 0x7F, 0x00, 0x01, 0x6B, 0x61, 0xC0, 0x81, 0x1A, 0x02, 0x42, 0x1B, 0xD5,
+    0xE2, 0x0F, 0xC1, 0xAC, 0xE2, 0x0F, 0xC1, 0xA8, 0x00, 0x00, 0x00, 0x14,
+};
+constexpr std::array FPS_UNLOCK_HOOKS{
+    BuiltinPatchHook{"solver steps", 0x38AEB80, SOLVER_STEPS_FUNCTION_SIZE, SOLVER_STEPS_SITE,
+                     0x3C46400, SOLVER_STEPS_ROUTINE},
+    BuiltinPatchHook{"solver steps", 0x38AFC10, SOLVER_STEPS_FUNCTION_SIZE, SOLVER_STEPS_SITE,
+                     0x3C46480, SOLVER_STEPS_ROUTINE},
+};
+
 constexpr std::array FPS_UNLOCK_RECORDS{
     BuiltinPatchRecord{0x6E6CC4, DYNAMIC_FPS_CALL, DYNAMIC_FPS_ORIGINAL},
     BuiltinPatchRecord{0x3C46200, FPS_UNLOCK_ROUTINE, {}, true},
@@ -610,6 +665,55 @@ constexpr std::array WEB_CARRY_RECORDS{
 };
 constexpr std::array WEB_CARRY_STATE{BuiltinPatchState{0x4E9D100, 136}};
 
+// Keep the manager's original bit test and both targets. After the first eligible request,
+// require one guest second between requests. The hook preserves x8-x11, SP and NZCV.
+// The KaeGae registry lists these zero-filled alignment slots inside the exact build's text,
+// where the native-execution scanner can also translate the two timer reads.
+constexpr std::string_view TEXTURE_COMPACTION_NAME = "Texture heap compaction interval (built-in)";
+constexpr std::array<u8, 4> TEXTURE_COMPACTION_ORIGINAL{0x88, 0x00, 0x08, 0x36};
+constexpr std::array<u8, 4> TEXTURE_COMPACTION_HOOK{0xD3, 0x1E, 0x40, 0x14};
+constexpr std::array<u8, 28> TEXTURE_COMPACTION_PADDING{};
+constexpr std::array<u8, 28> TEXTURE_COMPACTION_ENTRY{
+    0x88, 0xDD, 0x0F, 0x36, 0xE8, 0x27, 0xBE, 0xA9, 0xEA, 0x2F, 0x01, 0xA9,
+    0x0B, 0x42, 0x3B, 0xD5, 0x08, 0xE0, 0x3B, 0xD5, 0x88, 0xDF, 0xFF, 0xB4,
+    0x93, 0xFE, 0xFF, 0x17,
+};
+constexpr std::array<u8, 24> TEXTURE_COMPACTION_SAMPLE{
+    0x29, 0xE0, 0x3B, 0xD5, 0xEA, 0xB8, 0x01, 0xF0, 0x4A, 0x01, 0x08, 0x91,
+    0x4A, 0x05, 0x40, 0xF9, 0x8A, 0x06, 0x00, 0xB4, 0x1B, 0x00, 0x00, 0x14,
+};
+constexpr std::array<u8, 24> TEXTURE_COMPACTION_ELAPSED{
+    0xEA, 0xB8, 0x01, 0xF0, 0x4A, 0x01, 0x41, 0xF9, 0x2A, 0x01, 0x0A, 0xCB,
+    0x5F, 0x01, 0x08, 0xEB, 0x83, 0x05, 0x00, 0x54, 0x13, 0x00, 0x00, 0x14,
+};
+constexpr std::array<u8, 20> TEXTURE_COMPACTION_RECORD{
+    0xEA, 0xB8, 0x01, 0xF0, 0x4A, 0x01, 0x08, 0x91, 0x28, 0x00, 0x80, 0xD2,
+    0x49, 0x21, 0x00, 0xA9, 0x2C, 0x00, 0x00, 0x14,
+};
+constexpr std::array<u8, 16> TEXTURE_COMPACTION_SKIP{
+    0x0B, 0x42, 0x1B, 0xD5, 0xEA, 0x2F, 0x41, 0xA9, 0xE8, 0x27, 0xC2, 0xA8,
+    0x45, 0xE2, 0xBF, 0x17,
+};
+constexpr std::array<u8, 16> TEXTURE_COMPACTION_ALLOW{
+    0x0B, 0x42, 0x1B, 0xD5, 0xEA, 0x2F, 0x41, 0xA9, 0xE8, 0x27, 0xC2, 0xA8,
+    0x2A, 0xE2, 0xBF, 0x17,
+};
+constexpr std::array TEXTURE_COMPACTION_RECORDS{
+    BuiltinPatchRecord{0x777278, TEXTURE_COMPACTION_HOOK, TEXTURE_COMPACTION_ORIGINAL},
+    BuiltinPatchRecord{0x177EDC4, TEXTURE_COMPACTION_ENTRY, TEXTURE_COMPACTION_PADDING},
+    BuiltinPatchRecord{0x177E828, TEXTURE_COMPACTION_SAMPLE,
+                       std::span{TEXTURE_COMPACTION_PADDING}.first<TEXTURE_COMPACTION_SAMPLE.size()>()},
+    BuiltinPatchRecord{0x177E8A8, TEXTURE_COMPACTION_ELAPSED,
+                       std::span{TEXTURE_COMPACTION_PADDING}.first<TEXTURE_COMPACTION_ELAPSED.size()>()},
+    BuiltinPatchRecord{0x177E908, TEXTURE_COMPACTION_RECORD,
+                       std::span{TEXTURE_COMPACTION_PADDING}.first<TEXTURE_COMPACTION_RECORD.size()>()},
+    BuiltinPatchRecord{0x177E968, TEXTURE_COMPACTION_SKIP,
+                       std::span{TEXTURE_COMPACTION_PADDING}.first<TEXTURE_COMPACTION_SKIP.size()>()},
+    BuiltinPatchRecord{0x177E9C8, TEXTURE_COMPACTION_ALLOW,
+                       std::span{TEXTURE_COMPACTION_PADDING}.first<TEXTURE_COMPACTION_ALLOW.size()>()},
+};
+constexpr std::array TEXTURE_COMPACTION_STATE{BuiltinPatchState{0x4E9D200, 16}};
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -645,6 +749,7 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = FPS_UNLOCK_RECORDS,
         .states = FPS_UNLOCK_STATES,
+        .hooks = FPS_UNLOCK_HOOKS,
         .replaces = "Dynamic FPS by Dark (built-in)",
         .description =
             "Keeps the game at its real speed at any frame rate: below 60 FPS, and above 60 FPS "
@@ -714,6 +819,18 @@ constexpr std::array BUILTIN_PATCHES{
         .records = WEB_CARRY_RECORDS,
         .states = WEB_CARRY_STATE,
         .requires_patch = FPS_UNLOCK_NAME,
+    },
+    BuiltinPatch{
+        .name = TEXTURE_COMPACTION_NAME,
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = TEXTURE_COMPACTION_RECORDS,
+        .states = TEXTURE_COMPACTION_STATE,
+        .off_by_default = true,
+        .skip_on_cheat_overlap = true,
+        .description = "Limits requests for new texture heap compaction rounds to once per guest "
+                       "second. This may increase heap fragmentation. Restart the game to apply.",
     },
     BuiltinPatch{
         .name = "Full Scene Resolution with FXAA (built-in)",
@@ -1146,9 +1263,10 @@ std::vector<std::string> FindBuiltinPatchOverlaps(std::span<const BuiltinPatchRa
     return out;
 }
 
-std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
+static std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
     u64 title_id, std::span<const std::string_view> applied_patches,
-    std::span<const Core::Memory::CheatEntry> cheats) {
+    std::span<const Core::Memory::CheatEntry> cheats,
+    std::span<const InstalledBuiltinHook> installed_hooks) {
     const auto stores =
         Core::Memory::DmntCheatVm::MainStaticStores({cheats.begin(), cheats.end()});
     std::vector<BuiltinCheatOverlap> overlaps;
@@ -1194,9 +1312,21 @@ std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
             for (const auto& state : patch.states) {
                 check(state.offset, state.offset + state.size, true);
             }
+            for (const auto& hook : installed_hooks) {
+                if (hook.patch == patch.name) {
+                    check(hook.site, hook.site + sizeof(u32), false);
+                    check(hook.cave, hook.cave + hook.cave_size, false);
+                }
+            }
         }
     }
     return overlaps;
+}
+
+std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
+    u64 title_id, std::span<const std::string_view> applied_patches,
+    std::span<const Core::Memory::CheatEntry> cheats) {
+    return FindBuiltinCheatOverlaps(title_id, applied_patches, cheats, {});
 }
 
 PatchManager::PatchManager(u64 title_id_,
@@ -1556,6 +1686,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     // Held to the end: `replaced` and `applied_groups` view its names.
     const auto builtins = CurrentBuiltinPatches();
     std::vector<std::string_view> applied;
+    std::vector<InstalledBuiltinHook> installed_hooks;
     std::optional<std::vector<Core::Memory::CheatEntry>> cheats;
     const auto load_cheats = [&]() -> const auto& {
         if (!cheats) {
@@ -1715,7 +1846,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             note_result(patch, skipped);
             continue;
         }
-        if (!patch.requires_patch.empty()) {
+        if (!patch.requires_patch.empty() || patch.skip_on_cheat_overlap) {
             const auto overlaps =
                 FindBuiltinCheatOverlaps(title_id, std::span{&patch.name, 1}, load_cheats());
             if (!overlaps.empty()) {
@@ -1727,6 +1858,67 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         for (const auto& record : patch.records) {
             std::memcpy(out.data() + sizeof(Loader::NSOHeader) + record.module_offset,
                         record.bytes.data(), record.bytes.size());
+        }
+        // A hook whose site is missing, duplicated, or already modified is left out. The rest of
+        // the patch still applies; the game keeps its own instruction and the cave is never
+        // reached.
+        for (const auto& hook : patch.hooks) {
+            const auto& text = header.segments[0];
+            const u64 text_end = u64{text.location} + text.size;
+            const u64 executable_end = (text_end + 0xFFF) & ~u64{0xFFF};
+            const u64 function_end =
+                (std::min<u64>)(hook.function_offset + hook.function_size, text_end);
+            size_t site = 0;
+            size_t found = 0;
+            for (u64 at = hook.function_offset;
+                 at + hook.pattern.size() <= function_end && fits(nso, at, hook.pattern.size());
+                 at += sizeof(u32)) {
+                if (std::equal(hook.pattern.begin(), hook.pattern.end(),
+                               nso.begin() + sizeof(Loader::NSOHeader) + at)) {
+                    site = at;
+                    ++found;
+                }
+            }
+            const size_t cave = sizeof(Loader::NSOHeader) + hook.cave_offset;
+            const auto untouched = [&](size_t offset, size_t size) {
+                return std::equal(nso.begin() + offset, nso.begin() + offset + size,
+                                  out.begin() + offset);
+            };
+            const char* problem = nullptr;
+            if (found != 1) {
+                problem = found == 0 ? "its instruction is not in the function"
+                                     : "its instruction is in the function more than once";
+            } else if (hook.cave_offset < text_end ||
+                       hook.cave_offset + hook.cave.size() > executable_end ||
+                       hook.cave_offset + hook.cave.size() > header.segments[1].location ||
+                       !fits(nso, hook.cave_offset, hook.cave.size()) ||
+                       !fits(out, hook.cave_offset, hook.cave.size()) ||
+                       !std::all_of(nso.begin() + cave, nso.begin() + cave + hook.cave.size(),
+                                    [](u8 byte) { return byte == 0; })) {
+                problem = "its code cave is not executable padding";
+            } else if (!fits(out, site, hook.pattern.size()) ||
+                       !untouched(cave, hook.cave.size()) ||
+                       !untouched(sizeof(Loader::NSOHeader) + site, hook.pattern.size())) {
+                problem = "a user mod already patched it";
+            }
+            if (problem != nullptr) {
+                LOG_WARNING(Loader, "    - \"{}\" leaves out its {} hook in {}+{:#x}: {}",
+                            patch.name, hook.name, name, hook.function_offset, problem);
+                continue;
+            }
+            const auto branch = [](u64 from, u64 to) {
+                const auto words = static_cast<s64>(to - from) >> 2;
+                return static_cast<u32>(0x14000000 | (words & 0x03FFFFFF));
+            };
+            const u64 back = hook.cave_offset + hook.cave.size() - sizeof(u32);
+            const u32 to_cave = branch(site, hook.cave_offset);
+            const u32 to_site = branch(back, site + sizeof(u32));
+            std::memcpy(out.data() + cave, hook.cave.data(), hook.cave.size() - sizeof(u32));
+            std::memcpy(out.data() + sizeof(Loader::NSOHeader) + back, &to_site, sizeof(u32));
+            std::memcpy(out.data() + sizeof(Loader::NSOHeader) + site, &to_cave, sizeof(u32));
+            installed_hooks.push_back({patch.name, site, hook.cave_offset, hook.cave.size()});
+            LOG_INFO(Loader, "    - \"{}\": {} hook at {}+{:#x}", patch.name, hook.name, name,
+                     site);
         }
         note_result(patch, BuiltinPatchResult::Applied);
         LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
@@ -1756,7 +1948,8 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     }
 
     if (!applied.empty()) {
-        for (const auto& overlap : FindBuiltinCheatOverlaps(title_id, applied, load_cheats())) {
+        for (const auto& overlap :
+             FindBuiltinCheatOverlaps(title_id, applied, load_cheats(), installed_hooks)) {
             LOG_WARNING(Loader,
                         "Cheat \"{}\" writes {}+{:#x}..{:#x}, which built-in patch \"{}\" uses "
                         "for its {} at {}+{:#x}..{:#x}. The cheat still runs and overwrites it; "
