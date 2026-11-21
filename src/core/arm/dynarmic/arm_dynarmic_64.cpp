@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <thread>
 #if defined(_M_X64) || defined(__x86_64__)
 #include <immintrin.h>
 #endif
@@ -298,12 +299,21 @@ u64 DynarmicCallbacks64::GetCNTPCT() {
         return value == nullptr || value[0] != '0';
     }();
     if (pause_spins && ticks - m_last_cntpct < m_spin_ticks) {
+        // #2399: after 256 consecutive spin polls, yield the host thread so submission and
+        // compiler threads on small hosts are not starved; otherwise just pause the core.
+        if (++m_consecutive_spin_polls >= 256) {
+            m_consecutive_spin_polls = 0;
+            std::this_thread::yield();
+        } else {
 #if defined(_M_X64) || defined(__x86_64__)
-        _mm_pause();
-        _mm_pause();
+            _mm_pause();
+            _mm_pause();
 #elif defined(__aarch64__)
-        asm volatile("yield");
+            asm volatile("yield");
 #endif
+        }
+    } else {
+        m_consecutive_spin_polls = 0;
     }
     m_last_cntpct = ticks;
     if (Kernel::Nx2ThreadStats::g_enabled) {

@@ -899,20 +899,90 @@ struct DeferredStages {
     std::shared_ptr<PrepassShaders> prepass_shaders;
 };
 
-size_t GetTotalPipelineWorkers() {
-    const size_t max_core_threads =
-        std::max<size_t>(static_cast<size_t>(std::thread::hardware_concurrency()), 2ULL) - 1ULL;
+struct PipelineWorkerCounts {
+    size_t cpu_workers;
+    size_t driver_workers;
+};
+
+PipelineWorkerCounts GetSmartPipelineWorkers(const Device* device = nullptr,
+                                             bool boot_turbo = false) {
+    const size_t total_threads =
+        std::max<size_t>(static_cast<size_t>(std::thread::hardware_concurrency()), 2ULL);
+    size_t cpu_w = 2;
+    size_t driver_w = 1;
+
 #ifdef __ANDROID__
+    // The Android setting is the pool size. Boot turbo does not override it.
     const int configured = AndroidSettings::values.pipeline_worker_count.GetValue();
     const int clamped = std::clamp(configured, 2, 8);
     const size_t desired = static_cast<size_t>(clamped);
-    if (desired == 0) {
-        return 1ULL;
-    }
-    return std::min(max_core_threads, desired);
+    const size_t max_core_threads = total_threads - 1ULL;
+    cpu_w = desired == 0 ? 1ULL : std::min(max_core_threads, desired);
+    driver_w = std::min<size_t>(cpu_w, 2ULL);
+    (void)boot_turbo;
 #else
-    return max_core_threads;
+    if (boot_turbo) {
+        if (total_threads <= 4) {
+            cpu_w = 3;
+            driver_w = 1;
+        } else if (total_threads <= 6) {
+            // 6c/6t (e.g. i5-9400F) during initial boot load: guest CPU and audio are idle.
+            cpu_w = 5;
+            driver_w = 1;
+        } else if (total_threads <= 8) {
+            cpu_w = 6;
+            driver_w = 2;
+        } else if (total_threads <= 12) {
+            cpu_w = 10;
+            driver_w = 2;
+        } else {
+            cpu_w = std::min<size_t>(total_threads - 2ULL, 14ULL);
+            driver_w = total_threads >= 16 ? 3ULL : 2ULL;
+        }
+    } else if (total_threads <= 6) {
+        // 6c/6t (e.g. i5-9400F, i5-8400, Ryzen 3500) or 4c/4t:
+        // Reserve at least 3-4 cores for guest CPU, GPU thread, and audio to avoid stuttering.
+        cpu_w = 2;
+        driver_w = 1;
+    } else if (total_threads <= 8) {
+        // 8c/8t or 4c/8t:
+        cpu_w = 3;
+        driver_w = 1;
+    } else if (total_threads <= 12) {
+        // 6c/12t (e.g. Ryzen 5600, i5-10400, i5-12400):
+        cpu_w = 3;
+        driver_w = 2;
+    } else {
+        // 8c/16t or higher (Ryzen 7/9, i7/i9):
+        cpu_w = std::min<size_t>(total_threads / 2, 6ULL);
+        driver_w = std::min<size_t>(total_threads / 4, 3ULL);
+    }
 #endif
+
+    if (device) {
+        // NVIDIA proprietary driver serializes vkCreateGraphicsPipelines. On <=8 thread CPUs,
+        // one driver worker avoids that lock. This branch has no Device::IsAmdLegacyGcn.
+        if (device->GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY && total_threads <= 8) {
+            driver_w = 1;
+        }
+        if (device->HasBrokenParallelShaderCompiling()) {
+            driver_w = 1;
+        }
+    }
+    return {cpu_w, driver_w};
+}
+
+/// EDEN_NX2_HYBRID + #2399: topology-scaled worker counts, capped to the efficiency cores the
+/// background shader pools are confined to on hybrid hosts. Boot turbo still expands the pool
+/// relative to gameplay, but never beyond the E-core budget.
+PipelineWorkerCounts GetHybridPipelineWorkers(const Device* device, bool boot_turbo) {
+    PipelineWorkerCounts workers = GetSmartPipelineWorkers(device, boot_turbo);
+    if (const size_t efficiency = Common::HybridBackgroundProcessors(); efficiency != 0) {
+        const size_t driver_cap = std::max<size_t>(efficiency / 2, 2);
+        workers.cpu_workers = std::clamp<size_t>(workers.cpu_workers, 1, efficiency);
+        workers.driver_workers = std::clamp<size_t>(workers.driver_workers, 1, driver_cap);
+    }
+    return workers;
 }
 
 } // Anonymous namespace
@@ -1353,16 +1423,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     graphics_libraries.SetUnoptimizedFirst(UnoptimizedFirstEnabled(
         device.GetDriverID(), device.IsExtGraphicsPipelineLibrarySupported()));
 
-    size_t cpu_threads = GetTotalPipelineWorkers();
-    size_t driver_thread_limit = std::max<size_t>(std::thread::hardware_concurrency() / 2, 2);
-    // EDEN_NX2_HYBRID: the pools fit the efficiency cores they are confined to.
-    if (const size_t efficiency = Common::HybridBackgroundProcessors(); efficiency != 0) {
-        cpu_threads = std::clamp<size_t>(cpu_threads, 1, efficiency);
-        driver_thread_limit = std::clamp<size_t>(driver_thread_limit, 2, std::max<size_t>(efficiency / 2, 2));
-    }
-    const size_t driver_threads =
-        device.HasBrokenParallelShaderCompiling() ? 1
-                                                  : std::min(cpu_threads, driver_thread_limit);
+    // #2399: size the shader pools from the host CPU topology. Boot turbo expands them while the
+    // disk cache loads; SetActiveWorkerLimits below parks them back to the gameplay counts.
+    // EDEN_NX2_HYBRID: GetHybridPipelineWorkers caps both profiles to the efficiency cores.
+    const auto boot_workers = GetHybridPipelineWorkers(&device, true);
+    const auto gameplay_workers = GetHybridPipelineWorkers(&device, false);
     // EDEN_NX2_WAIT_BOOST (experiment): a shader job a draw waits for runs at normal priority.
     const char* const wait_boost_value = std::getenv("EDEN_NX2_WAIT_BOOST");
     const bool wait_boost =
@@ -1372,11 +1437,12 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                 "thread priority");
     }
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
-        .cpu_threads = cpu_threads,
-        .driver_threads = driver_threads,
+        .cpu_threads = std::max(boot_workers.cpu_workers, gameplay_workers.cpu_workers),
+        .driver_threads = std::max(boot_workers.driver_workers, gameplay_workers.driver_workers),
         .name = "VkShader",
         .wait_boost = wait_boost,
     });
+    shader_jobs->SetActiveWorkerLimits(gameplay_workers.cpu_workers, gameplay_workers.driver_workers);
 }
 
 namespace {
@@ -1922,6 +1988,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         LOG_ERROR(Common_Filesystem, "Failed to create pipeline cache directories");
         return;
     }
+    const auto boot_workers = GetHybridPipelineWorkers(&device, true);
+    const auto gameplay_workers = GetHybridPipelineWorkers(&device, false);
+    shader_jobs->SetActiveWorkerLimits(boot_workers.cpu_workers, boot_workers.driver_workers);
+    SCOPE_EXIT {
+        shader_jobs->SetActiveWorkerLimits(gameplay_workers.cpu_workers,
+                                           gameplay_workers.driver_workers);
+    };
     namespace CacheV2 = VideoCommon::ShaderCacheV2;
     pipeline_cache_filename = base_dir / CacheV2::FileName;
     // Left by a boot load that never finished (a driver crash, abort or hang): this boot builds
@@ -3206,7 +3279,8 @@ void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_tok
     }
 
     const auto begin = std::chrono::steady_clock::now();
-    const size_t num_threads = GetTotalPipelineWorkers();
+    // Precache runs inside LoadDiskResources, while the boot-turbo limit is active.
+    const size_t num_threads = GetHybridPipelineWorkers(&device, true).cpu_workers;
     std::vector<u8> built(jobs.size());
     std::atomic<size_t> done{};
     bool skipped = false;
@@ -5339,7 +5413,7 @@ bool PipelineCache::WaitForGraphicsTranslation(const GraphicsPipelineCacheKey& k
         action = DecideNativePending(policy.mode, policy.can_discard, native_wait_budget_us);
     }
     switch (DecideTranslationWait(action, job.Ready(), translating_graphics.size(),
-                                  GetTotalPipelineWorkers())) {
+                                  GetHybridPipelineWorkers(&device, false).cpu_workers)) {
     case TranslationWait::Adopt:
         break;
     case TranslationWait::Skip:

@@ -194,7 +194,9 @@ u64 DefaultShaderJobBudget() {
 ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
     : budget{config.memory_budget != 0 ? config.memory_budget : DefaultShaderJobBudget()},
       background_aging{config.background_aging}, wait_boost{config.wait_boost},
-      make_priority_target{config.priority_target} {
+      make_priority_target{config.priority_target},
+      active_cpu_limit{std::max<size_t>(config.cpu_threads, 1)},
+      active_driver_limit{std::max<size_t>(config.driver_threads, 1)} {
     stats.budget_bytes = budget;
     const auto start{[this](std::string name, bool driver) {
         threads.emplace_back([this, name = std::move(name), driver] {
@@ -210,6 +212,26 @@ ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
     }
     for (size_t i = 0; i < std::max<size_t>(config.driver_threads, 1); ++i) {
         start(config.name + "Driver", true);
+    }
+}
+
+void ShaderJobScheduler::SetActiveWorkerLimits(size_t cpu_threads, size_t driver_threads) {
+    bool wake_cpu = false;
+    bool wake_driver = false;
+    {
+        std::scoped_lock lock{mutex};
+        const size_t new_cpu = std::max<size_t>(cpu_threads, 1);
+        const size_t new_driver = std::max<size_t>(driver_threads, 1);
+        wake_cpu = new_cpu > active_cpu_limit;
+        wake_driver = new_driver > active_driver_limit;
+        active_cpu_limit = new_cpu;
+        active_driver_limit = new_driver;
+    }
+    if (wake_cpu) {
+        cpu_condition.notify_all();
+    }
+    if (wake_driver) {
+        driver_condition.notify_all();
     }
 }
 
@@ -414,14 +436,24 @@ void ShaderJobScheduler::Worker(bool driver) {
     // EDEN_NX2_WAIT_BOOST: how a draw's wait reaches this thread's priority.
     const std::unique_ptr<PriorityTarget> target{MakePriorityTarget()};
     std::unique_lock lock{mutex};
+    size_t& running = driver ? active_driver_running : active_cpu_running;
+    const size_t& limit = driver ? active_driver_limit : active_cpu_limit;
     while (true) {
         JobPtr job;
         (driver ? driver_condition : cpu_condition).wait(lock, [&] {
-            return stopping || (job = Pick(driver, Clock::now()));
+            if (stopping) {
+                return true;
+            }
+            if (running >= limit) {
+                return false;
+            }
+            job = Pick(driver, Clock::now());
+            return static_cast<bool>(job);
         });
         if (!job) {
             return;
         }
+        ++running;
         StartStage(*job, driver, Clock::now());
         lock.unlock();
         if (Common::HybridPlacementActive()) {
@@ -446,6 +478,7 @@ void ShaderJobScheduler::Worker(bool driver) {
         // RunCpu and RunDriver already detached the boost and restored the priority.
         job.reset();
         lock.lock();
+        --running;
     }
 }
 
