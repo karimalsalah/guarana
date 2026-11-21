@@ -562,7 +562,8 @@ void FrameGen::LogActivity() {
         if (activity.generated == 0) {
             LOG_INFO(Render_Vulkan,
                      "Frame generation ({}) idle: {:.0f} game FPS, no frames generated. It waits "
-                     "while the game is below 10 FPS, after hitches and once the target is met",
+                     "while the game is below 10 FPS, after hitches, once the target is met and "
+                     "while the display takes no more presents",
                      ModeText(built_type), static_cast<f32>(activity.frames) / seconds);
         } else {
             LOG_INFO(Render_Vulkan,
@@ -593,19 +594,25 @@ bool FrameGen::FluidInterpolation() {
     return on;
 }
 
-size_t FrameGen::WantedGenerations(size_t capacity,
+size_t FrameGen::WantedGenerations(size_t capacity, size_t free_frames,
                                    std::chrono::steady_clock::duration blocked) {
     if (unavailable) {
         plan = {};
         return 0;
     }
     plan = pacer.Plan(capacity, blocked);
+    plan.generations = GenerationsWithoutWaiting(plan.generations, free_frames);
     if (extrapolating && cadence_divisor != 0) {
-        // Extrapolated frames cost next to nothing: always fill the cadence.
-        plan = {.generations = std::min<size_t>(capacity, cadence_divisor - 1), .warm = true};
+        // Extrapolated frames cost next to nothing: always fill the cadence — but never wait for
+        // a present frame (#2023): the fill is capped by the frames free now, one kept in reserve.
+        plan = {.generations = GenerationsWithoutWaiting(
+                    std::min<size_t>(capacity, cadence_divisor - 1), free_frames),
+                .warm = true};
     } else if (!extrapolating && cadence_divisor != 0 && FluidInterpolation()) {
-        // EDEN_NX2_FLUID_INTERP: a frame for every slot between two real frames.
-        plan = {.generations = std::min<size_t>(capacity, cadence_divisor - 1), .warm = true};
+        // EDEN_NX2_FLUID_INTERP: a frame for every slot between two real frames, same no-wait cap.
+        plan = {.generations = GenerationsWithoutWaiting(
+                    std::min<size_t>(capacity, cadence_divisor - 1), free_frames),
+                .warm = true};
     }
     return plan.generations;
 }

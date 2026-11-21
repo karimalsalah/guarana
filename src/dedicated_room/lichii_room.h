@@ -1,5 +1,5 @@
-// Copyright eden Emulator Project
-// Licensed under GPLv3 or any later version
+// SPDX-FileCopyrightText: Copyright Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Refer to the license.txt file included.
 
 #pragma once

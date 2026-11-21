@@ -16,7 +16,7 @@ Their copyright notices stay in the source files, and the history in git keeps e
 
 ## Intel fixes
 
-[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp), 0007 (guest HMMA on 8x16x16 cooperative matrices) and 0008 (Intel's 8x16x16 HMMA rounds after each K=8 half, as the guest), both behind `EDEN_NX2_INTEL_COOP_MATRIX` and built on the Lichii pull request #779 below, and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), ported to Lichii `nx2` in this fork, and the experiment EXP56 (a cleared depth target larger than its colour targets follows the clear instead of an upload: `EDEN_NX2_DEPTH_CLEAR_COVERS`). The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
+[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): patches 0001 (dynamic primitive topology follows the pipeline's tessellation stages), 0003 (shuffles stay in bounds on host subgroups narrower than the guest warp), 0007 (guest HMMA on 8x16x16 cooperative matrices) and 0008 (Intel's 8x16x16 HMMA rounds after each K=8 half, as the guest), both behind `EDEN_NX2_INTEL_COOP_MATRIX` and built on the Lichii pull request #779 below, and 0010 (native float32 storage atomic add with `VK_EXT_shader_atomic_float`), and 0011 (16-lane compute shaders on Intel, off: `EDEN_NX2_INTEL_COMPUTE_SIMD16`), ported to Lichii `nx2` in this fork, and the experiment EXP56 (a cleared depth target larger than its colour targets follows the clear instead of an upload: `EDEN_NX2_DEPTH_CLEAR_COVERS`). The patches name their author only as "Fritchii Intel fixes"; their authors tested them on an Arc B580 and an Arc 140V.
 
 ## Upstream pull requests we carry
 
@@ -73,7 +73,10 @@ Work taken from other forks of Lichii. Their authors as recorded in git; each fo
 |---|---|---|---|
 | [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [58f55cb7d9](https://github.com/Frizti/Fritchii/commit/58f55cb7d9ee912931ce060ea8683694796e6ac3), [8627ff4233](https://github.com/Frizti/Fritchii/commit/8627ff4233323977fd5ead274867e4dd2ce66d5c) | [Frizti](https://github.com/Frizti) | The performance overlay's RAM and VRAM readouts: what the emulator holds and the room left, amber under 2 GB of RAM or 1 GB of video memory (hand port onto our overlay; the room of an integrated GPU's shared memory is also bounded by the free RAM) |
 | [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [c99790b878](https://github.com/Frizti/Fritchii/commit/c99790b8786cb6a5abc6a564a7115e2b8d15d937) | [Frizti](https://github.com/Frizti) | `EDEN_NX2_IR_POOL_CAP_MIB`: the shader recompiler's object pools free memory above a cap instead of keeping their largest shader's worth |
+| [CheezyEmu](https://github.com/CheezerWheezer/CheezyEmu) | [76f03c3c03](https://github.com/CheezerWheezer/CheezyEmu/commit/76f03c3c034b9be972b6a0129a83a90aa1fc9da2), [51eb67792f](https://github.com/CheezerWheezer/CheezyEmu/commit/51eb67792f3367f40bfb07c25bf7df3c43943fa9) | [CheezerWheezer](https://github.com/CheezerWheezer) | The status bar chip for Ocarina of Time's upscaler: which one draws and at what sizes, or why the game's own upscaler draws; a click turns Ocarina FSR on or off between games (hand port onto our upscale path) |
 | [Fritchii](https://github.com/Frizti/Fritchii) (v5.8.4) | [a962f20533](https://github.com/Frizti/Fritchii/commit/a962f20533a1733375cadd0ec59ecf6f82d8ddaf) | [Frizti](https://github.com/Frizti) | `EDEN_NX2_ASYNC_DISCARD=2`: native draws with an unbuilt pipeline are skipped only into render targets cleared every frame; the others wait (hand port onto our pending-draw policy and texture cache) |
+| [Eden](https://git.eden-emu.dev/eden-emu/eden) | [6e24dcb4b5](https://git.eden-emu.dev/eden-emu/eden/commit/6e24dcb4b549e40f2ea02a29db86f02de6444887) (Eden pull request [#4654](https://git.eden-emu.dev/eden-emu/eden/pulls/4654)) | PavelBARABANOV, Aydar Kamaltdinov | `EDEN_NX2_F2I_ABS_NEG`: F2I's absolute value and negation bits decoded the right way round (Disco Elysium) |
+| [Eden](https://git.eden-emu.dev/eden-emu/eden) | [6a767ac43a](https://git.eden-emu.dev/eden-emu/eden/commit/6a767ac43a089fe988526bf7f8477ccc43277fb1) (Eden pull request [#4639](https://git.eden-emu.dev/eden-emu/eden/pulls/4639), the asynchronous shader part) | John | `EDEN_NX2_ASYNC_GUARD`: draws that write memory, use transform feedback, rasterize nothing or render a small target wait for their pipeline instead of being skipped |
 
 ## Artwork
 
@@ -83,6 +86,31 @@ The Lichii logo, icon and library artwork that the packages still use are by YOB
 
 The libraries the emulator uses keep their own licences: see [LICENSES](LICENSES), the notices in `externals/`, and the licence files inside the release packages (the Linux x86_64 packages ship fsr4-vk with its own).
 
+## Ocarina of Time built-in add-ons
+
+The built-in patches for the Switch 2 release of Ocarina of Time carry named work, documented in
+[docs/nx2/ocarina-dynamic-fps.md](docs/nx2/ocarina-dynamic-fps.md), [docs/nx2/oot-network-bypass.md](docs/nx2/oot-network-bypass.md)
+and [docs/patch-packs.md](docs/patch-packs.md):
+
+- **Dark**, an Eglantine developer — the Dynamic FPS routine. Dark gave permission to bundle it; the port
+  preserves the call and 120-byte routine from **Frizti**'s `oot-gather-fix` commit `765659af4ccb`, which also
+  supplied the built-in integration. **CTGL**'s [Lichii #299](https://github.com/zortos293/Lichii/pull/299)
+  changed one instruction: the delta cap is `CNTFRQ / 10` instead of `CNTFRQ / 20`.
+- **NotRexed** ([Hookshot](https://github.com/NotRexed/Hookshot)) — the text-speed patches
+  ([Hookshot #402](https://github.com/NotRexed/Hookshot/pull/402)), ported by way of
+  [Lichii #1422](https://github.com/zortos293/Lichii/pull/1422) into the shipped JSON pack
+  `dist/patch-packs/0400486024DEC000-text-speed.json`. Hookshot also found both whole-tick counter sites
+  (`nx2/oot_patches.py`, `WHOLE_SITES`, GPL-3.0); the stubs here are our own.
+- The **KaeGae registry** ([Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding),
+  `registry/e0f3ccfa.toml`) — the memory-region map used to place the built-ins' code caves clear of mods and cheats.
+- **RsMan-Dev** — the texture pool patch behind Texture Pool x2.
+- **myshadowww** — Native DLAA sizing and atomic runtime-settings publication
+  ([Lichii #840](https://github.com/zortos293/Lichii/pull/840)), adapted for the DLSS quality settings
+  ([docs/user/DLSS.md](docs/user/DLSS.md)).
+- **ProfessorTee** — the Ocarina of Time render scales ([Lichii #903](https://github.com/zortos293/Lichii/pull/903))
+  the Max Resolution built-in's fixed-scale path uses.
+
 ## Guarana
 
 The fork's own changes are listed in [CHANGELOG.md](CHANGELOG.md) and in git history, with their authors.
+The named work the built-in add-ons carry is credited above, in [Ocarina of Time built-in add-ons](#ocarina-of-time-built-in-add-ons).

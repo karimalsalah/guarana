@@ -9,8 +9,7 @@ name: android
 # Signing: a build that release-binaries.yml asks to sign (`sign`: tags, the nightly and runs on
 # main) gets the ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS secrets and is
 # signed with the project's release key. Every other build, and every build while those secrets are
-# unset, is signed with the debug key committed in src/android, under the id
-# io.github.karimalsalah.guarana.preview (docs/SIGNING.md).
+# unset, is signed with the debug key committed in src/android, under a .preview id (docs/SIGNING.md).
 
 on:
   pull_request:
@@ -110,7 +109,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ccache glslang-tools
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -121,7 +120,7 @@ jobs:
           set -euo pipefail
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" --install "ndk;29.0.14206865" "cmake;3.31.5" > /dev/null
+          "$sdkmanager" --install "ndk;29.0.14206865" "cmake;3.31.5" "build-tools;36.0.0" > /dev/null
 
       - name: Restore compiler objects
         id: ccache
@@ -132,11 +131,24 @@ jobs:
           restore-keys: |
             android-arm64-ccache-
 
-      # The update checker stays off, as in every build of this fork (docs/LANES.md): -r and -n
-      # would turn it on.
+      # Maven Central rate-limits the runners (HTTP 429) and a cold Gradle resolution then fails
+      # the whole APK. Cache the resolved dependencies and the wrapper between runs.
+      - name: Restore Gradle dependencies
+        id: gradle-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-gradle-${{ hashFiles('src/android/**/*.gradle*', 'src/android/**/gradle-wrapper.properties', '.ci/android/**') }}
+          restore-keys: |
+            android-gradle-
+
+      # The nightly has its own app id. Neither channel enables the upstream update checker.
       - name: Build
         env:
           CCACHE: "true"
+          NIGHTLY: ${{ inputs.channel == 'nightly' }}
           GIT_TAG_NAME: ${{ inputs.version || format('pr{0}-{1}', github.event.pull_request.number || 'test', github.sha) }}
           # Only a build that release-binaries.yml asks to sign gets the release key. A pull request
           # from a branch of this repository, or a run dispatched by hand, builds code no release has
@@ -161,14 +173,32 @@ jobs:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+      - name: Save Gradle dependencies
+        if: always() && inputs.save_caches && steps.gradle-cache.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
+
       - name: Name the APK
         id: apk
         env:
           SIGNED: ${{ inputs.sign && secrets.ANDROID_KEYSTORE_B64 != '' }}
+          CHANNEL: ${{ inputs.channel || 'test' }}
         run: |
           set -euo pipefail
           apk=artifacts/app-mainline-release.apk
           test -s "$apk" || { echo "::error::$apk was not produced"; ls -la artifacts || true; exit 1; }
+          package=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")
+          expected=io.github.karimalsalah.guarana
+          if [ "$CHANNEL" = nightly ]; then expected+=.nightly; fi
+          if [ "$SIGNED" != true ]; then expected+=.preview; fi
+          if [ "$package" != "$expected" ]; then
+            echo "::error::Expected Android package $expected for $CHANNEL, got $package"
+            exit 1
+          fi
           mkdir -p out
           if [ -n "$PR" ]; then
             name="guarana-pr$PR-${GITHUB_SHA::10}-android-arm64"
@@ -179,12 +209,12 @@ jobs:
           # guarana-<version>-<platform>.apk.
           cp "$apk" "out/guarana-$GITHUB_SHA-android-arm64.apk"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-          key="the public debug key, as io.github.karimalsalah.guarana.preview"
+          key="the public debug key"
           if [ "$SIGNED" = true ]; then key="the release key"; fi
           {
             echo "### Android arm64 APK"
             echo
-            echo "\`$name\` ($(du -h "$apk" | cut -f1)), signed with $key."
+            echo "\`$name\` ($(du -h "$apk" | cut -f1)), package \`$package\`, signed with $key."
             echo "Never booted on a device by the project: please report how it runs with a device report."
           } >> "$GITHUB_STEP_SUMMARY"
 

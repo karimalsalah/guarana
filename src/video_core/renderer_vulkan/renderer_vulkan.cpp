@@ -49,6 +49,7 @@
 #include "video_core/textures/decoders.h"
 #include "video_core/video_core.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
+#include "video_core/vulkan_common/vulkan_address_map.h"
 #include "video_core/vulkan_common/vulkan_debug_callback.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
@@ -398,6 +399,8 @@ try
     // Create debug messenger if debug is enabled
     , debug_messenger(Settings::values.renderer_debug ? CreateDebugUtilsCallback(instance)
                                                     : vk::DebugUtilsMessenger{})
+    , address_messenger(AddressMap::Wanted() ? CreateAddressBindingCallback(instance, dld)
+                                             : vk::DebugUtilsMessenger{})
     // Create surface
     , surface(CreateSurface(instance, render_window.GetWindowInfo()))
     , device(CreateDevice(instance, dld, *surface, ApplyGamePresets,
@@ -555,74 +558,45 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // interpolated frames. The extrapolation pass writes SDR, so HDR output pauses it.
     std::vector<Frame*> predicted_frames;
     const bool fluid = present_manager.Fluid();
-    if (output.IsHdr() && ExtrapolationRequested()) {
+    // How many presents show this game frame, the generated frames included: Frame Pacing Mode
+    // targets game frames, not the presents of their generated frames.
+    const size_t game_frame_presents =
+        1 + frame_gen.WantedGenerations(present_manager.MaxExtraFrames(),
+                                        present_manager.FreeFrames(),
+                                        present_manager.TakeBlockedTime());
+    if (output.IsHdr()) {
         frame_gen.Pause();
         if (fluid) {
             RecordFluidFrames(frame, output, predicted_frames);
         }
     } else {
-        if (!output.IsHdr()) {
-            const auto& layout = render_window.GetFramebufferLayout();
-            frame_gen.SetExtrapolationSource(
-                rasterizer.OcarinaExtrapolationSource(),
-                VkRect2D{.offset = {static_cast<s32>(layout.screen.left),
-                                    static_cast<s32>(layout.screen.top)},
-                         .extent = {layout.screen.GetWidth(), layout.screen.GetHeight()}});
+        const auto& layout = render_window.GetFramebufferLayout();
+        frame_gen.SetExtrapolationSource(
+            rasterizer.OcarinaExtrapolationSource(),
+            VkRect2D{.offset = {static_cast<s32>(layout.screen.left),
+                                static_cast<s32>(layout.screen.top)},
+                     .extent = {layout.screen.GetWidth(), layout.screen.GetHeight()}});
+    }
+    frame_gen.Process(device, frame, frame->image_format, GuestExtent(framebuffers));
+    const size_t generated_frames = frame_gen.GeneratedFrameCount();
+    // Each generated frame keeps the screen for an equal share of the real frame interval. Sent
+    // back to back, a high refresh rate display shows it for one refresh only.
+    const auto spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
+                                   static_cast<f32>(generated_frames + 1)));
+    frame->game_frame_presents = static_cast<u32>(game_frame_presents);
+    for (size_t generation = 1; generation < game_frame_presents; ++generation) {
+        Frame* generated = present_manager.TryGetRenderFrame();
+        if (generated == nullptr) {
+            break;
         }
-        void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames(),
-                                         present_manager.TakeBlockedTime()));
-
-        frame_gen.Process(device, frame, frame->image_format, GuestExtent(framebuffers));
-
-        const size_t generated_frames = frame_gen.GeneratedFrameCount();
-        const bool predict = frame_gen.Extrapolating();
-        if (fluid && (predict || generated_frames == 0)) {
-            // EDEN_NX2_FLUID: the present thread shows each frame at its vblank slot.
-            RecordFluidFrames(frame, output, predicted_frames);
-        } else if (fluid && FrameGen::FluidInterpolation()) {
-            // EDEN_NX2_FLUID_INTERP: interpolated frames on the vblank slots before the real one.
-            RecordFluidInterpolated(frame, output, generated_frames, predicted_frames);
-        } else {
-            // Each generated frame keeps the screen for an equal share of the real frame
-            // interval (EDEN_NX2_CADENCE: of the target rate). Sent back to back, a high refresh
-            // rate display shows it for one refresh only.
-            auto spacing = frame_gen.CadenceSpacing();
-            if (spacing.count() == 0) {
-                spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
-                                               static_cast<f32>(generated_frames + 1)));
-            }
-            for (size_t generation = 0; generation < generated_frames; ++generation) {
-                Frame* generated = present_manager.GetRenderFrame();
-                generated->color_space = output.color_space;
-                generated->present_spacing = spacing;
-                generated->shown_kind = predict ? VideoCore::Nx2ShownFrames::Kind::Predicted
-                                                : VideoCore::Nx2ShownFrames::Kind::Interpolated;
-                blit_swapchain.PrepareFrame(device, generated,
-                                            render_window.GetFramebufferLayout());
-                frame_gen.GenerateInto(device, generated, generation);
-                if (predict) {
-                    // Recorded with the real frame's commands, which it reads; shown after it.
-                    predicted_frames.push_back(generated);
-                    continue;
-                }
-                generated->gpu_tick = scheduler.Flush(*generated->render_ready);
-                present_manager.Present(generated);
-            }
-            if (!predicted_frames.empty()) {
-                // The real frame and each predicted frame but the last hold the screen one
-                // spacing. The last leaves the next real frame free to show as soon as it is
-                // ready, as the real frame does after interpolated ones: (gens + 1) spacings plus
-                // copy time per batch would let the present queue creep behind.
-                frame->present_spacing = spacing;
-                predicted_frames.back()->present_spacing = {};
-            }
-            if (predict && FluidMode() != 0) {
-                // FrameGen leaves EDEN_NX2_FLUID's predictions to be counted as recorded, also
-                // once its watchdog fell back to this path.
-                frame_gen.NoteFluidGenerated(predicted_frames.size());
-            }
-        }
+        generated->color_space = output.color_space;
+        generated->present_spacing = spacing;
+        generated->game_frame_presents = static_cast<u32>(game_frame_presents);
+        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
+        frame_gen.GenerateInto(device, generated, generation);
+        scheduler.Flush(*generated->render_ready);
+        present_manager.Present(generated);
     }
 #endif
 
@@ -1175,6 +1149,23 @@ std::optional<VideoCore::VideoMemoryUsage> RendererVulkan::GetVideoMemoryUsage()
         .budget = device.GetDeviceHeapMemoryBudget(),
         .shared = device.IsIntegrated(),
     };
+}
+
+VideoCore::UpscalerStatus RendererVulkan::GetUpscalerStatus() const {
+    VideoCore::UpscalerStatus status;
+    status.upscaled_frames = rasterizer.UpscaledFrames();
+    const u64 sizes = rasterizer.UpscaleSizes();
+    status.render_width = static_cast<u32>((sizes >> 48) & 0xffff);
+    status.render_height = static_cast<u32>((sizes >> 32) & 0xffff);
+    status.output_width = static_cast<u32>((sizes >> 16) & 0xffff);
+    status.output_height = static_cast<u32>(sizes & 0xffff);
+    if (const char* const name = rasterizer.UpscalerName()) {
+        status.name = name;
+    }
+    const auto [tag, reason] = rasterizer.UpscalerIdleReason();
+    status.idle_tag = tag;
+    status.idle_reason = reason;
+    return status;
 }
 
 } // namespace Vulkan

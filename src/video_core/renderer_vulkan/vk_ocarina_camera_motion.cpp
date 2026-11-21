@@ -907,6 +907,15 @@ bool OcarinaUpscaler::EvaluationFailed() const {
     return impl->Failed();
 }
 
+const char* OcarinaUpscaler::LastUpscalerName() const {
+#ifdef EGLANTINE_STREAMLINE
+    if (impl->dlss) {
+        return "DLSS";
+    }
+#endif
+    return impl->output_fsr4 ? "FSR 4" : "FSR 3.1";
+}
+
 void OcarinaUpscaler::SaveSceneReference(VkImageView color) {
     auto& state = *impl;
     constexpr VkExtent2D extent{2560, 1440};

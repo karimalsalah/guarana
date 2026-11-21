@@ -5,6 +5,7 @@ body:
     attributes:
       value: |
         **For contributors and maintainers.** Reporting a bug, a device result, a performance idea or an agent task? Use that form instead: it asks for what we need. A maintainer may move or close an issue filed here that belongs in another form.
+        Do not post games, keys, firmware, account credentials or unauthorized download links. Do not attach bug bundles, GPU traces, shader caches or memory dumps publicly; ask a maintainer for handling instructions first.
   - type: textarea
     attributes:
       label: "Issue"

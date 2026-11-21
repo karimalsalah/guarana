@@ -546,6 +546,7 @@ public:
     FN_MAX_LIMIT_ELEM(PerStageDescriptorStorageBuffers) \
     FN_MAX_LIMIT_ELEM(PerStageResources) \
     FN_MAX_LIMIT_ELEM(PerStageDescriptorSamplers) \
+    FN_MAX_LIMIT_ELEM(SamplerAllocationCount) \
     FN_MAX_LIMIT_ELEM(DescriptorSetSamplers) \
     FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers) \
     FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffersDynamic) \
@@ -677,6 +678,29 @@ FN_MAX_LIMIT_LIST
         const auto& control = properties.subgroup_size_control;
         return (control.requiredSubgroupSizeStages & stage) != 0 &&
                control.minSubgroupSize <= GuestWarpSize && GuestWarpSize <= control.maxSubgroupSize;
+    }
+
+    /// The subgroup size to require for compute shaders without warp-width operations, 0 for the
+    /// driver's choice. Intel (Xe2) compiles large compute shaders SIMD32 with register spills
+    /// (5.7 KB of scratch for Ocarina of Time's global memory shaders) after also compiling them
+    /// SIMD16: 16 lanes build ~2.6x faster without spills, but run slower (Hyrule Field on a
+    /// B580: ~35 instead of ~39.5 fps; f84d5909908cc5ea 0.14 instead of 0.07 ms a dispatch), so
+    /// it is off unless asked for. EDEN_NX2_INTEL_COMPUTE_SIMD16: 0 (default) off, 1 shaders with
+    /// global memory accesses, 2 every shader without warp operations (Fritchii-Intel-Fixes 0011).
+    u32 NarrowComputeSubgroupSize(bool uses_global_memory) const {
+        constexpr u32 narrow = 16;
+        static const int mode = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COMPUTE_SIMD16");
+            return value != nullptr && value[0] >= '0' && value[0] <= '2' ? value[0] - '0' : 0;
+        }();
+        const auto& control = properties.subgroup_size_control;
+        const bool applies = mode == 2 || (mode == 1 && uses_global_memory);
+        return applies && properties.properties.vendorID == 0x8086 &&
+                       extensions.subgroup_size_control &&
+                       IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT) &&
+                       control.minSubgroupSize <= narrow && narrow <= control.maxSubgroupSize
+                   ? narrow
+                   : 0;
     }
 
     /// Returns true if compute pipelines can require full subgroups.
@@ -813,6 +837,23 @@ FN_MAX_LIMIT_LIST
     /// Returns true if VK_KHR_swapchain_mutable_format is enabled.
     bool IsKhrSwapchainMutableFormatEnabled() const {
         return extensions.swapchain_mutable_format;
+    }
+
+    /// Returns true if presents can carry an id and be waited for, through either version of
+    /// the extensions. A swapchain may still have neither (Swapchain::HasPresentIds).
+    bool IsPresentWaitEnabled() const {
+        return IsKhrPresentWaitEnabled() || IsKhrPresentWait2Enabled();
+    }
+
+    /// Returns true if VK_KHR_present_id and VK_KHR_present_wait are enabled.
+    bool IsKhrPresentWaitEnabled() const {
+        return present_id_features.presentId && present_wait_features.presentWait;
+    }
+
+    /// Returns true if VK_KHR_present_id2 and VK_KHR_present_wait2 are enabled. The surface still
+    /// has to support them.
+    bool IsKhrPresentWait2Enabled() const {
+        return present_id2_features.presentId2 && present_wait2_features.presentWait2;
     }
 
     /// Returns true if VK_EXT_hdr_metadata is enabled.
@@ -1251,6 +1292,18 @@ FN_MAX_LIMIT_LIST
         return has_renderdoc || has_nsight_graphics || has_radeon_gpu_profiler;
     }
 
+    /// Whether resources get debug names: for an attached tool, or for the device address map
+    /// (EDEN_NX2_FAULT_MAP) to name what a fault hit.
+    bool NamesObjects() const {
+        return HasDebuggingToolAttached() || address_binding_report;
+    }
+
+    /// Returns true when RADV saves a GPU hang report (RADV_DEBUG=hang), which keeps the SPIR-V of
+    /// the pipelines bound at the hang.
+    bool HasRadvHangReport() const {
+        return radv_hang_report;
+    }
+
     /// @returns True if compute pipelines can cause crashing.
     bool HasBrokenCompute() const {
         return has_broken_compute;
@@ -1610,6 +1663,12 @@ private:
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};
+    VkPhysicalDeviceAddressBindingReportFeaturesEXT address_binding_report_features{};
+    bool address_binding_report{};
+    VkPhysicalDevicePresentIdFeaturesKHR present_id_features{};
+    VkPhysicalDevicePresentWaitFeaturesKHR present_wait_features{};
+    VkPhysicalDevicePresentId2FeaturesKHR present_id2_features{};
+    VkPhysicalDevicePresentWait2FeaturesKHR present_wait2_features{};
     /// Enabled as the driver reports them (VK_KHR_portability_subset devices only).
     VkPhysicalDevicePortabilitySubsetFeaturesKHR portability_subset_features{};
     VkPhysicalDeviceProperties2 properties2{};
@@ -1637,6 +1696,7 @@ private:
     bool has_renderdoc{};                      ///< Has RenderDoc attached
     bool has_nsight_graphics{};                ///< Has Nsight Graphics attached
     bool has_radeon_gpu_profiler{};            ///< Has Radeon GPU Profiler attached.
+    bool radv_hang_report{};                   ///< RADV_DEBUG=hang is set.
     bool supports_d24_depth{};                 ///< Supports D24 depth buffers.
     bool must_emulate_scaled_formats{};        ///< Requires scaled vertex format emulation
     bool dynamic_state3_blending{};            ///< Has blending features of dynamic_state3.

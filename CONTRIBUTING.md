@@ -2,6 +2,13 @@
 
 Guarana, a fork of Lichii, makes the Switch 2 emulator run well on integrated GPUs, Intel Arc first and then AMD's handheld chips, and is honest about what it measured. People and AI agents are both welcome, and the rules are the same for both. [AGENTS.md](AGENTS.md) has the long form: build commands, the repository map, how to verify a change.
 
+**Tested on one machine, built for thousands — your device report is the most useful contribution.**
+It needs no code: [fill the form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) →
+[`tools/ingest`](tools/ingest) parses it → CI validates the row and updates the
+[leaderboard](https://karimalsalah.github.io/guarana/benchmarks.html) pull request; verified reports earn a row in
+[docs/DEVICES.md](docs/DEVICES.md).
+Join the [call for testers (#55)](https://github.com/karimalsalah/guarana/issues/55).
+
 Open issues and pull requests here, in [karimalsalah/guarana](https://github.com/karimalsalah/guarana). Chat, setup help and "is anyone on this?" go to the Discord, [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM); questions that deserve a lasting answer go to [Discussions](https://github.com/karimalsalah/guarana/discussions). Bugs and device reports stay on GitHub so they can be tracked.
 
 Using an AI tool? [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md) gets Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf, Aider, Cline or a plain web chat from zero to a pull request, one command each.
@@ -53,6 +60,13 @@ Numbers from your hardware are as valuable as code, especially for GPUs the main
 - **Best**: run `tools/bench` ([CONTRIBUTING-bench.md](tools/bench/CONTRIBUTING-bench.md)). It plays a scene the same way on every machine, checks the scene against your reference screenshot, and writes rows without user names or paths. Paste the rows into a device report, or open a pull request with your `tools/bench/results/<date>-<machine-id>.jsonl` and the regenerated `tools/bench/RESULTS.md`.
 - Make a report comparable: plugged in, background programs closed, the driver version in full, the power mode, and the baseline measured the same way right before or after.
 
+## Adding a game patch (no C++)
+
+A [patch pack](docs/patch-packs.md) is a JSON file of built-in patches for one module of one build of one game.
+Packs live in `dist/patch-packs/`, ship with every release, and apply through the same checks as the compiled-in
+add-ons. A patch for any game can be added by a pull request with no C++ — the Ocarina of Time text-speed pack is
+the first example. Credit the original author of any ported patch ([Credit](#credit)).
+
 ## Proposing a switch
 
 Open a [Performance idea](https://github.com/karimalsalah/guarana/issues/new?template=perf-idea.yml) or a pull request with:
@@ -85,3 +99,15 @@ Guarana is a fork of [zortos293/Lichii](https://github.com/zortos293/Lichii). Be
 Every merged pull request is credited for good: your name goes on the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html) and in [CONTRIBUTORS.md](CONTRIBUTORS.md), rebuilt daily from the git history. Your first merged pull request and your first device report each get one thank-you comment from the `welcome` workflow, with a next step; your name appears once a maintainer merges the next Hall of fame update. Authors of `Co-authored-by:` trailers count too, and so do ported fixes (credit the original author). AI tools you used are listed as tools, not as people; the person who owns the pull request is the contributor.
 
 Everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md), on Discord too.
+
+Submit only code and assets you have permission to share. Do not include games, firmware,
+decryption keys, console credentials, extracted shaders or other proprietary data in commits,
+issues or pull requests. Use synthetic test fixtures and document their provenance. Game-specific
+patches need a clear account of which bytes are original work and which came from another source.
+
+Keep reports focused on reproducible behavior. Do not link to unauthorized downloads or promote
+leaked or pre-release copies. Do not attach bug bundles, GPU traces, shader or pipeline caches,
+or memory dumps publicly; ask a maintainer for handling instructions first. Review plain-text
+logs for personal information and credentials before posting.
+
+Keep applicable copyright notices and third-party license notices when modifying or porting code.

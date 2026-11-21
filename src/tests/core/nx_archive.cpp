@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <random>
 #include <string>
@@ -401,4 +402,51 @@ TEST_CASE("NX: registering an archive preserves an external NSP add-on", "[core]
             CHECK(file->ReadAllBytes() == std::vector<u8>(8192, 0x44));
         }
     }
+}
+
+TEST_CASE("NX: the build id of main is the newest enabled update's", "[core][nx]") {
+    using BuildId = std::array<u8, 0x20>;
+    ScopedSystemTestContext environment;
+    Core::System system;
+    system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
+    FileSys::ManualContentProvider provider;
+    system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual, &provider);
+    const auto previous = Settings::values.disabled_addons[ApplicationId];
+    SCOPE_EXIT {
+        Settings::values.disabled_addons[ApplicationId] = previous;
+    };
+    const auto read = [&] {
+        Loader::AppLoader_NX loader{system, OpenFixture("lichii_synthetic.nx")};
+        BuildId build_id{};
+        REQUIRE(loader.ReadMainBuildId(system, build_id) == Loader::ResultStatus::Success);
+        return build_id;
+    };
+    // The synthetic packer fills each build id with one byte: 0x41 the base's main, 0x42 the
+    // update's, as the Catalog records them.
+    const auto filled = [](u8 value) {
+        BuildId build_id{};
+        build_id.fill(value);
+        return build_id;
+    };
+    CHECK(read() == filled(0x42));
+    Settings::values.disabled_addons[ApplicationId] = {"Update"};
+    CHECK(read() == filled(0x41));
+}
+
+TEST_CASE("NX: the build id of a native archive's main is read without Load",
+          "[core][nx][external]") {
+    ScopedSystemTestContext environment;
+    Core::System system;
+    system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
+    FileSys::ManualContentProvider provider;
+    system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual, &provider);
+    Loader::AppLoader_NX loader{system, OpenFixture("native_external_base.nx")};
+    std::array<u8, 0x20> build_id{};
+    REQUIRE(loader.ReadMainBuildId(system, build_id) == Loader::ResultStatus::Success);
+    // Through the NSP and NCA loaders to the base's main, whose build id the generator fills with
+    // 0x11. Its main.npdm is a stub that names no program, so the loader cannot look up updates
+    // for it: the update choice is the tree test's above.
+    CHECK(std::ranges::all_of(build_id, [](u8 byte) { return byte == 0x11; }));
+    // Registered as Load registers it.
+    CHECK(provider.GetEntry(ApplicationId, FileSys::ContentRecordType::Program) != nullptr);
 }

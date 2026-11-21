@@ -53,11 +53,6 @@ public:
      */
     void CloseStreams() override;
 
-    /// Opening a microphone can wait on a permission prompt (see Sink::InputOpenMayBlock).
-    bool InputOpenMayBlock() const override {
-        return true;
-    }
-
     /**
      * Get the device volume. Set from calls to the IAudioDevice service.
      *

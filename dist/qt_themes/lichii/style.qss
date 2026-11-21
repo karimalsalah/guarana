@@ -936,6 +936,12 @@ QPushButton#TogglableStatusBarButton[chip="fg"] {
     color: #ff8a4c;
 }
 
+/* the game's own upscaler replaced (Ocarina of Time's FSR or DLSS) */
+QPushButton#TogglableStatusBarButton[chip="upscale"] {
+    background-color: rgba(52, 211, 153, 0.14);
+    color: #34d399;
+}
+
 /* volume */
 QPushButton#TogglableStatusBarButton[chip="volume"] {
     background-color: rgba(232, 121, 249, 0.14);

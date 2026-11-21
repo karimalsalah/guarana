@@ -16,6 +16,7 @@
 #include "common/common_types.h"
 #include "common/literals.h"
 #include "common/logging.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -113,7 +114,7 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
         stream_ci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     }
     stream_buffer = memory_allocator.CreateBuffer(stream_ci, MemoryUsage::Stream);
-    if (device.HasDebuggingToolAttached()) {
+    if (device.NamesObjects()) {
         stream_buffer.SetObjectNameEXT("Stream Buffer");
     }
     if (device.IsBufferDeviceAddressSupported()) {
@@ -300,9 +301,11 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
         if (logged++ == 0) {
             LogMemoryTrace(device);
         }
-        // The GPU is idle after Finish, so the stream buffer after its last range is free. The
-        // ranges before it may hold data for commands not recorded yet, so it does not wrap.
-        if (usage != MemoryUsage::Upload || deferred || iterator + size >= stream_buffer_size) {
+        // The submitted ticks are done, so the stream buffer after its last range is free unless
+        // the open tick wrapped into it. The ranges before it may hold data for commands not
+        // recorded yet, so it does not wrap.
+        if (usage != MemoryUsage::Upload || deferred || iterator + size >= stream_buffer_size ||
+            AreRegionsActive(Region(iterator), Region(iterator + size) + 1)) {
             LOG_CRITICAL(Render_Vulkan, "No memory for a {} byte staging buffer (usage {})", size,
                          static_cast<u32>(usage));
             throw vk::Exception(VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -324,7 +327,8 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
             .index{},
         };
     }
-    if (device.HasDebuggingToolAttached()) {
+    VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::StagingCreates, 1);
+    if (device.NamesObjects()) {
         ++buffer_index;
         buffer.SetObjectNameEXT(fmt::format("Staging Buffer {}", buffer_index).c_str());
     }
@@ -379,27 +383,10 @@ u64 StagingBufferPool::CachedBytes(MemoryUsage usage) {
 }
 
 void StagingBufferPool::ReleaseMemory() {
-    // Waits for the GPU so the buffers it was still reading are idle too. Those handed out in
-    // the current tick may feed commands not recorded yet (the caller's input while it asks for
-    // its output): they move to the tick after Finish, so they are neither freed nor handed out
-    // again.
-    const u64 current_tick = scheduler.CurrentTick();
-    scheduler.Finish();
-    const u64 next_tick = scheduler.CurrentTick();
-    for (StagingBuffersCache* const cache : {&device_local_cache, &upload_cache, &download_cache}) {
-        for (StagingBuffers& staging : *cache) {
-            for (StagingBuffer& entry : staging.entries) {
-                if (entry.tick >= current_tick) {
-                    entry.tick = next_tick;
-                }
-            }
-        }
-    }
-    for (u64& sync_tick : sync_ticks) {
-        if (sync_tick >= current_tick) {
-            sync_tick = next_tick;
-        }
-    }
+    // Waits for the submitted ticks only (#1993). This runs while a draw or dispatch is set up,
+    // and a submit would leave its earlier bindings in the submitted command buffer. Buffers
+    // handed out in the open tick stay busy, as they may feed commands not recorded yet.
+    scheduler.Wait(scheduler.CurrentTick() - 1);
     ReleaseIdleBuffers();
 }
 

@@ -23,6 +23,26 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [overwolf-vulkan.md](overwolf-vulkan.md) | Overwolf Vulkan start-up protection |
 
 ## Contributors
+- **[General Build Instructions](./Build.md)**
+- **[CMake Options](./Options.md)**
+- **[Cross Compiling](./CrossCompile.md)**
+- **[Development Guidelines](./Development.md)**
+- **[Dependencies](./Deps.md)**
+- **[Debug Guidelines](./Debug.md)**
+  - **[RenderDoc](./Debug.md#renderdoc)**
+- **[Fuzzing the game-file parsers](./Fuzzing.md)**
+- **[CPM - CMake Package Manager](./CPMUtil.md)**
+- **[Platform-Specific Caveats](./Caveats.md)**
+- **[The NVIDIA SM86 (Maxwell) GPU](./NvidiaGpu.md)**
+- **[AMD GPUs and Switch 2 titles](./nx2/amd.md)**
+- **[Driver Bugs](./DriverBugs.md)**
+- **[Testing against a local server](./nx2/host-redirect.md)**
+- **[Building Older Commits](./build/OlderCommits.md)**
+- Subsystems:
+  - **[Design Overview](./DesignOverview.md)**
+  - **[Dynarmic](./dynarmic/README.md)**
+  - **[HOS Kernel](./HosKernel.md)**
+  - **[Settings](./Settings.md)**
 
 | Doc | What it is |
 |---|---|

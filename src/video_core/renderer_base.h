@@ -61,6 +61,19 @@ struct FrameGenStatus {
     u64 generated_frames{};
 };
 
+/// The game-specific upscaler (Ocarina of Time's FSR or DLSS in place of the game's own), for the
+/// status bar
+struct UpscalerStatus {
+    u64 upscaled_frames{}; ///< Frames it upscaled so far (rises while it runs)
+    std::string name;      ///< "FSR 3.1", "FSR 4" or "DLSS"; empty before the first frame
+    u32 render_width{};
+    u32 render_height{};
+    u32 output_width{};
+    u32 output_height{};
+    std::string idle_tag;    ///< Not upscaling: a short reason for the bar
+    std::string idle_reason; ///< and the full one for its tooltip
+};
+
 struct DlssStatus {
     u64 evaluations{};
     /// The last evaluation's settings: the mode it ran in, and the mode and preset the user chose
@@ -111,6 +124,11 @@ public:
 
     /// How many NVIDIA DLSS evaluations ran so far and the mode of the last one
     [[nodiscard]] virtual DlssStatus GetDlssStatus() const {
+        return {};
+    }
+
+    /// Whether the game-specific upscaler runs, which one and at what sizes
+    [[nodiscard]] virtual UpscalerStatus GetUpscalerStatus() const {
         return {};
     }
 

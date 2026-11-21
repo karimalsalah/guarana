@@ -115,6 +115,11 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
   `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`, `shown-<session>-<n>.png`.
 - **Nothing the server returns comes from game files, keys or firmware.** It returns rendered
   pixels, log lines, frame-dump manifests and shader hashes, which the owner already sends today.
+  `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`.
+- **Captures and memory reads can contain game data.** Frame captures, bug bundles and memory
+  reads can expose game code, shaders, textures, buffers and personal information. Do not publish
+  them or add them to the repository. Ask a maintainer for handling instructions before sharing
+  the minimum necessary material, and share only what you have permission to disclose.
   The memory tools read only the application's guest virtual memory and GPU virtual memory,
   through their page tables, and never write either. They cannot reach host memory, the key area
   or the file system: an address resolves only through a page the guest has mapped. The adapter's `capture_image` reads only PNGs inside

@@ -21,6 +21,7 @@ FORM_LABELS = (
     "Settings and switches", "Results", "tools/bench rows", "Screenshot", "Anything else", "Credit me as",
     # crash.yml, game_bug.yml, visual_bug.yml, ui_bug.yml
     "Regression", "Last known working build", "Steps to reproduce", "Log / crash dump",
+    "Text log",  # ui_bug.yml: the log field without the crash dump
     "Display refresh rate and variable refresh on/off", "Switches set", "Frame generation",
     # bug_report.yml (upstream consolidated form)
     "Guarana build",

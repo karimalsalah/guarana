@@ -41,3 +41,9 @@
 - [ ] Commits an AI tool helped write carry an `Assisted-by: <tool>` trailer (docs/AI_POLICY.md)
 - [ ] A changelog entry: a file `changelog.d/<slug>.<section>.md` (see `changelog.d/README.md`), not a line in `CHANGELOG.md`
 - [ ] Upstream checked (see above)
+
+## Testing
+
+Use synthetic fixtures or material you have permission to share. Do not include games, keys,
+firmware, credentials, extracted shaders or memory dumps in the diff or attachments. Document
+the provenance of new fixtures and game-specific patch bytes.

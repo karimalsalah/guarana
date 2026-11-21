@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,10 @@
 #include <set>
 #include <string>
 #include <utility>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
@@ -39,6 +44,16 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 #ifdef __linux__
     if (auto exe = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
         return exe.parent_path();
+    }
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    if (_NSGetExecutablePath(nullptr, &size) != 0 && size != 0) {
+        std::string path(size, '\0');
+        if (_NSGetExecutablePath(path.data(), &size) == 0) {
+            if (const auto exe = std::filesystem::canonical(path.c_str(), ec); !ec) {
+                return exe.parent_path();
+            }
+        }
     }
 #endif
     const auto exe = std::filesystem::absolute(argv0, ec);
@@ -86,7 +101,14 @@ static void LoadNx2Switches(const char* argv0) {
     };
     const auto exe_dir = GetSwitchExeDirectory(argv0);
     if (!exe_dir.empty()) {
-        ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
+        auto switches_dir = exe_dir;
+#ifdef __APPLE__
+        if (exe_dir.filename() == "MacOS" && exe_dir.parent_path().filename() == "Contents" &&
+            exe_dir.parent_path().parent_path().extension() == ".app") {
+            switches_dir = exe_dir.parent_path() / "Resources";
+        }
+#endif
+        ParseSwitchFile(switches_dir / "nx2_switches.txt", entries);
     }
     const std::map<std::string, std::string> shipped = entries;
 #ifdef __linux__

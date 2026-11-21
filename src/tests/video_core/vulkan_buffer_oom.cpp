@@ -4,11 +4,18 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
+// Before the Vulkan headers: Xlib defines Success, which NvResult (nvdata.h) declares.
+#include "video_core/renderer_vulkan/vk_state_tracker.h"
+
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/vk_multi_range_buffer.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/vulkan_common/vulkan_library.h"
@@ -159,4 +166,67 @@ TEST_CASE("Vulkan buffers: CreateAfterRecovery retries once after freeing memory
         REQUIRE(creates == 1);
         REQUIRE(recoveries == 0);
     }
+}
+
+// #1993: the recovery runs while a draw is set up, after its index and vertex binds were
+// recorded. A submit there left those binds in the submitted command buffer.
+TEST_CASE("Vulkan buffers: staging memory recovery does not submit the open command buffer",
+          "[vulkan_buffer_oom]") {
+    TestDevice test;
+    Vulkan::MemoryAllocator allocator(*test.device);
+    Vulkan::StateTracker state_tracker;
+    Vulkan::Scheduler scheduler(*test.device, state_tracker);
+    Vulkan::StagingBufferPool pool(*test.device, allocator, scheduler);
+
+    constexpr size_t size = 1 << 20;
+    const Vulkan::StagingBufferRef in_use = pool.Request(size, Vulkan::MemoryUsage::Download);
+    REQUIRE(in_use.buffer != VK_NULL_HANDLE);
+    const u64 tick = scheduler.CurrentTick();
+    const u64 epoch = scheduler.RecordingEpoch();
+
+    pool.ReleaseMemory();
+
+    CHECK(scheduler.CurrentTick() == tick);
+    CHECK(scheduler.RecordingEpoch() == epoch);
+    CHECK(pool.CachedBytes(Vulkan::MemoryUsage::Download) == size);
+}
+
+TEST_CASE("Multi-range buffers retire after more than 60 unused frames",
+          "[multi_range_buffer]") {
+    TestDevice test;
+    Vulkan::MemoryAllocator allocator(*test.device);
+    Vulkan::StateTracker state_tracker;
+    Vulkan::Scheduler scheduler(*test.device, state_tracker);
+    Vulkan::MultiRangeBufferCache cache(*test.device);
+    cache.use_sparse = false;
+    const Vulkan::MultiRangeSource source{.size = 4096};
+    const auto get = [&](u64 key) {
+        return cache.Get(*test.device, scheduler, allocator, key, std::span{&source, 1}, source.size);
+    };
+    const auto idle = get(1);
+    const auto boundary = get(2);
+    const auto active = get(3);
+    REQUIRE(idle.handle != VK_NULL_HANDLE);
+    cache.MarkGathered(1);
+    cache.MarkGathered(2);
+    cache.MarkGathered(3);
+    const u64 tick = scheduler.CurrentTick();
+    for (u32 frame = 0; frame < 60; ++frame) {
+        cache.TickFrame(scheduler);
+        CHECK(get(3).handle == active.handle);
+    }
+    CHECK(get(2).handle == boundary.handle);
+    cache.TickFrame(scheduler);
+    const auto recreated = get(1);
+    CHECK(recreated.handle != idle.handle);
+    CHECK(recreated.needs_gather);
+    CHECK(get(2).handle == boundary.handle);
+    CHECK(get(3).handle == active.handle);
+    CHECK_FALSE(get(3).needs_gather);
+    for (u32 frame = 0; frame < 60; ++frame) {
+        cache.TickFrame(scheduler);
+    }
+    CHECK(get(1).handle == recreated.handle);
+    CHECK(scheduler.CurrentTick() == tick);
+    CHECK_FALSE(scheduler.IsFree(tick));
 }

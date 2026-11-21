@@ -107,6 +107,12 @@ public:
         released = true;
         changed.notify_all();
     }
+    /// Reads the sink's state under its lock, without waiting.
+    template <typename Read>
+    auto Inspect(Read read) {
+        std::scoped_lock lock{mutex};
+        return read();
+    }
     /// Waits up to ten seconds for the condition, checked under the sink's lock.
     template <typename Condition>
     bool WaitFor(Condition condition) {

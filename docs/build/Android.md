@@ -50,7 +50,7 @@ A convenience script for building is provided in `.ci/android/build.sh`. On Wind
 
 ```txt
 Usage: build.sh [-c|--chromeos] [-t|--target FLAVOR] [-b|--build-type BUILD_TYPE]
-                [-h|--help] [-r|--release] [extra options]
+                [-h|--help] [-r|--release] [-n|--nightly] [extra options]
 
 Build script for Android.
 Associated variables can be set outside the script,
@@ -62,6 +62,7 @@ Options:
                             Default: false
     -r, --release           Enable update checker. If set, sets the DEVEL bool variable to false.
                             By default, DEVEL is true.
+    -n, --nightly           Use the nightly app id and name; does not enable the update checker.
     -t, --target <FLAVOR>   Build flavor (variable: TARGET)
                             Valid values are: legacy, optimized, standard
                             Default: standard

@@ -54,6 +54,15 @@ fn main() {
 
     logging::init();
     log::info!("Guarana Launcher {} starting", env!("CARGO_PKG_VERSION"));
+    // One app to Windows: the AppUserModelID of the Start menu shortcut (the bundle identifier), also
+    // when the launcher starts from a game file or a link. A game it starts takes the same one
+    // (`--launcher-session`, `src/lichii/main.cpp`), so the two share one taskbar button.
+    // SAFETY: a static wide string, before any window exists.
+    unsafe {
+        let _ = windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(windows::core::w!(
+            "io.github.karimalsalah.guarana"
+        ));
+    }
     // Scanning drives must never pop up "insert a disk" dialogs.
     // SAFETY: sets this process's error mode; no pointers involved.
     unsafe {

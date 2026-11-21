@@ -13,7 +13,7 @@ RETURN=0
 usage() {
     cat <<EOF
 Usage: $0 [-t|--target FLAVOR] [-b|--build-type BUILD_TYPE]
-       [-h|--help] [-r|--release] [extra options]
+       [-h|--help] [-r|--release] [-n|--nightly] [extra options]
 
 Build script for Android.
 Associated variables can be set outside the script,
@@ -29,7 +29,7 @@ Options:
     -b, --build-type <TYPE>	Build type (variable: TYPE)
                           	Valid values are: Release, RelWithDebInfo, Debug
                           	Default: Debug
-    -n, --nightly           Create a nightly build.
+    -n, --nightly           Use the nightly app id and name, independently of the update checker.
 
 Extra arguments are passed to CMake (e.g. -DCMAKE_OPTION_NAME=VALUE)
 Set the CCACHE variable to "true" to enable build caching.
@@ -73,6 +73,7 @@ done
 : "${TARGET:=standard}"
 : "${TYPE:=Release}"
 : "${DEVEL:=true}"
+: "${NIGHTLY:=false}"
 
 TARGET_LOWER=$(echo "$TARGET" | tr '[:upper:]' '[:lower:]')
 
@@ -106,18 +107,8 @@ chmod +x ./gradlew
 
 set -- "$@" -DUSE_CCACHE="${CCACHE}"
 
-nightly() {
-    [ "$NIGHTLY" = "true" ]
-}
-
-if nightly || [ "$DEVEL" != "true" ]; then
+if [ "$DEVEL" != "true" ]; then
     set -- "$@" -DENABLE_UPDATE_CHECKER=ON
-fi
-
-if nightly; then
-    NIGHTLY=true
-else
-    NIGHTLY=false
 fi
 
 echo "-- building..."

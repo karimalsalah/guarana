@@ -252,8 +252,10 @@ endif()
 # Set runtime library to MD/MDd for all configurations
 if(MSVC)
     if (LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set(libflag MT)
+        # The bundled Windows ARM64 Qt package is built against the dynamic CRT (/MD); the tree
+        # must match it or linking fails /failifmismatch on the Qt style/platform plugins.
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set(libflag MD)
     else()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set(libflag MD)
@@ -359,6 +361,15 @@ endif()
 if (ARCHITECTURE_arm64 AND (ANDROID OR LINUX))
     set(HAS_NCE 1)
     add_compile_definitions(HAS_NCE=1)
+endif()
+
+if (ARCHITECTURE_arm64 AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(HAS_HYPERVISOR 1)
+    add_compile_definitions(HAS_HYPERVISOR=1)
+endif()
+
+if ((HAS_NCE AND NOT ANDROID) OR HAS_HYPERVISOR)
+    add_compile_definitions(HAS_NATIVE_PAGE_PROTECTION=1)
 endif()
 
 if (LICHII_ROOM)

@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <openssl/evp.h>
 
+#include "core/core.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
@@ -27,6 +28,7 @@
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/file_sys/vfs/vfs_vector.h"
 #include "core/loader/nup.h"
+#include "tests/core/system_test_context.h"
 
 namespace {
 
@@ -1217,4 +1219,50 @@ TEST_CASE("NUP loader leaves standalone update metadata unchanged", "[nup][loade
     u64 program_id{};
     REQUIRE(loader.ReadProgramId(program_id) == Loader::ResultStatus::Success);
     REQUIRE(program_id == TitleId);
+}
+
+TEST_CASE("NUP loader reads the build id of the main that boots", "[nup][loader]") {
+    ScopedSystemTestContext environment;
+    Core::System system;
+    system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
+    // An NSO header whose build id counts up from `first`.
+    const auto main = [](u8 first) {
+        std::string header(0x100, '\0');
+        header.replace(0, 4, "NSO0");
+        for (int i = 0; i < 0x20; ++i) {
+            header[0x40 + i] = static_cast<char>(first + i);
+        }
+        return header;
+    };
+    const auto build_id = [&](const fs::path& archive) {
+        FileSys::RealVfsFilesystem real;
+        Loader::AppLoader_NUP loader{real.OpenFile(archive.string(), FileSys::OpenMode::Read)};
+        std::array<u8, 0x20> out{};
+        REQUIRE(loader.ReadMainBuildId(system, out) == Loader::ResultStatus::Success);
+        return out;
+    };
+    const auto expected = [](u8 first) {
+        std::array<u8, 0x20> out{};
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] = static_cast<u8>(first + i);
+        }
+        return out;
+    };
+
+    TempDir t;
+    const auto root = t.path / "Game";
+    Put(root / "base/exefs/main", main(0x10));
+    Put(root / "base/exefs/main.npdm", Npdm(TitleId));
+    Put(root / "base/romfs/base.bin", "base");
+    const auto base = t.path / "Base.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, base) == FileSys::Nup::PackResult::Success);
+    CHECK(build_id(base) == expected(0x10));
+
+    // The newest update's ExeFS is the one the loader boots.
+    Put(root / "updates/65536/exefs/main", main(0x50));
+    Put(root / "updates/65536/exefs/main.npdm", Npdm(TitleId));
+    Put(root / "updates/65536/romfs/update.bin", "update");
+    const auto updated = t.path / "Updated.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, updated) == FileSys::Nup::PackResult::Success);
+    CHECK(build_id(updated) == expected(0x50));
 }

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <cstdio>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -623,6 +624,44 @@ TEST_CASE("RunOrWait runs a queued job on the waiting thread", "[video_core][sha
     REQUIRE(blocker.Status() == ShaderJobStatus::Done);
 }
 
+TEST_CASE("RunOrWait runs the driver stage of a job whose CPU stage it waited out",
+          "[video_core][shader_jobs]") {
+    ShaderJobScheduler scheduler{Config(1, 1)};
+    Gate driver_gate;
+    const auto busy_driver = scheduler.Submit(
+        TwoStageJob(Background, [](ShaderJobContext&) {}, [&driver_gate] { driver_gate.Wait(); }));
+    WaitForStatus(busy_driver, ShaderJobStatus::Driver);
+
+    Gate cpu_gate;
+    std::thread::id driver_thread;
+    const auto job = scheduler.Submit(TwoStageJob(
+        Background, [&cpu_gate](ShaderJobContext&) { cpu_gate.Wait(); },
+        [&driver_thread] { driver_thread = std::this_thread::get_id(); }));
+    WaitForStatus(job, ShaderJobStatus::Cpu);
+
+    std::promise<std::thread::id> waiter_id;
+    auto waited = waiter_id.get_future();
+    std::thread waiter{[&] {
+        scheduler.RunOrWait(job);
+        waiter_id.set_value(std::this_thread::get_id());
+    }};
+    while (job.Priority() != NeedNow) {
+        std::this_thread::sleep_for(1ms);
+    }
+    std::this_thread::sleep_for(20ms);
+    cpu_gate.Open();
+    const bool returned = waited.wait_for(5s) == std::future_status::ready;
+    const bool driver_still_busy = busy_driver.Status() == ShaderJobStatus::Driver;
+    driver_gate.Open();
+    waiter.join();
+    busy_driver.Wait();
+
+    REQUIRE(returned);
+    REQUIRE(driver_still_busy);
+    REQUIRE(job.Status() == ShaderJobStatus::Done);
+    REQUIRE(driver_thread == waited.get());
+}
+
 #ifdef __linux__
 TEST_CASE("Shader job workers are named by stage", "[video_core][shader_jobs]") {
     ShaderJobScheduler scheduler{Config(1, 1)};
@@ -894,6 +933,13 @@ TEST_CASE("A prebuild reports what became of its builds once all have ended",
     REQUIRE(outcome->failed == 2);
     REQUIRE(outcome->taken_unfinished == 1);
     REQUIRE(outcome->unclaimed == 1);
+    // Pipelines 0 and 2 reached the driver (2 failed there), in whichever range a loaded host
+    // put them
+    size_t fast{}, medium{}, slow{};
+    REQUIRE(std::sscanf(outcome->driver_builds.Summary().c_str(),
+                        "%zu under 10 ms, %zu 10-100 ms, %zu over 100 ms", &fast, &medium,
+                        &slow) == 3);
+    REQUIRE(fast + medium + slow == 2);
 
     // Taken once built: no wait to report
     std::optional<std::chrono::steady_clock::duration> no_wait;
@@ -1059,6 +1105,18 @@ TEST_CASE("A take after a pending try-take drops the queued prebuild, which coun
     scheduler.RunOrWait(blocker);
     REQUIRE(builds == 0);
     REQUIRE(ended == 1);
+}
+
+TEST_CASE("Driver build times are counted in the ranges of a cache hit and a compile",
+          "[video_core][shader_jobs]") {
+    Vulkan::DriverBuildTimes times;
+    REQUIRE(times.Summary() ==
+            "0 under 10 ms, 0 10-100 ms, 0 over 100 ms (0.0 s in all, longest 0.0 ms)");
+    for (const auto elapsed : {1ms, 9ms, 10ms, 99ms, 100ms, 1500ms}) {
+        times.Add(elapsed);
+    }
+    REQUIRE(times.Summary() ==
+            "2 under 10 ms, 2 10-100 ms, 2 over 100 ms (1.7 s in all, longest 1500.0 ms)");
 }
 
 TEST_CASE("A prebuild's job ends once its pipeline is built or dropped",

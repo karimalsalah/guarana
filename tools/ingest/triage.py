@@ -31,6 +31,7 @@ from issue_forms import (GPU_OPTIONS, fenced_blocks, form_headings, gpu_labels, 
 
 CRASH_LABEL = "Crash"  # as in .github/labels.yml and crash.yml
 LOG_SECTION = "Log / crash dump"
+TEXT_LOG_SECTION = "Text log"  # ui_bug.yml: the log field without the crash dump
 LOG_MARKER = "<!-- guarana-triage:log-request -->"
 SOLVE_MARKER = "<!-- guarana-triage:solve-with-ai -->"
 # Forms and labels that make an issue a bug report (.github/ISSUE_TEMPLATE: crash, game_bug, ui_bug, visual_bug).
@@ -43,7 +44,7 @@ CHAT_LINKS = (("Claude", "https://claude.ai/new?q="), ("ChatGPT", "https://chatg
 # comment. tests/test_triage.py fails once label-issues.yml stops asking: then set this to False.
 LABEL_ISSUES_ASKS_FOR_LOGS = False
 # Sections that hold no words of the reporter's own: logs, rows, images, the form's own boxes.
-NOT_SCANNED = {LOG_SECTION, "tools/bench rows", "Screenshot", "Before submitting"}
+NOT_SCANNED = {LOG_SECTION, TEXT_LOG_SECTION, "tools/bench rows", "Screenshot", "Before submitting"}
 
 _CLAUSE = re.compile(r"(?i)[.;,!?\n(]|\b(?:but|and|however|while|whereas|though|although|yet)\b")
 _NEGATION = re.compile(r"(?i)(?:\b(?:no|not|never|without|none|zero|nor)|n't|\bno (?:longer|more)|\bfree of|\b0)"
@@ -174,7 +175,7 @@ def prose_of(issue, sections, body):
 
 
 def has_log(sections, body):
-    answer = sections.get(LOG_SECTION)
+    answer = sections.get(LOG_SECTION) or sections.get(TEXT_LOG_SECTION)
     if answer is not None:
         return bool(_ATTACHMENT.search(answer) or _LOG_LINES.search(answer) or len(strip_markup(answer).strip()) >= 200)
     return bool(_ATTACHMENT.search(body) or any(_LOG_LINES.search(content) for _, content in fenced_blocks(body)))
@@ -191,7 +192,7 @@ def reports_a_problem(body):
     reports and issues without a form. Agent tasks, performance ideas and feature requests that
     mention a crash are about one, so nobody is asked for a log there."""
     headings = form_headings(body)
-    return not headings - {"Issue"} or LOG_SECTION in headings or "Device" in headings
+    return not headings - {"Issue"} or LOG_SECTION in headings or TEXT_LOG_SECTION in headings or "Device" in headings
 
 
 def agent_ready(sections):
@@ -231,7 +232,8 @@ def triage(issue):
 
     crash_form = CRASH_LABEL.casefold() in present
     crash = crash_form or CRASH_LABEL in labels
-    label_issues_asks = LABEL_ISSUES_ASKS_FOR_LOGS and crash_form and not sections.get(LOG_SECTION)
+    label_issues_asks = LABEL_ISSUES_ASKS_FOR_LOGS and crash_form and not (
+        sections.get(LOG_SECTION) or sections.get(TEXT_LOG_SECTION))
     request = crash and reports_a_problem(body) and not label_issues_asks and not has_log(sections, body)
     if request:
         labels.add("needs-info")

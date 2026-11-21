@@ -219,6 +219,13 @@ class ReportTests(unittest.TestCase):
         self.assertIn("| GPU family | Intel Arc 140V / 130V (Lunar Lake), read from the GPU name in the report |",
                       ingest.comment_body(ingest.Report(1, record), {"reports": {}}, None, REPO))
 
+    def test_run_settings_are_written_as_the_ini_has_them(self):
+        # The resolver compares values as strings ("true", "1"): a JSON true is "true", not "True".
+        row = {"variant_settings": {"Renderer": {"ocarina_fsr": True, "vram_usage_mode": 1, "hdr_mode": None},
+                                    "Core": False}}
+        self.assertEqual(ingest.row_settings(row, ()), {"Renderer/ocarina_fsr": "true", "Renderer/vram_usage_mode": "1",
+                                                        "Renderer/hdr_mode": "default", "Core": "false"})
+
     def test_a_bench_rows_pci_id_names_the_family(self):
         body = fixture("device-report-bench.md").replace('"driver_version": "32.0.101.9175"}',
                                                          '"driver_version": "32.0.101.9175", "pci": "8086:7D51"}')

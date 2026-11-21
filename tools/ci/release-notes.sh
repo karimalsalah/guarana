@@ -102,4 +102,7 @@ EOF2
   if [[ -n "$x_pgo$a_pgo$w_pgo" ]]; then
     echo "The PGO builds are the same programs compiled with profile-guided optimization (clang plus Eglantine's profile); prefer them when your CPU supports it."
   fi
+
+  echo
+  echo "Built by the Guarana project — github.com/karimalsalah/guarana (yuzu → Eden → Eglantine → Lichii lineage, GPL-3.0-or-later)."
 } > "$out"

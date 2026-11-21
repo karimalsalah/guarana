@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -69,26 +70,43 @@ QString BuiltinVersionText(const FileSys::Patch& patch) {
     return ConfigurePerGameAddons::tr("Built-in");
 }
 
-/// Whether a checked built-in was left out when the game last started, for a reason the player
-/// can act on.
+/// Whether a built-in cannot apply to the game as installed, or a checked one was left out when
+/// the game last started, for a reason the player can act on.
 bool BuiltinFailed(const FileSys::Patch& patch) {
+    using Build = FileSys::BuiltinPatchBuild;
     using Result = FileSys::BuiltinPatchResult;
-    return patch.enabled &&
-           (patch.last_result == Result::WrongBuild || patch.last_result == Result::ModConflict ||
-            patch.last_result == Result::UnexpectedCode);
+    if (patch.build == Build::Other) {
+        return true;
+    }
+    // The build read now outdates a WrongBuild from an earlier start.
+    const bool wrong_build =
+        patch.build == Build::Unknown && patch.last_result == Result::WrongBuild;
+    return patch.enabled && (wrong_build || patch.last_result == Result::ModConflict ||
+                             patch.last_result == Result::UnexpectedCode);
 }
 
-/// What became of a checked built-in when the game last started. The reasons are the ones
-/// PatchManager::PatchNSO logs.
+/// Whether a built-in is made for the game as installed, and what became of a checked one when
+/// the game last started. The reasons are the ones PatchManager::PatchNSO logs.
 QString BuiltinStatusText(const FileSys::Patch& patch) {
+    using Build = FileSys::BuiltinPatchBuild;
     using Result = FileSys::BuiltinPatchResult;
+    if (patch.build == Build::Other) {
+        return ConfigurePerGameAddons::tr(
+            "Cannot be applied: it is made for another version of the game.");
+    }
+    const bool this_build = patch.build == Build::Matches;
     if (!patch.enabled) {
-        return {};
+        return this_build ? ConfigurePerGameAddons::tr("Made for this version of the game.")
+                          : QString{};
     }
     switch (patch.last_result) {
     case Result::Applied:
         return ConfigurePerGameAddons::tr("Applied when the game last started.");
     case Result::WrongBuild:
+        if (this_build) {
+            // Another version of the game started last time: nothing is known of this one.
+            break;
+        }
         return ConfigurePerGameAddons::tr(
             "Not applied when the game last started: it is made for another version of the game.");
     case Result::ModConflict:
@@ -105,12 +123,14 @@ QString BuiltinStatusText(const FileSys::Patch& patch) {
         return ConfigurePerGameAddons::tr(
             "Not used when the game last started: another option of the same kind was applied.");
     case Result::NotLoaded:
-        return ConfigurePerGameAddons::tr(
-            "Start the game once, then look here to see whether it was applied.");
     case Result::Disabled:
         break;
     }
-    return {};
+    return this_build ? ConfigurePerGameAddons::tr("Made for this version of the game. Start the "
+                                                   "game once, then look here to see whether it "
+                                                   "was applied.")
+                      : ConfigurePerGameAddons::tr(
+                            "Start the game once, then look here to see whether it was applied.");
 }
 
 /// The text of the box under the list for a built-in: what it does, then what became of it.
@@ -262,6 +282,7 @@ void ConfigurePerGameAddons::ApplyConfiguration() {
                                "game_list" / fmt::format("{:016X}.pv.txt", title_id));
     }
 
+    std::sort(disabled_addons.begin(), disabled_addons.end());
     Settings::values.disabled_addons[title_id] = disabled_addons;
 }
 
@@ -497,13 +518,28 @@ void ConfigurePerGameAddons::LoadConfiguration() {
     FileSys::VirtualFile update_raw;
     loader->ReadUpdateRaw(update_raw);
 
+    // Whether each built-in is made for the game's build, from the header of the main module that
+    // would load (with the enabled update and mods, as saved). Not while a game runs: the read can
+    // register content in the frontend's provider, which the game reads, and that game's start has
+    // already said what became of each built-in.
+    std::optional<FileSys::PatchManager::BuildID> main_build_id;
+    u64 program_id{};
+    if (!system.IsPoweredOn() && FileSys::HasListedBuiltinPatches(title_id) &&
+        loader->ReadProgramId(program_id) == Loader::ResultStatus::Success &&
+        program_id == title_id) {
+        FileSys::PatchManager::BuildID build_id{};
+        if (loader->ReadMainBuildId(system, build_id) == Loader::ResultStatus::Success) {
+            main_build_id = build_id;
+        }
+    }
+
     const auto& disabled = Settings::values.disabled_addons[title_id];
 
     update_items.clear();
     list_items.clear();
     item_model->removeRows(0, item_model->rowCount());
 
-    std::vector<FileSys::Patch> patches = pm.GetPatches(update_raw);
+    std::vector<FileSys::Patch> patches = pm.GetPatches(update_raw, main_build_id);
 
     bool has_enabled_update = false;
     bool has_builtin = false;
@@ -516,6 +552,9 @@ void ConfigurePerGameAddons::LoadConfiguration() {
         auto* const first_item = new QStandardItem;
         first_item->setText(patch.builtin ? BuiltinDisplayName(patch.name) : name);
         first_item->setCheckable(true);
+        if (!patch.description.empty()) {
+            first_item->setToolTip(QString::fromStdString(patch.description));
+        }
 
         const bool is_external_update = patch.type == FileSys::PatchType::Update &&
                                         patch.source == FileSys::PatchSource::External &&
@@ -578,9 +617,12 @@ void ConfigurePerGameAddons::LoadConfiguration() {
             first_item->setToolTip(tooltip);
             version_item->setToolTip(tooltip);
             if (BuiltinFailed(patch)) {
+                // Also on an unchecked one made for another version: checking it would not help.
                 first_item->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
-                problems << QStringLiteral("%1: %2").arg(first_item->text(),
-                                                         BuiltinStatusText(patch));
+                if (patch.enabled) {
+                    problems << QStringLiteral("%1: %2").arg(first_item->text(),
+                                                             BuiltinStatusText(patch));
+                }
             }
         }
 

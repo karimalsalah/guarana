@@ -280,6 +280,10 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
     if (const QString& dlss = m_mainWindow->DlssStatusText(); !dlss.isEmpty()) {
         tags << dlss;
     }
+    // Ocarina of Time's upscaler, as the status bar shows it: visible in fullscreen too.
+    if (const QString upscaler = m_mainWindow->UpscaleStatusText(); !upscaler.isEmpty()) {
+        tags << upscaler;
+    }
     switch (Settings::values.scaling_filter.GetValue()) {
     case Settings::ScalingFilter::Fsr:
         tags << QStringLiteral("FSR");

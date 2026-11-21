@@ -93,7 +93,9 @@ From then on every release and nightly is signed. A release published before the
 The Android APK (`guarana-<version>-android-arm64.apk`, built by `android.yml`) is always signed: Android installs nothing else. Which key signs it decides its application id.
 
 - **With the release key**, the id is `io.github.karimalsalah.guarana` (`.nightly` added for nightlies). Every later APK must be signed with the same key, or Android refuses to update the installed app: keep the keystore and its password safe, and back them up.
-- **Without it**, the APK is signed with the debug key committed in `src/android/app/debug.keystore` and gets the id `io.github.karimalsalah.guarana.preview` and the name "Guarana Preview". Anyone can sign with that key, so a preview build belongs on a device only from this repository's releases. Its own id keeps the first properly signed build from colliding with it: the two install side by side, and players move their saves across once.
+- **Without it**, the APK is signed with the debug key committed in `src/android/app/debug.keystore` and gets the id `io.github.karimalsalah.guarana.preview` ("Guarana Preview") or `io.github.karimalsalah.guarana.nightly.preview` ("Guarana Nightly Preview"). Anyone can sign with that key, so install preview builds only from this repository's releases.
+
+Stable and nightly have separate Android app data. The November 17, 2026 nightly used the stable preview id by mistake. If you used that nightly, keep it installed until you export your data and import it into the separately installed nightly. Installing the corrected nightly does not move or delete the old data.
 
 To turn release signing on, the owner creates the key once (with `keytool` from any JDK) and adds three repository secrets (Settings > Secrets and variables > Actions):
 

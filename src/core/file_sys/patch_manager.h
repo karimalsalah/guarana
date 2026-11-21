@@ -33,6 +33,10 @@ class NACP;
 
 enum class PatchType { Update, DLC, Mod };
 
+// Mods whose folder name starts with this load only while the host redirect is on: patches the
+// user makes so a title trusts their test server's certificate and name.
+constexpr std::string_view HostRedirectModPrefix = "[Host redirect]";
+
 enum class PatchSource {
     Unknown,
     NAND,
@@ -63,6 +67,14 @@ enum class BuiltinPatchResult : u8 {
     ModConflict,    // A user mod already changed bytes the patch writes
 };
 
+// Whether a built-in patch is made for the build of the game, from the header of the game's main
+// module read without starting it.
+enum class BuiltinPatchBuild : u8 {
+    Unknown, // Not read, or the patch is for another module
+    Matches,
+    Other, // Made for another build: PatchNSO skips it as WrongBuild
+};
+
 struct Patch {
     bool enabled;
     std::string name;
@@ -83,6 +95,8 @@ struct Patch {
     // An enabled built-in that contains this one: while that one applies, this one is not used.
     std::string replaced_by;
     BuiltinPatchResult last_result{BuiltinPatchResult::NotLoaded};
+    // Set when GetPatches was given the build id of the game's main module.
+    BuiltinPatchBuild build{BuiltinPatchBuild::Unknown};
 };
 
 // The disabled_addons entry that turns on an add-on that is off by default.
@@ -93,6 +107,9 @@ struct Patch {
 // Frontends only need to list what is unchecked.
 [[nodiscard]] std::vector<std::string> StoredDisabledAddons(u64 title_id,
                                                             std::vector<std::string> unchecked);
+
+// Whether GetPatches lists a built-in patch for the title.
+[[nodiscard]] bool HasListedBuiltinPatches(u64 title_id);
 
 // A run of bytes of its module that a built-in patch writes, checks or keeps its state in. For the
 // test that no two built-ins that can be applied together touch the same bytes.
@@ -124,6 +141,23 @@ struct BuiltinPatchRange {
 // One line per pair, empty when there is none. A range may end where the next one begins.
 [[nodiscard]] std::vector<std::string> FindBuiltinPatchOverlaps(
     std::span<const BuiltinPatchRange> ranges);
+// An enabled cheat that writes code or state of an applied built-in patch. Ranges are main module
+// offsets, end exclusive.
+struct BuiltinCheatOverlap {
+    std::string cheat;
+    std::string_view patch;
+    bool state;
+    u64 cheat_begin;
+    u64 cheat_end;
+    u64 patch_begin;
+    u64 patch_end;
+};
+
+// Checks the static stores of the enabled cheats against the records and state of the named
+// built-in patches.
+[[nodiscard]] std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
+    u64 title_id, std::span<const std::string_view> applied_patches,
+    std::span<const Core::Memory::CheatEntry> cheats);
 
 // A centralized class to manage patches to games.
 class PatchManager {
@@ -147,8 +181,10 @@ public:
     // - IPS
     // - IPSwitch
     // - Built-in patches, keyed by title and build id
-    [[nodiscard]] std::vector<u8> PatchNSO(const std::vector<u8>& nso,
-                                           const std::string& name) const;
+    // frame_rate_unlocked is set when an applied built-in opts into display-driven pacing;
+    // it is left as it is otherwise.
+    [[nodiscard]] std::vector<u8> PatchNSO(const std::vector<u8>& nso, const std::string& name,
+                                           bool* frame_rate_unlocked = nullptr) const;
 
     // Checks to see if PatchNSO() will have any effect given the NSO's build ID.
     // Used to prevent expensive copies in NSO loader.
@@ -166,8 +202,12 @@ public:
                                          VirtualFile packed_update_raw = nullptr,
                                          bool apply_layeredfs = true) const;
 
-    // Returns a vector of patches
-    [[nodiscard]] std::vector<Patch> GetPatches(VirtualFile update_raw = nullptr) const;
+    // Returns a vector of patches. Given the build id of the game's main module, each built-in for
+    // main says whether it is made for that build (Patch::build); the game list gives none, so
+    // nothing is read for it.
+    [[nodiscard]] std::vector<Patch> GetPatches(
+        VirtualFile update_raw = nullptr,
+        const std::optional<BuildID>& main_build_id = std::nullopt) const;
 
     // If the game update exists, returns the u32 version field in its Meta-type NCA. If that fails,
     // it will fallback to the Meta-type NCA of the base game. If that fails, the result will be
@@ -185,9 +225,11 @@ public:
     /// @brief Gets NACP metadata (accounting for any patches or updates)
     [[nodiscard]] static PatchManager::Metadata GetMetadataFromBaseOrUpdate(Core::System& system, u64 application_id) noexcept;
 
+    /// @brief Gets the add-ons disabled for this title and its parent application
+    [[nodiscard]] std::vector<std::string> GetDisabledAddons() const;
+
 private:
     [[nodiscard]] VirtualDir GetModificationLoadRoot(bool sdmc = false) const;
-    [[nodiscard]] std::vector<std::string> GetDisabledAddons() const;
     void ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) const;
     [[nodiscard]] std::vector<VirtualFile> CollectPatches(const std::vector<VirtualDir>& patch_dirs,
                                                           const std::string& build_id) const;

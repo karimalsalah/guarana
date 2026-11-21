@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "description": "What the community device reports show per GPU family (the engine's Common::GpuFamily), game and build: counts of reports and devices, and the effects measured by paired tools/bench rows. Generated from site/data/community.json by tools/ingest/evidence.py; edit the issues, not this file. Nothing reads it to change a default.",
-  "updated": "2026-11-13",
+  "updated": "2026-11-16",
   "source": "site/data/community.json",
-  "reports": 0,
+  "reports": 1,
   "fields": {
     "tiers": "observed: any listed report, numbers as reported. verified: a tools/bench row that is valid with scene_ok true. paired: two such rows of one report that differ only in switches or settings both rows set, on the same machine, scene, build and power source, measured within two hours of each other with the background CPU measured. Only a pair measures an effect; a baseline row sets nothing and pairs with nothing.",
     "devices": "Distinct devices: reports with the same device model, CPU and GPU family count once, the model and CPU compared by their letters and digits. Two machines of the same model count once, and one machine whose model is written two different ways counts twice: check the issues before trusting a count.",
@@ -103,7 +103,9 @@
   "effects": [],
   "unresolved": [],
   "outside": {
-    "reports": 0,
-    "issues": []
+    "reports": 1,
+    "issues": [
+      282
+    ]
   }
 }

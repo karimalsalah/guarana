@@ -17,6 +17,16 @@ for example `DLSS QUALITY M (PERFORMANCE DOESN'T FIT)`. Nothing DLSS-related is
 shown when the game never calls its upscaler, or after DLSS has failed; a failure
 keeps DLSS off until the game restarts, and the log says why.
 
+In Ocarina of Time a status bar chip also shows the game's replaced upscaler on any
+GPU: the one that draws (FSR 3.1, FSR 4 or DLSS) with the render and output heights,
+for example `FSR 3.1 720p → 1080p`, and the exact sizes in its tooltip. With DLSS it
+shows only the sizes, next to the DLSS label. When the game's own upscaler draws
+instead, the chip says why: `OFF` (Ocarina FSR is off), `RES 1X` (the game's images
+are not the size or format the upscaler takes, as with a Resolution other than 1X),
+`NO CAMERA` or `NO DEPTH` (menus, cutscenes and loading screens), `WAITING`, or
+`UNAVAILABLE` (it could not start; the log says why). With no game running it reads
+`FSR` or `NO FSR`, and a click turns Ocarina FSR on or off.
+
 ## Model presets
 
 Guarana defaults to **M** for every quality mode. The available choices are NVIDIA

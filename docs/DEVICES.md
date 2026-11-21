@@ -1,10 +1,19 @@
 # Devices
 
 Guarana is built for integrated GPUs: Intel Arc first, AMD Radeon handhelds next. One device has
-been tested so far. Every other row below is waiting for a report, and a report from your device is
-one of the most useful contributions you can make.
+been fully tested so far (scene-gated gameplay); a second has sent a title-screen report
+([#282](https://github.com/karimalsalah/guarana/issues/282)). Every other row below is waiting for a
+report, and a report from your device is one of the most useful contributions you can make.
+
+**Tested on one machine, built for thousands.** Sending a report takes minutes and no code:
+[fill the device-report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) →
+`tools/ingest` parses it → CI validates the row and updates the
+[community leaderboard](https://karimalsalah.github.io/guarana/benchmarks.html) pull request; verified reports
+earn a row in the matrix below. The standing call is
+[#55 — Call for testers: every device counts](https://github.com/karimalsalah/guarana/issues/55).
 
 - **Tested:** the game ran and game fps was measured in a known scene, with the numbers published.
+- **Reported:** a device report exists, but the full scene-gated gameplay bar is not met yet.
 - **Untested:** nobody has sent a report yet. It may run well, badly or not at all.
 
 ## Requirements (v20)
@@ -35,6 +44,12 @@ With 16 GB, enlarge the Windows page file before your first run:
 | Steam Deck, Ryzen Z2 A | RDNA2 | | Untested; likely too weak |
 
 Discrete GPUs are not a target of this fork and are not tested here; reports are still welcome.
+
+### Discrete GPU reports
+
+| GPU | Device | Build | Scene | Real game fps | Status |
+|---|---|---|---|---|---|
+| NVIDIA RTX 5060 Ti | ASUS desktop, i5-14400F, 32 GB, Win11, 1440p@180 Hz | 20.5.0-rc1 | Title screen (vision-classified) | 60.0 (shown p99 18.8 ms) | **Reported** — [#282](https://github.com/karimalsalah/guarana/issues/282); gameplay sample requested |
 
 ## What has been measured
 

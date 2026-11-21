@@ -21,6 +21,7 @@
 #include "common/common_funcs.h"
 #include "common/fs/path_util.h"
 #include "common/hex_util.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/patch_manager.h"
@@ -29,6 +30,8 @@
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/nso.h"
+#include "core/memory/cheat_engine.h"
+#include "tests/common/restore_eden_path.h"
 
 namespace {
 
@@ -81,17 +84,22 @@ constexpr std::string_view SoundGate =
 constexpr std::string_view SoundFeed = "001140BD10102E1E0068301EC0035FD6";
 constexpr u32 DynamicCallInstruction = 0x94D57D4F;
 constexpr u32 DynamicOriginalInstruction = 0x1E201828;
+constexpr size_t EponaHookOffset = sizeof(Loader::NSOHeader) + 0x2C3AE20;
+constexpr size_t EponaCaveOffset = sizeof(Loader::NSOHeader) + 0x3C46FB4;
+constexpr u32 EponaOriginalInstruction = 0x54000145;
+constexpr u32 EponaHookInstruction = 0x14403065;
+constexpr size_t EponaRoutineSize = 72;
 constexpr size_t TurnSpeedHookOffset = sizeof(Loader::NSOHeader) + 0x261EB18;
 constexpr u32 TurnSpeedOriginalInstruction = 0x1E210801;
-constexpr u32 TurnSpeedHookInstruction = 0x14589FCA;
+constexpr u32 TurnSpeedHookInstruction = 0x1458A021;
 // The second instruction the routine replaces; the hook guards it and leaves it in place.
 constexpr u32 TurnSpeedSecondInstruction = 0x1E280800;
-constexpr size_t TurnSpeedRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46A40;
+constexpr size_t TurnSpeedRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46B9C;
 constexpr size_t TurnSpeedRoutineSize = 40;
 constexpr size_t MovieFramesHookOffset = sizeof(Loader::NSOHeader) + 0x3B5C7C8;
 constexpr u32 MovieFramesOriginalInstruction = 0x11000508; // add w8, w8, #1
-constexpr u32 MovieFramesHookInstruction = 0x1403A8AA;     // b main+0x3C46A70
-constexpr size_t MovieFramesRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46A70;
+constexpr u32 MovieFramesHookInstruction = 0x1403A8FF;     // b main+0x3C46BC4
+constexpr size_t MovieFramesRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46BC4;
 constexpr size_t MovieFramesRoutineSize = 56;
 constexpr u32 ScarecrowCutOriginalInstruction = 0x1E390008; // fcvtzu w8, s0
 constexpr size_t ScarecrowRecordHookOffset = sizeof(Loader::NSOHeader) + 0x3296B08;
@@ -117,10 +125,14 @@ constexpr size_t ClothDtRoutineS0Offset = sizeof(Loader::NSOHeader) + 0x3C46B00;
 constexpr size_t ClothDtRoutineS2Offset = sizeof(Loader::NSOHeader) + 0x3C46B30;
 constexpr size_t ClothDtRoutineSize = 48;
 constexpr std::string_view ClothDtRoutineHead =
-    "D0810090104A44F9100240F9111A40B9101191521091A772310600513F02106B3132901A31060011";
+    "D0810090104A44F9100240F9111A40B91011915210B1A772310600513F02106B3132901A31060011";
 
 constexpr size_t StepRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46900;
-constexpr size_t StepStateSize = 0x1C0;
+constexpr size_t AmbientRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46B60;
+constexpr size_t AmbientRoutineSize = 60;
+constexpr size_t UnlockStateSize = 0xA8;
+constexpr size_t StepStateOffset = sizeof(Loader::NSOHeader) + 0x4E9EE00;
+constexpr size_t StepStateSize = 0x110;
 constexpr size_t HudHookOffset = sizeof(Loader::NSOHeader) + 0xA68300;
 constexpr u32 HudOriginalInstruction = 0x1E38000C;
 constexpr u32 HudHookInstruction = 0x14C77980;
@@ -132,7 +144,7 @@ constexpr u32 HitstopOriginalInstruction = 0x5EA1B900;
 constexpr u32 HitstopHookInstruction = 0x1433CDBA;
 constexpr size_t AmbientHookOffset = sizeof(Loader::NSOHeader) + 0x53F914;
 constexpr u32 AmbientOriginalInstruction = 0x1100077A;
-constexpr u32 AmbientHookInstruction = 0x14DC1C3B;
+constexpr u32 AmbientHookInstruction = 0x14DC1C93;
 
 constexpr std::array<std::pair<Common::FS::EdenPath, const char*>, 4> TestDirectories{{
     {Common::FS::EdenPath::NANDDir, "nand"},
@@ -189,7 +201,7 @@ public:
 
     ~PatchManagerTestContext() {
         for (size_t i = 0; i < TestDirectories.size(); ++i) {
-            Common::FS::SetEdenPath(TestDirectories[i].first, previous[i]);
+            Tests::RestoreEdenPath(TestDirectories[i].first, previous[i]);
         }
         Settings::values.disabled_addons.erase(OcarinaTitleId);
         std::error_code error;
@@ -202,6 +214,11 @@ public:
     FileSys::PatchManager Manager(u64 title_id = OcarinaTitleId) {
         return FileSys::PatchManager{title_id, system.GetFileSystemController(),
                                      system.GetContentProvider()};
+    }
+
+    void WriteCheat(std::string_view cheat) const {
+        std::ofstream file{root / "load" / fmt::format("{:016X}", OcarinaTitleId) / "cheat_test.txt"};
+        file << cheat;
     }
 
 private:
@@ -270,6 +287,64 @@ TEST_CASE("Built-in Max Resolution patch is gated on build id and original word"
     }
 }
 
+TEST_CASE("Yoshi 2.0.0 Full Scene Resolution with FXAA is an exact opt-in patch",
+          "[patch_manager]") {
+    constexpr u64 TitleId = 0x0400245021D2C000;
+    constexpr std::string_view Name = "Full Scene Resolution with FXAA (built-in)";
+    constexpr size_t SiteOffset = sizeof(Loader::NSOHeader) + 0x7582677;
+    constexpr u8 Original = 0x35;
+    constexpr u8 Replacement = 0x19;
+    PatchManagerTestContext context;
+    const auto manager = context.Manager(TitleId);
+    Settings::values.disabled_addons.erase(TitleId);
+    SCOPE_EXIT {
+        Settings::values.disabled_addons.erase(TitleId);
+    };
+
+    Loader::NSOHeader header{};
+    header.magic = Common::MakeMagic('N', 'S', 'O', '0');
+    header.build_id = {0x89, 0x3C, 0x30, 0xE7, 0x55, 0x21, 0xAF, 0xB8,
+                       0xB2, 0x33, 0x26, 0xEB, 0x6A, 0xA0, 0xE2, 0xDC};
+    std::vector<u8> nso(SiteOffset + 2);
+    std::memcpy(nso.data(), &header, sizeof(header));
+    nso[SiteOffset] = Original;
+
+    SECTION("Listed unchecked and left unchanged by default") {
+        const auto patches = manager.GetPatches();
+        const auto patch = std::ranges::find(patches, Name, &FileSys::Patch::name);
+        REQUIRE(patch != patches.end());
+        CHECK(patch->off_by_default);
+        CHECK_FALSE(patch->enabled);
+        CHECK_FALSE(patch->description.empty());
+        CHECK_FALSE(manager.HasNSOPatch(header.build_id, "main"));
+        REQUIRE(manager.PatchNSO(nso, "main") == nso);
+    }
+
+    SECTION("Checked in Add-Ons") {
+        Settings::values.disabled_addons[TitleId] = FileSys::StoredDisabledAddons(TitleId, {});
+        SECTION("Only the profile byte changes on the matching module") {
+            CHECK(manager.HasNSOPatch(header.build_id, "main"));
+            const auto patched = manager.PatchNSO(nso, "main");
+            nso[SiteOffset] = Replacement;
+            REQUIRE(patched == nso);
+        }
+        SECTION("Different build id sharing the same first 16 bytes is refused") {
+            header.build_id.back() = 1;
+            CHECK_FALSE(manager.HasNSOPatch(header.build_id, "main"));
+            std::memcpy(nso.data(), &header, sizeof(header));
+            REQUIRE(manager.PatchNSO(nso, "main") == nso);
+        }
+        SECTION("Unexpected original byte is refused") {
+            nso[SiteOffset] = 0x36;
+            REQUIRE(manager.PatchNSO(nso, "main") == nso);
+        }
+        SECTION("Different module is refused") {
+            CHECK_FALSE(manager.HasNSOPatch(header.build_id, "sdk"));
+            REQUIRE(manager.PatchNSO(nso, "sdk") == nso);
+        }
+    }
+}
+
 TEST_CASE("Built-in Max Resolution patch defers to a user mod at the same offset",
           "[patch_manager]") {
     SECTION("A different word from the mod is kept") {
@@ -334,7 +409,8 @@ TEST_CASE("Built-in patches that can be applied together never touch the same by
     CHECK(has(MaxResolution, Kind::Code, 0x805BD0, 4));
     CHECK(has(FpsUnlock, Kind::CodeCave, 0x3C46200, UnlockRoutineSize));
     CHECK(has(DynamicFps, Kind::CodeCave, 0x3C46200, DynamicRoutineSize));
-    CHECK(has(FpsUnlock, Kind::State, 0x4E9FE00, StepStateSize));
+    CHECK(has(FpsUnlock, Kind::State, 0x4E9FE00, UnlockStateSize));
+    CHECK(has(FpsUnlock, Kind::State, 0x4E9EE00, StepStateSize));
     CHECK(has(DynamicFps, Kind::State, 0x4E9FE00, DynamicStateSize));
     // The hitstop hook writes 44 bytes and the turn speed hook 8.
     CHECK(has(FpsUnlock, Kind::Code, 0x2F53268, 44));
@@ -444,7 +520,7 @@ constexpr std::array<std::pair<size_t, u32>, 3> GroundVelocityBranches{{
 
 std::vector<u8> MakeDynamicMain() {
     auto nso = MakeMain(OcarinaBuildId, TbzInstruction);
-    nso.resize(DynamicStateOffset + StepStateSize);
+    nso.resize(DynamicStateOffset + UnlockStateSize);
     Loader::NSOHeader header;
     std::memcpy(&header, nso.data(), sizeof(header));
     header.segments[0].size = 63201744;
@@ -456,6 +532,7 @@ std::vector<u8> MakeDynamicMain() {
     std::memcpy(nso.data(), &header, sizeof(header));
     std::memcpy(nso.data() + DynamicCallOffset, &DynamicOriginalInstruction,
                 sizeof(DynamicOriginalInstruction));
+    std::memcpy(nso.data() + EponaHookOffset, &EponaOriginalInstruction, sizeof(u32));
     std::memcpy(nso.data() + WaterHookOffset, &WaterOriginalInstruction,
                 sizeof(WaterOriginalInstruction));
     std::memcpy(nso.data() + WaterMulOffset, &WaterMulOriginalInstruction,
@@ -542,7 +619,9 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     REQUIRE(listed(DynamicFps).version == FileSys::BUILTIN_PATCH_LABEL);
     REQUIRE(listed(DynamicFps).replaced_by == FpsUnlock);
     REQUIRE(listed(FpsUnlock).replaced_by.empty());
-    auto patched = manager.PatchNSO(nso, "main");
+    bool frame_rate_unlocked = false;
+    auto patched = manager.PatchNSO(nso, "main", &frame_rate_unlocked);
+    REQUIRE_FALSE(frame_rate_unlocked);
     REQUIRE(WordAt(patched, DynamicCallOffset) == DynamicCallInstruction);
     REQUIRE(routine(patched, UnlockRoutineSize) ==
             std::string{RoutineHead} + "E300001C4268231EC300001C4278231E4840201EC0035FD6"
@@ -551,13 +630,13 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     REQUIRE(WordAt(patched, TurnSpeedHookOffset + 4) == TurnSpeedSecondInstruction);
     REQUIRE(Common::HexToString(
                 std::span{patched}.subspan(TurnSpeedRoutineOffset, TurnSpeedRoutineSize)) ==
-            "01102E1E0021211E8A0000540018281E0140211E3360A717E10F40BD0108211E0008281E"
-            "2F60A717");
+            "01102E1E0021211E8A0000540018281E0140211EDC5FA717E10F40BD0108211E0008281E"
+            "D85FA717");
     REQUIRE(WordAt(patched, MovieFramesHookOffset) == MovieFramesHookInstruction);
     REQUIRE(Common::HexToString(
                 std::span{patched}.subspan(MovieFramesRoutineOffset, MovieFramesRoutineSize)) ==
-            "ED3BBDA9EF4301A9FE1300F98DE20B91CE810090CE4944F9CE0140F9C01140BDBCFFFF97"
-            "08010D0BFE1340F9EF4341A9ED3BC3A84A57FC17");
+            "ED3BBDA9EF4301A9FE1300F98DE20B91CE810090CE4944F9CE0140F9C01140BD67FFFF97"
+            "08010D0BFE1340F9EF4341A9ED3BC3A8F556FC17");
     REQUIRE(WordAt(patched, ScarecrowRecordHookOffset) == ScarecrowRecordHookInstruction);
     REQUIRE(Common::HexToString(std::span{patched}.subspan(ScarecrowRecordRoutineOffset,
                                                            ScarecrowRoutineSize)) ==
@@ -592,7 +671,11 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     REQUIRE_FALSE(listed(FpsUnlock).enabled);
     REQUIRE(listed(DynamicFps).version == FileSys::BUILTIN_PATCH_LABEL);
     REQUIRE(listed(DynamicFps).replaced_by.empty());
-    patched = manager.PatchNSO(nso, "main");
+    // Dark's step never drops below 1.0, so the game keeps the vsync timer's rate
+    // (KProcess::IsFrameRateUnlocked stays false).
+    frame_rate_unlocked = false;
+    patched = manager.PatchNSO(nso, "main", &frame_rate_unlocked);
+    REQUIRE_FALSE(frame_rate_unlocked);
     REQUIRE(WordAt(patched, DynamicCallOffset) == DynamicCallInstruction);
     REQUIRE(routine(patched, DynamicRoutineSize) ==
             std::string{RoutineHead} + "C300001C0309231E4020231E4D0000544840201EC0035FD6"
@@ -622,7 +705,9 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     // Both unchecked: hook and code cave stay untouched.
     Settings::values.disabled_addons[OcarinaTitleId] = {std::string{FpsUnlock},
                                                         std::string{DynamicFps}};
-    patched = manager.PatchNSO(nso, "main");
+    frame_rate_unlocked = false;
+    patched = manager.PatchNSO(nso, "main", &frame_rate_unlocked);
+    REQUIRE_FALSE(frame_rate_unlocked);
     REQUIRE(WordAt(patched, DynamicCallOffset) == DynamicOriginalInstruction);
     REQUIRE(WordAt(patched, DynamicRoutineOffset) == 0);
     REQUIRE(water_untouched(patched));
@@ -636,6 +721,75 @@ TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_ma
     const auto unrelated = context.Manager(OtherTitleId).GetPatches();
     REQUIRE(std::ranges::find(unrelated, DynamicFps, &FileSys::Patch::name) == unrelated.end());
     REQUIRE(std::ranges::find(unrelated, FpsUnlock, &FileSys::Patch::name) == unrelated.end());
+}
+
+TEST_CASE("FPS Unlock fixes Epona's jump only when its hook and cave are free",
+          "[patch_manager][epona]") {
+    auto nso = MakeDynamicMain();
+    std::optional<u32> mod;
+    size_t mod_offset = EponaHookOffset;
+    std::string_view cheat;
+    bool should_patch = false;
+    bool unlock_applies = true;
+    bool disable_unlock = false;
+    SECTION("Unmodified main") {
+        should_patch = true;
+    }
+    SECTION("Unknown hook word") {
+        std::memcpy(nso.data() + EponaHookOffset, &NopInstruction, sizeof(u32));
+    }
+    SECTION("Nonzero padding") {
+        nso[EponaCaveOffset + EponaRoutineSize - 1] = 1;
+    }
+    SECTION("An IPS replaces the hook") {
+        mod = NopInstruction;
+    }
+    SECTION("An IPS uses the end of the cave") {
+        mod = NopInstruction;
+        mod_offset = EponaCaveOffset + EponaRoutineSize - sizeof(u32);
+    }
+    SECTION("A cheat writes into the cave after loading") {
+        cheat = "[Jump stub]\n04000000 03C46FF8 D503201F\n";
+    }
+    SECTION("Only Dark's Dynamic FPS is enabled") {
+        disable_unlock = true;
+        unlock_applies = false;
+    }
+    SECTION("FPS Unlock is enabled but cannot apply") {
+        nso[SoundEntryOffset] ^= 1;
+        unlock_applies = false;
+    }
+    SECTION("Unknown build ID") {
+        nso[offsetof(Loader::NSOHeader, build_id)] ^= 1;
+        unlock_applies = false;
+    }
+
+    PatchManagerTestContext context{mod, mod_offset};
+    if (!cheat.empty()) {
+        context.WriteCheat(cheat);
+    }
+    if (disable_unlock) {
+        Settings::values.disabled_addons[OcarinaTitleId] = {std::string{FpsUnlock}};
+    }
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(WordAt(patched, SoundEntryOffset) ==
+            (unlock_applies ? SoundEntryBranchInstruction : WordAt(nso, SoundEntryOffset)));
+    if (should_patch) {
+        REQUIRE(WordAt(patched, EponaHookOffset) == EponaHookInstruction);
+        REQUIRE(Common::HexToString(std::span{patched}.subspan(EponaCaveOffset, EponaRoutineSize)) ==
+                "25020054699200D0299145F9A90100B42A1140B96A01003409F0A7525F01096B"
+                "020100544901261E3F010071AD00005429010A6B2955895A3F09407149000054"
+                "8CCFBF1794CFBF17");
+    } else {
+        if (mod) {
+            REQUIRE(WordAt(patched, mod_offset) == *mod);
+            std::memcpy(nso.data() + mod_offset, &*mod, sizeof(u32));
+        }
+        REQUIRE(WordAt(patched, EponaHookOffset) == WordAt(nso, EponaHookOffset));
+        REQUIRE(std::equal(nso.begin() + EponaCaveOffset,
+                           nso.begin() + EponaCaveOffset + EponaRoutineSize,
+                           patched.begin() + EponaCaveOffset));
+    }
 }
 
 TEST_CASE("Built-in FPS Unlock skips the sound gate's sites only as a whole patch",
@@ -681,13 +835,14 @@ TEST_CASE("Built-in FPS Unlock applies all step counters", "[patch_manager]") {
             "ED3BBDA9EF4301A9FE1300F90D6302910041201E07000094E9030D2AFE1340F9EF4341A9"
             "ED3BC3A80A9B40B94632CC17");
     REQUIRE(Common::HexToString(std::span{patched}.subspan(StepRoutineOffset + 128, 128)) ==
-            "E007BFADCE9200B0CE013B910F028052D00140F91F020DEB40020054700100B4CE410091"
+            "E007BFADCE920090CE4138910F028052D00140F91F020DEB40020054700100B4CE410091"
             "EF05007141FFFF54CE4104D1D00140B90F060011EF0D0012CF0100B9CE410091CE11108B"
             "CD0100F9DF0900B90D00381EBF050071ADA59F1A07000014C10940BD0028211E01C0251E"
             "0038211EC00900BD2D00381EE007C1ACC0035FD6");
-    REQUIRE(Common::HexToString(std::span{patched}.subspan(StepRoutineOffset + 256, 60)) ==
-            "ED3BBDA9EF4301A9FE1300F98D0B018BCE810090CE4944F9CE0140F9C01140BDD8FFFF97"
-            "7A030D0B001840BDFE1340F9EF4341A9ED3BC3A8B8E32317");
+    REQUIRE(Common::HexToString(std::span{patched}.subspan(AmbientRoutineOffset,
+                                                           AmbientRoutineSize)) ==
+            "ED3BBDA9EF4301A9FE1300F98D0B018BCE810090CE4944F9CE0140F9C01140BD80FFFF97"
+            "7A030D0B001840BDFE1340F9EF4341A9ED3BC3A860E32317");
     // The remaining instructions in the 44-byte hitstop record are guarded but unchanged.
     REQUIRE(std::equal(nso.begin() + HitstopHookOffset + sizeof(u32),
                        nso.begin() + HitstopHookOffset + 44,
@@ -707,7 +862,10 @@ TEST_CASE("Built-in Dynamic FPS leaves all step counters untouched", "[patch_man
     REQUIRE(std::equal(nso.begin() + HitstopHookOffset, nso.begin() + HitstopHookOffset + 44,
                        patched.begin() + HitstopHookOffset));
     REQUIRE(std::all_of(patched.begin() + StepRoutineOffset,
-                        patched.begin() + StepRoutineOffset + 0x13C,
+                        patched.begin() + StepRoutineOffset + 0x100,
+                        [](u8 byte) { return byte == 0; }));
+    REQUIRE(std::all_of(patched.begin() + AmbientRoutineOffset,
+                        patched.begin() + AmbientRoutineOffset + AmbientRoutineSize,
                         [](u8 byte) { return byte == 0; }));
 }
 
@@ -735,22 +893,24 @@ TEST_CASE("Built-in FPS Unlock validates all step records before writing", "[pat
         nso[StepRoutineOffset + 79] = 1;
     }
     SECTION("Nonzero ambient cave") {
-        nso[StepRoutineOffset + 0x13B] = 1;
+        nso[AmbientRoutineOffset + AmbientRoutineSize - 1] = 1;
     }
     SECTION("Nonzero helper cave") {
         nso[StepRoutineOffset + 239] = 1;
     }
     SECTION("Nonzero step state") {
-        nso[DynamicStateOffset + StepStateSize - 1] = 1;
+        nso[StepStateOffset + StepStateSize - 1] = 1;
     }
-    SECTION("Truncated step state") {
-        nso.resize(DynamicStateOffset + StepStateSize - 1);
+    SECTION("Truncated sound state") {
+        nso.resize(DynamicStateOffset + UnlockStateSize - 1);
     }
     SECTION("Step state outside BSS") {
         Loader::NSOHeader header;
         std::memcpy(&header, nso.data(), sizeof(header));
-        header.segments[2].bss_size =
-            0x4E9FE00 + StepStateSize - 1 - header.segments[2].location - header.segments[2].size;
+        const u32 bss_end = header.segments[2].location + header.segments[2].size +
+                            header.segments[2].bss_size;
+        header.segments[2].size = 0x4E9EE01 - header.segments[2].location;
+        header.segments[2].bss_size = bss_end - 0x4E9EE01;
         std::memcpy(nso.data(), &header, sizeof(header));
     }
     REQUIRE(context.Manager().PatchNSO(nso, "main") == nso);
@@ -778,7 +938,7 @@ TEST_CASE("Built-in FPS Unlock defers transactionally to mods in step records", 
         offset = StepRoutineOffset + 80;
     }
     SECTION("Ambient stub") {
-        offset = StepRoutineOffset + 256;
+        offset = AmbientRoutineOffset;
     }
     SECTION("Skipped hitstop instruction") {
         offset = HitstopHookOffset + 40;
@@ -787,7 +947,7 @@ TEST_CASE("Built-in FPS Unlock defers transactionally to mods in step records", 
         offset = StepRoutineOffset + 128;
     }
     SECTION("Step state") {
-        offset = DynamicStateOffset + StepStateSize - sizeof(u32);
+        offset = StepStateOffset + StepStateSize - sizeof(u32);
     }
     constexpr u32 mod_word = 0x11223344;
     PatchManagerTestContext context{mod_word, offset};
@@ -956,6 +1116,69 @@ TEST_CASE("Built-in FPS Unlock leaves all records alone when a user mod changes 
     auto expected = nso;
     std::memcpy(expected.data() + offset, &mod_word, sizeof(mod_word));
     REQUIRE(context.Manager().PatchNSO(nso, "main") == expected);
+}
+
+TEST_CASE("FPS Unlock guards the Deku Tree floor web carry", "[patch_manager][oot_carry]") {
+    constexpr size_t Site = sizeof(Loader::NSOHeader) + 0x632D00;
+    constexpr size_t Entry = sizeof(Loader::NSOHeader) + 0x177E244;
+    constexpr size_t LastWord = sizeof(Loader::NSOHeader) + 0x177E57C;
+    constexpr size_t State = sizeof(Loader::NSOHeader) + 0x4E9D100;
+    constexpr u32 Original = 0x1E380016;
+    constexpr u32 Branch = 0x14452D51;
+    auto nso = MakeDynamicMain();
+    std::memcpy(nso.data() + Site, &Original, sizeof(Original));
+    std::optional<u32> mod;
+    bool installs = false;
+    bool unlock = true;
+    bool disable_fps = false;
+    std::string_view cheat;
+    SECTION("Matching build, instructions and padding") {
+        installs = true;
+    }
+    SECTION("Different build") {
+        nso[offsetof(Loader::NSOHeader, build_id)] ^= 1;
+        unlock = false;
+    }
+    SECTION("Changed original instruction") {
+        nso[Site] ^= 1;
+    }
+    SECTION("Occupied final alignment slot") {
+        nso[LastWord + 3] = 1;
+    }
+    SECTION("Occupied BSS") {
+        nso[State + 135] = 1;
+    }
+    SECTION("IPS uses the final alignment slot") {
+        mod = NopInstruction;
+    }
+    SECTION("A static cheat writes the BSS remainder") {
+        cheat = "[Carry overlap]\n04000000 04E9D140 00000000\n";
+    }
+    SECTION("Dark's Dynamic FPS without FPS Unlock") {
+        disable_fps = true;
+        unlock = false;
+    }
+    SECTION("FPS Unlock was requested but could not apply") {
+        nso[SoundEntryOffset] ^= 1;
+        unlock = false;
+    }
+    PatchManagerTestContext context{mod, LastWord};
+    if (disable_fps) {
+        Settings::values.disabled_addons[OcarinaTitleId] = {std::string{FpsUnlock}};
+    }
+    if (!cheat.empty()) {
+        context.WriteCheat(cheat);
+    }
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(WordAt(patched, Site) == (installs ? Branch : WordAt(nso, Site)));
+    REQUIRE(WordAt(patched, SoundEntryOffset) ==
+            (unlock ? SoundEntryBranchInstruction : WordAt(nso, SoundEntryOffset)));
+    REQUIRE(WordAt(patched, Entry) == (installs ? Original : 0));
+    if (installs) {
+        REQUIRE(WordAt(patched, LastWord) != 0);
+    } else {
+        REQUIRE(WordAt(patched, LastWord) == mod.value_or(WordAt(nso, LastWord)));
+    }
 }
 
 TEST_CASE("Built-in FPS Unlock validates the movie frame count records before writing",
@@ -1284,28 +1507,6 @@ TEST_CASE("Built-in text speed is off until checked in Add-Ons", "[patch_manager
     }
 }
 
-TEST_CASE("Unchecked add-on lists store off-by-default built-ins when checked", "[patch_manager]") {
-    const std::string Double{"Text Speed 2x (built-in)"};
-    const std::string Quadruple{"Text Speed 4x (built-in)"};
-    const std::string Instant{"Text Speed Instant (built-in)"};
-    const std::string MaxResolutionName{MaxResolution};
-
-    SECTION("Unchecked off-by-default built-ins are not stored, checked ones get their key") {
-        auto stored = FileSys::StoredDisabledAddons(OcarinaTitleId,
-                                                    {MaxResolutionName, Double, Instant});
-        std::ranges::sort(stored);
-        std::vector<std::string> expected{MaxResolutionName,
-                                          FileSys::EnabledAddonKey(Quadruple)};
-        std::ranges::sort(expected);
-        REQUIRE(stored == expected);
-    }
-
-    SECTION("Other titles are stored as given") {
-        REQUIRE(FileSys::StoredDisabledAddons(OtherTitleId, {Double}) ==
-                std::vector<std::string>{Double});
-    }
-}
-
 TEST_CASE("Listed built-ins carry a label, a description and a level for players",
           "[patch_manager]") {
     using Level = FileSys::BuiltinPatchLevel;
@@ -1445,6 +1646,78 @@ TEST_CASE("The patch list says what became of each built-in at the last start",
         // So does another module of Ocarina.
         void(context.Manager().PatchNSO(MakeDynamicMain(), "sdk"));
         CHECK(result_of(context, MaxResolution) == Result::Applied);
+    }
+}
+
+TEST_CASE("The patch list says whether each built-in is made for the game's build",
+          "[patch_manager]") {
+    using Build = FileSys::BuiltinPatchBuild;
+    using Result = FileSys::BuiltinPatchResult;
+    using BuildID = FileSys::PatchManager::BuildID;
+    PatchManagerTestContext context;
+    const auto manager = context.Manager();
+    // Each listed built-in's answer for a build id of the game's main module.
+    const auto builds = [&](const std::optional<BuildID>& main_build_id) {
+        std::vector<std::pair<std::string, Build>> out;
+        for (const auto& patch : manager.GetPatches(nullptr, main_build_id)) {
+            if (patch.builtin) {
+                out.emplace_back(patch.name, patch.build);
+            }
+        }
+        REQUIRE(out.size() >= 4);
+        return out;
+    };
+    auto other = OcarinaBuildId;
+    other[0] ^= 1;
+
+    SECTION("Without a build id, as for the game list, nothing is known") {
+        for (const auto& [name, build] : builds(std::nullopt)) {
+            CAPTURE(name);
+            CHECK(build == Build::Unknown);
+        }
+    }
+
+    SECTION("Checked or not, each is made for its build and no other") {
+        // The text speeds are off until checked and get an answer too.
+        for (const auto& [name, build] : builds(OcarinaBuildId)) {
+            CAPTURE(name);
+            CHECK(build == Build::Matches);
+        }
+        for (const auto& [name, build] : builds(other)) {
+            CAPTURE(name);
+            CHECK(build == Build::Other);
+        }
+    }
+
+    SECTION("The answer is the one PatchNSO gives when the game starts") {
+        auto padded = OcarinaBuildId;
+        padded[0x1F] = 1; // Past the 20 bytes the built-ins name
+        for (const auto& build_id : {OcarinaBuildId, other, padded, BuildID{}}) {
+            CAPTURE(Common::HexToString(build_id));
+            void(manager.PatchNSO(MakeMain(build_id, TbzInstruction), "main"));
+            size_t checked = 0;
+            for (const auto& patch : manager.GetPatches(nullptr, build_id)) {
+                // PatchNSO compares the build of the checked ones only.
+                if (!patch.builtin || !patch.enabled) {
+                    continue;
+                }
+                CAPTURE(patch.name);
+                CHECK(patch.last_result != Result::NotLoaded);
+                CHECK((patch.build == Build::Other) == (patch.last_result == Result::WrongBuild));
+                ++checked;
+            }
+            CHECK(checked >= 4);
+        }
+        // Leaves no result of these starts to the tests after this one.
+        void(manager.PatchNSO(std::vector<u8>(4), "main"));
+    }
+
+    SECTION("Only a title with listed built-ins needs the read") {
+        CHECK(FileSys::HasListedBuiltinPatches(OcarinaTitleId));
+        CHECK_FALSE(FileSys::HasListedBuiltinPatches(OtherTitleId));
+        for (const auto& patch : context.Manager(OtherTitleId).GetPatches(nullptr, OcarinaBuildId)) {
+            CHECK_FALSE(patch.builtin);
+        }
     }
 }
 
@@ -2017,4 +2290,256 @@ TEST_CASE("A patch pack gives a game built-ins without any C++", "[patch_manager
         CHECK(std::ranges::count(patches, MaxResolution, &FileSys::Patch::name) == 1);
         CHECK(std::ranges::find(patches, PackFix, &FileSys::Patch::name) == patches.end());
     }
+}
+
+TEST_CASE("FPS Unlock guards the OoT day/night clock carry", "[patch_manager][oot_carry]") {
+    constexpr size_t Site = sizeof(Loader::NSOHeader) + 0x3CDFC0;
+    constexpr size_t Entry = sizeof(Loader::NSOHeader) + 0x177DAE4;
+    constexpr size_t LastWord = sizeof(Loader::NSOHeader) + 0x177DE3C;
+    constexpr size_t State = sizeof(Loader::NSOHeader) + 0x4E9D000;
+    constexpr u32 Original = 0x1E380008;
+    constexpr u32 Branch = 0x144EBEC9;
+    auto nso = MakeDynamicMain();
+    std::memcpy(nso.data() + Site, &Original, sizeof(Original));
+    std::optional<u32> mod;
+    bool installs = false;
+    bool unlock = true;
+    bool disable_fps = false;
+    std::string_view cheat;
+    SECTION("Matching build, instructions and padding") {
+        installs = true;
+    }
+    SECTION("Different build") {
+        nso[offsetof(Loader::NSOHeader, build_id)] ^= 1;
+        unlock = false;
+    }
+    SECTION("Changed original instruction") {
+        nso[Site] ^= 1;
+    }
+    SECTION("Occupied final alignment slot") {
+        nso[LastWord + 3] = 1;
+    }
+    SECTION("Occupied BSS") {
+        nso[State + 135] = 1;
+    }
+    SECTION("IPS uses the final alignment slot") {
+        mod = NopInstruction;
+    }
+    SECTION("A static cheat writes the BSS remainder") {
+        cheat = "[Carry overlap]\n04000000 04E9D040 00000000\n";
+    }
+    SECTION("Dark's Dynamic FPS without FPS Unlock") {
+        disable_fps = true;
+        unlock = false;
+    }
+    SECTION("FPS Unlock was requested but could not apply") {
+        nso[SoundEntryOffset] ^= 1;
+        unlock = false;
+    }
+    PatchManagerTestContext context{mod, LastWord};
+    if (disable_fps) {
+        Settings::values.disabled_addons[OcarinaTitleId] = {std::string{FpsUnlock}};
+    }
+    if (!cheat.empty()) {
+        context.WriteCheat(cheat);
+    }
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(WordAt(patched, Site) == (installs ? Branch : WordAt(nso, Site)));
+    REQUIRE(WordAt(patched, SoundEntryOffset) ==
+            (unlock ? SoundEntryBranchInstruction : WordAt(nso, SoundEntryOffset)));
+    REQUIRE(WordAt(patched, Entry) == (installs ? Original : 0));
+    if (installs) {
+        REQUIRE(WordAt(patched, LastWord) != 0);
+    } else {
+        REQUIRE(WordAt(patched, LastWord) == mod.value_or(WordAt(nso, LastWord)));
+    }
+}
+
+TEST_CASE("Unchecked add-on lists store off-by-default built-ins when checked", "[patch_manager]") {
+    const std::string Double{"Text Speed 2x (built-in)"};
+    const std::string Quadruple{"Text Speed 4x (built-in)"};
+    const std::string Instant{"Text Speed Instant (built-in)"};
+    const std::string MaxResolutionName{MaxResolution};
+
+    SECTION("Unchecked off-by-default built-ins are not stored, checked ones get their key") {
+        auto stored = FileSys::StoredDisabledAddons(OcarinaTitleId,
+                                                    {MaxResolutionName, Double, Instant});
+        std::ranges::sort(stored);
+        std::vector<std::string> expected{MaxResolutionName,
+                                          FileSys::EnabledAddonKey(Quadruple)};
+        std::ranges::sort(expected);
+        REQUIRE(stored == expected);
+    }
+
+    SECTION("Other titles are stored as given") {
+        REQUIRE(FileSys::StoredDisabledAddons(OtherTitleId, {Double}) ==
+                std::vector<std::string>{Double});
+    }
+}
+
+namespace {
+
+std::vector<FileSys::BuiltinCheatOverlap> CheatOverlaps(
+    std::string_view cheats, std::initializer_list<std::string_view> applied) {
+    const std::vector<std::string_view> names{applied};
+    return FileSys::FindBuiltinCheatOverlaps(OcarinaTitleId, names,
+                                             Core::Memory::TextCheatParser{}.Parse(cheats));
+}
+
+// A cheat that stores a word at every 4 bytes of [begin, end) of main.
+std::string StoresCheat(std::string_view name, u64 begin, u64 end) {
+    std::string cheat = fmt::format("[{}]\n", name);
+    for (u64 offset = begin; offset < end; offset += sizeof(u32)) {
+        cheat += fmt::format("04000000 {:08X} D503201F\n", offset);
+    }
+    return cheat;
+}
+
+} // Anonymous namespace
+
+TEST_CASE("Built-in patch overlap check names the cheat, the patch and both ranges",
+          "[patch_manager]") {
+    constexpr std::string_view Cheats = "[HUD stub]\n"
+                                        "04000000 03C46900 D503201F\n"
+                                        "04000000 03C46904 D503201F\n"
+                                        "[Step slot]\n"
+                                        "04000000 04E9EE08 00000001\n"
+                                        "[Heap at the same offset]\n"
+                                        "04100000 03C46900 00000000\n"
+                                        "[Elsewhere in main]\n"
+                                        "04000000 00100000 00000000\n"
+                                        "[On ZL]\n"
+                                        "80000100\n"
+                                        "04000000 03C46B60 D503201F\n"
+                                        "20000000\n"
+                                        "[Offset from a loaded register]\n"
+                                        "40000000 00000000 00000010\n"
+                                        "04000000 03C46900 00000000\n";
+
+    const auto overlaps = CheatOverlaps(Cheats, {FpsUnlock});
+    REQUIRE(overlaps.size() == 4);
+    CHECK(overlaps[0].cheat == "HUD stub");
+    CHECK(overlaps[0].patch == FpsUnlock);
+    CHECK_FALSE(overlaps[0].state);
+    CHECK(overlaps[0].cheat_begin == 0x3C46900);
+    CHECK(overlaps[0].cheat_end == 0x3C46908);
+    CHECK(overlaps[0].patch_begin == 0x3C46900);
+    CHECK(overlaps[0].patch_end == 0x3C46928);
+    CHECK(overlaps[1].cheat == "Step slot");
+    CHECK(overlaps[1].state);
+    CHECK(overlaps[1].cheat_begin == 0x4E9EE08);
+    CHECK(overlaps[1].cheat_end == 0x4E9EE0C);
+    CHECK(overlaps[1].patch_begin == 0x4E9EE00);
+    CHECK(overlaps[1].patch_end == 0x4E9EF10);
+    CHECK(overlaps[2].cheat == "On ZL");
+    CHECK_FALSE(overlaps[2].state);
+    CHECK(overlaps[2].cheat_begin == 0x3C46B60);
+    CHECK(overlaps[2].patch_begin == 0x3C46B60);
+    CHECK(overlaps[2].patch_end == 0x3C46B9C);
+    CHECK(overlaps[3].cheat == "Offset from a loaded register");
+    CHECK(overlaps[3].cheat_begin == 0x3C46910);
+    CHECK(overlaps[3].cheat_end == 0x3C46914);
+    CHECK(overlaps[3].patch_begin == 0x3C46900);
+
+    // Only applied built-ins count: Dynamic FPS has neither range, and nothing applied has none.
+    CHECK(CheatOverlaps(Cheats, {DynamicFps}).empty());
+    CHECK(CheatOverlaps(Cheats, {}).empty());
+}
+
+TEST_CASE("Built-in patch overlap check follows registers from earlier cheats",
+          "[patch_manager]") {
+    // The enabled cheats run as one program, so the register the first loads offsets the
+    // second's store to main+0x3C46B60.
+    constexpr std::string_view Cheats = "[Load offset]\n"
+                                        "40000000 00000000 00000160\n"
+                                        "[Store]\n"
+                                        "04000000 03C46A00 D503201F\n";
+    const auto overlaps = CheatOverlaps(Cheats, {FpsUnlock});
+    REQUIRE(overlaps.size() == 1);
+    CHECK(overlaps[0].cheat == "Store");
+    CHECK(overlaps[0].cheat_begin == 0x3C46B60);
+    CHECK(overlaps[0].cheat_end == 0x3C46B64);
+    CHECK(overlaps[0].patch_begin == 0x3C46B60);
+
+    // Without the load the store stays at 0x3C46A00, which nothing built-in uses now. A load on
+    // a key press may or may not run, so the store's address is unknown and it is left out.
+    CHECK(CheatOverlaps("[Store]\n04000000 03C46A00 D503201F\n", {FpsUnlock}).empty());
+    CHECK(CheatOverlaps("[Load on ZL]\n"
+                        "80000100\n"
+                        "40000000 00000000 00000160\n"
+                        "20000000\n"
+                        "[Store]\n"
+                        "04000000 03C46A00 D503201F\n",
+                        {FpsUnlock})
+              .empty());
+}
+
+TEST_CASE("Built-in patches stay clear of the known code-patching cheats (#1873)",
+          "[patch_manager]") {
+    // tomvita's MyNXCheats for this build: "No damage" as players use it, and the main ranges
+    // its other cheats write (code caves, their hooks and their flags in BSS).
+    std::string cheats = "[No damage]\n"
+                         "04000000 04E9FF88 00000000\n"
+                         "04000000 04E9FF88 00000001\n"
+                         "04000000 03C46A00 1A8B13EC\n"
+                         "04000000 03C46A04 A9BF3FEE\n"
+                         "04000000 03C46A08 B00092CE\n"
+                         "04000000 03C46A0C B94F89CE\n"
+                         "04000000 03C46A10 340000EE\n"
+                         "04000000 03C46A14 B9400D0E\n"
+                         "04000000 03C46A18 528AB00F\n"
+                         "04000000 03C46A1C 72A6356F\n"
+                         "04000000 03C46A20 6B0F01DF\n"
+                         "04000000 03C46A24 54000041\n"
+                         "04000000 03C46A28 2A0A03EC\n"
+                         "04000000 03C46A2C A8C13FEE\n"
+                         "04000000 03C46A30 17215CB1\n"
+                         "04000000 0049DCF0 14DEA344\n";
+    cheats += StoresCheat("Refill hearts, Max hearts 20", 0x3C46A40, 0x3C46AAC);
+    cheats += StoresCheat("Moon jump", 0x3C46CC0, 0x3C46DB0);
+    cheats += StoresCheat("Hook A", 0x163B20, 0x163B24) + StoresCheat("Hook B", 0x4D6EE4, 0x4D6EE8);
+    cheats += StoresCheat("Flags A", 0x4E9FF80, 0x4E9FF94);
+    cheats += StoresCheat("Flags B", 0x4E9FFA0, 0x4E9FFB0);
+    REQUIRE(Core::Memory::TextCheatParser{}.Parse(cheats).size() == 8);
+
+    const auto all = {MaxResolution, std::string_view{"Texture Pool x2 (built-in)"}, FpsUnlock,
+                      std::string_view{"DLSS Balanced render scale (built-in)"}};
+    CHECK(CheatOverlaps(cheats, all).empty());
+    CHECK(CheatOverlaps(cheats, {DynamicFps}).empty());
+}
+
+TEST_CASE("Built-in FPS Unlock still applies beside a cheat that writes its cave",
+          "[patch_manager]") {
+    PatchManagerTestContext context;
+    const auto cheats_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LoadDir) /
+                            fmt::format("{:016X}", OcarinaTitleId) / "Cheats" / "cheats";
+    std::filesystem::create_directories(cheats_dir);
+    std::ofstream{cheats_dir / "E0F3CCFAF50065AE.txt"} << StoresCheat("HUD stub", 0x3C46900,
+                                                                      0x3C46904);
+    const auto patched = context.Manager().PatchNSO(MakeDynamicMain(), "main");
+    REQUIRE(WordAt(patched, HudHookOffset) == HudHookInstruction);
+    REQUIRE(WordAt(patched, AmbientHookOffset) == AmbientHookInstruction);
+}
+
+TEST_CASE("Host redirect mods load only while the redirect is on", "[patch_manager]") {
+    PatchManagerTestContext context;
+    constexpr FileSys::PatchManager::BuildID TestBuildId{
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA,
+        0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x12, 0x34, 0x56, 0x78, 0x9A,
+    };
+    const auto exefs = Common::FS::GetEdenPath(Common::FS::EdenPath::LoadDir) /
+                       fmt::format("{:016X}", OtherTitleId) / "[Host redirect] Test server" /
+                       "exefs";
+    std::filesystem::create_directories(exefs);
+    WriteIps(exefs / fmt::format("{}.ips", Common::HexToString(TestBuildId)), BranchInstruction);
+
+    SCOPE_EXIT {
+        Settings::values.online_service_redirect = false;
+    };
+    Settings::values.online_service_redirect = false;
+    REQUIRE(PatchMain(context, TestBuildId, NopInstruction, "main", OtherTitleId) ==
+            NopInstruction);
+    Settings::values.online_service_redirect = true;
+    REQUIRE(PatchMain(context, TestBuildId, NopInstruction, "main", OtherTitleId) ==
+            BranchInstruction);
 }

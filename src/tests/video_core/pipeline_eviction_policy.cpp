@@ -11,6 +11,7 @@ using Vulkan::MaxUnusedPrebuiltPipelines;
 using Vulkan::PipelinesToEvict;
 using Vulkan::PrebuildAfterLoadSave;
 using Vulkan::PrebuildLimit;
+using Vulkan::PrebuildStartsWithBootBuilds;
 using Vulkan::SaveDriverCacheAtLoadEnd;
 
 TEST_CASE("Nothing is evicted at or under the kept limit", "[video_core][pipeline_eviction]") {
@@ -93,4 +94,15 @@ TEST_CASE("The load's driver cache save and when the prebuild starts",
     REQUIRE_FALSE(SaveDriverCacheAtLoadEnd(true, true, false, false));
     REQUIRE_FALSE(SaveDriverCacheAtLoadEnd(true, false, false, true));
     REQUIRE_FALSE(PrebuildAfterLoadSave(true, true, false, true, true));
+}
+
+TEST_CASE("The prebuild waits for the load's driver cache saves where reads race builds",
+          "[video_core][pipeline_eviction]") {
+    REQUIRE(PrebuildStartsWithBootBuilds(false, false));
+    // After the precache, as its jobs would queue ahead of the precache's
+    REQUIRE_FALSE(PrebuildStartsWithBootBuilds(true, false));
+    // Intel's Windows driver: a prebuild build running into the cache while the end-of-load save
+    // reads it crashes the driver, so the save would have to be skipped
+    REQUIRE_FALSE(PrebuildStartsWithBootBuilds(false, true));
+    REQUIRE_FALSE(PrebuildStartsWithBootBuilds(true, true));
 }

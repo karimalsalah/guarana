@@ -255,6 +255,9 @@ SDLSink::SDLSink(std::string_view target_device_name) {
 
 SDLSink::~SDLSink() = default;
 
+// InputOpenMayBlock stays false: SDL's WASAPI backend opens every device on one management
+// thread, so a microphone open held by the permission prompt would also hold the next playback
+// open, on any thread. The open waits on the caller as before; the lock keeps the list safe.
 SinkStream* SDLSink::AcquireSinkStream(Core::System& system, u32 system_channels_,
                                        const std::string&, StreamType type) {
     // Build the stream outside the lock: opening a microphone can wait on a permission prompt.

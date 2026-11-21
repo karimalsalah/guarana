@@ -11,6 +11,334 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.7.1] - 2026-11-20
+
+### Fixed
+
+- Windows ARM64 release builds link again: the Switch 2 BLE WinRT code now compiles against the
+  exact C++/WinRT version the Qt arm64 package was built with (2.0.250303.1, fetched from NuGet),
+  instead of the Windows SDK's newer 2.0.250303.5 that lld-link's `/failifmismatch` rejects.
+- macOS release builds no longer fail when the runner's freetype bottle still links
+  `libhvf.dylib` (which macOS 15.0-15.3 lack): freetype is rebuilt from source on the runner.
+
+## [20.7.0] - 2026-11-20
+
+### Added
+
+- `EDEN_NX2_ASYNC_GUARD` (experimental, off): with asynchronous shaders, draws that write memory,
+  use transform feedback, rasterize nothing or render into a small target wait for their pipeline
+  instead of being skipped, so effects later draws depend on are not lost until a restart. From
+  Eden ([6a767ac43a](https://git.eden-emu.dev/eden-emu/eden/commit/6a767ac43a089fe988526bf7f8477ccc43277fb1)).
+- `EDEN_NX2_F2I_ABS_NEG` (experimental, off): F2I's absolute value and negation modifiers are
+  decoded the right way round, a shader fix Eden made for Disco Elysium
+  ([Eden 6e24dcb4b5](https://git.eden-emu.dev/eden-emu/eden/commit/6e24dcb4b5)).
+
+### Changed
+
+- Bump the launcher cargo group: sysinfo 0.40.1 to 0.40.3 and zip 9.4.1 to 9.5.1.
+- Bump actions/checkout from 5 to 7 in the bench-rows and switch-registry workflows.
+- Windows: the launcher and a game it starts are one app to Windows. In a launcher session the
+  emulator takes the launcher's AppUserModelID (the one on its Start menu shortcut), and the
+  launcher sets it for itself also when it starts from a game file or a link. They share one taskbar
+  button, and pinning the game's button pins the launcher instead of `guarana.exe`.
+- Bump rfd from 0.17.2 to 0.18.0 in the launcher.
+- Bump actions/setup-java from 4 to 5 in the Android workflow.
+- Upstream sync (zortos293/Lichii nx2 to 6708d2476c, 31 commits): Ocarina of Time FPS Unlock
+  carry fixes — cloth below 60 fps, Epona's fence jump, fractional day/night seconds and Deku
+  web steps; nvdrv small-GPFIFO-submit allocation churn; texture cache recovery from failed
+  host scratch allocations and bounded descriptor lookups; Vulkan borrows a cached sampler
+  when the driver refuses allocation; core_timing drops due events whose owner expired;
+  Windows zero-page unlocks capped at 1 MiB; sysmix purges output streams too (Xenoblade DE
+  docked/handheld crash); Yoshi 2.0.0 full-scene-resolution FXAA option; macOS bundle ships
+  nx2_switches.txt in Resources; scratch HOME profile state; ARM64 NCE validation and
+  Dynarmic defaults. Text speed stays the shipped JSON pack; Guarana's shutdown telemetry,
+  portable switch loading and built-in metadata are kept across the new upstream code.
+- Bump vite from 8.3.6 to 8.3.8 in the launcher UI.
+
+### Fixed
+
+- Android nightlies install beside the stable app instead of updating it. The APK build checks the packaged app ID before uploading it, and the upstream update checker stays off on both channels.
+- A game the launcher starts no longer opens the debug console (when "Show Log in Console" is on in
+  Configure > Debug) or the What's New dialog after an update: the game is the one window, and the
+  launcher's Updates screen has the notes. Creating a folder link on Windows (the Link choice of the
+  data import, Link to Ryujinx) no longer flashes a console window.
+- Audio: while Windows' microphone prompt is unanswered, capture streams wait for the one open
+  already waiting instead of starting one each, and the SDL backend opens the microphone on the
+  calling thread again, so a stuck open cannot hold SDL's next playback open
+  ([#199](https://github.com/karimalsalah/guarana/issues/199)).
+- Ocarina of Time with No sharpening, the default on Intel integrated GPUs: the picture is no
+  longer hazier and flatter than in v20.4.0. Since v20.5.0's upstream merge the bypass copied the
+  image the network's output pass samples, which on Hyrule Field is not the tonemapped picture
+  (26 dB from the network's own output, against 32 dB). It copies the tonemap drawn that frame
+  again, and the sampled image only when no known tonemap was drawn (Lichii #1688's case).
+
+
+## [20.6.0] - 2026-11-18
+
+### Added
+
+- Android: release and nightly builds include `guarana-<version>-android-arm64.apk` (Android 13 or
+  newer): the app under Guarana's own id, `io.github.karimalsalah.guarana`, which reads the player's
+  `nx2_switches.txt` from its user folder as the desktop builds do. Until the release key is set up
+  ([docs/SIGNING.md](docs/SIGNING.md), "Android") it is a preview build,
+  `io.github.karimalsalah.guarana.preview`. Nobody on the project has booted it on a device yet.
+- [docs/ARM64.md](docs/ARM64.md): Guarana on Snapdragon X laptops and Android handhelds: what runs
+  where, how CI builds the Windows ARM64 and Android packages, what the renderer needs from Adreno
+  drivers (mesh shaders above all), the expected gains, and the call for testers.
+- Issue forms for ARM64 testers: Snapdragon X laptops (Adreno X1 / X2) and Android devices (Adreno
+  6xx to 8xx, other Android GPUs) in every "Graphics card" list, "Windows 11 on ARM" and "Android" in
+  the operating system lists, and "Phone or tablet" as a device report form factor. New issues get the
+  `QUALCOMM`, `arm64` and `android` labels, and the benchmarks page filters reports by Qualcomm GPUs
+  and by phones and tablets.
+- `EDEN_NX2_ASYNC_DISCARD=2` (experimental, off): with asynchronous shaders, a native draw whose
+  pipeline is still building is skipped only when it draws into render targets the game clears
+  and redraws every frame, and waits otherwise, so title text, chat bubbles and lighting drawn
+  once are not lost on an empty shader cache. Ported from Fritchii (`a962f20533`).
+- Benchmark: boot suites. `tools/bench/suites/console-boot.json` measures launch to gameplay and
+  first-visit hitches in one command, every boot and shader switch against the baseline with a
+  cold, a second and a warm shader cache (and the GPU driver's cache with `--driver-cache-dir`),
+  three times; each row has the boot phases, the held draws and builds to the scene and the
+  stutter frames, and is invalid when its cache was not in the state it claims
+  ([docs/console-boot.md](docs/console-boot.md)).
+- Device reports: each report gets the engine's GPU family (Arrow Lake-H, Lunar Lake, Radeon 780M,
+  Steam Deck LCD and the others) when it names its GPU exactly, and the new
+  `site/data/community-evidence.json` counts reports and devices per family, game and build, with
+  the effects that paired `tools/bench` rows measured. Nothing reads it to change a default yet
+  ([#24](https://github.com/karimalsalah/guarana/issues/24)).
+- Experimental `EDEN_NX2_DLSS_SKIP_PASSES` (ports of zortos293/Lichii#864 and #1985): a game's own
+  DLSS network passes are skipped while a replacement upscale draws over their output (`drew`) or
+  while the network cannot be shown (`blocked`). Off by default; upstream measured The Duskbloods
+  on a Steam Deck at 56.6 to 40.4 ms of GPU time a frame.
+- Experimental `EDEN_NX2_FG_GAME_MOTION`: with `EDEN_NX2_FLUID_INTERP`, in-between frames are
+  warped from the game's motion (Ocarina of Time's motion guide: the camera from the scene depth,
+  and Link) instead of optical flow, and what one real frame no longer shows is filled from the
+  other by depth. Off by default and not measured yet; `tools/bench/suites/game-motion-fg.json`
+  measures it against the optical-flow interpolation the game ships with at 120 Hz.
+- Design for the game's own reconstruction network and motion on integrated GPUs
+  (`docs/design/game-reconstruction-and-motion.md`), and the bench suite of its first step:
+  `tools/bench/suites/game-network.json` measures Ocarina of Time's anti-aliasing network with
+  each existing way of running its tensor instructions (software, the shared-memory gather,
+  Intel's 8x16x16 cooperative matrices), with the game presets off so the network actually runs.
+- Experimental `EDEN_NX2_INTEL_COOP_MATRIX_8X8`: the game's tensor networks on the Arc 140T's own
+  cooperative matrices (8x8x16 with fp32 accumulators, the only fp16 shape its driver lists), two
+  products per guest HMMA through shared memory, rounded to fp16 once. Off by default, not measured
+  and not yet run on the hardware; `tools/bench/suites/game-network-a1b.json` measures it.
+- Experimental switches for the game's own tensor networks on matrix units that go through shared
+  memory (AMD's 16x16x16, Intel's 8x16x16): `EDEN_NX2_HMMA_ZERO_C` starts an HMMA whose accumulator
+  is zero from a zero matrix instead of a stored C tile (bit-exact), and `EDEN_NX2_HMMA_K16_ONCE`
+  runs a K=16 HMMA as one 8x16x16 product per row half, rounding once. The diagnostic
+  `EDEN_NX2_TENSOR_LOG` logs each tensor program's HMMA counts and the path they take, and
+  `tools/bench/suites/game-network-a1.json` measures the two switches on Ocarina of Time. All off by
+  default and not measured yet.
+- Debug server `input_latency`: holds a right-stick step and times, from when the game first
+  reads it, the first shown frame whose picture moved (generated frames included) and the first
+  real one, so frame generation's input latency can be measured against no generation.
+- `EDEN_NX2_INTEL_COMPUTE_SIMD16` (experimental, off): on Intel GPUs, compute shaders without warp
+  operations can be built at 16 lanes, which built Ocarina of Time's large global-memory programs
+  about 2.6 times faster on an Arc B580 at the cost of some frame rate. From Fritchii-Intel-Fixes
+  (patch 0011).
+- `EDEN_NX2_LOAD_SAVE=1` (experimental, off by default): on Intel's Windows driver the boot load
+  saves the driver pipeline cache once its builds have ended and starts the background prebuild
+  after it, so a crash or kill later in the session no longer loses that boot's driver builds
+  (port of [Lichii #1838](https://github.com/zortos293/Lichii/pull/1838); step B6 of
+  [docs/console-boot.md](docs/console-boot.md)).
+- `EDEN_NX2_IR_POOL_CAP_MIB` (experimental, off): the shader recompiler's object pools free
+  their memory after a shader once it passes the cap instead of keeping their largest shader's
+  worth, which can return host RAM an integrated GPU shares. Ported from Fritchii (`c99790b878`).
+- `EDEN_NX2_NCE_REPORT=1` (diagnostic): one log line per module a game loads, on any host, with
+  what native code execution (NCE) on ARM64 hosts would rewrite and which system registers it
+  would leave to the host CPU, so Switch 2 titles can be checked for NCE without an ARM64 device.
+  [docs/NCE.md](docs/NCE.md) has the plan for NCE on Linux ARM64, Android, Windows on ARM and macOS.
+- Performance overlay: a memory row with the RAM Guarana holds and the RAM the PC has free, and the
+  GPU memory it uses with the room the driver still gives it, amber when either runs low. On an
+  integrated GPU the GPU memory is marked shared and its room is bounded by the free RAM. Ported
+  from Fritchii (Frizti/Fritchii `58f55cb7d9`, `8627ff4233`).
+- Built-in patches can be data: a patch pack (`dist/patch-packs/*.json`, see
+  [docs/patch-packs.md](docs/patch-packs.md)) adds built-in add-ons for any game without C++.
+  They are checked as the compiled-in ones are: build id, the game's original bytes (by
+  SHA-256), code caves in executable padding, zero-filled state, user mods first. Ocarina of
+  Time's three Text Speed add-ons are the first pack and work as before. The packs ship in a
+  `patch-packs` folder next to the program and are compiled into it as well, so Android and a
+  program without the folder keep them; a file in the folder replaces the compiled-in copy of its
+  name. The unit tests reject a pack with a field the format does not have, a patch without a
+  description, or bytes another built-in writes.
+- Presenter telemetry for pacing A/Bs ([#8](https://github.com/karimalsalah/guarana/issues/8)):
+  a `Present setup` line at each swapchain creation names the window's display and its refresh
+  rate, the present mode and image count, `EDEN_NX2_FLUID` and Windows' hardware-accelerated GPU
+  scheduling; `EDEN_NX2_SHOWN_STATS` also counts the intervals between presents in refreshes
+  (under one, one, two, three or more) and the refreshes missed against the median; the
+  diagnostic `EDEN_NX2_PRESENT_MODE=immediate|fifo|fifo_relaxed|mailbox` asks for one present
+  mode, falling back with a warning when the surface lacks it; and
+  `tools/bench/suites/presenter-ab.json` runs FIFO against IMMEDIATE with frame generation off
+  and on.
+- GPU trace bench: on a driver that does not replay bit for bit (Intel's Windows driver), the
+  baseline's own run-to-run difference becomes a noise floor, and a variant within it is reported
+  as within noise instead of failing the comparison (`trace_replay.py bench --noise-margin`).
+- Device reports name the GPU's PCI ID: `tools/bench` rows record it (`hardware.gpus[].pci`, from
+  Windows' PNP device ID or `lspci -nn`), and the launcher's "Share my numbers" writes it after the
+  GPU's name. The report bot uses it for the engine's GPU family, so Meteor Lake and Panther Lake
+  GPUs that their drivers name only "Intel Graphics" count for their family
+  ([#24](https://github.com/karimalsalah/guarana/issues/24)).
+- The boot `Resolution:` line and the debug server's `status.resolution` cite the community's paired
+  `tools/bench` measurements (`site/data/community-evidence.json`, which each build now carries) where
+  a preset or switch default sets a value measured on the player's GPU family and game. No value
+  changes ([#24](https://github.com/karimalsalah/guarana/issues/24)).
+- `EDEN_NX2_SKIP_REDRAWN=1` (experimental, off by default): with asynchronous shaders on, a Switch 2
+  draw into a target the game redraws every frame is skipped while its pipeline builds instead of
+  stopping the frame (port of [Eglantine #874](https://github.com/Eglantine-Community/Eglantine/pull/874);
+  step F4 of [docs/console-boot.md](docs/console-boot.md)).
+- `EDEN_NX2_STARTUP_CHECK_ASYNC=1` (experimental, off by default): the startup Vulkan check's child
+  process runs while the frontend starts, and the frontend waits for its verdict only before it
+  first uses Vulkan (step B2 of [docs/console-boot.md](docs/console-boot.md)).
+- Status bar: in Ocarina of Time a chip shows which upscaler replaces the game's own (FSR 3.1,
+  FSR 4 or DLSS) with the render and output sizes, for example `FSR 3.1 720p → 1080p`, or why
+  the game's own upscaler draws (`OFF`, `RES 1X`, `NO CAMERA`, `NO DEPTH`, `WAITING`,
+  `UNAVAILABLE`); between games a click turns Ocarina FSR on or off. Until now only NVIDIA DLSS
+  showed its state. Ported from CheezyEmu (CheezerWheezer/CheezyEmu `76f03c3c03`, `51eb67792f`).
+- Windows on ARM: release and nightly builds include `guarana-<version>-windows-arm64.zip`, a
+  native ARM64 build for Snapdragon X laptops (clang-cl for ARM64 with ThinLTO, dynarmic's ARM64
+  backend, Qt linked statically). Nobody on the project has booted it on a device yet: device
+  reports are welcome.
+
+### Changed
+
+- The game network suites now log each tensor program's path (`EDEN_NX2_TENSOR_LOG` in
+  `game-network.json` too) and say which GPUs their matrix arms apply to: the Arc 140T's driver lists
+  only 8x8x16 shapes with fp32 accumulators and 8x8x32 8-bit shapes, so `EDEN_NX2_INTEL_COOP_MATRIX`
+  and the A1 switches do nothing there (they apply to Xe2 and RDNA 3). The design gains step A1b, an
+  8x8x16 path for the 140T, and says to read only each suite's second pass (every arm compiles cold).
+- Add-Ons: the page says whether each built-in patch is made for the installed version of the
+  game before the game has ever been started. It reads the build id of the game's main program
+  from the version that would start (the enabled update and mods included) without loading it.
+  A built-in made for another version gets the warning sign and "Cannot be applied: it is made
+  for another version of the game", ticked or not; one made for this version says so until the
+  first start tells whether it was applied. The other reasons (a mod changes the same part of the
+  game, the game's code is not what it expects) still come from the last start. The loader call
+  is `AppLoader::ReadMainBuildId`, ported from Lichii #1358.
+- CI: only pushes save the build's dependency and compiler cache; pull requests restore the
+  newest one of their base. A day of pull requests had filled the repository's 10 GB of Actions
+  cache with caches only their own pull request could read, which evicted `main`'s and made its
+  next Windows build start cold (65 minutes instead of about 9).
+- Legal hardening for the public release: PRIVACY.md documents exactly what device reports
+  collect and how to opt out; SPDX headers completed on the room stub and the texture-rect test;
+  CREDITS.md names ProfessorTee's render scales (Lichii #903). The Nintendo-unaffiliated, BYO
+  keys/firmware/games stance is unchanged and verified across README and forms.
+- Windows: lz4 1.11.1, up from 1.10.0, for compressed game files and NSO decompression. It no
+  longer crashes or overflows on invalid arguments. Linux uses the system's lz4.
+- NX converter: nxformat 1.0.4, up from 1.0.3. It imports Switch 2 Edition and multi-program
+  games better, and handles incomplete sparse native bases with their matching updates. Loading
+  `.nx` games is unchanged.
+- Archives: QuaZip 1.7.2, the release, instead of a December 2025 commit. It reads zip64
+  archive comments correctly.
+- `release-binaries.yml` runs dispatched on a branch other than `main` save no caches: they could
+  serve only that branch, and the repository's 10 GB cache quota would evict `main`'s to hold them.
+- Merged [zortos293/Lichii](https://github.com/zortos293/Lichii) `nx2` up to `a2af87d7de`
+  (226 commits): native HOME isolation and NCA signature policy, texture-cache write-back fixes,
+  the built-in patch system with Ocarina of Time text speeds (port of NotRexed/Hookshot#402) and
+  FPS unlock frame-rate flag, present ids and present waits for unlocked-frame-rate games
+  (host vsync), frame generation that never waits for a present frame, game-frame pacing targets,
+  mesh vertex-input lending, color-feedback-loop checks, RADV hang-report wait, and the
+  Switch 2 Joy-Con 2 IR mouse support. Guarana's fluid presenter, locked cadence, graphics
+  pipeline libraries, draw templates, prepass split, async-discard modes 1/2 and skip-redrawn
+  all kept; the pending-draw policy now also applies upstream's color-write-history heuristic
+  (Eglantine #874) and the bounded wait budget. Resolutions listed in the merge pull request.
+- Upstream: merged zortos293/Lichii `nx2` from `99e89096cb` to `7c7f723b68` (50 commits).
+  Among them: Nextendo online play no longer needs a special build and follows Configure >
+  Network, still off by default (Lichii #1979); with it on, a game's signed NPLN patch is checked
+  before boot ("Checking online patches") and applied after mods (Lichii #1358), with Nextendo's
+  network rules and signed game catalogue (Lichii #1984) and Splatoon 3's network requests
+  (Lichii #1988). Ocarina of Time's No sharpening copies the image the output pass samples, which
+  ends a frozen 3D under a live HUD (Lichii #1875), and skips the unused heavy dispatch while the
+  output is replaced (Lichii #1941). A lost Vulkan device ends the process with a log line instead
+  of an unhandled exception (Lichii #1938); a buffer without memory frees staging memory and
+  retries (Lichii #1963, #1931); padded depth targets are drawn as the square they are (Lichii
+  #1868); terminated threads and a stopped game's kernel objects close safely (Lichii #1957,
+  #1932); and bounds fixes in the NSO, KIP, NPDM, NCZ, ticket and XTS readers. Help > Check for
+  Updates stays hidden in our releases, which are built without the update checker. With
+  `EDEN_NX2_OOT_BYPASS_ANY` the
+  bypass still copies the tonemap the rasterizer tracks ([docs/switches.md](docs/switches.md)).
+
+### Removed
+
+- Four frame pacing experiments that measured no gain, or worse, are removed with their code:
+  `EDEN_NX2_QUEUE_LIMIT`, `EDEN_NX2_FLUID_OFFSET_US`, `EDEN_NX2_FLUID_SPLIT_SUBMIT` and
+  `EDEN_NX2_FLUID_HOST_WAIT_US`. Setting one now changes nothing; the presenter keeps the defaults
+  they replaced. Their measurements are in
+  [docs/switches.md](docs/switches.md#removed-experiments).
+- Two tool helpers that nothing called are removed: `person_label` in `tools/ci/legacy.py` and
+  `empty_document` in `tools/ingest/ingest.py`.
+- Seven `gpu_perf` scope counters and the autopilot's 5th percentile of shown frame times are gone:
+  they were counted but never reported anywhere. Nothing a player or the debug server sees changes.
+
+### Fixed
+
+- Android builds cache Gradle's resolved dependencies and wrapper between runs: Maven Central
+  rate-limits the runners (HTTP 429), and a cold resolution used to fail the whole APK.
+- Linux and macOS: Guarana installs and announces itself as `io.github.karimalsalah.guarana`
+  instead of upstream Lichii's `io.github.zortos293.lichii`: the desktop entry, AppStream metadata,
+  MIME package and icon, the Wayland app id, the About dialog's theme icon and the macOS bundle id.
+  A Guarana package and a Lichii package no longer install the same files or share one app id
+  ([#107](https://github.com/karimalsalah/guarana/issues/107)).
+- Built-in console news shows Guarana's own GitHub releases, credited to Guarana with an "Open
+  GitHub" link, instead of Lichii's releases labelled as Eden news. The update checker keeps its
+  source ([#107](https://github.com/karimalsalah/guarana/issues/107)).
+- Benchmark boot suites: a second run on a driver that keeps its own pipeline cache (NVIDIA, AMD)
+  is no longer marked invalid for a driver cache its cold run never saves, and the caches of cold
+  runs that no second run copies are deleted at once instead of filling the work folder; the
+  README says to record the reference with `bench.py run` and to smoke-test with two runs first.
+- Experimental `EDEN_NX2_FG_GAME_MOTION`: in-between frames no longer drag a copy of the HUD into
+  the scene beside it during a pan. A source on the HUD gives way to the other real frame's, as
+  extrapolation's rule has it, and `EDEN_NX2_EXTRAPOLATE_HUD_FILL` applies.
+- Device reports: a bench run's boolean settings are recorded as `true` and `false`, as the ini has
+  them, so the resolver can cite community evidence for a boolean setting.
+- Launcher: every version runs from one path, `%LOCALAPPDATA%\Guarana\app\guarana.exe`, instead
+  of its own `versions\<version>\` folder. Windows keys the microphone permission, the GPU choice in
+  Settings > System > Display > Graphics, firewall rules and Game Bar's game detection by that path,
+  so an update or rollback no longer resets them, and the microphone question that held up a boot
+  comes once, not after every update
+  ([#199](https://github.com/karimalsalah/guarana/issues/199)). The launcher fills `app\` with
+  copies of the version's programs and hard links to its other files, and swaps it whole with two
+  renames, never while Guarana or a shader warm-up runs: an update made during a game switches at
+  the next Play.
+- Audio: a Switch 2 game opens the host microphone only when it starts capturing, and no
+  game thread waits for that open. On Windows the first start from a new folder (so after every
+  launcher update) asks for microphone access, and Ocarina of Time waited on that prompt before
+  its first frame, though it never captures
+  ([#199](https://github.com/karimalsalah/guarana/issues/199)).
+- Mod import on Windows refuses a mod name such as `D:`, or one that ends in a period or a space.
+  `D:` made the folder the import clears the current folder of drive D, usually its root, so a
+  mod whose type had to be picked by hand could delete files on another drive. An import that was
+  cut off no longer loses the mod it had moved aside to replace.
+- Merge gate: `tools/ci/pr_gate.py` now requires the "Check the changelog entry" job, so a pull
+  request whose changelog check failed or has not reported is no longer called ready. `main` is
+  still judged by the three jobs every push runs, and a `resolve/pr-N` commit takes the changelog
+  verdict of its pull request's head ([#147](https://github.com/karimalsalah/guarana/issues/147)).
+- Stop: each teardown step is logged with its time (`Shutdown step N took X ms: <step>`), the last
+  line names the slowest, and the stop watchdog's lines name the last step done, so a slow stop
+  says where its time went ([#239](https://github.com/karimalsalah/guarana/issues/239)).
+- Stop: a teardown busy on the CPU is no longer taken for a hung one, for up to a minute without
+  a step done. After a long session the watchdog could end the program during a step that works
+  without noting progress, and a Stop from the menu then closed the whole app instead of going
+  back to the game list. Compute pipelines are destroyed with progress, like the graphics ones
+  ([#239](https://github.com/karimalsalah/guarana/issues/239)).
+- Stop: the Windows trim of all-zero guest memory pages stops when a Switch 2 game stops, and a
+  pass in progress ends at its next check: a stop could wait for a whole pass over memory it was
+  about to release ([#239](https://github.com/karimalsalah/guarana/issues/239)).
+- The Debug setting "Perform Vulkan check" turns the startup Vulkan check off again: it was read
+  before the settings were loaded, so the check always ran.
+- CI: the Windows jobs try the Vulkan SDK download up to four times before failing, so a
+  flaky download server no longer fails a build.
+
+### Security
+
+- Android: only release builds (tags, the nightly and runs on `main`) are signed with the release key.
+  Pull requests and runs dispatched by hand build preview APKs with the debug key, and the decoded
+  keystore is deleted even when the build fails.
+- Windows: zlib 1.4, up from 1.3.2. It fixes an overflow in non-blocking `gzwrite()`
+  (CVE-2026-85091), an `inflateGetDictionary()` write past the caller's buffer present since
+  1.2.8, and other inflate, deflate and minizip memory-safety bugs. Linux and macOS builds use the
+  system's zlib.
+
 ## [20.5.0]
 
 ### Added

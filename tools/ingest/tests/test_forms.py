@@ -89,7 +89,8 @@ class FormTests(unittest.TestCase):
 
     def test_crash_forms_log_field(self):
         for name in ("crash.yml", "game_bug.yml", "visual_bug.yml", "ui_bug.yml"):
-            self.assertIn(triage.LOG_SECTION, fields(form(name)), name)
+            self.assertTrue(triage.LOG_SECTION in fields(form(name)) or
+                            triage.TEXT_LOG_SECTION in fields(form(name)), name)
         self.assertIn(triage.CRASH_LABEL, form("crash.yml")["labels"])
 
 

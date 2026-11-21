@@ -36,6 +36,7 @@
 #include "video_core/bounded_store.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
+#include "video_core/renderer_vulkan/mesh_vertex_input.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
@@ -154,6 +155,16 @@ public:
 
     [[nodiscard]] ComputePipeline* CurrentComputePipeline(u64& native_key);
 
+    /// Whether a Switch 2 dispatch whose compute pipeline is still building is skipped instead
+    /// of waiting for the build, as native_async_draws decides for draws. Skipping leaves the
+    /// dispatch's outputs as they are, which costs a frame of its work only when shaders wrote
+    /// them before (a pass the game runs every frame); otherwise they would keep a clear value
+    /// or whatever the guest left there, so those dispatches wait. A Bounded wait takes from the
+    /// draws' budget.
+    /// @param outputs_hold_gpu_data Every buffer byte the dispatch writes holds GPU writes, and
+    ///                              every image level it writes holds storage writes.
+    [[nodiscard]] bool SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data);
+
     /// Loads the title's disk caches and builds or queues their pipelines.
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                            const VideoCore::DiskResourceLoadCallback& callback);
@@ -187,6 +198,14 @@ private:
 
     /// Charges the time since `begin` to this frame's native wait budget.
     void ChargeNativeWait(std::chrono::steady_clock::time_point begin);
+
+    /// How native work with an unbuilt pipeline is handled: native_async_draws, or Skip with
+    /// EDEN_NX2_ASYNC_DISCARD=1.
+    [[nodiscard]] NativePendingMode NativeMode() const;
+
+    /// Logs the bounded waits' time every 10 s.
+    void LogBoundedWaits();
+
     /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
     /// pointers whatever they hold now. `evicted`: a pipeline of this key was evicted.
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
@@ -363,13 +382,14 @@ private:
     void QueueVulkanPipelineCacheFlush();
 
     /// Queues one write of the driver pipeline cache file on the serialization thread, with no
-    /// throttle. For the end of a precache: its builds never reach the timed flush, which counts
-    /// only pipelines built during play. Where reads are serialized against builds, or can't be
-    /// made during builds at all (Intel's Windows driver), it writes it here instead, before the
-    /// background prebuild starts. `on_saved` runs once the file holds the precache's builds (not
-    /// when the save fails): the precache markers, which say what the file holds. Without a file
-    /// to save (the driver cache is off) it runs here.
-    void QueueVulkanPipelineCacheSave(Common::UniqueFunction<void> on_saved);
+    /// throttle, or writes it now where reading the cache during a build crashes. For the end of
+    /// a precache: its builds never reach the timed flush, which counts only pipelines built
+    /// during play. Where reads are serialized against builds, or can't be made during builds at
+    /// all (Intel's Windows driver), it writes it here instead, before the background prebuild
+    /// starts. `on_saved` runs once the file holds the precache's builds (not when the save
+    /// fails): the precache markers, which say what the file holds. Without a file to save (the
+    /// driver cache is off) it runs here.
+    void QueueVulkanPipelineCacheSave(Common::UniqueFunction<void> on_saved = {});
 
     /// One build of the shader precache: a compute pipeline built and destroyed
     struct PrecacheJob {
@@ -417,6 +437,12 @@ private:
     GraphicsPipelineCacheKey graphics_key{};
     u64 vertex_attribute_types{}; ///< graphics_key's attribute types before the program's mask
     GraphicsPipeline* current_pipeline{};
+    /// Native mesh draws' vertex input, lent by the first key of each pipeline
+    MeshVertexInputs<GraphicsPipelineCacheKey> mesh_vertex_inputs;
+    /// mesh_vertex_inputs holds the mesh pipelines the boot load built
+    bool mesh_vertex_inputs_seeded{};
+    /// graphics_key holds vertex input another key lent it instead of the registers'
+    bool vertex_input_lent{};
 
     /// EDEN_NX2_GPL: shader libraries shared by the graphics pipelines. Declared before the
     /// pipelines, so it outlives them.

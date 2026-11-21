@@ -47,6 +47,21 @@ using VideoCore::Surface::SurfaceType;
 namespace {
 constexpr size_t NUM_SUPPORTED_VERTEX_ATTRIBUTES = 16;
 
+/// Depth bias, in units of the depth format, that pushes far plane draws past the far value so
+/// that depth clamping puts them exactly on it. A vertex shader that stores one value to position
+/// z and w puts every vertex on the far plane, the usual way to draw a sky. NVIDIA fills such a
+/// triangle with exactly the far value; AMD's rasterizer lands some pixels a step short, so two
+/// sky meshes fight and a dome tested EQUAL or LEQUAL against an earlier one loses in blocks
+/// (Mario Kart 8 Deluxe's Sky-High Sundae, #1905).
+constexpr GLfloat FAR_PLANE_DEPTH_BIAS = 16.0f;
+
+/// Viewport 0 passes position z and w through unswizzled
+bool ViewportKeepsDepth(const Maxwell& regs) {
+    const auto& swizzle = regs.viewport_transform[0].swizzle;
+    return swizzle.z == Maxwell::ViewportSwizzle::PositiveZ &&
+           swizzle.w == Maxwell::ViewportSwizzle::PositiveW;
+}
+
 void oglEnable(GLenum cap, bool state) {
     (state ? glEnable : glDisable)(cap);
 }
@@ -245,6 +260,10 @@ void RasterizerOpenGL::PrepareDraw(bool is_indexed, Func&& draw_func) {
     if (!pipeline->Configure(is_indexed))
         return;
 
+    const auto& regs = maxwell3d->regs;
+    SetFarPlaneDraw(pipeline->OnFarPlane() && !regs.polygon_offset_fill_enable &&
+                    !regs.polygon_offset_line_enable && !regs.polygon_offset_point_enable &&
+                    ViewportKeepsDepth(regs));
     SyncState();
 
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
@@ -358,6 +377,7 @@ void RasterizerOpenGL::DrawTexture() {
     texture_cache.SynchronizeDescriptors(false);
     texture_cache.UpdateRenderTargets(false);
 
+    SetFarPlaneDraw(false);
     SyncState();
 
     const auto& draw_texture_state = maxwell3d->draw_manager.draw_texture_state;
@@ -949,7 +969,18 @@ void RasterizerOpenGL::SyncDepthClamp() {
                                   Maxwell::ViewportClipControl::GeometryClip::FrustumXYZ ||
                               maxwell3d->regs.viewport_clip_control.geometry_clip ==
                                   Maxwell::ViewportClipControl::GeometryClip::FrustumZ};
-    oglEnable(GL_DEPTH_CLAMP, !depth_clamp_disabled);
+    oglEnable(GL_DEPTH_CLAMP, far_plane_draw || !depth_clamp_disabled);
+}
+
+void RasterizerOpenGL::SetFarPlaneDraw(bool far_plane) {
+    auto& flags = maxwell3d->dirty.flags;
+    if (far_plane || far_plane != far_plane_draw) {
+        flags[Dirty::PolygonOffset] = true;
+    }
+    if (far_plane != far_plane_draw) {
+        far_plane_draw = far_plane;
+        flags[Dirty::DepthClampEnabled] = true;
+    }
 }
 
 void RasterizerOpenGL::SyncClipEnabled(u32 clip_mask) {
@@ -1331,12 +1362,26 @@ void RasterizerOpenGL::SyncLineState() {
 
 void RasterizerOpenGL::SyncPolygonOffset() {
     auto& flags = maxwell3d->dirty.flags;
-    if (!flags[Dirty::PolygonOffset]) {
+    const float slope_scale =
+        texture_cache.IsRescaling() && maxwell3d->regs.viewport_scale_offset_enabled
+            ? Settings::values.resolution_info.up_factor
+            : 1.0f;
+    if (!flags[Dirty::PolygonOffset] && slope_scale == polygon_offset_slope_scale) {
         return;
     }
     flags[Dirty::PolygonOffset] = false;
+    polygon_offset_slope_scale = slope_scale;
 
     const auto& regs = maxwell3d->regs;
+    if (far_plane_draw) {
+        oglEnable(GL_POLYGON_OFFSET_FILL, true);
+        oglEnable(GL_POLYGON_OFFSET_LINE, true);
+        oglEnable(GL_POLYGON_OFFSET_POINT, true);
+        const bool reversed =
+            regs.viewport_scale_offset_enabled && regs.viewport_transform[0].scale_z < 0.0f;
+        glPolygonOffsetClamp(0.0f, reversed ? -FAR_PLANE_DEPTH_BIAS : FAR_PLANE_DEPTH_BIAS, 0.0f);
+        return;
+    }
     oglEnable(GL_POLYGON_OFFSET_FILL, regs.polygon_offset_fill_enable);
     oglEnable(GL_POLYGON_OFFSET_LINE, regs.polygon_offset_line_enable);
     oglEnable(GL_POLYGON_OFFSET_POINT, regs.polygon_offset_point_enable);
@@ -1344,7 +1389,7 @@ void RasterizerOpenGL::SyncPolygonOffset() {
     if (regs.polygon_offset_fill_enable || regs.polygon_offset_line_enable ||
         regs.polygon_offset_point_enable) {
         // Hardware divides polygon offset units by two
-        glPolygonOffsetClamp(regs.slope_scale_depth_bias, regs.depth_bias / 2.0f,
+        glPolygonOffsetClamp(regs.slope_scale_depth_bias * slope_scale, regs.depth_bias / 2.0f,
                              regs.depth_bias_clamp);
     }
 }
@@ -1443,8 +1488,14 @@ AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_c
     : buffer_cache{buffer_cache_}, texture_cache{texture_cache_} {}
 
 bool AccelerateDMA::BufferCopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount) {
-    std::scoped_lock lock{buffer_cache.mutex};
-    return buffer_cache.DMACopy(src_address, dest_address, amount);
+    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    // DMACopy copies guest memory without telling the texture cache (see the Vulkan rasterizer).
+    boost::container::small_vector<std::pair<DAddr, size_t>, 4> gpu_written;
+    if (!buffer_cache.DMACopy(src_address, dest_address, amount, &gpu_written)) {
+        return false;
+    }
+    texture_cache.WriteDmaCopy(src_address, dest_address, amount, gpu_written);
+    return true;
 }
 
 bool AccelerateDMA::BufferClear(GPUVAddr src_address, u64 amount, u32 value) {

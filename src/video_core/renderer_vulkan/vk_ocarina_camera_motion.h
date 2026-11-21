@@ -43,6 +43,8 @@ public:
     ~OcarinaUpscaler();
 
     [[nodiscard]] bool EvaluationFailed() const;
+    /// What drew the last recorded frame: "DLSS", "FSR 4" or "FSR 3.1" (a string literal).
+    [[nodiscard]] const char* LastUpscalerName() const;
     /// Save the 1440p temporal scene copy before the game adds its HUD.
     void SaveSceneReference(VkImageView color);
     /// Composite the HUD from the guest image over the matching 4K scene.

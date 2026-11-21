@@ -105,6 +105,8 @@ public:
     [[nodiscard]] VideoCore::DlssStatus GetDlssStatus() const override;
 #endif
 
+    [[nodiscard]] VideoCore::UpscalerStatus GetUpscalerStatus() const override;
+
     void RequestGpuBusySample() override {
         scheduler.RequestGpuBusySample();
     }
@@ -288,6 +290,7 @@ private:
     vk::Instance instance;
 
     vk::DebugUtilsMessenger debug_messenger;
+    vk::DebugUtilsMessenger address_messenger;
 
     vk::SurfaceKHR surface;
 

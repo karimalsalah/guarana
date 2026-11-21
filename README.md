@@ -5,199 +5,252 @@
   <img alt="Guarana: Switch 2 emulation, tuned for the GPU you actually have" src="assets/readme/hero-light.svg" width="100%">
 </picture>
 
-**An open-source Nintendo Switch 2 emulator, tuned for the integrated GPU in your laptop or handheld.**<br>
-A fork of [Lichii](https://github.com/zortos293/Lichii) (the yuzu, Eden, Eglantine line), GPL-3.0-or-later. Intel Arc first, AMD handhelds next. Every number names its machine.
+**The open-source Nintendo Switch 2 emulator that runs everywhere — tuned first for the GPU you actually have.**<br>
+A fork of [Lichii](https://github.com/zortos293/Lichii) in the yuzu → Eden → Eglantine line, GPL-3.0-or-later.
+Eight platform builds, one codebase. Every number on this page names its machine.
 
 <a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Download Guarana" src="https://img.shields.io/badge/Download-latest_release-F2851A?style=for-the-badge&labelColor=16181D"></a>
 
 <a href="https://github.com/karimalsalah/guarana/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/karimalsalah/guarana?include_prereleases&sort=semver&label=release&style=flat-square"></a>
-<a href="https://github.com/karimalsalah/guarana/actions/workflows/build-check.yml"><img alt="Build check status" src="https://img.shields.io/github/actions/workflow/status/karimalsalah/guarana/build-check.yml?label=CI&style=flat-square"></a>
-<a href="LICENSE.txt"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square"></a>
+<a href="https://github.com/karimalsalah/guarana/actions/workflows/build-check.yml"><img alt="Build check status" src="https://img.shields.io/github/actions/workflow/status/karimalsalah/guarana/build-check.yml?label=build&style=flat-square"></a>
+<a href="https://github.com/karimalsalah/guarana/actions/workflows/nightly.yml"><img alt="Nightly status" src="https://img.shields.io/github/actions/workflow/status/karimalsalah/guarana/nightly.yml?label=nightly&style=flat-square"></a>
+<img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square">
+<img alt="Platforms: Windows, Linux, macOS, Android — x64 and ARM64" src="https://img.shields.io/badge/platforms-Windows%20·%20Linux%20·%20macOS%20·%20Android-444?style=flat-square">
+<a href="https://github.com/karimalsalah/guarana/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/karimalsalah/guarana/total?style=flat-square&label=downloads"></a>
 <a href="https://discord.gg/urz7vMdRM"><img alt="Discord: discord.gg/urz7vMdRM" src="https://img.shields.io/badge/discord-urz7vMdRM-5865F2?style=flat-square"></a>
-<a href="docs/AI-QUICKSTART.md"><img alt="AI agents welcome" src="https://img.shields.io/badge/AI_agents-welcome-8A2BE2?style=flat-square"></a>
 
 </div>
 
-**Measured, with the machine named.** So far on one laptop: Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED, in Ocarina of Time's Hyrule Field.
+> **Tested on one machine. Built for thousands.**
+> Guarana's numbers come from a single verified laptop — a Core Ultra 9 285H with an Arc 140T — and every
+> other device row is waiting for a report. **Your device report is the most useful contribution you can make:**
+> [fill the form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) (5 minutes, no code) →
+> CI parses and validates it → it lands on the [community leaderboard](https://karimalsalah.github.io/guarana/benchmarks.html);
+> verified reports earn a row in [docs/DEVICES.md](docs/DEVICES.md). Join the [call for testers (#55)](https://github.com/karimalsalah/guarana/issues/55).
 
-- **Frames on time.** On the laptop's 120 Hz screen, v20.4.0's 120 Hz set put **98 to 100%** of shown frames within 2 ms of the median and missed **0 to 4 of 1,200** display slots per 10 s, in three lab runs. The 60 Hz set, unchanged since v20.3, had **0 late flips** and up to **599 of 600** slots on time. [Measured wins](#measured-wins)
-- **One shader fix: 14.8 to 22.8 game fps**, frame generation off (`EDEN_NX2_GM=11`, on by default for Ocarina of Time only). [Measured wins](#measured-wins)
-- **Shaders before you play.** `guarana-cli --warm-pipelines` built 4,515 pipelines and programs in 155 s without booting the game. [docs/warm-up.md](docs/warm-up.md)
-- **No compiler needed to help.** CI builds every pull request and posts a Windows test build anyone with the game can run. [Contribute](#contribute-with-or-without-an-ai-agent)
+## What is Guarana?
 
-<div align="center">
+Guarana is an open-source Nintendo Switch 2 emulator for Windows, Linux, macOS and Android, on x64 and ARM64.
+It forks [Lichii](https://github.com/zortos293/Lichii) (zortos293) and carries its `nx2` enhancement layer forward:
+frame pacing and frame generation on a power budget, a DLSS replacement upscaler, asynchronous shaders, per-GPU
+device profiles, and built-in game patches — with the native Switch 2 remake of Ocarina of Time as the showcase title.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/metrics.svg">
-  <img alt="v20.3 defaults, Ocarina of Time, Hyrule Field, on a Core Ultra 9 285H with an Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED: 599 of 600 slots on time in the best run and 531-599 over two paired rounds; 0 late flips in both paired rounds, against about 200 per 10 s before; 99.5% of frames within 2 ms of the median in the best run; 20 real frames a second, one per 20 Hz game tick, with frame generation 3x toward 60." src="assets/readme/metrics-light.svg" width="100%">
-</picture>
+The lineage, credited up front: **yuzu → Eden → Eglantine (Camille LaVey) → Lichii → Guarana**, with Sudachi
+credited among Lichii's bases. Guarana is free software under the **GPL-3.0-or-later** ([LICENSE.txt](LICENSE.txt));
+upstream copyright notices stay in the source files and git keeps every author. Full attribution:
+[CREDITS.md](CREDITS.md) · [docs/CREDITS.md](docs/CREDITS.md) · [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
-[Get it](#get-it) · [Devices](#devices) · [Test it](#test-it-on-your-device-10-minutes) · [Contribute](#contribute-with-or-without-an-ai-agent) · [Measured wins](#measured-wins) · [How the pacing works](#how-the-frame-pacing-works) · [Roadmap](#roadmap) · [Docs](#docs) · [FAQ](#faq) · [Website](https://karimalsalah.github.io/guarana/)
+Guarana ships no keys, firmware or games. Dump your own from hardware you own — [LEGAL.md](LEGAL.md).
 
-<sub>**Languages:** English · [简体中文](docs/i18n/README.zh-CN.md) · [Español](docs/i18n/README.es.md) · [Português (Brasil)](docs/i18n/README.pt-BR.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Русский](docs/i18n/README.ru.md) · [العربية](docs/i18n/README.ar.md) · [Suomi](docs/i18n/README.fi.md)</sub>
+## Why Guarana
 
-</div>
+### Ocarina of Time, rebuilt for modern displays
 
-<sub>No keys, firmware or games included: bring your own, dumped from hardware you own. Not affiliated with Nintendo. [Legal](#legal).</sub>
+The star title is **The Legend of Zelda: Ocarina of Time — the native Nintendo Switch 2 remake**
+(Nintendo EPD, released 2026-11-05; a standalone Switch 2 game, *not* the N64 original via the NSO app).
+Guarana ships built-in add-ons for it — no mod downloads, no C++, applied only to the exact game build they
+were made for ([how they work](docs/nx2/ocarina-dynamic-fps.md)):
 
-## Get it
+- **Max Resolution** — the 3D scene draws at full resolution all the time; the stock game drops to 480p when the GPU is slow.
+- **FPS Unlock** — real game speed at any frame rate: sound, water, cloth and timers stay right below *and* above 60 fps.
+  The 1.1.1 update shifted the old Dynamic FPS hook and broke the original patch as distributed elsewhere
+  ([Eden #3264](https://github.com/eden-emulator/Releases/issues/3264)); Guarana's **two-block FPS Unlock**
+  (30→60 below, 60→120 above) is build-gated, original-byte-guarded and transactionally validated, so it
+  applies cleanly to 1.1.1. v20.7.0 adds the carry fixes: **Epona's fence jump, the fractional day/night clock,
+  the Deku Tree floor web (a softlock without it), and cloth below 60 fps**
+  ([PR #304](https://github.com/karimalsalah/guarana/pull/304), carrying Lichii
+  [#2313](https://github.com/zortos293/Lichii/pull/2313)/[#2314](https://github.com/zortos293/Lichii/pull/2314)/[#2317](https://github.com/zortos293/Lichii/pull/2317)/[#2318](https://github.com/zortos293/Lichii/pull/2318)).
+- **Texture Pool x2** — doubles the graphics pool; with Max Resolution on, the stock pool runs out in the guard house and crashes. Leave it on.
+- **No sharpening** — the remake runs a tensor-network smoother and then sharpens hard (2.2× edge contrast, visible halos). This option bypasses the network and shows the clean tonemapped image ([docs/nx2/oot-network-bypass.md](docs/nx2/oot-network-bypass.md)).
+- **DLSS render scales** — on RTX cards, Balanced / Performance / Ultra Performance lower OoT's render resolution under Max Resolution while DLSS rebuilds the image (details in the [quickstart](#ocarina-of-time-quickstart)).
+- **Text Speed 2x / 4x / Instant** — dialogue, fairy hints and signs at your pace; a port of [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot)'s text-speed work, shipped as a [JSON patch pack](docs/patch-packs.md).
 
-1. **Download** `Guarana-Setup-<version>.exe` from [Releases](https://github.com/karimalsalah/guarana/releases/latest), the only official download. It installs for your user, without admin rights. Linux and macOS builds are there too.
-2. **Bring your own keys, firmware and games**, dumped from hardware you own. Guarana Setup finds them on your PC with your consent; in the emulator they are *Tools → Install Decryption Keys* and *Tools → Install Firmware*.
-3. **Play.** On a Windows integrated GPU, Ocarina of Time sets up its own frame pacing; on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (since v20.2). The first visit to each area hitches once while shaders compile.
+[Get started in 5 minutes →](#ocarina-of-time-quickstart)
 
-The zip install, every platform, the data folders and the guides: [Install in detail](#install-in-detail). Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
+### The nx2 performance layer, measured
 
-## Devices
+On the verified laptop (Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED), in Ocarina of Time's Hyrule Field:
 
-Guarana is tuned for integrated GPUs: **Intel Arc first, AMD handhelds next, and every Windows PC welcome.** Measured first on the Arc 140T; every other device's numbers come from your reports.
+- **Frames on time.** v20.4.0's 120 Hz set put **98–100%** of shown frames within 2 ms of the median and missed
+  **0–4 of 1,200** display slots per 10 s across three lab runs. The 60 Hz set had **0 late flips** and up to
+  **599 of 600** slots on time. [The tables](#measured-wins)
+- **One shader fix: 14.75 → 22.83 game fps**, frame generation off — a same-spot A/B at the Hyrule Field overlook.
+- **Shaders before you play.** `guarana-cli --warm-pipelines` built **4,515 pipelines in 155 s** without booting the game ([docs/warm-up.md](docs/warm-up.md)).
+- **No compiler needed to help.** CI builds every pull request and posts a Windows test build anyone with the game can run.
 
-**Windows x64 is the tested platform** (Linux and macOS builds are on Releases, untested on these devices); you need an x86-64 CPU with AVX2 and a Vulkan driver. 16 GB of RAM is below the comfortable floor, because the GPU shares it: with 16 GB, enlarge the page file before the first run ([requirements](docs/DEVICES.md#requirements-v20)).
+## Feature matrix
 
-| GPU | Example devices | Status |
+| Area | What you get |
+|---|---|
+| **Platforms** | 8 CI-built targets: Windows x64/ARM64, Linux x64/ARM64, macOS arm64, Android arm64 — [install](#install) |
+| **Renderer** | Vulkan, asynchronous shader compilation, per-GPU-family device profiles, driver verdicts at boot ([docs/DEVICES.md](docs/DEVICES.md)) |
+| **Upscaling** | DLSS replacement on RTX (DLAA → Ultra Performance, presets J/K/L/M — [docs/user/DLSS.md](docs/user/DLSS.md)); FSR 3.1 / FSR 4 elsewhere |
+| **Frame pacing & generation** | FLUID interpolated in-between frames, locked 60/120/144 Hz sets for OoT on Intel iGPUs, per-present pacing stats |
+| **Game patches** | Built-in add-ons with build-fit checks + [JSON patch packs](docs/patch-packs.md) — add a patch for any game with no C++ |
+| **Launcher** | Sessions with report cards (fps, pacing, stutters), add-ons in one place, opt-in [Game Booster](launcher/CONTRACT.md#game-booster), stable install path + update handoff |
+| **Boot & stutter** | Headless shader warm-up, boot benchmark suites ([docs/console-boot.md](docs/console-boot.md)), paired A/B trace replay without the game ([docs/nx2/gpu-trace.md](docs/nx2/gpu-trace.md)) |
+| **Input** | Joy-Con 2 IR mouse support, gyro, per-game controller mapping |
+| **Safety** | Native HOME isolation, fail-closed NCA header signatures, signed build-provenance attestations on every release file |
+| **Tooling** | `guarana-cli`, debug MCP server, bench suites, issue-form ingest that turns device reports into leaderboard rows |
+
+## Install
+
+Download from **[Releases](https://github.com/karimalsalah/guarana/releases/latest)** (current: [v20.6.0](https://github.com/karimalsalah/guarana/releases/tag/v20.6.0), 2026-11-18).
+The zip install, data folders and guides: [docs/user/QuickStart.md](docs/user/QuickStart.md). Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md) or the [Discord](https://discord.gg/urz7vMdRM).
+
+| Platform | Get | First-run notes |
 |---|---|---|
-| Intel Arc **140T** (Arrow Lake-H) | Core Ultra 9 285H laptops | **Tested.** 14.75 to 22.83 game fps at the Hyrule Field overlook with `EDEN_NX2_GM=11`, frame generation off; 98 to 100% of shown frames within 2 ms of the median with v20.4.0's 120 Hz set ([Measured wins](#measured-wins)) |
-| Intel Arc 130T (Arrow Lake-H) | Laptops | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| Intel Arc **140V** / 130V (Lunar Lake) | MSI Claw 8 AI+, MSI Claw 7 AI+ | Community report: 22-24 fps in gameplay on a third-party build, not verified by us ([source](docs/DEVICES.md#third-party-data-points)). Untested here: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| Intel Arc (Meteor Lake) | MSI Claw A1M | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| Intel Arc B370 / **B390** (Panther Lake) | MSI Claw 8 EX AI+, other Arc G3 handhelds | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| AMD Radeon **780M** | ROG Ally, ROG Ally X, Legion Go | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| AMD Radeon **880M / 890M** | ROG Xbox Ally X, Legion Go 2, MSI Claw A8 | Community report: about 30 fps in Ocarina of Time on an 890M, upstream Lichii [issue #1433](https://github.com/zortos293/Lichii/issues/1433), not verified by us. Untested here: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| AMD Radeon **8060S** (Strix Halo) | | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
-| Steam Deck, Ryzen Z2 A (RDNA2) | | Untested; likely too weak. A report says for sure |
-| NVIDIA and other discrete GPUs | | Not a target and not tested here; reports welcome |
+| **Windows x64** | [Installer](https://github.com/karimalsalah/guarana/releases/latest) (`Guarana-Setup-*.exe`) or `guarana-*-windows-x86_64-pgo.zip` (recommended) | Extract the whole zip into a writable folder and run `guarana.exe`. SmartScreen may warn on an unsigned installer: **More info → Run anyway**. PGO = profile-guided optimization, same program, faster. |
+| **Windows ARM64** (Snapdragon X) | `guarana-*-windows-arm64.zip` when attached | Native ARM64 CI build, no PGO. **Nobody on the project has booted it on a device yet** — it was not attached in v20.6.0; check each release's assets. [docs/ARM64.md](docs/ARM64.md) · [report your run](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
+| **Linux x64** | `guarana-*-linux-x86_64-pgo.AppImage` (recommended) or `.tar.gz` | `chmod +x` the AppImage and run it; needs glibc 2.39+ (Ubuntu 24.04, Fedora 40, Debian 13, Arch). The tar.gz uses system libraries (Qt 6). |
+| **Linux ARM64** | `guarana-*-linux-aarch64-pgo.AppImage` or `.tar.gz` | Same as x64; CI-built, awaiting device reports. |
+| **macOS arm64** | `guarana-*-macos-arm64.dmg` (or `.zip`) | macOS 15+, Apple Silicon. **Not notarized (Gatekeeper):** right-click → **Open** the first time, or `xattr -dr com.apple.quarantine guarana.app`. `guarana-cli` is inside the bundle, `Contents/MacOS`. |
+| **Android arm64** | `guarana-*-android-arm64.apk` | Android 13+. Preview-signed (`io.github.karimalsalah.guarana.preview`) until the release key is set up. **Nobody on the project has booted it on a device yet.** [docs/ARM64.md](docs/ARM64.md) |
 
-*Community reports* are third-party numbers from other builds and scenes. For context, a survey of other Switch 2 forks, as of 2026-11-13, found none claiming more than 26 fps in Hyrule Field on an Intel integrated GPU. Requirements, vendor notes and the device profile line: [docs/DEVICES.md](docs/DEVICES.md). Reports feed the leaderboard on the [benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html).
+**Requirements:** x86-64 with AVX2 (release builds use `x86-64-v3`) or ARM64; a Vulkan driver; 32 GB RAM is the
+tested configuration — 16 GB is below the comfortable floor for Switch 2 titles (12 GiB guest layout, shared with
+the iGPU); enlarge the page file first ([why](docs/user/Troubleshoot.md)). Keys, firmware and games dumped from
+hardware you own.
 
-## New in v20.4
+**Verify your download:** every release ships `SHA256SUMS.txt` (`sha256sum -c`, `shasum -a 256 -c`, or
+`Get-FileHash`) and a signed build-provenance attestation: `gh attestation verify <file> --repo karimalsalah/guarana`
+([docs/SIGNING.md](docs/SIGNING.md)).
 
-Released in [v20.4.0](https://github.com/karimalsalah/guarana/releases/tag/v20.4.0) on 2026-11-16; the details are in the [changelog](CHANGELOG.md#2040---2026-11-16).
+## Ocarina of Time quickstart
 
-- **In step with upstream Lichii:** 67 more commits of its `nx2` branch. Loading Shaders waits only for the pipelines the last two sessions used and builds the older ones in the background (upstream [#1803](https://github.com/zortos293/Lichii/pull/1803)). Ocarina of Time no longer locks at 11 to 17 game fps at 240 Hz with 4x frame generation (upstream [#1779](https://github.com/zortos293/Lichii/pull/1779)), and the 16 GB memory growth in its Skulltula House is gone (upstream [#1845](https://github.com/zortos293/Lichii/pull/1845)).
-- **Fixes ported from upstream pull requests:** Ocarina of Time's 3D view no longer comes out white or in false colours after a load ([#1835](https://github.com/zortos293/Lichii/pull/1835)). Resolution scaling stays within the device's image limits, which lost the device on AMD at 1.5x and 2x ([#1890](https://github.com/zortos293/Lichii/pull/1890)). An upload list no longer grows for the whole session, 768 MiB after 90 minutes ([#1908](https://github.com/zortos293/Lichii/pull/1908)). Moving the window during play no longer aborts (Eglantine `c40fca7da4`).
-- **The locked 120 Hz and 144 Hz sets out of the box** for Ocarina of Time on Intel integrated GPUs, with interpolated in-between frames: a line in the shipped switch file no longer turns them off ([#119](https://github.com/karimalsalah/guarana/issues/119)).
-- **A driver verdict at boot:** the log says when the graphics driver is older than a version the engine knows something about, and the window names a driver the renderer has to work around ([docs/DEVICES.md](docs/DEVICES.md)).
-- **Launcher:** a new interface whose Home shows your last measured session, and four Doctor rows that check Guarana's own settings and only report.
-- **For contributors:** a paired A/B on a recorded GPU trace, without the game. `tools/nx2/trace_replay.py bench` says whether two builds or switch sets draw the same frames bit for bit and what a frame cost ([docs/nx2/gpu-trace.md](docs/nx2/gpu-trace.md)).
+**You need:** a Nintendo Switch 2 you own, with **Ocarina of Time (the native Switch 2 release) updated to
+1.1.1** (v131072), plus keys and firmware dumped from that hardware ([LEGAL.md](LEGAL.md)). Guarana's built-ins
+target the 1.1.1 build of the game (title `0400486024DEC000`, build `E0F3CCFAF50065AE…`); the Add-Ons page tells
+you before the first start whether they fit your game build. On the base 1.0.0 build the add-ons step aside —
+update the game first.
 
-Known in this version: a boot can fail to show a frame while the host microphone opens ([#199](https://github.com/karimalsalah/guarana/issues/199)). It happened twice in 22 boots on one laptop, once on the first start from a new folder. Close Guarana and start the game again.
+1. **Install Guarana** ([above](#install)) and point it at your game folder.
+2. Right-click **Ocarina of Time → Properties → Add-Ons**. Confirm **FPS Unlock (built-in)** and
+   **Max Resolution (built-in)** are checked — both are on by default and apply automatically to the 1.1.1 build.
+   Leave **Texture Pool x2** on. Optional: **No sharpening** (removes the remake's halo-producing sharpener)
+   and **Text Speed 2x / 4x / Instant** (off by default; with more than one checked, the fastest applies).
+3. **Start the game.** The box under the add-on list says whether each built-in was applied; a ticked patch that
+   could not apply shows a warning and the reason. The performance overlay shows fps, 1% lows and per-present pacing.
+4. On v20.7.0, FPS Unlock also carries the **Epona fence-jump, day/night clock, Deku web and cloth** fixes
+   ([PR #304](https://github.com/karimalsalah/guarana/pull/304)). With FPS Unlock off, **Dynamic FPS by Dark**
+   keeps game speed right below 60 fps as the fallback.
 
-<a name="coming-in-v203"></a>
+### Recommended settings per device class
 
-## New in v20.3
+Only the Intel Arc row below is project-verified on hardware; the rest is guidance from the code and docs,
+and your [device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) is what turns it into measured fact.
 
-Released in [v20.3.0](https://github.com/karimalsalah/guarana/releases/tag/v20.3.0) on 2026-11-14; the details are in the [changelog](CHANGELOG.md#2030---2026-11-14).
+| Device class | What to set | Notes |
+|---|---|---|
+| **Intel Arc iGPU** (Core Ultra, Arc B-series) — *the measured home ground* | Leave the automatic device profile alone. On Windows with OoT on a 120/144 Hz display, the locked FLUID sets apply by default. | Verified on Arc 140T, Intel driver **32.0.101.9175** — the driver the numbers were measured on. Older drivers are untested. Panther Lake (4-core Xe3 "Intel Graphics"): single-run notes exist (24 real / 91.5 shown fps with the 144 Hz set, Kokiri Forest, one session — [docs/DEVICES.md](docs/DEVICES.md#intel-graphics-4-xe3-cores-panther-lake)); no bench rows yet. The v20.5.0 No-sharpening haze regression on Intel iGPUs is fixed by the tonemap-copy change in [PR #275](https://github.com/karimalsalah/guarana/pull/275) (PSNR-verified on the Arc 140T), landing in v20.7.0. |
+| **AMD Radeon iGPU / handheld APUs** (780M, 880M/890M, Steam Deck) | Defaults; on Linux use Mesa **RADV 26.2.5+** (older ones take a slower mesh-shader workaround). | Community report: ~30 fps in OoT on an 890M ([Lichii #1433](https://github.com/zortos293/Lichii/issues/1433)) — not verified by us. |
+| **NVIDIA RTX** (Windows) | Graphics → enable **Use NVIDIA DLSS in place of a game's DLSS**. Automatic + preset M is the default. **Quality**: OoT renders 1440p, DLSS rebuilds to 4K. For more fps, **Balanced** (2276×1280), **Performance** (1920×1080) or **Ultra Performance** (1280×720) — built-in render scales follow the DLSS mode. | Driver **580.119.02+** recommended (older ones lose dynamic vertex input). DLSS takes over at Quality and above; at Balanced only DLSS's padded scene path uses it. CI-built, not yet verified by the project. |
+| **Handhelds** (Steam Deck, ROG Ally, Legion Go, MSI Claw) | Linux x86_64 **PGO AppImage**, default profile. The engine recognizes the Steam Deck LCD/OLED GPU families. | No project-verified numbers yet. MSI Claw 8 AI+ (Arc 140V): community report of 22–24 fps on a *third-party* build ([source](docs/DEVICES.md#third-party-data-points)). Your report sets the first verified row. |
+| **macOS** (Apple Silicon) | macOS 15+, arm64 build; right-click → Open (not notarized). | CI-built; untested by the project. |
+| **Android** (Adreno) | APK preview, Android 13+; the renderer needs mesh-shader support from the Adreno driver. | CI-built; nobody on the project has booted it yet ([docs/ARM64.md](docs/ARM64.md)). |
 
-- **Frames on time in Ocarina of Time** on Windows integrated GPUs, by default: the screen copy runs on a queue of its own, and the frame budget no longer raises the resolution into the GPU time the cadence frees. The numbers are at the top of this page.
-- **FLUID at 120 Hz**, the default for Ocarina of Time on Windows Intel integrated GPUs with the game on a 120 Hz display (a 144 Hz one gets a locked 144 Hz set), and opt-in elsewhere (`EDEN_NX2_SHOWN_RATE=120`, or a frame generation target of 120): a frame every refresh of a 120 Hz display. In Hyrule Field on the Arc 140T, five swapchain images took slots on time from 790-801 to 1134-1137 of 1200.
-- **Fewer freezes.** Pointer-slot compute rebuilds compile on a worker, which removes 2.5-3.4 s freezes in Hyrule Field (upstream [#995](https://github.com/zortos293/Lichii/pull/995)), and guest writes no longer block the game thread when the caches are busy (upstream [#1602](https://github.com/zortos293/Lichii/pull/1602)).
-- **A device profile in the log**: GPU, CPU cores, RAM, power, display refresh and a device class, in one line you can paste into a report. No default changes with it yet ([docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log)).
-- **Launcher:** an opt-in three-level [Game Booster](launcher/CONTRACT.md#game-booster) that undoes everything when the game exits, and [Windows integration](launcher/README.md#windows-integration): game files open from Explorer, `guarana://` links, taskbar progress and opt-in notifications.
-- **Checkable downloads**: a signed build provenance attestation on every release file ([docs/SIGNING.md](docs/SIGNING.md)).
+## Benchmark comparison
 
-## Test it on your device (10 minutes)
+> **v20.7.0 benchmarks landing.** Two measurement sets are being run now and will land here with v20.7.0:
+> a paired A/B of Ocarina of Time on the verified machine (stock vs FPS Unlock + Max Resolution), and a
+> same-scene comparison against other Switch 2 emulators. Each row will name its machine, driver, scene and
+> settings, and link the raw evidence. **No numbers without a machine — nothing here is estimated.**
 
-No code and no debugger. Every GPU except one laptop's Arc 140T is untested, so any report is a first data point. The [call for testers (#55)](https://github.com/karimalsalah/guarana/issues/55) lists the devices needed most.
-
-1. **Install** Guarana Setup, plug in the charger and leave the settings at their defaults (mode **Auto**).
-2. **Stand in Hyrule Field** in your own copy of Ocarina of Time: 30 seconds to settle, then one more minute. Take one screenshot.
-3. **Send it.** Press **Share** on the card the launcher shows after the game (it fills in your device, driver and numbers), or fill in the [device report form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml). You read it and you press Submit; nothing is sent for you.
-
-"It does not run" and "it crashes here" are results too. Leave out keys, firmware, games, saves, shader caches and logs with your name in them. The full protocol: [docs/TESTING.md](docs/TESTING.md). To measure with scripts and set a record on the [records board](https://karimalsalah.github.io/guarana/benchmarks.html#records): [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
-
-## Contribute, with or without an AI agent
-
-The rules are the same for people and agents ([AGENTS.md](AGENTS.md)), and a person owns every pull request.
-
-1. **Find work.** [Good first issues](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22), [help wanted](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22), and [agent-ready tasks](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aneeds-triage%20no%3Aassignee), each with an acceptance test. Open problems with their numbers: [Open wins](https://karimalsalah.github.io/guarana/wins.html).
-2. **Claim it.** Comment `/claim` on the issue: the bot labels it `claimed` and assigns you, so nobody else starts the same work. The claim holds for 72 hours, and for as long as an open pull request links the issue; `/unclaim` gives it back ([how claims work](docs/agents/README.md#2-claim-it)).
-3. **Do it, with an agent or by hand.** By hand: [CONTRIBUTING.md](CONTRIBUTING.md#five-minute-start). With an agent, one sentence in your clone, here with Claude Code ([every tool](#built-for-ai-agents)):
-
-   ```text
-   claude "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"
-   ```
-
-4. **Open the pull request.** CI builds it on Linux and Windows and comments a Windows test build. Disclose AI help with an `Assisted-by:` trailer ([docs/AI_POLICY.md](docs/AI_POLICY.md)). Once merged, your name goes on the [Hall of fame](#hall-of-fame).
-
-Questions get answers in the [Discord](https://discord.gg/urz7vMdRM); bugs and device reports stay on GitHub.
-
-<a name="measured-results"></a>
+What is already measured, on the one verified machine: [Measured wins](#measured-wins) below.
+How we measure: [docs/BENCHMARKING.md](docs/BENCHMARKING.md) · community rows and device reports:
+[benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html).
 
 ## Measured wins
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/pacing.svg">
-  <img alt="Bar chart for Ocarina of Time, Hyrule Field, on a Core Ultra 9 285H with an Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED, on a 0 to 100% scale. Old setup: about 45-47% of frames on screen on time and about 200 frames per 10 s flipped late, because the screen copy waited behind about 24 ms of queued game GPU work. v20.3 defaults: 599 of 600 slots on time in the best run, 531-599 of 600 over two paired rounds, and 0 late flips in both. A slot is one 16.7 ms display interval; 10 s hold 600." src="assets/readme/pacing-light.svg" width="100%">
-</picture>
+All rows: **Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175, 32 GB, 120 Hz OLED, Windows**,
+Ocarina of Time, plugged in. These are the only project-verified numbers; other devices are
+[waiting for reports](#device-support).
 
-Every number in this section comes from one laptop: **Core Ultra 9 285H, Arc 140T iGPU, Intel driver 32.0.101.9175, 120 Hz OLED**, 32 GB RAM. Game: *The Legend of Zelda: Ocarina of Time*. A slot is one display interval: one 8.3 ms refresh with the 120 Hz set, so 10 s hold 1,200, and 16.7 ms, two refreshes, with the 60 Hz set, so 10 s hold 600. **Game fps** counts the frames the game renders; generated frames are not included.
-
-**The v20.4.0 result, at 120 Hz.** With the defaults v20.4.0 picks for this laptop's 120 Hz screen (the locked 120 Hz set: 20 real frames a second, the in-between frames interpolated), Hyrule Field showed **98 to 100%** of shown frames within 2 ms of the median and missed **0 to 4 of 1,200** display slots per 10 s. Method: three lab runs of two local builds of the release code, one of them the tag's, windowed, with no compiler running in any 5 s sample, read from the presenter's own counters (`EDEN_NX2_SHOWN_STATS`). They are not `tools/bench` rows yet, and the CI-built release files were not in those runs. The code from just before the upstream merge did the same in that session, so no gain over it is claimed ([HANDOVER.md](HANDOVER.md#where-things-stand)).
-
-**The 60 Hz set, from v20.3.** v20.4.0 keeps it for every other refresh rate and for AMD. In Hyrule Field the v20.3 defaults put **599 of 600** display slots on screen on time in the best run, with **0 late flips** and **99.5%** of frames within 2 ms of the median. Over two paired rounds: 531-599 of 600, 0 late flips. The old setup put only about 45-47% of frames on screen on time.
-
-**What v20.3 fixed.** In the old setup the screen copy waited behind about 24 ms of queued game GPU work, so about 200 frames per 10 s were flipped late. v20.3 copies each frame to the screen on a queue of its own and stops the frame budget from raising the resolution into the freed GPU time. Real frames hold 20 a second against the game's 20 Hz logic. The switches behind it: [How the frame pacing works](#how-the-frame-pacing-works).
-
-**How it was measured.** The old setup and the v20.3 defaults ran back to back in two paired rounds in Hyrule Field. The presenter counts the slots shown on time and the late flips (frames whose screen copy finished after their vblank) every 10 s; `EDEN_NX2_SHOWN_STATS` gives the share of frames within 2 ms of the median ([docs/switches.md](docs/switches.md)). No input latency figure is published yet. [Help us measure](docs/BENCHMARKING.md); live data is on the [benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html).
+| Measure | Result | Since |
+|---|---|---|
+| 120 Hz set, Hyrule Field: shown frames within 2 ms of the median | **98–100%**, 0–4 of 1,200 display slots missed per 10 s (three lab runs) | v20.4.0 defaults |
+| 60 Hz set: late flips / slots on time | **0 late flips**, up to **599 of 600** on time | v20.3 defaults |
+| Shader fix A/B, Hyrule Field overlook, FG off | **14.75 → 22.83 game fps** (`EDEN_NX2_GM=11`, on by default for OoT only) | v20.3 |
+| Headless shader warm-up | **4,515 pipelines in 155 s**, no game boot | v20.1 (`guarana-cli --warm-pipelines`) |
+| FLUID at 120 Hz, Hyrule Field: slots on time | 790–801 → **1134–1137 of 1200** (five swapchain images) | v20.3 |
+| Mesh-lens compute rebuilds | **2.5–3.4 s freezes removed** in Hyrule Field (upstream [#995](https://github.com/zortos293/Lichii/pull/995)) | v20.3 |
 
 <details>
-<summary><b>Earlier measured wins: v20 and v20.1</b></summary>
+<summary>Earlier measured rows (v20.1–v20.2) and how they were taken</summary>
 
-| Win | Before | After | Status |
-|---|---:|---:|---|
-| Hyrule Field, from one shader fix (`EDEN_NX2_GM=11`), frame generation off | 14.8 game fps | **22.8 game fps** | Since v20; on by default for Ocarina of Time only |
-| Foliage mesh draw, same runs | 15.7 ms GPU | **5.8 ms GPU** | Since v20 |
-| Frame generation pacing, title screen: frames within 2 ms of the median | n/a | **100%** (16.7 ms pacing) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
-| Same measure, Hyrule Field | 33-54% | **75%** (p5 16.4 ms) | In v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
-| Headless shader warm-up | n/a | **4,515 pipelines in 155 s** | Since v20.1 (`guarana-cli --warm-pipelines`, `eden-cli` before v20.2) |
+| Measure | Before | After | Where |
+|---|---|---|---|
+| Frame generation pacing, title screen: frames within 2 ms of the median | n/a | **100%** (16.7 ms pacing) | v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
+| Same measure, Hyrule Field | 33–54% | **75%** (p5 16.4 ms) | v20.1, opt-in (`EDEN_NX2_FLUID=1`) |
 
-The shader fix is a same-spot A/B at the Hyrule Field overlook, switch on against off, plugged in: 14.75 against 22.83 game fps. The v20.1 pacing rows come from `EDEN_NX2_SHOWN_STATS`, which reports every 10 s how evenly frames reached the swapchain, generated ones included.
+The shader fix is a same-spot A/B at the Hyrule Field overlook, switch on against off, plugged in: 14.75 against
+22.83 game fps. The v20.1 pacing rows come from `EDEN_NX2_SHOWN_STATS`, which reports every 10 s how evenly frames
+reached the swapchain, generated ones included. Method and raw rows: [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
 
 </details>
 
-<a name="ai-native-plug-in-your-agent"></a>
+## Device support
 
-## Built for AI agents
+Honest status: **one device has been tested by the project so far.** Everything else is CI-built and waiting
+for reports — it may run well, badly or not at all.
 
-Point an agent at an issue and it finds everything it needs here: one rulebook, [AGENTS.md](AGENTS.md); tasks written with an acceptance test; a free test build for every pull request; and, when a tester runs the game, a debug server it can ask for frame times and screenshots. The agent does the work end to end. A person owns the pull request.
+| Platform / device | Build status | Verified by the project? |
+|---|---|---|
+| Windows x64 — Core Ultra 9 285H + **Arc 140T** | CI + PGO + installer | ✅ **The verified machine**: driver 32.0.101.9175, 32 GB, 120 Hz OLED; all numbers above |
+| Windows x64 — other Intel Arc / AMD / NVIDIA GPUs | CI + PGO | ❌ Untested here — [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
+| Windows ARM64 (Snapdragon X, Adreno X1/X2) | CI | ❌ Nobody has booted it; not attached in v20.6.0 |
+| Linux x64 (incl. Steam Deck, ROG Ally, Legion Go) | CI + PGO | ❌ Untested here; GPU families recognized, defaults await paired runs |
+| Linux ARM64 | CI + PGO | ❌ Untested here |
+| macOS arm64 (Apple Silicon) | CI | ❌ Untested here |
+| Android arm64 (Adreno 6xx–8xx and others) | CI, preview-signed | ❌ Nobody has booted it |
 
-**Start in one line.** Fork, clone, start your tool in the folder and give it one sentence:
+**Community data points** (third-party, *not* verified by us): Arc 140V/130V (MSI Claw 8 AI+/7 AI+) — 22–24 fps
+in gameplay on a third-party build ([source](docs/DEVICES.md#third-party-data-points)); Radeon 890M — about
+30 fps in OoT ([Lichii #1433](https://github.com/zortos293/Lichii/issues/1433)). For context, a survey of other
+Switch 2 forks as of 2026-11-13 found none claiming more than 26 fps in Hyrule Field on an Intel integrated GPU.
 
-| Tool | One command in your clone |
-|---|---|
-| **Claude Code** | `claude "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` (`CLAUDE.md` imports `AGENTS.md`) |
-| **OpenAI Codex CLI** | `codex "Read AGENTS.md, then fix https://github.com/karimalsalah/guarana/issues/<n>"` (trust the folder so `.codex/config.toml` lifts Codex's 32 KiB cap on `AGENTS.md`, or add `-c project_doc_max_bytes=65536`) |
-| **Gemini CLI** | `gemini`, then paste the sentence (`GEMINI.md` imports `AGENTS.md`) |
-| **Cursor** | `agent "Read AGENTS.md, then fix ..."`, or open the folder (`.cursor/rules/guarana.mdc` is always on) |
-| **GitHub Copilot** | Agent mode in your editor, or the coding agent from your fork; paste the sentence |
-| **Windsurf** | Open the folder, open Cascade, paste the sentence |
-| **Aider** | `aider --message "Read AGENTS.md, then fix ..."` (`.aider.conf.yml` loads `AGENTS.md`) |
-| **Cline** | `cline "Read AGENTS.md, then fix ..."`, or the extension (`.clinerules/` and `AGENTS.md`) |
+**How your report becomes a row:** the [device-report issue form](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml)
+collects device/GPU/driver/scene → [`tools/ingest`](tools/ingest) parses it → CI validates the row and updates a
+leaderboard pull request ([`site/data/community.json`](site/data/community.json)) → it appears on the
+[benchmarks page](https://karimalsalah.github.io/guarana/benchmarks.html); verified reports earn a row in
+[docs/DEVICES.md](docs/DEVICES.md). Requirements, vendor notes and the device-profile log line:
+[docs/DEVICES.md](docs/DEVICES.md).
 
-No install? Paste the [copy-paste prompt](docs/AI-QUICKSTART.md#no-install-chatgpt-claude-or-gemini-in-the-browser) into ChatGPT, Claude or Gemini in the browser. It points the chat at [`llms-full.txt`](https://karimalsalah.github.io/guarana/llms-full.txt), the whole project context in one URL; the site's [agents page](https://karimalsalah.github.io/guarana/agents.html) has a copy button. Install steps, flags and the honest limits of each tool: [docs/AI-QUICKSTART.md](docs/AI-QUICKSTART.md).
+## Release history
 
-**What an `agent-ready` issue holds.** Each one comes from the [agent task form](https://github.com/karimalsalah/guarana/issues/new?template=agent-task.yml): the goal, the files to change and what to read first, an acceptance test that fails before the change and passes after it, the measurement (scene, device, metric, baseline and the gain that counts, or "not a performance task"), whether it can be checked without the game, and its size. Triage adds `agent-ready` when the acceptance test is checkable, and new ones get a **"Solve it with AI"** comment with the commands above filled in. [Open and unclaimed](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready%20-label%3Aneeds-triage%20no%3Aassignee): 46 as of 2026-11-13.
+- **[v20.6.0](https://github.com/karimalsalah/guarana/releases/tag/v20.6.0)** (2026-11-18, current) — Android APK
+  preview builds; the ARM64 tester program ([docs/ARM64.md](docs/ARM64.md)); boot benchmark suites; the community
+  evidence registry; Guarana's own app identity (`io.github.karimalsalah.guarana`) and console news; launcher
+  stable install path; microphone-open fix; dependency security updates (zlib 1.4, lz4 1.11.1); upstream Lichii
+  syncs (226 + 50 commits). [Full notes](https://github.com/karimalsalah/guarana/releases/tag/v20.6.0)
+- **v20.7.0** (imminent) — [PR #304](https://github.com/karimalsalah/guarana/pull/304): upstream sync to
+  `6708d2476c` (31 commits) with the **OoT FPS Unlock carry fixes** (cloth below 60 fps, Epona's fence jump,
+  fractional day/night seconds, Deku web steps), texture-cache recovery, Vulkan sampler fallback, and more.
+- Earlier: [v20.4.0](https://github.com/karimalsalah/guarana/releases/tag/v20.4.0) (pacing defaults, upstream
+  #1803/#1779/#1845), v20.3.0 (shader fix, FLUID 120 Hz), v20.1–20.2 (frame generation, warm-up) —
+  the full record is in [CHANGELOG.md](CHANGELOG.md).
 
-**Claim it, so two agents do not do the same work.** Take an issue without `needs-triage` and without an assignee. Read it and its comments, and check that nobody has claimed it: an assignee, a `claimed` label, a linked pull request. Then comment `/claim`: the `agent-claims` workflow labels it `claimed` and assigns you, and a claim with no open pull request linking the issue is released after 72 hours. If you stop, comment `/unclaim`. From a terminal, `echo /claim | gh issue comment <n> -R karimalsalah/guarana --body-file -` works in every shell; `--body "/claim"` from Git Bash on Windows arrives as a path and claims nothing. Stay inside its scope; anything else is a new issue. The long form: [CONTRIBUTING.md](CONTRIBUTING.md#picking-an-agent-ready-issue), [docs/AGENTS-INVITE.md](docs/AGENTS-INVITE.md), [docs/agents/README.md](docs/agents/README.md) and [HANDOVER.md](HANDOVER.md).
+## Credits and attribution
 
-**See and drive the game.** `.mcp.json` registers the `emulator-debug` MCP server ([docs/nx2/debug-mcp.md](docs/nx2/debug-mcp.md)). When a tester starts a build with `EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545`, the agent reads frame times, screenshots, GPU costs and logs, A/B tests shaders and sends controller input. Loopback only; the agent never starts or stops the emulator.
+Guarana stands on the work of the **yuzu team**, the **Eden project**, **Eglantine** (its original developer
+Camille LaVey), **Sudachi**, and **[Lichii](https://github.com/zortos293/Lichii)** (zortos293 and its contributors) —
+the emulator this fork is. GPL lineage is respected: notices stay in the source, git keeps every author, and
+third-party license obligations continue to apply ([LICENSES](LICENSES), [LEGAL.md](LEGAL.md)).
 
-**No compiler needed.** CI builds every pull request on Linux and Windows and comments a Windows test build (`guarana-pr<N>-<commit>-windows-x86_64`, kept 14 days) that anyone with the game can run.
+The OoT built-ins and the nx2 layer carry named work, credited in full in [CREDITS.md](CREDITS.md) and
+[docs/CREDITS.md](docs/CREDITS.md):
 
-**Rules that keep it honest.** Measured gains only, default-off `EDEN_NX2_*` switches, no game data. The person who runs the agent owns the pull request and discloses the AI with an `Assisted-by:` trailer ([docs/AI_POLICY.md](docs/AI_POLICY.md)). Every merged pull request puts its author on the [Hall of fame](#hall-of-fame).
-
-## Why contribute now
-
-- **It is early.** One device has results, the Arc 140T. Almost any laptop or handheld you own is a first data point, and a [device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) needs no code.
-- **Open problems have numbers.** Read-back stalls, first-visit shader stutter, boot time, Hyrule Field fps and the first AMD reports are on the [Open wins](https://karimalsalah.github.io/guarana/wins.html) page, each with its scene, today's number and target.
-- **Your name stays.** Every merged pull request, and every `Co-authored-by:` trailer, goes on the [Hall of fame](#hall-of-fame) and in [CONTRIBUTORS.md](CONTRIBUTORS.md), rebuilt daily from the git history.
-- **Help in real time.** Questions about a task, a driver or a build get answers in the [Discord](https://discord.gg/urz7vMdRM). Bugs and device reports stay on GitHub so they can be tracked.
-- **Small steps count.** Run the [benchmark](docs/BENCHMARKING.md), triage an issue, port an upstream fix with its author credited, add a test. [CONTRIBUTING.md](CONTRIBUTING.md) has the five-minute start.
-
-## Hall of fame
-
-Everyone credited for good. Authors of merged commits and of `Co-authored-by:` trailers are people; bots and AI tools are
-listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.py).
+- **Dark** (Eglantine developer) — the Dynamic FPS routine; **Frizti** — the `oot-gather-fix` integration and
+  built-in port; **CTGL** — the delta-cap change ([#299](https://github.com/zortos293/Lichii/pull/299)).
+- **NotRexed** ([Hookshot](https://github.com/NotRexed/Hookshot)) — the text-speed patches; the **KaeGae
+  registry** ([Kabosune/oot-remake-modding](https://github.com/Kabosune/oot-remake-modding)) — the memory-region
+  map that keeps the built-ins' code caves clear of mods and cheats.
+- **ProfessorTee** — the OoT render scales ([Lichii #903](https://github.com/zortos293/Lichii/pull/903)) behind
+  Max Resolution's fixed-scale path; **RsMan-Dev** — the texture pool patch.
+- **myshadowww** — Native DLAA sizing ([Lichii #840](https://github.com/zortos293/Lichii/pull/840));
+  **Fritchii-Intel-Fixes** — the Intel Arc cooperative-matrix and atomic fixes; **YOB (yobslab)** — branding assets.
+- Everyone who contributed upstream, the authors of every pull request we carry included: [CREDITS.md](CREDITS.md).
+  Everyone who contributed here: [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 <!-- legacy:start -->
 <!-- Generated by tools/ci/legacy.py. Do not edit between the markers. -->
@@ -209,6 +262,7 @@ listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.p
   <a href="https://github.com/MythosOfs"><img src="https://github.com/MythosOfs.png?size=96" width="48" height="48" alt="MythosOfs" title="MythosOfs"></a>
   <a href="https://github.com/sethsethsethsethsethsethseth"><img src="https://github.com/sethsethsethsethsethsethseth.png?size=96" width="48" height="48" alt="sethsethsethsethsethsethseth" title="sethsethsethsethsethsethseth"></a>
   <a href="https://github.com/justin-wq1337"><img src="https://github.com/justin-wq1337.png?size=96" width="48" height="48" alt="justin-wq1337" title="justin-wq1337"></a>
+  <a href="https://github.com/Maufeat"><img src="https://github.com/Maufeat.png?size=96" width="48" height="48" alt="Maufeat" title="Maufeat"></a>
   <a href="https://github.com/PantACRO4life"><img src="https://github.com/PantACRO4life.png?size=96" width="48" height="48" alt="PantACRO4life" title="PantACRO4life"></a>
   <a href="https://github.com/BrunoSilvestre00"><img src="https://github.com/BrunoSilvestre00.png?size=96" width="48" height="48" alt="BrunoSilvestre00" title="BrunoSilvestre00"></a>
   <a href="https://github.com/jpkto"><img src="https://github.com/jpkto.png?size=96" width="48" height="48" alt="jpkto" title="jpkto"></a>
@@ -231,6 +285,7 @@ listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.p
   <a href="https://github.com/kdegonia-star"><img src="https://github.com/kdegonia-star.png?size=96" width="48" height="48" alt="kdegonia-star" title="kdegonia-star"></a>
   <a href="https://github.com/kimoalsalah"><img src="https://github.com/kimoalsalah.png?size=96" width="48" height="48" alt="kimoalsalah" title="kimoalsalah"></a>
   <a href="https://github.com/krim404"><img src="https://github.com/krim404.png?size=96" width="48" height="48" alt="krim404" title="krim404"></a>
+  <a href="https://github.com/kurebeyashi-noah"><img src="https://github.com/kurebeyashi-noah.png?size=96" width="48" height="48" alt="kurebeyashi-noah" title="kurebeyashi-noah"></a>
   <a href="https://github.com/Molier"><img src="https://github.com/Molier.png?size=96" width="48" height="48" alt="Molier" title="Molier"></a>
   <a href="https://github.com/myshadowww"><img src="https://github.com/myshadowww.png?size=96" width="48" height="48" alt="myshadowww" title="myshadowww"></a>
   <a href="https://github.com/Nanoc6"><img src="https://github.com/Nanoc6.png?size=96" width="48" height="48" alt="Nanoc6" title="Nanoc6"></a>
@@ -250,7 +305,6 @@ listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.p
   <a href="https://github.com/DuskDarf1"><img src="https://github.com/DuskDarf1.png?size=96" width="48" height="48" alt="DuskDarf1" title="DuskDarf1"></a>
   <a href="https://github.com/GoatTech-42"><img src="https://github.com/GoatTech-42.png?size=96" width="48" height="48" alt="GoatTech-42" title="GoatTech-42"></a>
   <a href="https://github.com/jschert"><img src="https://github.com/jschert.png?size=96" width="48" height="48" alt="jschert" title="jschert"></a>
-  <a href="https://github.com/kurebeyashi-noah"><img src="https://github.com/kurebeyashi-noah.png?size=96" width="48" height="48" alt="kurebeyashi-noah" title="kurebeyashi-noah"></a>
   <a href="https://github.com/Lancito01"><img src="https://github.com/Lancito01.png?size=96" width="48" height="48" alt="Lancito01" title="Lancito01"></a>
   <a href="https://github.com/liomaroliveira"><img src="https://github.com/liomaroliveira.png?size=96" width="48" height="48" alt="liomaroliveira" title="liomaroliveira"></a>
   <a href="https://github.com/marcochiusso-lgtm"><img src="https://github.com/marcochiusso-lgtm.png?size=96" width="48" height="48" alt="marcochiusso-lgtm" title="marcochiusso-lgtm"></a>
@@ -262,151 +316,37 @@ listed apart as tools. Rebuilt daily by [`tools/ci/legacy.py`](tools/ci/legacy.p
   <a href="https://github.com/simonMettler2000"><img src="https://github.com/simonMettler2000.png?size=96" width="48" height="48" alt="simonMettler2000" title="simonMettler2000"></a>
   <a href="https://github.com/StiensWout"><img src="https://github.com/StiensWout.png?size=96" width="48" height="48" alt="StiensWout" title="StiensWout"></a>
   <a href="https://github.com/thatrandomalt"><img src="https://github.com/thatrandomalt.png?size=96" width="48" height="48" alt="thatrandomalt" title="thatrandomalt"></a>
-  <a href="https://github.com/Velken"><img src="https://github.com/Velken.png?size=96" width="48" height="48" alt="Velken" title="Velken"></a>
 </p>
 
-**81 people credited for good**, 21 of them not shown here. Everyone: [CONTRIBUTORS.md](CONTRIBUTORS.md) and the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html).
+**104 people credited for good**, 44 of them not shown here. Everyone: [CONTRIBUTORS.md](CONTRIBUTORS.md) and the [Hall of fame](https://karimalsalah.github.io/guarana/legacy.html).
 
 <!-- legacy:end -->
 
-<a name="quick-start"></a>
-<a name="play-ocarina-of-time-on-your-pc"></a>
+## Contributing
 
-## Install in detail
+The fastest way to help is a **[device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml)** —
+no code, five minutes, and it becomes a leaderboard row. Beyond that:
 
-> [!NOTE]
-> **Guarana Setup** (since v20.1), the Windows installer and launcher, about 92 MB with WebView2 included, one click:
-> - **One switch** for how it runs: Auto, Smooth, Quality or Battery.
-> - **Finds your own keys, firmware and games** on your own PC, with your consent, and sets up your controller automatically.
-> - **Autopilot** retunes after each session, with undo.
-> - **Doctor** finds common problems and offers fixes.
-> - **"Ask AI" buttons** open a prefilled Claude or ChatGPT chat with scrubbed diagnostics (you press send).
->
-> Download `Guarana-Setup-<version>.exe` from [Releases](https://github.com/karimalsalah/guarana/releases/latest). Prefer no installer? The zip below is the whole install.
+- **Build from source:** [docs/Build.md](docs/Build.md) (Windows, Linux, macOS, Android).
+- **Pull requests:** fork → branch → add a `changelog.d/` fragment → PR. CI builds every PR and posts a Windows
+  test build; the merge gate requires the changelog check. Details: [CONTRIBUTING.md](CONTRIBUTING.md).
+- **First contribution:** browse [`good first issue`](https://github.com/karimalsalah/guarana/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) — small, well-defined tasks.
+- **Add a game patch with no C++:** a JSON [patch pack](docs/patch-packs.md) is a pull request of its own.
+- **AI agents welcome:** read [AGENTS.md](AGENTS.md) first — it carries the project's rules, including the
+  paired-measurement rule for performance claims.
 
-**[Releases](https://github.com/karimalsalah/guarana/releases/latest)** is the only official download, for every platform:
-Windows x86-64 zips (plain and PGO), Linux x86-64 and ARM64 (AppImage and tar.gz, plain and PGO), macOS Apple silicon (dmg and zip),
-and `SHA256SUMS.txt` to check them ([how to verify a download](docs/SIGNING.md), build provenance and signatures included). Our own numbers on this page were measured on Windows, with a CPU with AVX2 and a current GPU driver.
+## Community
 
-1. **Download** the build for your system from [Releases](https://github.com/karimalsalah/guarana/releases/latest). To build it yourself: [docs/Build.md](docs/Build.md), or one command: `powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1` / `bash scripts/build-linux.sh`.
-2. **Extract** it to a writable folder and run **`guarana.exe`**.
-3. **Install your keys and firmware:** *Tools → Install Decryption Keys*, then *Tools → Install Firmware*.
-4. **Add your games folder** (double-click the empty game list) and start a game. Each new area compiles shaders and hitches once; later visits use the cache. `guarana-cli --warm-pipelines <title id>` builds the cached ones ahead of time ([docs/warm-up.md](docs/warm-up.md)).
-5. **Ocarina of Time:** on a Windows integrated GPU the game's preset does the setup (since v20.2). It sets the pacing switches in [the table below](#how-the-frame-pacing-works), and on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (multiplier 3, target 60). It changes only what you left at its default. Elsewhere, or by hand: *Emulation → Configure… → Graphics → Enable Frame Generation*, **Frame Generation Multiplier** 3, **Target Frame Rate** 60. Measured on the Arc 140T only.
-
-Settings, saves and caches live in `%APPDATA%\guarana`. On first start Guarana copies your settings, saves and caches from the old `%APPDATA%\lichii` folder and points the copied settings at the new one; the old folder stays as it was. On Linux the folder is `guarana` in your config directory (`$XDG_CONFIG_HOME/guarana`).
-Put your own switch lines in `%APPDATA%\guarana\nx2_switches.txt`, not the copy next to `guarana.exe`; a play mode writes its own block at the top of that file ([docs/user/ui.md](docs/user/ui.md)). Every switch is in [docs/switches.md](docs/switches.md).
-
-**Guides:** [play Ocarina of Time on a PC in five minutes](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html) · [Intel Arc settings](https://karimalsalah.github.io/guarana/switch-2-emulator-intel-arc.html) · [stutter, black screen, crash](https://karimalsalah.github.io/guarana/fix-stutter-switch-2-emulator.html) · [ROG Ally, Legion Go, MSI Claw, Steam Deck](https://karimalsalah.github.io/guarana/switch-2-emulator-handheld.html) · [controllers](https://karimalsalah.github.io/guarana/controller-setup.html) · [emulator or recompilation](https://karimalsalah.github.io/guarana/play-ocarina-of-time-switch-2-on-pc.html#compare). For Ocarina of Time: the [controller guide](docs/user/Controllers.md), the [Dynamic FPS add-on](docs/nx2/ocarina-dynamic-fps.md) and the [anti-aliasing network bypass](docs/nx2/oot-network-bypass.md).
-Stuck? [Troubleshooting](docs/TROUBLESHOOTING.md), or ask in the [Discord](https://discord.gg/urz7vMdRM).
-
-<details>
-<summary><b>What v20.2 brought</b></summary>
-
-- **The Guarana name.** The programs are `guarana.exe` and `guarana-cli.exe` (`lichii.exe` and `eden-cli.exe` before), the data folder is `%APPDATA%\guarana`, and your old folder is copied as described above. The first boot after the rename recompiles shaders once, because Intel's driver cache is per program name.
-- **A new window.** The Guarana Dark theme, a Guarana settings page with three play modes (Smooth, Quality, Battery), a compact performance overlay and window memory per monitor ([docs/user/ui.md](docs/user/ui.md)).
-- **Ocarina of Time smooth out of the box** on Windows integrated GPUs (step 5 above).
-- **Upstream Lichii build-177**, merged.
-
-Full notes: [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-## How the frame pacing works
-
-The game renders **real frames** at its own pace, and frame generation fills the display slots between them. In Ocarina of Time those frames are **predicted**: the newest real frame's pixels move along the game's motion vectors, depth decides which surface is in front, and the HUD stays in place. Extrapolation shows each real frame as soon as it is ready, where interpolation would hold it back until the next one exists. That is the 60 Hz set below. On an Intel integrated GPU with the game on a 120 or 144 Hz display, the locked sets interpolate the in-between frames from the last two real frames instead, so each real frame is held back while the frames before it are shown. Generated frames make motion smoother, not input faster.
-
-```mermaid
-flowchart LR
-    guest["Guest<br/>game logic at 20 Hz"] -->|"command lists"| gpu["GPU thread<br/>the real frame,<br/>then its predictions"]
-    gpu -->|"rendered on the<br/>graphics queue"| fluid["FLUID presenter<br/>one 16.7 ms slot<br/>per frame"]
-    fluid -->|"screen copy"| copy["A copy queue<br/>of its own"]
-    copy -->|"presented on the<br/>slot's vblank"| screen["Screen<br/>120 Hz OLED"]
-```
-
-Before v20.3 the screen copy shared the graphics queue and waited behind the game's queued work. Now it runs on a queue of its own at default priority, beside the game's rendering, and the present thread waits for the copy to finish before it presents. The frame budget now only lowers the resolution: raising it into the GPU time the cadence frees would keep the GPU queue deep.
-
-**v20.3 defaults for Ocarina of Time on a Windows integrated GPU, the 60 Hz set.** The game's preset sets them, only where you left them at their defaults; `EDEN_NX2_NO_PRESETS=1` or *Automatic presets* off turns it off. Intel iGPUs with the game on a 120 or 144 Hz display get the locked sets in [docs/switches.md](docs/switches.md#defaults-for-ocarina-of-time-on-a-windows-integrated-gpu).
-
-| Switch or setting | Value | What it does |
-|---|---|---|
-| Frame generation | 3x toward 60 | Each real frame fills three 16.7 ms slots. The preset turns it on for Intel iGPUs without matrix cores, such as the Arc 140T; elsewhere turn it on yourself |
-| `EDEN_NX2_EXTRAPOLATE` | `1` | Predicts frames from the game's motion vectors |
-| `EDEN_NX2_FLUID` | `2` | The vblank-locked presenter: the real frame is shown, and predictions reach under one frame interval ahead |
-| `EDEN_NX2_CADENCE` | `3` | 20 real frames a second, one per game tick, so predicted motion has the right speed |
-| `EDEN_NX2_FLUID_QUEUE`, `EDEN_NX2_FLUID_QUEUE_HOST_WAIT` | `5`, `1` | New in v20.3: the screen copy on a queue of its own at default priority, and the present thread waits for it |
-| `EDEN_NX2_BUDGET_HOLD_RES` | `1` | New in v20.3: the frame budget only lowers the resolution, so it cannot fill the GPU time the cadence frees |
-| `EDEN_NX2_EARLY_SUBMIT`, `EDEN_NX2_EARLY_PAGES`, `EDEN_NX2_EARLY_AFTER` | `1`, `256`, `1` | Early read-backs |
-| `EDEN_NX2_GPL` | `1`, Intel only | Pipeline library fast links for first-visit shaders |
-
-Every row, with its measurements and code: [docs/switches.md](docs/switches.md). Contributor detail: [docs/frame-generation.md](docs/frame-generation.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#frame-generation-and-pacing).
-
-<details>
-<summary><b>Why frames looked uneven before the presenter</b></summary>
-
-<p align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/frametime.svg">
-  <img alt="Illustration, not a measurement: a jagged frame-time line between 10 ms and 50 ms flattens to a steady 16.7 ms line. Axis marks: 10 ms, 16.7 ms, 33.3 ms and 50 ms." src="assets/readme/frametime-light.svg" width="860">
-</picture>
-</p>
-
-A real frame that lands between two refreshes cannot stay up as long as the one before it, so motion looks uneven even at a steady average. The FLUID presenter shows one frame per 16.7 ms slot instead, timed to the slot's vblank.
-
-</details>
-
-## Roadmap
-
-**Planned next** (no dates yet): **per-device defaults.** v20.3 logs a device class at boot; a default for a class comes only with a paired run on a verified scene of that class ([docs/DEVICES.md](docs/DEVICES.md#the-device-profile-in-the-log)). The Game Booster, signed build provenance and the Windows integrations that were on this list are in v20.3 ([New in v20.3](#coming-in-v203)).
-
-**Open in [ROADMAP.md](ROADMAP.md)**, each item with a problem, a plan and a definition of done: the Intel pipeline-cache crash ([IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)), shader translation off the GPU thread, persisted SPIR-V, non-blocking boot and memory-mapped caches, cheaper Intel pipeline compiles, the AMD Radeon iGPU path, disocclusion fill for predicted frames and shader-need prediction. Later: LSE atomics in the JIT, handheld mode and hotkeys, portable mode out of the box, and auto-update. What already shipped: [CHANGELOG.md](CHANGELOG.md).
-
-## Docs
-
-| Document | What it is |
-|---|---|
-| [docs/README.md](docs/README.md) | Every document, one line each |
-| [docs/FAQ.md](docs/FAQ.md) | Short answers: legality, frame generation, hitches, settings, updates |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Start-up errors, hitches, pacing problems and crashes |
-| [docs/switches.md](docs/switches.md) | Every `EDEN_NX2_*` switch: values, status, measured effect, code |
-| [docs/lifecycle.md](docs/lifecycle.md), [docs/design/settings-hygiene.md](docs/design/settings-hygiene.md) | What Guarana stores and when it is flushed, loaded and preloaded; the proposed settings hygiene ([#125](https://github.com/karimalsalah/guarana/issues/125)) |
-| [docs/frame-generation.md](docs/frame-generation.md) | How frames are predicted and paced, the known limits, and how to test them |
-| [docs/TESTING.md](docs/TESTING.md), [docs/DEVICES.md](docs/DEVICES.md) | The 10-minute device test; requirements and every device's status |
-| [AGENTS.md](AGENTS.md) | The rulebook for agents and people: rules, repository map, build, verification |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, in order |
-| [ROADMAP.md](ROADMAP.md) | Open work, each item with a problem, a plan and a definition of done |
-| [docs/agents/README.md](docs/agents/README.md), [HANDOVER.md](HANDOVER.md) | For agents: claiming work and avoiding collisions |
-| [CHANGELOG.md](CHANGELOG.md), [CREDITS.md](CREDITS.md) | What shipped in each version; whose work Guarana builds on |
-
-## FAQ
-
-- **Is this legal?** Guarana contains no keys, firmware, games or system files; you use your own dumps. [LEGAL.md](LEGAL.md), [FAQ](docs/FAQ.md#is-this-legal).
-- **Does frame generation make the game faster?** It makes motion smoother; the game still runs and reads input at its own rate. [More](docs/FAQ.md#does-frame-generation-make-the-game-faster).
-- **Does it add input lag?** Extrapolation, the 60 Hz set's, never holds a real frame back; the locked 120 Hz and 144 Hz sets interpolate, which does. A measured latency figure is not published yet. [More](docs/FAQ.md#does-frame-generation-add-input-lag).
-- **Why 20 real frames a second?** By design. Ocarina of Time's logic runs at 20 Hz, so one real frame per game tick gives predicted frames the right speed, and the presenter fills the slots between them. [How the frame pacing works](#how-the-frame-pacing-works).
-- **Why does it hitch the first time I enter an area?** The driver is compiling shaders, 0.4-1 s per pipeline on Intel; later visits use the cache. [More](docs/FAQ.md#why-does-it-hitch-the-first-time-i-enter-an-area).
-- **Will it run on my device?** Try it, then send a [device report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml): your numbers put your device on the leaderboard. [Devices](#devices).
-- **Do I have to use AI to contribute?** No. The rules are the same for people and agents. [CONTRIBUTING.md](CONTRIBUTING.md).
-
-All questions: [docs/FAQ.md](docs/FAQ.md). Every document: [the docs index](docs/README.md). Chat: [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM).
+- **Discord:** [discord.gg/urz7vMdRM](https://discord.gg/urz7vMdRM) — help, device reports, development.
+- **GitHub Discussions:** [questions and ideas](https://github.com/karimalsalah/guarana/discussions).
+- **Website:** [karimalsalah.github.io/guarana](https://karimalsalah.github.io/guarana/) — guides,
+  [benchmarks](https://karimalsalah.github.io/guarana/benchmarks.html), [device pages](https://karimalsalah.github.io/guarana/devices/).
+- **Call for testers:** [#55 — every device counts](https://github.com/karimalsalah/guarana/issues/55).
 
 ## Legal
 
-> [!IMPORTANT]
-> - **No keys, firmware, games or system files** are included, and none are accepted in issues, pull requests, discussions or the Discord.
-> - **No piracy.** Requests for or links to copyrighted files are closed without discussion.
-> - **Optional LSFG frame generation** only loads a `Lossless.dll` that you supply from your own Lossless Scaling purchase. Guarana distributes none of it.
-> - **Independent project.** Not affiliated with, endorsed by or sponsored by Nintendo, or by the Lichii project. "Nintendo" and "Nintendo Switch" are trademarks of Nintendo, used only to say what this software is compatible with. Games are named in plain text to identify test cases; this README uses no game screenshots or Nintendo artwork.
->
-> Full text: [LEGAL.md](LEGAL.md).
+Guarana is free software under the **GPL-3.0-or-later** ([LICENSE.txt](LICENSE.txt)). No keys, firmware or games
+are included or provided; dump your own from hardware you own. Nintendo, Switch, Ocarina of Time and related
+marks belong to Nintendo; this project is not affiliated with or endorsed by Nintendo. Full text: [LEGAL.md](LEGAL.md).
 
-## Credits and license
-
-Guarana stands on [Lichii](https://github.com/zortos293/Lichii), [Eglantine](https://github.com/Eglantine-Community/Eglantine),
-[Eden](https://git.eden-emu.dev/eden-emu/eden) and yuzu. The Intel Arc fixes in v20 are ported from
-[Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes). v20.3 carries upstream pull requests
-[#1602](https://github.com/zortos293/Lichii/pull/1602), [#995](https://github.com/zortos293/Lichii/pull/995),
-[#1584](https://github.com/zortos293/Lichii/pull/1584) and [#1483](https://github.com/zortos293/Lichii/pull/1483), which
-upstream had not merged when we took them. Everyone who contributed upstream, the authors of every pull request we carry
-included: [CREDITS.md](CREDITS.md). Everyone who contributed here: [CONTRIBUTORS.md](CONTRIBUTORS.md). Free software under
-the **GNU General Public License v3.0 or later** ([LICENSE.txt](LICENSE.txt)).
+Built by the Guarana project — [github.com/karimalsalah/guarana](https://github.com/karimalsalah/guarana).

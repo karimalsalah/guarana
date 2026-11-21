@@ -18,6 +18,37 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # Disable tests/tools in all externals supporting the standard option name
 set(BUILD_TESTING OFF)
 
+# C++/WinRT on Windows ARM64: the SDK ships cppwinrt 2.0.250303.5 while the Qt arm64
+# package was built with 2.0.250303.1; lld-link's /failifmismatch rejects the mix when
+# linking switch2_ble.cpp against Qt6Core. Generate the projection with the EXACT
+# compiler version Qt used (NuGet package = compiler + fast-forwarder libs; the headers
+# are generated from the installed SDK's metadata and stamped with the compiler version).
+if (WIN32 AND MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    set(CPPWINRT_VER 2.0.250303.1)
+    set(CPPWINRT_PKG "${CMAKE_BINARY_DIR}/cppwinrt-${CPPWINRT_VER}")
+    if (NOT EXISTS "${CPPWINRT_PKG}/include/winrt/base.h")
+        set(CPPWINRT_NUPKG "${CPPWINRT_PKG}.nupkg")
+        file(DOWNLOAD
+            "https://api.nuget.org/v3-flatcontainer/microsoft.windows.cppwinrt/${CPPWINRT_VER}/microsoft.windows.cppwinrt.${CPPWINRT_VER}.nupkg"
+            "${CPPWINRT_NUPKG}"
+            EXPECTED_HASH SHA512=adf9ec7059a58b3e0eb0057de52900692f58305aee8ba708d265d273a81127978beb9bf2599b00855b61b725d4e6eb06206b66897eaeaef1aec83948d60bc293
+            STATUS CPPWINRT_DL_STATUS)
+        list(GET CPPWINRT_DL_STATUS 0 CPPWINRT_DL_RC)
+        if (NOT CPPWINRT_DL_RC EQUAL 0)
+            message(FATAL_ERROR "cppwinrt ${CPPWINRT_VER} download failed: ${CPPWINRT_DL_STATUS}")
+        endif()
+        file(ARCHIVE_EXTRACT INPUT "${CPPWINRT_NUPKG}" DESTINATION "${CPPWINRT_PKG}")
+        execute_process(
+            COMMAND "${CPPWINRT_PKG}/bin/cppwinrt.exe" -input sdk -output "${CPPWINRT_PKG}/include"
+            RESULT_VARIABLE CPPWINRT_GEN_RC)
+        if (NOT CPPWINRT_GEN_RC EQUAL 0)
+            message(FATAL_ERROR "cppwinrt projection generation failed (${CPPWINRT_GEN_RC})")
+        endif()
+    endif()
+    set(cppwinrt_SOURCE_DIR "${CPPWINRT_PKG}" CACHE INTERNAL "cppwinrt projection matching Qt's version")
+    message(STATUS "cppwinrt ${CPPWINRT_VER} projection ready: ${CPPWINRT_PKG}/include")
+endif()
+
 # Build only static externals
 set(BUILD_SHARED_LIBS OFF)
 
@@ -152,7 +183,23 @@ if(ENABLE_CUBEB)
     endif()
 endif()
 
-if (NOT LICHII_USE_BUNDLED_SDL3)
+# libusb, before SDL3 so a source-built SDL3 can use it
+if (ENABLE_LIBUSB)
+    add_subdirectory(libusb)
+endif()
+
+# The prebuilt Windows SDL3 has no libusb, which SDL's Switch 2 controller driver needs
+if (MSVC AND ENABLE_LIBUSB AND LICHII_USE_BUNDLED_SDL3)
+    message(STATUS "Building SDL3 with libusb for Switch 2 controllers")
+    AddJsonPackage(NAME sdl3 FORCE_BUNDLED_PACKAGE ON OPTIONS
+        "SDL_SHARED OFF"
+        "SDL_STATIC ON"
+        "SDL_INSTALL OFF"
+        "SDL_TEST_LIBRARY OFF"
+        "SDL_HIDAPI ON"
+        "SDL_HIDAPI_LIBUSB ON"
+        "SDL_HIDAPI_LIBUSB_SHARED OFF")
+elseif (NOT LICHII_USE_BUNDLED_SDL3)
     if (NOT WIN32)
         # Yuzu itself needs: Atomic Audio Events Joystick Haptic Sensor Threads Timers
         # Since 2.0.18 Atomic+Threads required for HIDAPI/libusb (see https://github.com/libsdl-org/SDL/issues/5095)
@@ -173,7 +220,7 @@ if (NOT LICHII_USE_BUNDLED_SDL3)
         set(SDL_FILE ON)
     endif()
 
-    AddJsonPackage(sdl3)
+    AddJsonPackage(NAME sdl3 OPTIONS "SDL_INSTALL OFF")
 else()
     message(STATUS "Using bundled SDL3")
     AddJsonPackage(sdl3-ci)
@@ -200,7 +247,10 @@ endif()
 AddJsonPackage(spirv-headers)
 
 # Sirit
-if (LICHII_USE_BUNDLED_SIRIT)
+# The prebuilt sirit-ci package is linked against the dynamic CRT (/MD). The Windows ARM64
+# bundled-Qt build uses the static CRT (/MT), so a prebuilt /MD sirit fails /failifmismatch at
+# link; build sirit from source there so it inherits the same runtime as the rest of the tree.
+if (LICHII_USE_BUNDLED_SIRIT AND NOT (MSVC AND LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64))
     AddJsonPackage(sirit-ci)
 else()
     AddJsonPackage(sirit)
@@ -267,11 +317,6 @@ endif()
 
 # Glad
 add_subdirectory(glad)
-
-# libusb
-if (ENABLE_LIBUSB)
-    add_subdirectory(libusb)
-endif()
 
 # VMA
 AddJsonPackage(vulkan-memory-allocator)

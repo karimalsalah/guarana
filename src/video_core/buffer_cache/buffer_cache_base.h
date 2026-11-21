@@ -467,7 +467,11 @@ public:
     void PopAsyncFlushes();
     void PopAsyncBuffers();
 
-    bool DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount);
+    /// gpu_written_dest: the destination ranges that took GPU-written bytes, which guest memory
+    /// doesn't hold until they are downloaded
+    bool DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount,
+                 boost::container::small_vector<std::pair<DAddr, size_t>, 4>* gpu_written_dest =
+                     nullptr);
 
     bool DMAClear(GPUVAddr src_address, u64 amount, u32 value);
 
@@ -502,6 +506,13 @@ public:
 
     /// Return true when a CPU region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(DAddr addr, size_t size);
+
+    /// Whether every byte the bound compute storage and texture buffers would mark GPU-written
+    /// for this dispatch already holds GPU writes. Call before the bindings are made (and mark).
+    [[nodiscard]] bool ComputeWritesHoldGpuData();
+
+    /// Whether every byte of the range holds GPU writes (a DMA clear or CPU write removes them).
+    [[nodiscard]] bool IsRegionFullyGpuModified(DAddr addr, size_t size);
 
     /// Visits the uniform and storage buffers bound for the last draw or dispatch with the cached
     /// host buffer holding each range, if one does, for diagnostics. Nothing is
@@ -1310,10 +1321,11 @@ private:
         u32 copy_begin{};  ///< Bytes of the page the copy holds (a buffer can end inside it)
         u32 copy_end{};
         /// Written outside a compute dispatch or a DMA copy (a draw's storage writes) at least
-        /// once: the front can't tell from what it sent which draws write the page, so it reads
-        /// no copy. A draw's writes reach a pushbuffer fetch only after a host-level wait, so
-        /// the page's lists read guest memory once the back ran the work before the last such
-        /// wait and no write came since the front flushed the page (Nx2ReadListCopy).
+        /// once: the front can't tell from what it sent which draws write the page. A draw's
+        /// writes reach a pushbuffer fetch only after a host-level wait, so the page's lists are
+        /// read once the back ran the work before the last such wait: from guest memory if no
+        /// write came since the front flushed the page, else from a copy made after the last
+        /// write (Nx2ReadListCopy).
         bool draw_written{};
         /// The page's bytes: copy_begin to copy_end of mapped_span hold them.
         std::optional<Nx2Staging> copy;

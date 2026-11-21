@@ -36,6 +36,25 @@
 
 #ifdef _WIN32
 #include <QScreen>
+#include <cstring>
+#include <windows.h>
+#include <shobjidl.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "shell32.lib")
+#endif
+
+// A game the Guarana launcher starts takes the launcher's AppUserModelID, the one its Start menu
+// shortcut carries (the bundle identifier in launcher/src-tauri/tauri.conf.json). Windows then sees
+// one app: one taskbar button, and pinning the game's button pins the launcher. It must be set
+// before any window exists.
+static void JoinLauncherIdentity(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--launcher-session") == 0) {
+            SetCurrentProcessExplicitAppUserModelID(L"io.github.karimalsalah.guarana");
+            return;
+        }
+    }
+}
 
 static void OverrideWindowsFont() {
     // Qt5 chooses these fonts on Windows and they have fairly ugly alphanumeric/cyrillic characters
@@ -118,6 +137,9 @@ static void SetUpNvidiaShaderDiskCache() {
 #endif
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    JoinLauncherIdentity(argc, argv);
+#endif
 #if defined(__unix__) && !defined(__APPLE__) && !defined(__ANDROID__)
     SetUpNvidiaShaderDiskCache();
 #endif

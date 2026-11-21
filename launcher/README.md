@@ -85,6 +85,7 @@ and every check are in [CONTRACT.md](CONTRACT.md#opening-games-from-windows).
 | `guarana://` links | tauri-plugin-deep-link `=2.6.3`, scheme in `plugins > deep-link > desktop` | `src-tauri/src/args.rs`, `src-tauri/src/open.rs` |
 | Notifications: shaders ready, update installed | tauri-plugin-notification `=2.8.1`; off until switched on in Home → Advanced, and only while the launcher is in the background | `src-tauri/src/notify.rs` |
 | Taskbar progress for installs (also the first-run one) and shader warm-ups | Tauri's `set_progress_bar` | `src-tauri/src/taskbar.rs` |
+| One app on the taskbar: the launcher and a game it starts share a button, and pinning the game pins the launcher | The Start menu shortcut's AppUserModelID (the bundle identifier), set by the launcher at start and by the emulator in a launcher session | `src-tauri/src/main.rs`, `src/lichii/main.cpp` |
 
 The installer is per user (`installMode: currentUser`), so Tauri's NSIS template writes the
 associations and the `guarana` scheme under `HKCU\Software\Classes`, without admin rights. The

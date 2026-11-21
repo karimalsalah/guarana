@@ -247,7 +247,8 @@ void Config::SetUpIni() {
         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
         seed(Settings::values.async_presentation, ToString(true));
-        seed(Settings::values.use_asynchronous_shaders, ToString(true));
+        // use_asynchronous_shaders is intentionally not seeded: waiting for shaders off is now
+        // every config's default, so it is not an explicit non-default choice a preset must honor.
         EndGroup();
     }
 #endif
