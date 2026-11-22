@@ -129,6 +129,21 @@ void Submit(Writer& writer, u64 offset, const Commands& commands) {
 
 /// The config, one address space mapping the whole sample memory and one channel.
 void WriteSampleSnapshot(Writer& writer) {
+    const nlohmann::json config{
+        {"program_id", "0400000000000001"}, {"switch2", true},  {"synthetic", true},
+        {"memory_layout", 0},               {"width", Width},   {"height", Height},
+    };
+    const std::string text = config.dump();
+    writer.Write(RecordType::Config, AsBytes(text));
+    writer.WritePod(RecordType::AddressSpace, AddressSpaceRecord{0, 40, 1ULL << 34, 16, 12});
+    writer.WritePod(RecordType::SmmuMap, SmmuMapRecord{DeviceBase, PhysicalBase, Size});
+    writer.WritePod(RecordType::GmmuMap,
+                    GmmuMapRecord{0, static_cast<u32>(Tegra::PTEKind::PITCH), GpuBase, DeviceBase,
+                                  Size, 0, 0});
+    writer.WritePod(RecordType::Channel, ChannelRecord{Channel, 0, 0x0400000000000001ULL});
+    writer.Write(RecordType::SnapshotEnd, std::span<const u8>{});
+}
+
 Commands BindTarget() {
     Commands commands;
     const u64 address = GpuBase + TargetOffset;
