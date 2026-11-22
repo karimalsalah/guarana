@@ -1,0 +1,8 @@
+{
+  "name": "mapped-reads",
+  "description": "EDEN_NX2_MAPPED_READS=1. Integrated GPUs: buffer-cache buffers are host-visible and a download waits for the submission that wrote the buffer (Lichii #1903). Off on MoltenVK and discrete GPUs.",
+  "settings": {},
+  "env": {
+    "EDEN_NX2_MAPPED_READS": "1"
+  }
+}

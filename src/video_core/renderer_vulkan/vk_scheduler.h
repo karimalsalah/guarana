@@ -111,6 +111,12 @@ enum class TraceCategory : u8 {
 /// OpenGL-like operations on Vulkan command buffers.
 class Scheduler {
 public:
+    /// Whether every submission ends with a host-read barrier, so a host-visible buffer can be
+    /// read once the submission that last wrote it completes (EDEN_NX2_MAPPED_READS).
+    [[nodiscard]] bool HostReadsMappedBuffers() const noexcept {
+        return host_reads_mapped_buffers;
+    }
+
     explicit Scheduler(const Device& device, StateTracker& state_tracker);
     ~Scheduler();
 
@@ -714,6 +720,8 @@ private:
 
     const Device& device;
     StateTracker& state_tracker;
+    /// EDEN_NX2_MAPPED_READS on an integrated GPU other than MoltenVK.
+    const bool host_reads_mapped_buffers;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
     FragmentBarrierState fragment_barrier;

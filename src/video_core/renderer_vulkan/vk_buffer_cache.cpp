@@ -17,6 +17,7 @@
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_mapped_reads.h"
 #include "video_core/nx2_uma.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vertex_repack.h"
@@ -142,10 +143,13 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
             }
             // host_mapped (EDEN_NX2_UMA bit 2): on an integrated GPU every memory type is system
             // memory, so a mapped one costs the GPU nothing and takes uploads without a staging
-            // copy.
-            return memory_allocator.CreateBuffer(buffer_ci, device.IsMoltenVK() || host_mapped
-                                                                ? MemoryUsage::Stream
-                                                                : MemoryUsage::DeviceLocal);
+            // copy. EDEN_NX2_MAPPED_READS uses the same mapping so a download can read it in place.
+            const bool mapped_reads =
+                VideoCommon::Nx2MappedReads::Active(device.IsIntegrated(), device.IsMoltenVK());
+            const MemoryUsage usage = device.IsMoltenVK() || host_mapped || mapped_reads
+                                           ? MemoryUsage::Stream
+                                           : MemoryUsage::DeviceLocal;
+            return memory_allocator.CreateBuffer(buffer_ci, usage);
         },
         [&] {
             static u32 logged{};
@@ -510,6 +514,14 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
                         "EDEN_NX2_UMA bit 4 (host image copy) is not implemented");
         }
     }
+    if (VideoCommon::Nx2MappedReads::Enabled()) {
+        const bool active =
+            VideoCommon::Nx2MappedReads::Active(device.IsIntegrated(), device.IsMoltenVK());
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_MAPPED_READS: host-visible buffer cache {} (integrated {}, MoltenVK {})",
+                 active ? "on" : "off", device.IsIntegrated() ? "yes" : "no",
+                 device.IsMoltenVK() ? "yes" : "no");
+    }
     const VkDriverIdKHR driver_id = device.GetDriverID();
     const bool enable_vertex_repack = VertexRepackEnabled();
     LOG_INFO(Render_Vulkan, "69-byte vertex layout repacking {} ({})",
@@ -747,6 +759,17 @@ u64 BufferCacheRuntime::QueueForHostRead() {
         scheduler.Flush();
     }
     return tick;
+}
+
+void BufferCacheRuntime::WaitForMappedRead(u64 write_tick) {
+    const auto wait = VideoCommon::Nx2MappedReads::ChooseHostRead(
+        scheduler.HostReadsMappedBuffers(), write_tick);
+    if (wait == VideoCommon::Nx2MappedReads::HostReadWait::FinishAll) {
+        FinishForHostRead();
+        return;
+    }
+    // Every submission ends with a host-read barrier (Scheduler::SubmitExecution).
+    WaitForHostRead(write_tick);
 }
 
 void BufferCacheRuntime::WaitForHostRead(u64 tick) {

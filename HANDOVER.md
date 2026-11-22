@@ -124,7 +124,7 @@ it becomes a default.
 | Candidate | What it is | State |
 |---|---|---|
 | `EDEN_NX2_OOT_BYPASS_SKIP=d9ee412f00ce399a` | Also skip the network's heavy dispatch while the output pass is bypassed (raphaeltorquat0/Lichii `c91d646a52`) | Superseded: upstream does it by default since Lichii #1941 (merged to `7c7f723b68`), between a skipped prepass and the output copy. Not measured on an integrated GPU |
-| zortos293/Lichii#1903 | Host-visible buffer cache on integrated GPUs (15 to 25 fps on Adreno 830) | Read only; touches the buffer cache |
+| zortos293/Lichii#1903 | Host-visible buffer cache on integrated GPUs (15 to 25 fps on Adreno 830) | Ported behind `EDEN_NX2_MAPPED_READS`, off unless set. No verified-scene measurement |
 | zortos293/Lichii#1897, #1810, #1797, #1816 | Collector waits once per pass; semaphore acquires without a drain; ASTC decode image reuse | Behind a switch, then A/B |
 | zortos293/Lichii#1832 | Marks routed stores' buffers written | Wait: it runs after `EDEN_NX2_GM` has built its narrowed lists from the read-only buffers |
 | zortos293/Lichii#1874 | Formatless image loads on Vulkan 1.3 | No effect on Intel 32.0.101.9175, which reports the feature; no evidence yet where it changes something |
