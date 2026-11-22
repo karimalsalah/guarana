@@ -1,0 +1,14 @@
+{
+  "name": "async-shaders",
+  "description": "Asynchronous shaders on: non-native draws whose pipeline is not built are skipped; native draws still wait (native_async_draws Wait).",
+  "cache_states": [
+    "cold",
+    "warm"
+  ],
+  "env": {},
+  "settings": {
+    "Renderer": {
+      "use_asynchronous_shaders": true
+    }
+  }
+}

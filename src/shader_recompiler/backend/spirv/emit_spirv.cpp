@@ -613,7 +613,8 @@ void RewriteOpcodes(std::vector<u32>& code, std::span<const std::pair<u32, spv::
             return;
         }
         if (opcode == spv::Op::OpGroupNonUniformShuffleXor ||
-            opcode == spv::Op::OpGroupNonUniformQuadBroadcast) {
+            opcode == spv::Op::OpGroupNonUniformQuadBroadcast ||
+            opcode == spv::Op::OpAtomicFMaxEXT) {
             const auto it{std::ranges::find(rewrites, code[offset + 2],
                                             &std::pair<u32, spv::Op>::first)};
             if (it != rewrites.end()) {
@@ -672,10 +673,13 @@ void PatchMeshInstructions(std::vector<u32>& code, const EmitContext& ctx) {
 
 std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings) {
     const std::optional<u32> tensor_scratch_word{ReserveCooperativeHmmaScratch(profile, program)};
+    const std::optional<u32> software_matrix_scratch_word{
+        ReserveSoftwareMatrixScratch(profile, program)};
     const bool cooperative_hmma{tensor_scratch_word.has_value() ||
                                 UsesCooperativeHmma(profile, program)};
     EmitContext ctx{profile, runtime_info, program, bindings, cooperative_hmma};
     ctx.tensor_scratch_word = tensor_scratch_word;
+    ctx.software_matrix_scratch_word = software_matrix_scratch_word;
     DefineSoftwareMatrixFunctions(ctx, program);
     const Id main{DefineMain(ctx, program)};
     DefineEntryPoint(program, ctx, main);
@@ -694,6 +698,7 @@ std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_in
         PatchCooperativeHmma(code, *ctx.cooperative_hmma);
     }
     program.info.uses_cooperative_matrix = ctx.cooperative_hmma.has_value();
+    program.info.uses_subgroup_shared_scratch = software_matrix_scratch_word.has_value();
     return code;
 }
 

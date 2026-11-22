@@ -6,7 +6,7 @@ eight of them, representing 17,916 distinct stage/bytecode combinations. Three
 independent fixes remove lowering failures from 1,043 distinct bytecode programs.
 The other eight titles still need another asset reader or a guarded runtime capture.
 
-No game was launched for this sweep. The owner had `lichii.exe` running, so the
+No game was launched for this sweep. The owner had `guarana.exe` running, so the
 approved no-GUI safety condition prevented fallback boots. All library access was
 read-only. Exported data, logs and builds stayed in separate scratch directories;
 no key files were needed or transferred.
@@ -75,7 +75,7 @@ The remaining eight titles are inventory coverage, not shader passes:
 | Star Fox | `0400E88025B1A000` | Hash-named ZIP members have no supported shader-container prefix in the examined reads. The standard ZIP reader rejected 45,822 of 114,154 member-prefix reads on CRC checks; this is a reader limitation, not proof that the game dump is corrupt. |
 | Yoshi and the Mysterious Book demo | `04007C6028AA8000` | Unreal `.utoc`/`.ucas` I/O Store assets need a selective reader. |
 
-All four current NUPs were cataloged with Lichii's `NupContainer` and `RealVFS`.
+All four current NUPs were cataloged with Guarana's `NupContainer` and `RealVFS`.
 Explicit export of 30 shader-named members from Bananza and Mario Kart World yields
 the same shader identities as their loose counterparts, so those are not counted
 twice. The empty `[0] NUPS` directory is not a title.

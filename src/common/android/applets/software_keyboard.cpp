@@ -7,6 +7,7 @@
 #include <thread>
 
 #include <jni.h>
+#include <utility>
 
 #include "common/android/android_common.h"
 #include "common/android/applets/software_keyboard.h"

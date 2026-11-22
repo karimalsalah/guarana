@@ -1,0 +1,1 @@
+- Document the position-balanced OoT Switch 2 measurements in docs/switches.md: EDEN_NX2_HOT_PAGES gains 1.8-5.5 ms/frame (2x2 balanced, vision-gated; keep 1 in the runtime switches file) and EDEN_NX2_SVC_FASTPATH is neutral (-0.15 ms, stays off); the single-order ±9.5 ms swings were a first-leg position penalty, not switch effects.

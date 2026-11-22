@@ -49,15 +49,15 @@ required.
 Run release-binaries by hand with `nsight_aftermath` on and `publish_release`
 off. The Windows builds fetch the SDK above, check its SHA256, keep only
 `include/` and configure with `-DENABLE_NSIGHT_AFTERMATH=ON`. Their
-artifacts are named `lichii-windows-x86_64[-pgo]-aftermath-<sha>` and hold
+artifacts are named `guarana-windows-x86_64[-pgo]-aftermath-<sha>` and hold
 no NVIDIA files, so the tester puts `GFSDK_Aftermath_Lib.x64.dll` from his
-own SDK download beside `lichii.exe`. Without it the log shows
+own SDK download beside `guarana.exe`. Without it the log shows
 `Failed to load Nsight Aftermath DLL` and no dumps are written. The run
 refuses to publish a release.
 
 ## Assemble the private portable launch
 
-Place the unmodified `GFSDK_Aftermath_Lib.x64.dll` beside `lichii.exe` in
+Place the unmodified `GFSDK_Aftermath_Lib.x64.dll` beside `guarana.exe` in
 the diagnostic payload. The DLL is loaded dynamically, so the ordinary PE
 import-closure packager will not discover it automatically.
 Its PE import table lists only Windows system DLLs; no additional runtime
@@ -110,7 +110,7 @@ environment-variable override in the current frontend.
 From the fresh run directory, launch the GUI with the explicit game path:
 
 ```powershell
-.\lichii.exe -g "D:\path\to\Star Fox\exefs\main"
+.\guarana.exe -g "D:\path\to\Star Fox\exefs\main"
 ```
 
 On Windows, portable data is resolved beside the executable, not merely

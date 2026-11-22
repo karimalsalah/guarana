@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "common/common_types.h"
@@ -32,11 +33,38 @@ constexpr u32 RESCALING_LAYOUT_WORDS_OFFSET = offsetof(RescalingLayout, rescalin
 constexpr u32 RESCALING_LAYOUT_DOWN_FACTOR_OFFSET = offsetof(RescalingLayout, down_factor);
 constexpr u32 RENDERAREA_LAYOUT_OFFSET = offsetof(RenderAreaLayout, render_area);
 
+/// Cheaper run-time routing of global memory accesses (Profile::global_memory_opt).
+constexpr u32 GM_HOIST = 1;  ///< buffer base addresses are computed once, at the start of main
+constexpr u32 GM_NARROW = 2; ///< a load searches only the buffers the storage buffer pass named
+/// With GM_NARROW and GM_NARROW_NO_FALLBACK: a load built on one loaded pointer reads that
+/// pointer's buffer at an offset the storage buffer pass computes, without a search
+constexpr u32 GM_REBASE = 4;
+constexpr u32 GM_NARROW_NO_FALLBACK = 8; ///< with GM_NARROW: zero, not the full search, below them
+
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
 [[nodiscard]] inline std::vector<u32> EmitSPIRV(const Profile& profile, IR::Program& program) {
     Bindings binding;
     return EmitSPIRV(profile, {}, program, binding);
 }
+
+/// Whether EmitSPIRV gathers the program's software HMMA operands from subgroup scratch in shared
+/// memory (Profile::support_software_matrix_shared_memory). Its pipeline needs full subgroups of
+/// the guest's 32 lanes; this answers before the SPIR-V exists.
+[[nodiscard]] bool UsesSoftwareMatrixSharedMemory(const Profile& profile,
+                                                  const IR::Program& program);
+
+/// Whether EmitSPIRV lowers the program's HMMA to cooperative matrices, which is what it stores in
+/// Info::uses_cooperative_matrix. A pipeline needs full subgroups for them; this answers before the
+/// SPIR-V exists. Call it on a program EmitSPIRV has not touched: the 16x16x16 path grows
+/// IR::Program::shared_memory_size, which this reads.
+[[nodiscard]] bool UsesCooperativeMatrix(const Profile& profile, const IR::Program& program);
+
+/// EDEN_NX2_TENSOR_LOG: the program's guest tensor operations (HMMA count by depth, how many start
+/// from a zero accumulator, how many reuse the previous HMMA's A) and the path EmitSPIRV takes for
+/// them, with the reason when it is software on a device with matrices. Empty without tensor
+/// operations. Call it, like UsesCooperativeMatrix, before EmitSPIRV grows the shared memory.
+[[nodiscard]] std::string DescribeTensorProgram(const Profile& profile,
+                                                const IR::Program& program);
 
 /// Words per lane in the buffer of EmitCooperativeHmmaTest: the guest registers a0 a1 a2 a3 b0 b1
 /// c0 c1 as input, then d0 d1 as output.

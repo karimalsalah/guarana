@@ -134,9 +134,67 @@ bool TakeWarmBeforeStart();
 void RequestSkipWarm();
 bool TakeSkipWarm();
 
-/// Removes the title's precache file, its marker, count, progress and request, the list of
-/// precached graphics pipelines older builds kept and a leftover temporary file (rebuild or
-/// delete from the UI). Returns false when a file exists but cannot be removed, with
+/// Headless warm-up (eden-cli --warm-pipelines): while set, the renderer's disk cache load acts as
+/// a precache before the start that also builds every cached pipeline it can hold, waits for the
+/// background prebuild and saves the driver pipeline cache, so the process can exit when the load
+/// returns. Cached pipelines an earlier warm-up or precache built for this driver are not built
+/// again.
+void SetWarmOnly(bool warm_only);
+[[nodiscard]] bool WarmOnly();
+
+/// What the last load of a warm-up found, left by the renderer.
+struct WarmOnlyReport {
+    /// False: the cache was not built because the last boot ended while building it (or another
+    /// emulator is loading it); the load cleared that, so the next run builds.
+    bool built{};
+    /// Cached graphics pipelines for this device
+    size_t graphics_records{};
+    /// Cached graphics pipelines an earlier run had already built for this driver
+    size_t already_built{};
+    /// Cached graphics pipelines this pass held no room for (capture limits): another pass
+    /// builds them
+    size_t left{};
+};
+void ReportWarmOnly(const WarmOnlyReport& report);
+[[nodiscard]] WarmOnlyReport TakeWarmOnlyReport();
+
+/// The GPU driver, device, pipeline cache version and build variant pipelines were precached
+/// for. The variant hashes what else decides the SPIR-V and create flags the driver gets (the
+/// SPIR-V emission stamp, the settings and EDEN_NX2_* switches that change the emitted code):
+/// without it, a build or setting that emits other SPIR-V kept a list saying "built" for
+/// pipelines the driver's cache did not hold.
+struct DriverStamp {
+    u32 driver{};
+    u32 device_id{};
+    u32 cache_version{};
+    u64 variant{};
+
+    bool operator==(const DriverStamp&) const = default;
+};
+
+/// The title's list of cached graphics pipelines an earlier precache built
+/// (<shader dir>/<title id>/precache-graphics.bin). Builds with shader libraries emit other
+/// SPIR-V, so they keep their own list (precache-graphics-libraries.bin).
+std::filesystem::path PrecachedPipelinesPath(u64 title_id, bool libraries);
+
+/// The pipeline key hashes in `file`, empty when there is none or it was written for another
+/// driver, device, cache version or variant.
+std::unordered_set<u64> ReadPrecachedPipelines(const std::filesystem::path& file,
+                                               const DriverStamp& stamp);
+
+/// Writes `hashes` for `stamp` to `file`. Returns false when it cannot be written. The list says
+/// what the driver pipeline cache file holds: written only after a save of that file succeeded.
+bool WritePrecachedPipelines(const std::filesystem::path& file, const DriverStamp& stamp,
+                             const std::unordered_set<u64>& hashes);
+
+/// Removes the markers that say what a title's driver pipeline cache file holds, in `title_dir`
+/// (<shader dir>/<title id>): both lists of precached graphics pipelines and the precache file's
+/// marker (.done). For when that file is missing, deleted or rejected: what they list is not in
+/// it. The precache file and its count stay. Returns false when a marker cannot be removed.
+bool RemoveDriverCacheMarkers(const std::filesystem::path& title_dir);
+
+/// Removes the title's precache file, its marker and count, the list of precached graphics
+/// pipelines older builds kept and a leftover temporary file (rebuild or delete from the UI). Returns false when a file exists but cannot be removed, with
 /// the reason in `error` when given.
 bool DeleteWarmFiles(u64 title_id, std::string* error = nullptr);
 

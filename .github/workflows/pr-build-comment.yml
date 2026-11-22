@@ -1,0 +1,97 @@
+name: pr-build-comment
+
+# Links the Windows test build that build-check uploaded on its pull request, in one comment that
+# each new run updates. A separate workflow because build-check runs a pull request from a fork
+# with a read-only token, which cannot comment. workflow_run runs here with this repository's
+# token; it reads run metadata only and never checks out or runs the pull request's code.
+on:
+  workflow_run:
+    workflows: [build-check]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Comment the test build
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Comment the test build
+        uses: actions/github-script@v9
+        env:
+          APP: "guarana"
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const marker = `<!-- ${process.env.APP}-test-build -->`;
+            const short = run.head_sha.slice(0, 7);
+
+            // The pull request whose head this run built. A run from a fork has an empty
+            // pull_requests list, so look its head branch up and match the commit.
+            let number = run.pull_requests?.[0]?.number;
+            if (!number) {
+              const owner = run.head_repository?.owner?.login;
+              if (!owner) {
+                core.info("The run has no head repository");
+                return;
+              }
+              const { data: pulls } = await github.rest.pulls.list({
+                ...context.repo,
+                state: "open",
+                head: `${owner}:${run.head_branch}`,
+                per_page: 20,
+              });
+              number = pulls.find((pull) => pull.head.sha === run.head_sha)?.number;
+            }
+            if (!number) {
+              core.info(`No open pull request has ${run.head_sha} as its head`);
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              ...context.repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+            const build = data.artifacts.find((a) => a.name.endsWith("-windows-x86_64") && !a.expired);
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: number,
+              per_page: 100,
+            });
+            const previous = comments.find(
+              (c) => c.user?.type === "Bot" && (c.body || "").includes(marker),
+            );
+
+            let body;
+            if (build) {
+              const url = `${run.html_url}/artifacts/${build.id}`;
+              body = [
+                marker,
+                `**Windows test build** of ${short}: [${build.name}](${url})`,
+                "",
+                "Extract it into an empty folder and run `guarana.exe` (`lichii.exe` if the build predates the rename). It is a Release build of this pull request merged into its base branch, without the ThinLTO and PGO of the release builds, so compare its fps only with another test build. Downloading needs a GitHub account; the build is kept for 14 days.",
+                "",
+                "Testers: post the device, driver, scene and fps or frame times here (`tools/bench` rows if you can, see `tools/bench/CONTRIBUTING-bench.md`). Use your own keys, firmware and games, and never attach them or logs with personal paths.",
+              ].join("\n");
+            } else if (previous && run.conclusion === "failure") {
+              body = [
+                marker,
+                `**Windows test build:** build-check failed for ${short} ([run](${run.html_url})), so the latest commit has no test build. The link to the build of an earlier commit was removed so nobody tests stale code.`,
+              ].join("\n");
+            } else {
+              // Nothing was built (a documentation-only change) and there is nothing to correct.
+              core.info("No test build in this run");
+              return;
+            }
+
+            if (previous) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: number, body });
+            }

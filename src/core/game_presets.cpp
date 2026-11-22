@@ -1,0 +1,1145 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "core/game_presets.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+#include <fmt/format.h>
+
+#include "common/fs/path_util.h"
+#include "common/logging.h"
+#include "common/settings.h"
+#include "common/switch_origin.h"
+
+namespace Core::GamePresets {
+namespace {
+
+constexpr Evidence PRESET_NOT_MEASURED{
+    false, "not measured: no paired run (docs/switches.md, EDEN_NX2_NO_PRESETS row; the preset's "
+           "comment gives 9.5 to 15 fps on the Arc 140T without it)"};
+
+// Ocarina of Time on an Intel Arc 140T. Its anti-aliasing network is tensor math that runs as
+// scalar shader code there, "No sharpening" replaces it; Max Resolution keeps the game off its
+// 480p dynamic resolution floor. On Windows frame generation is on, 3 frames per real one toward
+// 60: with OCARINA_IGPU_SWITCHES it predicts from the game's motion on the vblank-locked presenter
+// (20 real frames a second, one per 20 Hz game tick). Elsewhere that presenter is not measured,
+// so frame generation stays off.
+constexpr std::array OCARINA_SOFTWARE_TENSOR_SETTINGS{
+    SettingValue{"oot_anti_aliasing", "1", // No sharpening
+                 "its anti-aliasing network is tensor math that runs as scalar shader code on a GPU "
+                 "without matrix cores; No sharpening replaces it",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"ocarina_fsr", "false",
+                 "kept off beside No sharpening; the preset's comment gives no separate reason",
+                 PRESET_NOT_MEASURED},
+#ifdef _WIN32
+    SettingValue{"frame_gen", "true",
+                 "frame generation on, predicting from the game's motion on the vblank-locked "
+                 "presenter (the Ocarina of Time switch defaults)",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"frame_gen_multiplier", "3", "3 frames per real frame, toward 60",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"frame_gen_target_rate", "60", "toward 60 frames a second", PRESET_NOT_MEASURED},
+#else
+    SettingValue{"frame_gen", "false",
+                 "the vblank-locked presenter frame generation counts on is not measured off "
+                 "Windows",
+                 PRESET_NOT_MEASURED},
+#endif
+    SettingValue{"vram_usage_mode", "1", // Aggressive
+                 "aggressive VRAM use; the preset's comment gives no separate reason",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"frame_pacing_mode", "0", // Auto
+                 "automatic frame pacing; the preset's comment gives no separate reason",
+                 PRESET_NOT_MEASURED},
+};
+
+// Ocarina of Time on a Windows integrated GPU: the pacing measured best in Hyrule Field on the
+// Arc 140T (docs/switches.md, "Defaults for Ocarina of Time"). FLUID=2 shows each real frame and
+// predicts under one frame interval ahead, CADENCE=3 holds real frames to the game's 20 Hz tick,
+// EXTRAPOLATE predicts from the game's motion vectors, EARLY_* download read-backs early. Against
+// FLUID=1 in one paired session: slots shown on time 430 to 536 of 600, evenly paced frames 62%
+// to 88%. FLUID_QUEUE=5 with HOST_WAIT copies each frame to the screen on a queue of its own, so
+// the copy does not wait behind the game's rendering, and BUDGET_HOLD_RES keeps the resolution
+// from rising into the freed GPU time: frames that reached the screen late went from about 200
+// per 10 s to 0, slots on time to 586-599 of 600. GPL (pipeline library fast links) only on
+// Intel, where it was measured.
+#ifdef _WIN32
+constexpr std::array OCARINA_IGPU_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+};
+constexpr std::array OCARINA_INTEL_IGPU_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
+// A display at about 120 Hz: a frame every refresh on the vblank clock, the in-between frames
+// interpolated from the last two real frames (optical flow, so Link and everything else moves by its
+// own motion), 20 real frames a second (CADENCE=3 is a share of 60, six slots each at 120), the
+// present thread time-critical in the MMCSS Games task. Arc 140T, Hyrule Field, while Link runs:
+// 1181-1200 of 1200 slots on time per 10 s, 118-120 shown frames a second, p99 9.6-13.6 ms.
+// EXTRAPOLATE=0: with EXTRAPOLATE on, frames are extrapolated and FLUID_INTERP does nothing, and
+// the shipped nx2_switches.txt turns it on (a game's switch default replaces a value only that
+// file set). The rows above do not record whether it was unset or 0.
+constexpr std::array OCARINA_INTEL_IGPU_120_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_FLUID_INTERP", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_RT", "1"},
+    SwitchValue{"EDEN_NX2_SHOWN_RATE", "120"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "0"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_CEILING", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
+// A display at about 144 Hz: frames paced to every refresh on the vblank clock (91.5 of 144 shown
+// a second in the one run), the in-between frames interpolated, real frames held to 24 a second
+// (CADENCE_DIVISOR=6: six slots per real frame at a shown rate of 144; the divisor is read only
+// with CADENCE set, and CADENCE=3 alone would give 6 too, but only because 144/60 rounds to 2),
+// the time-critical present thread. Exactly the setup
+// measured: the 60 Hz Intel set with EXTRAPOLATE=0, FLUID_INTERP=1, FLUID_RT=1, SHOWN_RATE=144
+// and CADENCE_DIVISOR=6, so no BUDGET_CEILING (the 120 Hz set has it; these runs did not).
+// One device, single runs, Ocarina of Time in Kokiri Forest by Link's house: Panther Lake laptop,
+// "Intel(R) Graphics" 8086:B0A0, 4 Xe3 cores, driver 32.0.101.8724, 2880x1800 at 144 Hz.
+//   the 60 Hz set:           20.0 real fps, 50.5 shown a second, shown frames held one slot 0%
+//                            (held 2 or 4+ refreshes), real frame age 57.0 ms
+//   this set:                24.0 real fps, 91.5 shown a second, 917 of 1069 slots on their slot,
+//                            84% held one slot, real frame age 89.9 ms
+//   with CADENCE_DIVISOR=7:  20.6 real fps, 84.1 shown a second, 847 of 1048 slots, 90%, 108.1 ms
+//   EXTRAPOLATE=1 (shipped nx2_switches.txt), divisor 7: 15.5 real fps, 58.5 shown a second,
+//                            573 of 1439 slots, 56%, 75.5 ms, 655 of 1238 frames dropped unshown
+// A scripted walk outdoors with this set held 17.6 to 24.1 real frames a second. The real frame
+// shown is older: 89.9 ms against 57.0 ms. A paired A-B-A-B of the first
+// two rows held in both pairs (79-83 shown a second against 44-51, 24 real against 20-22, real
+// frame age 74-87 ms against 53-57 ms; one session, 14 November). The set names EXTRAPOLATE=0, as
+// measured, because the shipped nx2_switches.txt sets EXTRAPOLATE=1 and a game's switch default
+// replaces a value only that file set (ApplySwitchDefaults). With EDEN_NX2_EXTRAPOLATE=1 set by
+// the player (their environment or their own nx2_switches.txt), which stays as set, the presenter
+// extrapolates and FLUID_INTERP does nothing: that combination is the last row, not this one, and
+// ApplySwitchDefaults says so in its log line.
+constexpr std::array OCARINA_INTEL_IGPU_144_SWITCHES{
+    SwitchValue{"EDEN_NX2_FLUID", "2"},
+    SwitchValue{"EDEN_NX2_FLUID_INTERP", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_RT", "1"},
+    SwitchValue{"EDEN_NX2_SHOWN_RATE", "144"},
+    SwitchValue{"EDEN_NX2_CADENCE", "3"},
+    SwitchValue{"EDEN_NX2_CADENCE_DIVISOR", "6"},
+    SwitchValue{"EDEN_NX2_EXTRAPOLATE", "0"},
+    SwitchValue{"EDEN_NX2_EARLY_SUBMIT", "1"},
+    SwitchValue{"EDEN_NX2_EARLY_PAGES", "256"},
+    SwitchValue{"EDEN_NX2_EARLY_AFTER", "1"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE", "5"},
+    SwitchValue{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT", "1"},
+    SwitchValue{"EDEN_NX2_BUDGET_HOLD_RES", "1"},
+    SwitchValue{"EDEN_NX2_GPL", "1"},
+};
+
+#ifdef _WIN32
+/// The primary display's refresh rate in Hz, 0 when Windows does not say. The fallback for a
+/// window whose display's rate the host did not report (ChooseRefreshHz).
+[[nodiscard]] u32 PrimaryDisplayRefreshHz() {
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode)) {
+        return 0;
+    }
+    return mode.dmDisplayFrequency > 1 ? static_cast<u32>(mode.dmDisplayFrequency) : 0U;
+}
+#endif
+#endif
+constexpr u64 OCARINA_TITLE_ID = 0x0400486024DEC000;
+
+// The display rates each locked set is chosen at, in Hz (both ends included). Each was measured at
+// one rate only: 120 and 144.
+constexpr u32 LOCKED_120_MIN_HZ = 115;
+constexpr u32 LOCKED_120_MAX_HZ = 125;
+constexpr u32 LOCKED_144_MIN_HZ = 140;
+constexpr u32 LOCKED_144_MAX_HZ = 148;
+
+constexpr std::array<std::string_view, 1> OCARINA_SOFTWARE_TENSOR_ADDONS{
+    "Max Resolution (built-in)",
+};
+
+// Ocarina of Time on Adreno 830 (Snapdragon 8 Elite). Turnip's A8xx driver is experimental:
+// compute shared memory above 32 KiB fails Vulkan conformance, and a compute job after a tiled
+// render pass has hung the GPU. Nothing here is a paired measurement. Tensor anti-aliasing is
+// left alone (matrix support on this part is unmeasured). Frame generation stays off. Extended
+// dynamic state, pipeline libraries and guest compute pipelines stay off, and asynchronous GPU
+// emulation and presentation are turned off so submission does not overlap a tiled pass. The
+// match is any integrated Qualcomm GPU: presets cannot name a GPU family until that family is
+// classified, and Adreno 830 is the part this set was written for. Listed before the Intel
+// preset; the two matches do not overlap.
+constexpr std::array OCARINA_ADRENO_830_SETTINGS{
+    SettingValue{"frame_gen", "false",
+                 "frame generation is unmeasured on Adreno 830 and adds compute after tiled "
+                 "render passes, which experimental Turnip A8xx has hung on",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"use_asynchronous_gpu_emulation", "false",
+                 "submit GPU work synchronously; experimental Turnip A8xx has hung when compute "
+                 "follows a tiled render pass",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"async_presentation", "false",
+                 "present in lockstep with the GPU; asynchronous presentation is unmeasured on "
+                 "Turnip A8xx",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"vram_usage_mode", "0", // Conservative
+                 "conservative VRAM on unified phone memory; Turnip A8xx is experimental",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"frame_pacing_mode", "0", // Auto
+                 "automatic frame pacing; a 120 Hz cadence set is not measured on Adreno 830",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"dyna_state", "0", // Disabled
+                 "extended dynamic state off; Turnip A8xx is experimental",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"use_graphics_pipeline_library", "false",
+                 "graphics pipeline libraries were measured on Intel only",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"enable_compute_pipelines", "false",
+                 "guest compute pipelines stay off; Turnip A8xx compute shared memory above "
+                 "32 KiB fails conformance",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"gpu_accuracy", "0", // Low
+                 "low GPU accuracy; high accuracy is unmeasured on Adreno 830",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"vertex_input_dynamic_state", "false",
+                 "vertex input dynamic state off; unmeasured on Turnip A8xx",
+                 PRESET_NOT_MEASURED},
+};
+
+constexpr std::array<std::string_view, 3> OCARINA_ADRENO_830_ADDONS{
+    "Max Resolution (built-in)",
+    "Texture Pool x2 (built-in)",
+    "FPS Unlock (built-in)",
+};
+
+constexpr std::array PRESETS{
+    Preset{
+        .title_id = OCARINA_TITLE_ID,
+        .gpu = {.vendor = GameSettings::GPUVendor::Qualcomm, .integrated = true},
+        .settings = OCARINA_ADRENO_830_SETTINGS,
+        .addons = OCARINA_ADRENO_830_ADDONS,
+        .reason = "Ocarina of Time on Adreno 830 (Snapdragon 8 Elite)",
+    },
+    Preset{
+        .title_id = 0x0400486024DEC000,
+        .gpu = {.vendor = GameSettings::GPUVendor::Intel,
+                .integrated = true,
+                .software_tensor_math = true},
+        .settings = OCARINA_SOFTWARE_TENSOR_SETTINGS,
+        .addons = OCARINA_SOFTWARE_TENSOR_ADDONS,
+        .reason = "Ocarina of Time on an Intel integrated GPU without matrix cores",
+    },
+};
+
+struct FirstBootTitle {
+    u64 title_id{};
+    std::string_view name;
+};
+
+// Titles whose first boot on an Intel or AMD integrated GPU gets one line with what the presets
+// did, so that a first report shows the starting point.
+constexpr std::array FIRST_BOOT_TITLES{
+    FirstBootTitle{.title_id = 0x0400486024DEC000, .name = "Ocarina of Time"},
+};
+
+bool Enabled() {
+    const char* off = std::getenv("EDEN_NX2_NO_PRESETS");
+    return Settings::values.auto_presets.GetValue() && (off == nullptr || off[0] != '1');
+}
+
+/// What the user chose, read from the settings, the environment and the shipped switch file.
+UserChoices ReadUserChoices() {
+    UserChoices user;
+    user.presets_enabled = Enabled();
+    user.setting = [](std::string_view label) {
+        SettingState state;
+        const auto& by_key = Settings::values.linkage.by_key;
+        const auto it = by_key.find(std::string{label});
+        if (it == by_key.end() || !it->second->Switchable()) {
+            return state;
+        }
+        Settings::BasicSetting& setting = *it->second;
+        state.known = true;
+        state.per_game = !setting.UsingGlobal();
+        state.global_value = setting.ToStringGlobal();
+        state.default_value = setting.DefaultToString();
+        state.value = setting.ToString();
+        return state;
+    };
+    user.addon_disabled = [](u64 title_id, std::string_view addon) {
+        const auto& all = Settings::values.disabled_addons;
+        const auto it = all.find(title_id);
+        return it != all.end() && std::ranges::any_of(it->second, [addon](const std::string& name) {
+                   return name == addon;
+               });
+    };
+    user.environment = [](std::string_view name) -> std::optional<std::string> {
+        const std::string key{name};
+        const char* const value = std::getenv(key.c_str());
+        if (value == nullptr) {
+            return std::nullopt;
+        }
+        return std::string{value};
+    };
+    user.shipped_only = [](std::string_view name) {
+        return Common::SwitchOrigin::ShippedOnlyValue(name);
+    };
+#ifdef _WIN32
+    user.primary_refresh_hz = PrimaryDisplayRefreshHz();
+#endif
+    return user;
+}
+
+// What the process resolved at boot, for the debug server: the switch stage (ApplySwitchDefaults,
+// before the device) and the settings stage (Apply, once the device's capabilities are known) each
+// fill their part.
+struct ResolutionRecord {
+    std::mutex mutex;
+    std::optional<Resolution> value;
+};
+
+ResolutionRecord& TheResolutionRecord() {
+    static ResolutionRecord record;
+    return record;
+}
+
+// The resolution as recorded so far, with this stage's part in it. Another title starts over.
+Resolution Record(const Resolution& stage, bool switches_stage) {
+    ResolutionRecord& record = TheResolutionRecord();
+    const std::scoped_lock lock{record.mutex};
+    if (!record.value || record.value->title_id != stage.title_id) {
+        record.value.emplace();
+        record.value->title_id = stage.title_id;
+    }
+    Resolution& kept = *record.value;
+    kept.presets_enabled = stage.presets_enabled;
+    if (switches_stage) {
+        const bool software_tensor_math = kept.inputs.software_tensor_math;
+        kept.inputs = stage.inputs;
+        kept.inputs.software_tensor_math = software_tensor_math;
+        kept.pacing = stage.pacing;
+        kept.pacing_why = stage.pacing_why;
+        kept.switches = stage.switches;
+    } else {
+        kept.inputs.software_tensor_math = stage.inputs.software_tensor_math;
+        kept.preset_reason = stage.preset_reason;
+        kept.settings = stage.settings;
+        kept.addons = stage.addons;
+    }
+    return kept;
+}
+
+/// Returns the outcome for the summary line.
+std::string ApplySetting(std::string_view preset_reason, const SettingEntry& item) {
+    const auto& by_key = Settings::values.linkage.by_key;
+    const auto it = by_key.find(std::string{item.label});
+    if (!item.available || it == by_key.end() || !it->second->Switchable()) {
+        LOG_ERROR(Core, "Preset {}: {} is not a per-game setting", preset_reason, item.label);
+        return fmt::format("{} is not a per-game setting", item.label);
+    }
+    Settings::BasicSetting& setting = *it->second;
+    switch (item.decision) {
+    case Decision::Apply:
+        setting.SetGlobal(false);
+        setting.LoadString(std::string{item.value});
+        Settings::HoldPresetValue(setting);
+        LOG_INFO(Core, "Preset {}: {}={}", preset_reason, item.label, setting.ToString());
+        return fmt::format("{}={}", item.label, setting.ToString());
+    case Decision::AlreadySet:
+        LOG_INFO(Core, "Preset {}: {}={} (already set)", preset_reason, item.label, item.value);
+        return fmt::format("{}={} (already set)", item.label, item.value);
+    case Decision::UserPerGame:
+        LOG_INFO(Core, "Preset {}: {}={} skipped, the game's configuration sets {}",
+                 preset_reason, item.label, item.value, setting.ToString());
+        return fmt::format("{}={} skipped (game configuration: {})", item.label, item.value,
+                           setting.ToString());
+    case Decision::UserGlobal:
+        LOG_INFO(Core, "Preset {}: {}={} skipped, the global configuration sets {}",
+                 preset_reason, item.label, item.value, setting.ToStringGlobal());
+        return fmt::format("{}={} skipped (global configuration: {})", item.label, item.value,
+                           setting.ToStringGlobal());
+    }
+    return {};
+}
+
+/// Returns the outcome for the summary line.
+std::string ReportAddon(std::string_view preset_reason, const AddonEntry& addon) {
+    if (addon.disabled) {
+        LOG_INFO(Core, "Preset {}: add-on \"{}\" skipped, it is disabled in Add-Ons",
+                 preset_reason, addon.name);
+        return fmt::format("add-on \"{}\" skipped (disabled in Add-Ons)", addon.name);
+    }
+    LOG_INFO(Core, "Preset {}: add-on \"{}\" enabled", preset_reason, addon.name);
+    return fmt::format("add-on \"{}\" enabled", addon.name);
+}
+
+std::filesystem::path FirstBootList() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "presets_first_boot.txt";
+}
+
+} // Anonymous namespace
+
+std::span<const Preset> Presets() {
+    return PRESETS;
+}
+
+bool Matches(const GpuMatch& match, const GpuInfo& gpu) {
+    return (match.vendor == GameSettings::GPUVendor::Unknown || match.vendor == gpu.vendor) &&
+           (!match.integrated || gpu.integrated) &&
+           (!match.software_tensor_math || gpu.software_tensor_math) &&
+           (match.device_class == Common::DeviceClass::Unknown ||
+            match.device_class == gpu.device_class) &&
+           (match.gpu_family == Common::GpuFamily::None || match.gpu_family == gpu.gpu_family);
+}
+
+const Preset* Find(std::span<const Preset> presets, u64 title_id, const GpuInfo& gpu) {
+    const auto it = std::ranges::find_if(presets, [&](const Preset& preset) {
+        return preset.title_id == title_id && Matches(preset.gpu, gpu);
+    });
+    return it != presets.end() ? &*it : nullptr;
+}
+
+Decision Decide(std::string_view preset_value, bool per_game, std::string_view global_value,
+                std::string_view default_value) {
+    if (per_game) {
+        return Decision::UserPerGame;
+    }
+    if (global_value == preset_value) {
+        return Decision::AlreadySet;
+    }
+    return global_value == default_value ? Decision::Apply : Decision::UserGlobal;
+}
+
+std::string Apply(u64 title_id, const GpuInfo& gpu) {
+    ResolveInput input;
+    input.title_id = title_id;
+    input.gpu = gpu;
+    input.user = ReadUserChoices();
+    input.want_switches = false;
+    input.community = CommunityEvidence::Embedded();
+    const Resolution resolution = Resolve(input);
+    LOG_INFO(Core, "Resolution: {}", DescribeResolution(Record(resolution, false)));
+    if (resolution.preset_reason.empty()) {
+        return {};
+    }
+    if (!resolution.presets_enabled) {
+        LOG_INFO(Core, "Preset {}: not used, automatic presets are off", resolution.preset_reason);
+        return fmt::format("preset \"{}\" not used, automatic presets are off",
+                           resolution.preset_reason);
+    }
+    std::string summary = fmt::format("preset \"{}\":", resolution.preset_reason);
+    std::string_view separator = " ";
+    for (const SettingEntry& item : resolution.settings) {
+        summary += separator;
+        summary += ApplySetting(resolution.preset_reason, item);
+        separator = ", ";
+    }
+    for (const AddonEntry& addon : resolution.addons) {
+        summary += separator;
+        summary += ReportAddon(resolution.preset_reason, addon);
+        separator = ", ";
+    }
+    return summary;
+}
+
+GameSettings::GPUVendor VendorOfPciId(u32 vendor_id) {
+    switch (vendor_id) {
+    case 0x8086:
+        return GameSettings::GPUVendor::Intel;
+    case 0x1002:
+        return GameSettings::GPUVendor::AMD;
+    case 0x10DE:
+        return GameSettings::GPUVendor::Nvidia;
+    case 0x5143:
+        return GameSettings::GPUVendor::Qualcomm;
+    default:
+        return GameSettings::GPUVendor::Unknown;
+    }
+}
+
+namespace {
+
+// Whether the host reported a usable rate for the window's display. At least 1.5 Hz rounds to 2 or
+// more, as the primary display's rate counts only above 1 Hz. Written so that NaN is "not
+// reported", and an implausible rate is too.
+bool WindowRateReported(double window_hz) {
+    return window_hz >= 1.5 && window_hz < 10000.0;
+}
+
+std::string PrimaryDisplayText(u32 refresh_hz) {
+    return refresh_hz == 0 ? std::string{"primary display rate unknown"}
+                           : fmt::format("primary display at {} Hz", refresh_hz);
+}
+
+} // Anonymous namespace
+
+u32 ChooseRefreshHz(double window_hz, u32 primary_hz) {
+    if (WindowRateReported(window_hz)) {
+        return static_cast<u32>(window_hz + 0.5);
+    }
+    return primary_hz;
+}
+
+std::string DescribeDisplay(const DisplayInfo& display, u32 refresh_hz) {
+    if (!WindowRateReported(display.refresh_hz)) {
+        return PrimaryDisplayText(refresh_hz);
+    }
+    if (display.name.empty()) {
+        return fmt::format("the window's display at {} Hz", refresh_hz);
+    }
+    return fmt::format("display {} ({}) at {} Hz", display.name,
+                       display.primary ? "primary" : "not the primary display", refresh_hz);
+}
+
+PacingSet ChoosePacingSet(u64 title_id, const GpuInfo& gpu, u32 refresh_hz) {
+    if (title_id != OCARINA_TITLE_ID || !gpu.integrated) {
+        return PacingSet::None;
+    }
+    if (gpu.vendor == GameSettings::GPUVendor::AMD) {
+        return PacingSet::Hz60;
+    }
+    if (gpu.vendor != GameSettings::GPUVendor::Intel) {
+        return PacingSet::None;
+    }
+    // Measured at 120 and 144 Hz only: other refresh rates, and an unknown one, keep the 60 Hz set.
+    if (refresh_hz >= LOCKED_120_MIN_HZ && refresh_hz <= LOCKED_120_MAX_HZ) {
+        return PacingSet::Hz120;
+    }
+    if (refresh_hz >= LOCKED_144_MIN_HZ && refresh_hz <= LOCKED_144_MAX_HZ) {
+        return PacingSet::Hz144;
+    }
+    // TODO(measure): defaults by device class or GPU family (gpu.device_class, gpu.gpu_family) go
+    // here; settings presets by class or family set GpuMatch's device_class or gpu_family. Each
+    // needs a paired run on a verified scene of that class or family first (AGENTS.md, rule 1);
+    // until then neither changes anything.
+    return PacingSet::Hz60;
+}
+
+std::string DescribePacingChoice(const GpuInfo& gpu, u32 refresh_hz, PacingSet set,
+                                 std::string_view display_text) {
+    const std::string display =
+        display_text.empty() ? PrimaryDisplayText(refresh_hz) : std::string{display_text};
+    switch (set) {
+    case PacingSet::None:
+        return fmt::format("{}, no pacing set for this game and GPU", display);
+    case PacingSet::Hz60:
+        if (gpu.vendor != GameSettings::GPUVendor::Intel) {
+            return fmt::format(
+                "{}, the 60 Hz set (the only set given for this GPU vendor; measured on Intel)",
+                display);
+        }
+        return fmt::format("{}, the 60 Hz set (the locked sets are chosen at {} to {} and {} "
+                           "to {} Hz only)",
+                           display, LOCKED_120_MIN_HZ, LOCKED_120_MAX_HZ, LOCKED_144_MIN_HZ,
+                           LOCKED_144_MAX_HZ);
+    case PacingSet::Hz120:
+        return fmt::format("{}, the 120 Hz set (chosen at {} to {} Hz, measured at 120)", display,
+                           LOCKED_120_MIN_HZ, LOCKED_120_MAX_HZ);
+    case PacingSet::Hz144:
+        return fmt::format("{}, the 144 Hz set (chosen at {} to {} Hz, measured at 144)", display,
+                           LOCKED_144_MIN_HZ, LOCKED_144_MAX_HZ);
+    }
+    return display;
+}
+
+std::span<const SwitchValue> PacingSwitches([[maybe_unused]] PacingSet set,
+                                            [[maybe_unused]] const GpuInfo& gpu) {
+#ifdef _WIN32
+    switch (set) {
+    case PacingSet::None:
+        return {};
+    case PacingSet::Hz60:
+        if (gpu.vendor == GameSettings::GPUVendor::Intel) {
+            return OCARINA_INTEL_IGPU_SWITCHES;
+        }
+        return OCARINA_IGPU_SWITCHES;
+    case PacingSet::Hz120:
+        return OCARINA_INTEL_IGPU_120_SWITCHES;
+    case PacingSet::Hz144:
+        return OCARINA_INTEL_IGPU_144_SWITCHES;
+    }
+#else
+    // The sets are measured on Windows only.
+#endif
+    return {};
+}
+
+std::span<const SwitchValue> SwitchDefaults(u64 title_id, const GpuInfo& gpu,
+                                            const DisplayInfo& display) {
+#ifdef _WIN32
+    const u32 primary_hz = PrimaryDisplayRefreshHz();
+#else
+    const u32 primary_hz = 0;
+#endif
+    return PacingSwitches(
+        ChoosePacingSet(title_id, gpu, ChooseRefreshHz(display.refresh_hz, primary_hz)), gpu);
+}
+
+SwitchDecision DecideSwitch(std::optional<std::string_view> current,
+                            std::optional<std::string_view> shipped_only) {
+    if (!current) {
+        return SwitchDecision::Set;
+    }
+    // Only while the value is still the shipped file's: what changed it since is not that file.
+    if (shipped_only && *shipped_only == *current) {
+        return SwitchDecision::ReplaceShipped;
+    }
+    return SwitchDecision::KeepPlayers;
+}
+
+namespace {
+
+constexpr Evidence EVIDENCE_60_INTEL{
+    true, "docs/switches.md, Defaults for Ocarina of Time (60 Hz set): Arc 140T, Hyrule Field, one "
+          "paired session"};
+constexpr Evidence EVIDENCE_60_AMD{
+    false, "not measured on AMD: docs/switches.md, Defaults for Ocarina of Time (the 60 Hz set was "
+           "measured on Intel)"};
+constexpr Evidence EVIDENCE_120{
+    true, "docs/switches.md, Defaults for Ocarina of Time (120 Hz set): Arc 140T, Hyrule Field at "
+          "120 Hz, one device"};
+constexpr Evidence EVIDENCE_144{
+    true, "docs/switches.md, Defaults for Ocarina of Time (144 Hz set): Panther Lake laptop, Kokiri "
+          "Forest at 144 Hz, paired A-B-A-B, one device"};
+constexpr Evidence EVIDENCE_NO_SET{false, "no switch default for this game and GPU"};
+
+[[nodiscard]] Evidence EvidenceOfPacingSet(PacingSet set, GameSettings::GPUVendor vendor) {
+    switch (set) {
+    case PacingSet::None:
+        return EVIDENCE_NO_SET;
+    case PacingSet::Hz60:
+        return vendor == GameSettings::GPUVendor::Intel ? EVIDENCE_60_INTEL : EVIDENCE_60_AMD;
+    case PacingSet::Hz120:
+        return EVIDENCE_120;
+    case PacingSet::Hz144:
+        return EVIDENCE_144;
+    }
+    return EVIDENCE_NO_SET;
+}
+
+struct SwitchReason {
+    std::string_view name;
+    std::string_view reason;
+};
+
+// Why each switch of the pacing sets is in them, from docs/switches.md.
+constexpr std::array SWITCH_REASONS{
+    SwitchReason{"EDEN_NX2_FLUID",
+                 "the vblank-locked presenter: each real frame is shown and predictions reach under "
+                 "one frame interval ahead"},
+    SwitchReason{"EDEN_NX2_FLUID_INTERP",
+                 "in-between frames interpolated from the last two real frames"},
+    SwitchReason{"EDEN_NX2_FLUID_RT",
+                 "the present thread is time-critical in the MMCSS Games task"},
+    SwitchReason{"EDEN_NX2_SHOWN_RATE",
+                 "a frame every refresh of the locked display, on the vblank clock"},
+    SwitchReason{"EDEN_NX2_CADENCE",
+                 "real frames held to the game's 20 Hz tick, so predicted motion has the right "
+                 "speed"},
+    SwitchReason{"EDEN_NX2_CADENCE_DIVISOR",
+                 "six slots per real frame at 144 shown a second: 24 real frames a second"},
+    SwitchReason{"EDEN_NX2_EARLY_SUBMIT", "early read-back downloads"},
+    SwitchReason{"EDEN_NX2_EARLY_PAGES", "early read-back downloads"},
+    SwitchReason{"EDEN_NX2_EARLY_AFTER", "early read-back downloads"},
+    SwitchReason{"EDEN_NX2_FLUID_QUEUE",
+                 "the screen copy on a queue of its own, so it does not wait behind the game's "
+                 "rendering"},
+    SwitchReason{"EDEN_NX2_FLUID_QUEUE_HOST_WAIT",
+                 "the screen copy on a queue of its own, so it does not wait behind the game's "
+                 "rendering"},
+    SwitchReason{"EDEN_NX2_BUDGET_HOLD_RES",
+                 "the frame budget does not raise the resolution into the GPU time the cadence "
+                 "frees"},
+    SwitchReason{"EDEN_NX2_BUDGET_CEILING", "the frame budget's GPU time scale is capped at 1"},
+    SwitchReason{"EDEN_NX2_GPL", "pipeline library fast links for first-visit shaders"},
+};
+
+[[nodiscard]] std::string_view ReasonOfSwitch(std::string_view name, std::string_view value) {
+    if (name == "EDEN_NX2_EXTRAPOLATE") {
+        return value == "0"
+                   ? "off in the locked sets, which interpolate: with it on, frames are "
+                     "extrapolated and FLUID_INTERP does nothing"
+                   : "frames predicted from the game's motion vectors";
+    }
+    const auto it = std::ranges::find(SWITCH_REASONS, name, &SwitchReason::name);
+    return it != SWITCH_REASONS.end() ? it->reason : std::string_view{};
+}
+
+[[nodiscard]] std::string SettingText(const SettingEntry& entry) {
+    if (!entry.available) {
+        return fmt::format("{}={} (no such per-game setting)", entry.label, entry.value);
+    }
+    switch (entry.decision) {
+    case Decision::Apply:
+        return fmt::format("{}={} (set)", entry.label, entry.value);
+    case Decision::AlreadySet:
+        return fmt::format("{}={} (already set)", entry.label, entry.value);
+    case Decision::UserPerGame:
+        return fmt::format("{}={} (kept: game configuration {})", entry.label, entry.value,
+                           entry.current);
+    case Decision::UserGlobal:
+        return fmt::format("{}={} (kept: global configuration {})", entry.label, entry.value,
+                           entry.current);
+    }
+    return {};
+}
+
+/// The community's paired measurement of `name` at `value` on this GPU's family and the title.
+[[nodiscard]] std::string CommunityText(const ResolveInput& input, std::string_view name,
+                                        std::string_view value) {
+    const CommunityEvidence::Effect* const effect = CommunityEvidence::Find(
+        input.community, input.gpu.gpu_family, input.title_id, name, value);
+    return effect != nullptr ? CommunityEvidence::Describe(*effect) : std::string{};
+}
+
+/// " [community: ...]" after an entry that has a community measurement.
+[[nodiscard]] std::string CommunitySuffix(const std::string& community) {
+    return community.empty() ? std::string{} : fmt::format(" [community: {}]", community);
+}
+
+[[nodiscard]] std::string SwitchText(const SwitchEntry& entry) {
+    switch (entry.decision) {
+    case SwitchDecision::Set:
+        return fmt::format("{}={}", entry.name, entry.value);
+    case SwitchDecision::ReplaceShipped:
+        return fmt::format("{}={} (over shipped)", entry.name, entry.value);
+    case SwitchDecision::KeepPlayers:
+        return fmt::format("{}={} (kept: player's {})", entry.name, entry.value,
+                           entry.player_value);
+    }
+    return {};
+}
+
+} // Anonymous namespace
+
+std::string_view VendorName(GameSettings::GPUVendor vendor) {
+    switch (vendor) {
+    case GameSettings::GPUVendor::Intel:
+        return "Intel";
+    case GameSettings::GPUVendor::AMD:
+        return "AMD";
+    case GameSettings::GPUVendor::Nvidia:
+        return "NVIDIA";
+    case GameSettings::GPUVendor::Qualcomm:
+        return "Qualcomm";
+    default:
+        return "unknown vendor";
+    }
+}
+
+std::string_view DecisionName(Decision decision) {
+    switch (decision) {
+    case Decision::Apply:
+        return "apply";
+    case Decision::AlreadySet:
+        return "already_set";
+    case Decision::UserPerGame:
+        return "user_per_game";
+    case Decision::UserGlobal:
+        return "user_global";
+    }
+    return "unknown";
+}
+
+std::string_view SwitchDecisionName(SwitchDecision decision) {
+    switch (decision) {
+    case SwitchDecision::Set:
+        return "set";
+    case SwitchDecision::ReplaceShipped:
+        return "replace_shipped";
+    case SwitchDecision::KeepPlayers:
+        return "keep_players";
+    }
+    return "unknown";
+}
+
+std::string_view PacingSetName(PacingSet set) {
+    switch (set) {
+    case PacingSet::None:
+        return "none";
+    case PacingSet::Hz60:
+        return "60hz";
+    case PacingSet::Hz120:
+        return "120hz";
+    case PacingSet::Hz144:
+        return "144hz";
+    }
+    return "unknown";
+}
+
+u64 PixelsPerGpuCore(u32 width_px, u32 height_px, u32 cores) {
+    if (width_px == 0 || height_px == 0 || cores == 0) {
+        return 0;
+    }
+    return static_cast<u64>(width_px) * height_px / cores;
+}
+
+Resolution Resolve(const ResolveInput& input) {
+    const GpuInfo& gpu = input.gpu;
+    const UserChoices& user = input.user;
+    Resolution out;
+    out.title_id = input.title_id;
+    out.presets_enabled = user.presets_enabled;
+    const u32 refresh_hz = ChooseRefreshHz(input.display.refresh_hz, user.primary_refresh_hz);
+    ResolverInputs& seen = out.inputs;
+    seen.vendor = gpu.vendor;
+    seen.integrated = gpu.integrated;
+    seen.software_tensor_math = gpu.software_tensor_math;
+    seen.device_class = gpu.device_class;
+    seen.gpu_family = gpu.gpu_family;
+    seen.refresh_hz = refresh_hz;
+    seen.display = DescribeDisplay(input.display, refresh_hz);
+    seen.output_width = input.display.width_px;
+    seen.output_height = input.display.height_px;
+    seen.gpu_cores = gpu.cores;
+    seen.gpu_cores_unit = gpu.cores_unit;
+    seen.pixels_per_core = PixelsPerGpuCore(seen.output_width, seen.output_height, gpu.cores);
+
+    if (input.want_settings) {
+        if (const Preset* const preset = Find(PRESETS, input.title_id, gpu)) {
+            out.preset_reason = preset->reason;
+            for (const SettingValue& item : preset->settings) {
+                SettingEntry entry;
+                entry.label = item.label;
+                entry.value = item.value;
+                entry.reason = item.reason.empty() ? preset->reason : item.reason;
+                entry.evidence = item.evidence.where.empty() ? PRESET_NOT_MEASURED : item.evidence;
+                entry.community = CommunityText(input, entry.label, entry.value);
+                SettingState state;
+                state.known = true;
+                if (user.setting) {
+                    state = user.setting(item.label);
+                }
+                entry.available = state.known;
+                if (state.known) {
+                    entry.decision = Decide(item.value, state.per_game, state.global_value,
+                                            state.default_value);
+                    if (entry.decision == Decision::UserPerGame) {
+                        entry.current = state.value;
+                    } else if (entry.decision == Decision::UserGlobal) {
+                        entry.current = state.global_value;
+                    }
+                }
+                out.settings.push_back(std::move(entry));
+            }
+            for (const std::string_view name : preset->addons) {
+                AddonEntry entry;
+                entry.name = name;
+                entry.disabled = user.addon_disabled && user.addon_disabled(preset->title_id, name);
+                entry.reason = preset->reason;
+                entry.evidence = PRESET_NOT_MEASURED;
+                out.addons.push_back(entry);
+            }
+        }
+    }
+
+    if (input.want_switches) {
+        out.pacing = ChoosePacingSet(input.title_id, gpu, refresh_hz);
+        out.pacing_why = DescribePacingChoice(gpu, refresh_hz, out.pacing, seen.display);
+        const Evidence evidence = EvidenceOfPacingSet(out.pacing, gpu.vendor);
+        for (const SwitchValue& item : PacingSwitches(out.pacing, gpu)) {
+            SwitchEntry entry;
+            entry.name = item.name;
+            entry.value = item.value;
+            entry.reason = ReasonOfSwitch(item.name, item.value);
+            entry.evidence = evidence;
+            entry.community = CommunityText(input, entry.name, entry.value);
+            std::optional<std::string> current;
+            if (user.environment) {
+                current = user.environment(item.name);
+            }
+            std::optional<std::string> shipped;
+            if (user.shipped_only) {
+                shipped = user.shipped_only(item.name);
+            }
+            std::optional<std::string_view> current_view;
+            if (current) {
+                current_view = *current;
+            }
+            std::optional<std::string_view> shipped_view;
+            if (shipped) {
+                shipped_view = *shipped;
+            }
+            entry.decision = DecideSwitch(current_view, shipped_view);
+            if (entry.decision == SwitchDecision::KeepPlayers && current) {
+                entry.player_value = *current;
+            }
+            entry.shipped = std::move(shipped);
+            out.switches.push_back(std::move(entry));
+        }
+    }
+    return out;
+}
+
+std::string DescribeResolution(const Resolution& resolution) {
+    const ResolverInputs& in = resolution.inputs;
+    const std::string output = in.output_width != 0 && in.output_height != 0
+                                   ? fmt::format("{}x{}", in.output_width, in.output_height)
+                                   : std::string{"not reported"};
+    std::string cores = in.gpu_cores != 0 ? fmt::format("{} {}", in.gpu_cores, in.gpu_cores_unit)
+                                          : std::string{"not reported by the driver"};
+    if (in.pixels_per_core != 0) {
+        cores += fmt::format(", {} output pixels per core", in.pixels_per_core);
+    }
+    std::string text = fmt::format(
+        "title {:016X}, {} {}GPU{}, class {}, family {}; {}; output {}, GPU cores {}; ",
+        resolution.title_id, VendorName(in.vendor), in.integrated ? "integrated " : "",
+        in.software_tensor_math ? " without matrix cores" : "",
+        Common::DeviceClassName(in.device_class), Common::GpuFamilyName(in.gpu_family), in.display,
+        output, cores);
+    if (!resolution.presets_enabled) {
+        text += "automatic presets off; ";
+    }
+    if (resolution.preset_reason.empty()) {
+        text += "settings: no preset";
+    } else {
+        const auto measured = std::ranges::count_if(
+            resolution.settings, [](const SettingEntry& entry) { return entry.evidence.measured; });
+        text += fmt::format("settings: preset \"{}\" ({} of {} measured):", resolution.preset_reason,
+                            measured, resolution.settings.size());
+        // With the presets off nothing is applied: these are the values the preset would give.
+        const bool used = resolution.presets_enabled;
+        for (const SettingEntry& entry : resolution.settings) {
+            text += ' ';
+            text += used ? SettingText(entry)
+                         : fmt::format("{}={} (not used)", entry.label, entry.value);
+            text += CommunitySuffix(entry.community);
+        }
+        for (const AddonEntry& addon : resolution.addons) {
+            const char* const state = !used           ? "not used"
+                                      : addon.disabled ? "disabled by the user, kept"
+                                                       : "enabled";
+            text += fmt::format(" add-on \"{}\" ({}, not measured)", addon.name, state);
+        }
+    }
+    if (resolution.switches.empty()) {
+        text += "; switches: none";
+    } else {
+        const auto measured = std::ranges::count_if(
+            resolution.switches, [](const SwitchEntry& entry) { return entry.evidence.measured; });
+        text += fmt::format("; switches: {} ({} of {} measured):", resolution.pacing_why, measured,
+                            resolution.switches.size());
+        for (const SwitchEntry& entry : resolution.switches) {
+            text += ' ';
+            text += resolution.presets_enabled
+                        ? SwitchText(entry)
+                        : fmt::format("{}={} (not used)", entry.name, entry.value);
+            text += CommunitySuffix(entry.community);
+        }
+    }
+    return text;
+}
+
+std::optional<Resolution> LastResolution() {
+    ResolutionRecord& record = TheResolutionRecord();
+    const std::scoped_lock lock{record.mutex};
+    return record.value;
+}
+
+namespace {
+
+// A value an ApplySwitchDefaults call set, so the next call in this process (a later game start)
+// can put back what was there before it.
+struct AppliedDefault {
+    std::string name;
+    std::string value;
+    std::optional<std::string> before; ///< The shipped file's value it replaced; nullopt: unset.
+};
+
+struct AppliedDefaults {
+    std::mutex mutex;
+    std::vector<AppliedDefault> items;
+    u32 calls{};
+};
+
+AppliedDefaults& TheAppliedDefaults() {
+    static AppliedDefaults applied_defaults;
+    return applied_defaults;
+}
+
+// Sets `name` to `value` in this process's environment, or removes it when `value` is nullopt.
+void SetSwitchInEnvironment(const std::string& name, const std::optional<std::string>& value) {
+#ifdef _WIN32
+    // An empty value removes the variable.
+    _putenv_s(name.c_str(), value ? value->c_str() : "");
+#else
+    if (value) {
+        setenv(name.c_str(), value->c_str(), 1);
+    } else {
+        unsetenv(name.c_str());
+    }
+#endif
+}
+
+} // Anonymous namespace
+
+std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu, const DisplayInfo& display) {
+    AppliedDefaults& applied = TheAppliedDefaults();
+    const std::scoped_lock lock{applied.mutex};
+    // A game started earlier in this process: put back what its defaults set, where the value is
+    // still theirs, so none of it carries over to this game and the decisions below are those of a
+    // first start (a value an earlier default set is not the player's).
+    for (const AppliedDefault& earlier : applied.items) {
+        const char* const now = std::getenv(earlier.name.c_str());
+        if (now != nullptr && earlier.value == now) {
+            SetSwitchInEnvironment(earlier.name, earlier.before);
+        }
+    }
+    applied.items.clear();
+    const bool first_start = applied.calls == 0;
+    ++applied.calls;
+    ResolveInput input;
+    input.title_id = title_id;
+    input.gpu = gpu;
+    input.display = display;
+    input.user = ReadUserChoices();
+    input.want_settings = false;
+    input.community = CommunityEvidence::Embedded();
+    const Resolution resolution = Resolve(input);
+    Record(resolution, true);
+    const PacingSet pacing = resolution.pacing;
+    if (resolution.switches.empty()) {
+        return {};
+    }
+    const std::string& why = resolution.pacing_why;
+    if (!resolution.presets_enabled) {
+        LOG_INFO(Core,
+                 "Switch defaults for this game and GPU ({}): not used, automatic presets are off",
+                 why);
+        return fmt::format("switch defaults ({}) not used, automatic presets are off", why);
+    }
+    std::string set;
+    std::string replaced;
+    std::string kept;
+    for (const SwitchEntry& item : resolution.switches) {
+        const std::string name{item.name};
+        if (item.decision == SwitchDecision::KeepPlayers) {
+            kept += fmt::format(" {}={}", name, item.player_value);
+            continue;
+        }
+        const std::string value{item.value};
+        // Listed as set over the shipped file only where it changes that file's value.
+        const bool over_shipped =
+            item.decision == SwitchDecision::ReplaceShipped && item.shipped && *item.shipped != value;
+        if (over_shipped) {
+            replaced += fmt::format(" {}={} (shipped {})", name, value, *item.shipped);
+        } else {
+            set += fmt::format(" {}={}", name, value);
+        }
+        SetSwitchInEnvironment(name, value);
+        Common::SwitchOrigin::RecordSetByProcess(name);
+        std::optional<std::string> before;
+        if (item.decision == SwitchDecision::ReplaceShipped) {
+            before = item.shipped;
+        }
+        applied.items.push_back(AppliedDefault{name, value, std::move(before)});
+    }
+    // The locked sets name EXTRAPOLATE=0, so after the loop above it is non-zero only where the
+    // player set it (their environment or their own nx2_switches.txt, the launcher's or the
+    // settings page's lines in it included); then it wins over FLUID_INTERP
+    // (ExtrapolationRequested).
+    std::string extrapolating;
+    if (pacing == PacingSet::Hz120 || pacing == PacingSet::Hz144) {
+        if (const char* extrapolate = std::getenv("EDEN_NX2_EXTRAPOLATE");
+            extrapolate != nullptr && *extrapolate != '\0' && *extrapolate != '0') {
+            extrapolating = fmt::format(
+                "; EDEN_NX2_EXTRAPOLATE={} is set, so frames are extrapolated and FLUID_INTERP "
+                "does nothing",
+                extrapolate);
+        }
+    }
+    std::string outcome = set.empty() && replaced.empty() ? std::string{" none needed"} : set;
+    if (!replaced.empty()) {
+        outcome += fmt::format("{} over the shipped nx2_switches.txt:{}", set.empty() ? "" : ";",
+                               replaced);
+    }
+    if (!kept.empty()) {
+        outcome += fmt::format("; set by the player:{}", kept);
+    }
+    outcome += extrapolating;
+    if (!first_start) {
+        // ExtrapolationRequested and most other switches are read once per process.
+        outcome += "; not the first game started in this process: switches read once, "
+                   "EDEN_NX2_EXTRAPOLATE among them, keep the values of the first start";
+    }
+    LOG_INFO(Core, "Switch defaults for this game and GPU ({}):{}", why, outcome);
+    return fmt::format("switch defaults ({}):{}", why, outcome);
+}
+
+bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {
+    return gpu.integrated &&
+           (gpu.vendor == GameSettings::GPUVendor::Intel ||
+            gpu.vendor == GameSettings::GPUVendor::AMD ||
+            gpu.vendor == GameSettings::GPUVendor::Qualcomm) &&
+           std::ranges::any_of(FIRST_BOOT_TITLES, [title_id](const FirstBootTitle& title) {
+               return title.title_id == title_id;
+           });
+}
+
+void ReportFirstBoot(u64 title_id, const GpuInfo& gpu, std::string_view gpu_name,
+                     std::string_view summary) {
+    if (!ReportsFirstBoot(title_id, gpu)) {
+        return;
+    }
+    const auto title = std::ranges::find_if(FIRST_BOOT_TITLES, [title_id](const auto& entry) {
+        return entry.title_id == title_id;
+    });
+    const std::string id = fmt::format("{:016X}", title_id);
+    const std::filesystem::path list = FirstBootList();
+    {
+        std::ifstream file{list};
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line == id) {
+                return;
+            }
+        }
+    }
+    LOG_INFO(Core, "First boot of {} on {} ({} integrated GPU{}): {}", title->name, gpu_name,
+             VendorName(gpu.vendor),
+             gpu.software_tensor_math ? " without matrix cores" : "",
+             summary.empty() ? std::string_view{"no preset for this GPU, settings as configured"}
+                             : summary);
+    std::error_code error;
+    if (std::filesystem::is_directory(list.parent_path(), error)) {
+        std::ofstream file{list, std::ios::app};
+        file << id << '\n';
+    }
+}
+
+} // namespace Core::GamePresets

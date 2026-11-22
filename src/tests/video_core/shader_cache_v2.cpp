@@ -33,6 +33,7 @@
 #include "common/fs/file_lock.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/fs/mapped_file.h"
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
 #include "shader_recompiler/program_header.h"
 #include "video_core/native_lowering.h"
@@ -567,7 +568,7 @@ TEST_CASE("Shader cache v2: compaction keeps the live records and only them",
         const Common::FS::FileLock other{VideoCommon::PipelineCacheLockPath(file)};
         REQUIRE(other.Held());
         REQUIRE(V2::CompactLog(file) == V2::WriteResult::Busy);
-        REQUIRE(ReadAll(file) == before.bytes);
+        REQUIRE(std::ranges::equal(ReadAll(file), before.bytes));
     }
     REQUIRE(V2::CompactLog(file) == V2::WriteResult::Written);
     const V2::LogFile after = V2::ReadLogFile(file);
@@ -937,6 +938,180 @@ TEST_CASE("Shader cache v2: a log parsed in parallel reads as one parsed in orde
     }
 }
 
+TEST_CASE("Shader cache v2: a log read through a memory map reads as one copied into memory",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    TestLog log = MakeLog(400);
+    log.bytes[log.ranges[10].second - 9] ^= 0x40;  // A payload byte
+    log.bytes[log.ranges[200].first + 13] ^= 0x01; // A header's key
+    V2::EncodeRecord(log.bytes, RecordKind::Compute, 0x1000 + 1, TestPayload(7));
+    V2::EncodeRecord(log.bytes, RecordKind::Tombstone, 0x1000 + 4,
+                     V2::TombstonePayload(RecordKind::Compute));
+    std::vector<u8> torn;
+    V2::EncodeRecord(torn, RecordKind::Graphics, 0x9999, TestPayload(3));
+    log.bytes.insert(log.bytes.end(), torn.begin(), torn.begin() + torn.size() / 2);
+    const auto damaged = temp.path / "damaged.bin";
+    WriteAll(damaged, log.bytes);
+    const auto intact = temp.path / "intact.bin";
+    WriteAll(intact, std::span{log.bytes}.first(log.ranges[5].second));
+    const auto header_cut = temp.path / "header-cut.bin";
+    WriteAll(header_cut, std::span{log.bytes}.first(V2::FileHeaderSize / 2));
+    const auto empty = temp.path / "empty.bin";
+    WriteAll(empty, std::span<const u8>{});
+    const auto missing = temp.path / "missing.bin";
+
+    VideoCommon::ShaderJobScheduler jobs{{.cpu_threads = 4, .driver_threads = 1}};
+    const V2::ForEach parallel = [&](size_t count, const std::function<void(size_t)>& task) {
+        VideoCommon::ParallelFor(jobs, count, task);
+    };
+    {
+        const V2::LogFile copied = V2::ReadLogFile(damaged);
+        REQUIRE(copied.parsed.stats.bad_payloads == 1);
+        REQUIRE(copied.parsed.stats.bad_headers >= 1);
+        REQUIRE(copied.parsed.stats.superseded >= 2);
+        REQUIRE(copied.parsed.stats.torn_tail_bytes != 0);
+    }
+    for (const auto& file : {damaged, intact, header_cut, empty, missing}) {
+        INFO(file.filename().string());
+        const V2::LogFile copied = V2::ReadLogFile(file);
+        for (const V2::ForEach& for_each : {V2::ForEach{}, parallel}) {
+            const V2::LogFile mapped = V2::MapLogFile(file, for_each);
+            // Missing and empty files are read as before
+            REQUIRE(mapped.mapping.IsMapped() == (file != empty && file != missing));
+            const std::span<const u8> view = mapped.mapping.Bytes();
+            REQUIRE(mapped.parsed.header == copied.parsed.header);
+            REQUIRE(mapped.parsed.created_unix == copied.parsed.created_unix);
+            REQUIRE(Live(mapped.parsed) == Live(copied.parsed));
+            REQUIRE(mapped.parsed.live.size() == copied.parsed.live.size());
+            for (size_t i = 0; i < mapped.parsed.live.size(); ++i) {
+                const V2::LogRecord& record = mapped.parsed.live[i];
+                REQUIRE(record.offset == copied.parsed.live[i].offset);
+                REQUIRE(record.flags == copied.parsed.live[i].flags);
+                // Read where the file is mapped, not copied
+                REQUIRE(record.payload.data() >= view.data());
+                REQUIRE(record.payload.data() + record.payload.size() <=
+                        view.data() + view.size());
+            }
+            const auto& a = mapped.parsed.stats;
+            const auto& b = copied.parsed.stats;
+            REQUIRE(std::tie(a.file_size, a.records, a.live, a.superseded, a.tombstones,
+                             a.bad_headers, a.bad_payloads, a.skipped_bytes, a.torn_tail_bytes,
+                             a.dead_bytes) == std::tie(b.file_size, b.records, b.live,
+                                                       b.superseded, b.tombstones, b.bad_headers,
+                                                       b.bad_payloads, b.skipped_bytes,
+                                                       b.torn_tail_bytes, b.dead_bytes));
+        }
+    }
+
+    // Bytes appended after the file was mapped are not part of the mapping.
+    const Common::FS::MappedFile mapping{intact};
+    REQUIRE(mapping.IsMapped());
+    const std::vector<u8> before(mapping.Bytes().begin(), mapping.Bytes().end());
+    REQUIRE(before.size() == log.ranges[5].second);
+    {
+        std::ofstream stream(intact, std::ios::binary | std::ios::app);
+        stream.write(reinterpret_cast<const char*>(log.bytes.data() + log.ranges[5].second),
+                     static_cast<std::streamsize>(log.ranges[6].second - log.ranges[5].second));
+    }
+    REQUIRE(V2::ReadLogFile(intact).parsed.live.size() == 7);
+    REQUIRE(mapping.Bytes().size() == before.size());
+    REQUIRE(std::ranges::equal(mapping.Bytes(), before));
+    REQUIRE(V2::ParseLog(mapping.Bytes()).live.size() == 6);
+}
+
+TEST_CASE("Shader cache v2: programs loaded in parallel are the ones loaded in order",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const V2::ProgramRecord base = LowerTestProgram(PlainProgram, false, 0);
+    enum class Expect { Hit, Stale, Miss };
+    std::vector<V2::ProgramRecord> programs;
+    std::vector<Expect> expected;
+    const auto header = V2::EncodeFileHeader(1234);
+    std::vector<u8> bytes(header.begin(), header.end());
+    for (u32 i = 0; i < 300; ++i) {
+        // Another native program, under a key of its own, with code that tells it apart
+        V2::ProgramRecord program = base;
+        program.native.push_back(Instruction{{0x00007918, i, 0, 0}});
+        program.lowered_code.push_back(0x5000 + u64{i});
+        program.texture_bound = i % 7;
+        program.source_size += i;
+        u64 key = V2::ProgramKey(program);
+        std::vector<u8> payload = V2::EncodeProgram(program);
+        Expect expect = Expect::Hit;
+        if (i % 10 == 3) {
+            // Of another build's lowering
+            program.lowering_stamp ^= 1;
+            payload = V2::EncodeProgram(program);
+            expect = Expect::Stale;
+        } else if (i % 25 == 7) {
+            // Under another key than its inputs make
+            key ^= 1;
+            expect = Expect::Miss;
+        } else if (i % 31 == 5) {
+            // Its stamp is there, the rest doesn't decode
+            payload.resize(60);
+            expect = Expect::Miss;
+        }
+        V2::EncodeRecord(bytes, RecordKind::Program, key, payload);
+        if (i % 50 == 0) {
+            V2::EncodeRecord(bytes, RecordKind::Graphics, 0x7000 + i, TestPayload(i));
+        }
+        programs.push_back(std::move(program));
+        expected.push_back(expect);
+    }
+    const V2::ParsedLog parsed = V2::ParseLog(bytes);
+    REQUIRE(parsed.live.size() == programs.size() + 6);
+
+    VideoCommon::ShaderJobScheduler jobs{{.cpu_threads = 4, .driver_threads = 1}};
+    std::atomic<size_t> tasks{};
+    V2::Cache in_order{temp.path / "in-order.bin"};
+    in_order.LoadPrograms(parsed.live);
+    V2::Cache parallel{temp.path / "parallel.bin"};
+    parallel.LoadPrograms(parsed.live, [&](size_t count, const std::function<void(size_t)>& task) {
+        tasks += count;
+        VideoCommon::ParallelFor(jobs, count, task);
+    });
+    // A task left out is made by LoadPrograms itself.
+    V2::Cache partial{temp.path / "partial.bin"};
+    partial.LoadPrograms(parsed.live, [](size_t count, const std::function<void(size_t)>& task) {
+        for (size_t index = 0; index < count; index += 2) {
+            task(index);
+        }
+    });
+    REQUIRE(tasks > 1);
+
+    for (size_t i = 0; i < programs.size(); ++i) {
+        INFO("program " << i);
+        const V2::ProgramKeyInputs inputs = V2::ProgramKeyInputsOf(programs[i]);
+        const V2::FoundProgram reference = in_order.FindProgram(inputs);
+        switch (expected[i]) {
+        case Expect::Hit:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Hit);
+            REQUIRE(reference.code != nullptr);
+            REQUIRE(reference.code->code == programs[i].lowered_code);
+            break;
+        case Expect::Stale:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Stale);
+            break;
+        case Expect::Miss:
+            REQUIRE(reference.lookup == V2::ProgramLookup::Miss);
+            break;
+        }
+        for (V2::Cache* cache : {&parallel, &partial}) {
+            const V2::FoundProgram found = cache->FindProgram(inputs);
+            REQUIRE(found.lookup == reference.lookup);
+            REQUIRE((found.code == nullptr) == (reference.code == nullptr));
+            if (found.code != nullptr) {
+                REQUIRE(found.code->native_program_key == reference.code->native_program_key);
+                REQUIRE(found.code->code == reference.code->code);
+                REQUIRE(found.code->source_size == reference.code->source_size);
+                REQUIRE(found.code->texture_bound == reference.code->texture_bound);
+                REQUIRE(found.code->trap_prefix.size() == reference.code->trap_prefix.size());
+            }
+        }
+    }
+}
+
 TEST_CASE("Shader cache v2: a program of this build's lowering keeps its code",
           "[video_core][shader_cache_v2]") {
     V2::ProgramRecord program = LowerTestProgram(PlainProgram, false, 0x2000);
@@ -1091,6 +1266,119 @@ TEST_CASE("Shader cache v2: a program whose texture bound buffer alone moved is 
     REQUIRE(Vulkan::PipelineRecordKey<Vulkan::ComputePipelineCacheKey>(appends[1].payload)
                 ->unique_hash == current.unique_hash);
 }
+
+TEST_CASE("Shader cache v2: graphics records move to the vertex attributes their programs read",
+          "[video_core][shader_cache_v2]") {
+    V2::ProgramRecord vertex = LowerTestProgram(PlainProgram, false, 0);
+    Shader::ProgramHeader sph{};
+    std::memset(&sph, 0, sizeof(sph));
+    sph.vtg.imap_generic_vector[0] = 0x10; // Attribute 1, x
+    std::memcpy(vertex.sph.data(), &sph, sizeof(sph));
+    const V2::ProgramRecord geometry = LowerTestProgram(ProgramCounterProgram, true, 0x40);
+    REQUIRE(vertex.unique_hash != geometry.unique_hash);
+
+    const auto identity = V2::ReadProgramIdentity(V2::EncodeProgram(vertex));
+    REQUIRE(identity.has_value());
+    REQUIRE(identity->stage == static_cast<u32>(Shader::Stage::VertexB));
+    REQUIRE(identity->unique_hash == vertex.unique_hash);
+    REQUIRE(identity->sph == vertex.sph);
+
+    const NativeTestEnvironment vertex_env{Shader::Stage::VertexB, vertex.lowered_code, 5};
+    const NativeTestEnvironment geometry_env{Shader::Stage::Geometry, geometry.lowered_code, 5};
+    const auto payload = [&](const Vulkan::GraphicsPipelineCacheKey& key) {
+        const std::array<const VideoCommon::GenericEnvironment*, 2> envs{&vertex_env,
+                                                                        &geometry_env};
+        return VideoCommon::SerializePipelinePayload(KeyBytes(key), envs, ReadProperties);
+    };
+    auto key = TestGraphicsKey(geometry.unique_hash, 0);
+    key.unique_hashes[1] = vertex.unique_hash;
+    key.state.dynamic_vertex_input.Assign(1);
+    key.state.attribute_types = 0b111111;
+    auto masked_key = key;
+    masked_key.state.attribute_types = 0b001100;
+    auto static_input = key;
+    static_input.state.dynamic_vertex_input.Assign(0);
+    auto mesh = key;
+    mesh.unique_hashes[1] ^= 0x77;
+    auto vertex_a = key;
+    vertex_a.unique_hashes[0] = vertex.unique_hash;
+
+    const auto header = V2::EncodeFileHeader(1);
+    std::vector<u8> bytes(header.begin(), header.end());
+    V2::EncodeRecord(bytes, RecordKind::Program, V2::ProgramKey(vertex), V2::EncodeProgram(vertex));
+    V2::EncodeRecord(bytes, RecordKind::Program, V2::ProgramKey(geometry),
+                     V2::EncodeProgram(geometry));
+    for (const auto& record_key : {key, masked_key, static_input, mesh, vertex_a}) {
+        V2::EncodeRecord(bytes, RecordKind::Graphics, Vulkan::GraphicsRecordKey(record_key),
+                         payload(record_key));
+    }
+    const V2::ParsedLog log = V2::ParseLog(bytes);
+    REQUIRE(log.live.size() == 7);
+
+    const auto masks = Vulkan::ProgramAttributeMasks(log.live);
+    REQUIRE(masks == std::unordered_map<u64, u64>{{vertex.unique_hash, 0b1100},
+                                                 {geometry.unique_hash, ~u64{0}}});
+    std::vector<const V2::LogRecord*> records;
+    for (const V2::LogRecord& record : log.live) {
+        records.push_back(&record);
+    }
+    // The masked key already has its own record, which is kept
+    const auto masked = Vulkan::MaskPipelineAttributeTypes(records, masks);
+    REQUIRE(masked.appends ==
+            std::vector<V2::LogAppend>{{RecordKind::Tombstone, Vulkan::GraphicsRecordKey(key),
+                                        V2::TombstonePayload(RecordKind::Graphics)}});
+    REQUIRE(masked.moves ==
+            std::vector<V2::LogAppend>{
+                {RecordKind::Graphics, Vulkan::GraphicsRecordKey(masked_key), {}},
+                {RecordKind::Tombstone, Vulkan::GraphicsRecordKey(key), {}}});
+    REQUIRE(
+        Vulkan::MaskPipelineAttributeTypes(records, masks, [] { return true; }).appends.empty());
+    REQUIRE(Vulkan::MaskPipelineAttributeTypes(records, {}).appends.empty());
+
+    // Two records that differ only in unread attribute types move to one record
+    auto other_unread = key;
+    other_unread.state.attribute_types = 0b011110;
+    std::vector<u8> merged_bytes(header.begin(), header.end());
+    for (const auto& record_key : {key, other_unread}) {
+        V2::EncodeRecord(merged_bytes, RecordKind::Graphics, Vulkan::GraphicsRecordKey(record_key),
+                         payload(record_key));
+    }
+    const V2::ParsedLog merged_log = V2::ParseLog(merged_bytes);
+    std::vector<const V2::LogRecord*> merged_records;
+    for (const V2::LogRecord& record : merged_log.live) {
+        merged_records.push_back(&record);
+    }
+    const auto merged = Vulkan::MaskPipelineAttributeTypes(merged_records, masks);
+    REQUIRE(merged.appends ==
+            std::vector<V2::LogAppend>{
+                {RecordKind::Graphics, Vulkan::GraphicsRecordKey(masked_key), payload(masked_key)},
+                {RecordKind::Tombstone, Vulkan::GraphicsRecordKey(key),
+                 V2::TombstonePayload(RecordKind::Graphics)},
+                {RecordKind::Tombstone, Vulkan::GraphicsRecordKey(other_unread),
+                 V2::TombstonePayload(RecordKind::Graphics)}});
+    REQUIRE(merged.moves ==
+            std::vector<V2::LogAppend>{
+                {RecordKind::Graphics, Vulkan::GraphicsRecordKey(masked_key), {}},
+                {RecordKind::Tombstone, Vulkan::GraphicsRecordKey(key), {}},
+                {RecordKind::Graphics, Vulkan::GraphicsRecordKey(masked_key), {}},
+                {RecordKind::Tombstone, Vulkan::GraphicsRecordKey(other_unread), {}}});
+
+    // A record moved by a relink and then by its mask in one boot
+    V2::EncodeRecord(bytes, RecordKind::Used, 100,
+                     V2::EncodeUsed({.session_time = 10, .pipelines = {1}}));
+    const V2::ParsedLog used_log = V2::ParseLog(bytes);
+    std::unordered_map<u64, u8> used{{1, 0}};
+    const std::vector<V2::LogAppend> moves{
+        {RecordKind::Graphics, 2, {}},
+        {RecordKind::Tombstone, 1, V2::TombstonePayload(RecordKind::Graphics)},
+        {RecordKind::Graphics, 3, {}},
+        {RecordKind::Tombstone, 2, V2::TombstonePayload(RecordKind::Graphics)},
+    };
+    REQUIRE(Vulkan::RelinkUsedPipelines(used_log.live, moves, 2, used) ==
+            std::vector<V2::LogAppend>{
+                {RecordKind::Used, 100, V2::EncodeUsed({.session_time = 10, .pipelines = {3}})}});
+    REQUIRE(used == std::unordered_map<u64, u8>{{3, 0}});
+}
 TEST_CASE("Shader cache v2: an older Vulkan cache and its used list are migrated",
           "[video_core][shader_cache_v2]") {
     TempDir temp;
@@ -1211,6 +1499,34 @@ TEST_CASE("Shader cache v2: used pipelines age by the sessions that used them",
     REQUIRE(used == std::unordered_map<u64, u8>{{4, 0}, {8, 0}, {3, 1}, {50, 1}, {2, 2}});
     std::ranges::sort(expired);
     REQUIRE(expired == std::vector<u64>{100, 101, 200});
+}
+
+TEST_CASE("Shader cache v2: the use order of the newest sessions says what to build first",
+          "[video_core][shader_cache_v2]") {
+    const V2::UseOrderRecord order{.session_time = 10,
+                                   .pipelines = {{.hash = 1, .first_use_ms = 5, .flags = 0},
+                                                 {.hash = 2,
+                                                  .first_use_ms = 9,
+                                                  .flags = V2::UseOrderBuiltInPlay}}};
+    REQUIRE(V2::DecodeUseOrder(V2::EncodeUseOrder(order)) == order);
+    REQUIRE_FALSE(V2::DecodeUseOrder(std::vector<u8>(15)).has_value());
+
+    const auto header = V2::EncodeFileHeader(1);
+    std::vector<u8> bytes(header.begin(), header.end());
+    V2::EncodeRecord(bytes, RecordKind::UseOrder, 100, V2::EncodeUseOrder(order));
+    V2::EncodeRecord(bytes, RecordKind::UseOrder, 101,
+                     V2::EncodeUseOrder({.session_time = 20,
+                                         .pipelines = {{.hash = 1, .first_use_ms = 7, .flags = 0},
+                                                       {.hash = 3, .first_use_ms = 2, .flags = 0}}}));
+    V2::EncodeRecord(bytes, RecordKind::UseOrder, 102,
+                     V2::EncodeUseOrder({.session_time = 1, .pipelines = {{.hash = 4}}}));
+    const V2::ParsedLog parsed = V2::ParseLog(bytes);
+    std::vector<u64> expired;
+    const auto info = Vulkan::UseOrderFromLog(parsed.live, 2, expired);
+    // The newest session that used a pipeline gives its time
+    REQUIRE(info.first_use_ms == std::unordered_map<u64, u32>{{1, 7}, {3, 2}, {2, 9}});
+    REQUIRE(info.built_in_play == std::unordered_set<u64>{2});
+    REQUIRE(expired == std::vector<u64>{102});
 }
 
 TEST_CASE("Shader cache v2: used pipelines follow the graphics records a relink moves",

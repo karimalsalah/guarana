@@ -8,7 +8,9 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
+#include <utility>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -16,41 +18,22 @@
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "common/nx2_switch_file.h"
+#include "common/switch_origin.h"
 
 // The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
 // set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
 // in the real environment always wins, so a launcher script can still override one run; between
-// files the later one wins, so the copy shipped with the build can be
-// overridden by %APPDATA%\lichii\nx2_switches.txt without editing the one that gets replaced.
+// files the later one wins, so the copy next to the executable (shipped with the build) can be
+// overridden by %APPDATA%\guarana\nx2_switches.txt without editing the one that gets replaced.
+// In portable mode (a "user" folder, found the way the path manager finds it) user\nx2_switches.txt
+// takes the per-user copy's place and the per-user folder is not read at all.
+// Only the copy next to the executable is the shipped one; every other file is the player's. The
+// values that reach the environment from the shipped copy alone are recorded
+// (Common::SwitchOrigin), so a game's switch defaults can replace them and nothing else.
 static void ParseSwitchFile(const std::filesystem::path& path,
                             std::map<std::string, std::string>& entries) {
-    std::ifstream file{path};
-    if (!file) {
-        return;
-    }
-    constexpr const char* blank = " \t\r";
-    std::string line;
-    while (std::getline(file, line)) {
-        line.erase(0, line.find_first_not_of(blank));
-        line.erase(line.find_last_not_of(blank) + 1);
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        const auto eq = line.find('=');
-        if (eq == std::string::npos) {
-            continue;
-        }
-        std::string name = line.substr(0, eq);
-        std::string value = line.substr(eq + 1);
-        name.erase(name.find_last_not_of(blank) + 1);
-        value.erase(0, value.find_first_not_of(blank));
-        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-            value = value.substr(1, value.size() - 2);
-        }
-        if (!name.empty()) {
-            entries.insert_or_assign(std::move(name), std::move(value));
-        }
-    }
+    Common::Nx2SwitchFile::Parse(path, entries);
 }
 
 static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
@@ -78,10 +61,46 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 #endif
 }
 
+// The same rule as PathManagerImpl::Reinitialize (common/fs/path_util.cpp), which runs later: the
+// portable folder is next to the executable on Windows, beside the .app bundle on macOS, and in
+// the current directory elsewhere. Returns an empty path when the install is not portable.
+static std::filesystem::path GetSwitchPortableDirectory(
+    [[maybe_unused]] const std::filesystem::path& exe_dir) {
+    std::error_code ec;
+#ifdef _WIN32
+    const std::filesystem::path base = exe_dir;
+#elif defined(__APPLE__)
+    // main() changes to the bundle's folder before the path manager starts (main.cpp).
+    const std::filesystem::path base = Common::FS::GetBundleDirectory() / "..";
+#else
+    const std::filesystem::path base = std::filesystem::current_path(ec);
+#endif
+    if (ec || base.empty()) {
+        return {};
+    }
+    auto portable = base / PORTABLE_DIR;
+    if (!std::filesystem::is_directory(portable, ec) || ec) {
+        return {};
+    }
+    return portable;
+}
+
 static void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
     std::map<std::string, std::string> entries;
-    if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
+    // Every name one of the player's files sets, to any value.
+    std::set<std::string> named_by_player;
+    const auto parse_players_file = [&entries,
+                                     &named_by_player](const std::filesystem::path& file_path) {
+        std::map<std::string, std::string> own;
+        ParseSwitchFile(file_path, own);
+        for (auto& [own_name, own_value] : own) {
+            named_by_player.insert(own_name);
+            entries.insert_or_assign(own_name, std::move(own_value));
+        }
+    };
+    const auto exe_dir = GetSwitchExeDirectory(argv0);
+    if (!exe_dir.empty()) {
         auto switches_dir = exe_dir;
 #ifdef __APPLE__
         if (exe_dir.filename() == "MacOS" && exe_dir.parent_path().filename() == "Contents" &&
@@ -91,6 +110,7 @@ static void LoadNx2Switches(const char* argv0) {
 #endif
         ParseSwitchFile(switches_dir / "nx2_switches.txt", entries);
     }
+    const std::map<std::string, std::string> shipped = entries;
 #ifdef __linux__
     if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
         std::error_code ec;
@@ -98,11 +118,17 @@ static void LoadNx2Switches(const char* argv0) {
         if (path.is_absolute()) {
             const auto resolved = std::filesystem::canonical(path, ec);
             if (!ec) {
-                ParseSwitchFile(resolved.parent_path() / "nx2_switches.txt", entries);
+                parse_players_file(resolved.parent_path() / "nx2_switches.txt");
             }
         }
     }
 #endif
+    // The portable folder sits beside the program like the files above, so its copy is limited to
+    // the same names; it wins over them the way the per-user copy does.
+    const auto portable_dir = GetSwitchPortableDirectory(exe_dir);
+    if (!portable_dir.empty()) {
+        parse_players_file(portable_dir / "nx2_switches.txt");
+    }
     std::erase_if(entries, [](const auto& entry) {
         const auto& name = entry.first;
         return !(name.starts_with("EDEN_NX2_") || name == "EDEN_DKB_FRAME_TRACE" ||
@@ -113,23 +139,26 @@ static void LoadNx2Switches(const char* argv0) {
                  name == "EDEN_VI2_MAX_RESOLUTION_MODE" ||
                  name == "EGLANTINE_EXPERIMENTAL_STATIC_VERTEX_REPACK" ||
                  name == "EGLANTINE_TEST_VERTEX_REPACK");
+        return !Common::Nx2SwitchFile::IsSwitchName(entry.first);
     });
+    if (portable_dir.empty()) {
 #ifdef _WIN32
-    const auto config_base = Common::FS::GetAppDataRoamingDirectory();
+        const auto config_base = Common::FS::GetAppDataRoamingDirectory();
 #else
-    const auto config_base = Common::FS::GetDataDirectory("XDG_CONFIG_HOME");
+        const auto config_base = Common::FS::GetDataDirectory("XDG_CONFIG_HOME");
 #endif
-    if (config_base.is_absolute()) {
-        ParseSwitchFile(config_base / EDEN_DIR / "nx2_switches.txt", entries);
-    }
-    for (const auto& [name, value] : entries) {
-        if (std::getenv(name.c_str()) != nullptr) {
-            continue;
+        if (config_base.is_absolute()) {
+            // This runs before the path manager copies the pre-rename "lichii" folder, so on the
+            // first start after the rename the user's file is still only in the old folder.
+            std::error_code ec;
+            const bool has_current_dir = std::filesystem::exists(config_base / EDEN_DIR, ec);
+            parse_players_file(config_base / (has_current_dir ? EDEN_DIR : PRE_GUARANA_DIR) /
+                               "nx2_switches.txt");
         }
-#ifdef _WIN32
-        _putenv_s(name.c_str(), value.c_str());
-#else
-        setenv(name.c_str(), value.c_str(), 1);
-#endif
     }
+    // Before the loop below, which puts them in the environment.
+    Common::SwitchOrigin::RecordShippedOnly(Common::SwitchOrigin::ShippedOnly(
+        shipped, entries, named_by_player,
+        [](const std::string& name) { return std::getenv(name.c_str()) != nullptr; }));
+    Common::Nx2SwitchFile::Apply(entries);
 }

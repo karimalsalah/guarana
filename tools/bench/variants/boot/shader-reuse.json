@@ -1,0 +1,10 @@
+{
+  "name": "shader-reuse",
+  "description": "Translated stages reused between pipelines with the same inputs (Lichii #1378).",
+  "cache_states": [
+    "cold"
+  ],
+  "env": {
+    "EDEN_NX2_SHADER_REUSE": "1"
+  }
+}

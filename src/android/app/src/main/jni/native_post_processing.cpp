@@ -7,6 +7,7 @@
 
 #include <jni.h>
 #include <nlohmann/json.hpp>
+#include <string_view>
 
 #include "common/android/android_common.h"
 #ifdef HAS_RESHADE

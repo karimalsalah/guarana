@@ -33,6 +33,7 @@
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -70,6 +71,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_render_view.h"
@@ -84,6 +86,7 @@
 #include "video_core/textures/texture.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/nx2_uma.h"
 
 // EDEN_NX2_RENDER_OWNS=1: on the back, an entry into GPURender's objects runs on GPURender, the
 // back parked (Fritchii ead877857's ONEF_LEND); other threads run it where they are.
@@ -105,6 +108,106 @@ using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 using VideoCommon::ImageViewId;
 using VideoCommon::ImageViewType;
 
+
+namespace {
+// EDEN_NX2_DRAW_STATS=<fragment hash>: counts what one mesh draw of that shader does (task and
+// mesh program runs, primitives made, clipped and kept, fragment program runs), about once a
+// second. Only the worker thread touches this.
+struct DrawStatsProbe {
+    u64 fragment{};
+    vk::QueryPool statistics;
+    vk::QueryPool primitives;
+    u32 groups{};
+    u32 wait{};
+    bool pending{};
+};
+
+DrawStatsProbe& DrawStats() {
+    static DrawStatsProbe probe = [] {
+        DrawStatsProbe made;
+        if (const char* const value = std::getenv("EDEN_NX2_DRAW_STATS")) {
+            made.fragment = std::strtoull(value, nullptr, 16);
+        }
+        return made;
+    }();
+    return probe;
+}
+
+bool BeginDrawStats(const Device& device, vk::CommandBuffer cmdbuf, u64 fragment, u32 groups) {
+    DrawStatsProbe& probe = DrawStats();
+    if (probe.fragment == 0 || fragment != probe.fragment) {
+        return false;
+    }
+    static constexpr VkQueryPipelineStatisticFlags statistics =
+        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT |
+        VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT;
+    if (!probe.statistics) {
+        try {
+            probe.statistics = device.GetLogical().CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                .queryCount = 1,
+                .pipelineStatistics = statistics,
+            });
+            probe.primitives = device.GetLogical().CreateQueryPool({
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT,
+                .queryCount = 1,
+                .pipelineStatistics = 0,
+            });
+        } catch (const vk::Exception& error) {
+            LOG_WARNING(Render_Vulkan, "EDEN_NX2_DRAW_STATS unavailable: {}", error.what());
+            probe.fragment = 0;
+            return false;
+        }
+    }
+    if (probe.pending) {
+        std::array<u64, 6> counts{};
+        std::array<u64, 2> made{};
+        const VkQueryResultFlags flags =
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT;
+        const VkResult first = device.GetLogical().GetQueryResults(
+            *probe.statistics, 0, 1, sizeof(counts), counts.data(), sizeof(counts), flags);
+        const VkResult second = device.GetLogical().GetQueryResults(
+            *probe.primitives, 0, 1, sizeof(made), made.data(), sizeof(made), flags);
+        if (first != VK_SUCCESS || second != VK_SUCCESS || counts[5] == 0 || made[1] == 0) {
+            return false;
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Draw stats {:016x}: {} task workgroups drawn, {} task runs, {} mesh runs, {} "
+                 "primitives made, {} into clipping, {} out of clipping, {} fragment runs",
+                 probe.fragment, probe.groups, counts[3], counts[4], made[0], counts[0], counts[1],
+                 counts[2]);
+        probe.pending = false;
+        probe.wait = 15;
+        return false;
+    }
+    if (probe.wait != 0) {
+        --probe.wait;
+        return false;
+    }
+    device.GetLogical().ResetQueryPool(*probe.statistics, 0, 1);
+    device.GetLogical().ResetQueryPool(*probe.primitives, 0, 1);
+    cmdbuf.BeginQuery(*probe.statistics, 0, 0);
+    cmdbuf.BeginQuery(*probe.primitives, 0, 0);
+    probe.groups = groups;
+    return true;
+}
+
+void EndDrawStats(vk::CommandBuffer cmdbuf) {
+    DrawStatsProbe& probe = DrawStats();
+    cmdbuf.EndQuery(*probe.primitives, 0);
+    cmdbuf.EndQuery(*probe.statistics, 0);
+    probe.pending = true;
+}
+} // Anonymous namespace
 
 namespace {
 
@@ -149,6 +252,91 @@ struct DrawParams {
     u32 first_index;
     bool is_indexed;
 };
+
+/// The colour write masks of a draw: the guest's, without the components the fragment shader
+/// doesn't output (4 bits per render target).
+std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> ColorWriteMasks(
+    const Maxwell& regs, u32 color_output_mask) {
+    std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> masks{};
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
+        const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
+        auto& current = masks[index];
+        if (mask.R) {
+            current |= VK_COLOR_COMPONENT_R_BIT;
+        }
+        if (mask.G) {
+            current |= VK_COLOR_COMPONENT_G_BIT;
+        }
+        if (mask.B) {
+            current |= VK_COLOR_COMPONENT_B_BIT;
+        }
+        if (mask.A) {
+            current |= VK_COLOR_COMPONENT_A_BIT;
+        }
+        current &= (color_output_mask >> (index * 4)) & 0xF;
+    }
+    return masks;
+}
+
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): whether the state of the draw gives the
+/// same image as a depth pass followed by a colour pass at equal depth. The pipeline's key and
+/// programs were checked when it was made (GraphicsPipeline::HasPrepassSplit).
+bool PrepassSplitAllowed(const Maxwell& regs) {
+    // Opaque, with a depth test that settles on one fragment per pixel and no other test that
+    // would see the fragments twice.
+    if (regs.zeta_enable == 0 || regs.depth_test_enable == 0 || regs.depth_write_enabled == 0 ||
+        regs.stencil_enable != 0 || regs.logic_op.enable != 0 ||
+        regs.transform_feedback_enabled != 0) {
+        return false;
+    }
+    // The samples-passed counter would count the visible fragments once more.
+    if (regs.zpass_pixel_count_enable != 0 && !VideoCore::Nx2Debug::PrepassForced()) {
+        return false;
+    }
+    switch (regs.depth_test_func) {
+    case Maxwell::ComparisonOp::Less_D3D:
+    case Maxwell::ComparisonOp::Less_GL:
+    case Maxwell::ComparisonOp::LessEqual_D3D:
+    case Maxwell::ComparisonOp::LessEqual_GL:
+    case Maxwell::ComparisonOp::Greater_D3D:
+    case Maxwell::ComparisonOp::Greater_GL:
+    case Maxwell::ComparisonOp::GreaterEqual_D3D:
+    case Maxwell::ComparisonOp::GreaterEqual_GL:
+        break;
+    default:
+        return false;
+    }
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
+        if (regs.rt[index].format != Tegra::RenderTargetFormat::NONE &&
+            regs.blend.enable[index] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The state PrepassSplitAllowed refused, for the first few draws it refuses.
+void LogPrepassRefusal(const Maxwell& regs, u64 fragment_hash) {
+    static u32 logged{};
+    if (logged >= 16) {
+        return;
+    }
+    ++logged;
+    u32 blended{};
+    for (size_t index = 0; index < Maxwell::NumRenderTargets; ++index) {
+        if (regs.rt[index].format != Tegra::RenderTargetFormat::NONE &&
+            regs.blend.enable[index] != 0) {
+            blended |= 1U << index;
+        }
+    }
+    LOG_INFO(Render_Vulkan,
+             "Prepass split: a draw of fragment shader {:016x} stays one pass: depth buffer {}, "
+             "test {}, write {}, func {:#x}; stencil {}, logic op {}, transform feedback {}, "
+             "samples-passed counter {}, blended targets {:#x}",
+             fragment_hash, regs.zeta_enable, regs.depth_test_enable, regs.depth_write_enabled,
+             static_cast<u32>(regs.depth_test_func), regs.stencil_enable, regs.logic_op.enable,
+             regs.transform_feedback_enabled, regs.zpass_pixel_count_enable, blended);
+}
 
 void RecordDirectDraw(Scheduler& scheduler, DrawParams params, std::pair<u64, u64> hashes,
                       std::source_location location = std::source_location::current()) {
@@ -485,6 +673,11 @@ void RasterizerVulkan::ReadMeshEmulationProbe() {
              probe.frame, probe.groups, triangles, corners, degenerate, outside, bad_index, sample);
 }
 
+/// The largest mesh emulation output arena, and the largest in low memory mode
+/// (Common::LowMemoryMode): what a submission's draws write past it is dropped.
+constexpr u64 MaxMeshArenaSize = u64{1} << 30;
+constexpr u64 LowMemoryMeshArenaSize = u64{256} << 20;
+
 const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     const u64 tick{scheduler.CurrentTick()};
     if (mesh_arena_current < mesh_arenas.size() && mesh_arenas[mesh_arena_current].tick == tick) {
@@ -492,7 +685,9 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     }
     // A finished submission's counter holds the words its draws asked for, including those
     // that did not fit: grow later arenas to hold them.
-    const u64 max_size{(std::min)(u64{1} << 30, u64{device.GetMaxStorageBufferRange()})};
+    const u64 max_size{
+        (std::min)(Common::LowMemoryMode() ? LowMemoryMeshArenaSize : MaxMeshArenaSize,
+                   u64{device.GetMaxStorageBufferRange()})};
     for (MeshArena& arena : mesh_arenas) {
         if (arena.counted || !scheduler.IsFree(arena.tick)) {
             continue;
@@ -538,6 +733,11 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
                 .size = mesh_arena_size,
             });
     }
+    u64 arena_bytes{};
+    for (const MeshArena& arena : mesh_arenas) {
+        arena_bytes += arena.size;
+    }
+    Common::g_memory_counters.mesh_arena_bytes.store(arena_bytes, std::memory_order_relaxed);
     // The GPU is done with this arena, and this submission's commands have not been sent yet.
     const u32 zero{};
     std::memcpy(it->counter.Mapped().data(), &zero, sizeof(zero));
@@ -627,6 +827,7 @@ RasterizerVulkan::~RasterizerVulkan() {
     state_tracker.ClearChannel();
     scheduler.WaitWorker();
     scheduler.Finish();
+    Common::ShutdownStepDone("GPU: rasterizer's last work finished on the GPU");
 }
 
 GraphicsPipeline* RasterizerVulkan::TakeReusableDraw(bool is_indexed, bool is_indirect) {
@@ -1143,12 +1344,17 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     const auto report_failure = [&](std::string_view reason) {
         TraceDrawFailure(reason);
         static std::set<std::tuple<u64, u64, std::string_view>> seen;
+        static size_t async_logged{};
         const auto& regs = maxwell3d->regs;
         const u64 vs = (u64{regs.pipelines[1].reserved[0] & 0xff} << 32) | regs.pipelines[1].reserved[1];
         const u64 ps = (u64{regs.pipelines[5].reserved[0] & 0xff} << 32) | regs.pipelines[5].reserved[1];
-        if (seen.size() < 64 && seen.emplace(vs, ps, reason).second) {
-            LOG_WARNING(HW_GPU, "Draw skipped ({}): vs={:#x} ps={:#x} rt0={:#x} {}x{}", reason, vs, ps,
-                        regs.rt[0].Address(), regs.rt[0].width, regs.rt[0].height);
+        // Say why, and keep the expected asynchronous-shader skips from using up the line budget.
+        const std::string_view miss = reason;
+        const bool async_miss = miss == "async-build";
+        if ((async_miss ? async_logged < 8 : seen.size() < 64) && seen.emplace(vs, ps, miss).second) {
+            async_logged += async_miss ? 1 : 0;
+            LOG_WARNING(HW_GPU, "Draw skipped ({}): vs={:#x} ps={:#x} rt0={:#x} {}x{} miss={}", reason, vs,
+                        ps, regs.rt[0].Address(), regs.rt[0].width, regs.rt[0].height, miss);
         }
     };
     GraphicsPipeline* const delta_pipeline =
@@ -1183,7 +1389,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         return;
     }
+    // No sharpening copies the tonemap tracked here while it is fresh; upstream's source, the
+    // image the output pass samples (#1875), is the fallback.
     if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID())) {
+        TrackOotTonemappedImage(*pipeline);
         TrackOotTonemappedImage();
     }
     // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
@@ -1506,7 +1715,32 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         Profile::Scope scope{Profile::Zone::DrawRecord};
         scheduler.TraceGraphicsPipeline(pipeline->ShaderHashes());
         trace_draw_hashes = {pipeline->ShaderHashes()[1], pipeline->ShaderHashes()[5]};
+        // EDEN_NX2_PREPASS_HASHES: a listed fragment shader's draw as a depth pass and a colour
+        // pass at equal depth, which shades a pixel once instead of once for every layer.
+        prepass_draw = PrepassDraw{};
+        if (pipeline->HasPrepassSplit() && !(is_indirect && mesh_draw) &&
+            VideoCore::Nx2Debug::IsPrepassHash(pipeline->ShaderHashes()[5])) {
+            const bool split{PrepassSplitAllowed(maxwell3d->regs)};
+            VideoCore::Nx2Debug::CountPrepassDraw(split);
+            if (!split) {
+                LogPrepassRefusal(maxwell3d->regs, pipeline->ShaderHashes()[5]);
+            } else {
+                prepass_draw = PrepassDraw{
+                    .pipeline = pipeline,
+                    .dynamic_depth = pipeline->UsesExtendedDynamicState(),
+                    .dynamic_color_mask = pipeline->UsesDynamicColorWriteMask(),
+                    .color_masks = ColorWriteMasks(maxwell3d->regs, pipeline->ColorOutputMask()),
+                };
+            }
+        }
         draw_func();
+        if (prepass_draw.pipeline != nullptr) {
+            // The colour pass left its pipeline bound, and its depth state where that is dynamic.
+            scheduler.ForgetGraphicsPipeline();
+            if (prepass_draw.dynamic_depth) {
+                state_tracker.InvalidatePrepassDepthState();
+            }
+        }
     }
     submitted = true;
     buffer_cache.NoteWorkRecorded(false);
@@ -2394,35 +2628,71 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
             }
             if (mesh_emulation_indirect.buffer) {
                 // With a task program the distribution pass wrote the vertex count.
-                scheduler.Record([this, indirect = mesh_emulation_indirect](vk::CommandBuffer cmdbuf) {
+                scheduler.Record([this, indirect = mesh_emulation_indirect,
+                                  hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                     if (scheduler.GraphicsPipelineMissing()) {
                         return;
                     }
-                    cmdbuf.DrawIndirect(indirect.buffer,
-                                        indirect.offset +
-                                            Shader::Backend::SPIRV::MESH_EMULATION_DRAW_ARGS_OFFSET,
-                                        1, 0);
+                    scheduler.TraceGpuWork(
+                        cmdbuf, hashes.first, hashes.second, {},
+                        [&] {
+                            cmdbuf.DrawIndirect(
+                                indirect.buffer,
+                                indirect.offset +
+                                    Shader::Backend::SPIRV::MESH_EMULATION_DRAW_ARGS_OFFSET,
+                                1, 0);
+                        },
+                        'e');
                 });
                 return;
             }
-            scheduler.Record([this, vertices](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, vertices, hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.Draw(vertices, 1, 0, 0);
+                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {vertices, 1, 0},
+                                       [&] { cmdbuf.Draw(vertices, 1, 0, 0); }, 'e');
             });
             return;
         }
+        // Both passes of a prepass split are timed as the one draw they replace.
         if (mesh_draw) {
-            scheduler.Record([this, groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, groups = draw_params.num_vertices, hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+                const bool stats = BeginDrawStats(device, cmdbuf, hashes.second, groups);
+                scheduler.TraceGpuWork(
+                    cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
+                    [&] { split.Draw(cmdbuf, [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); }); },
+                    'm');
+                if (stats) {
+                    EndDrawStats(cmdbuf);
+                }
             });
             return;
         }
-        RecordDirectDraw(scheduler, draw_params, trace_draw_hashes);
+        scheduler.Record([this, draw_params, hashes = trace_draw_hashes,
+                          split = prepass_draw](vk::CommandBuffer cmdbuf) {
+            if (scheduler.GraphicsPipelineMissing()) {
+                return;
+            }
+            scheduler.TraceGpuWork(
+                cmdbuf, hashes.first, hashes.second,
+                {draw_params.num_vertices, draw_params.num_instances, 0}, [&] {
+                    split.Draw(cmdbuf, [&] {
+                        if (draw_params.is_indexed) {
+                            cmdbuf.DrawIndexed(draw_params.num_vertices, draw_params.num_instances,
+                                               draw_params.first_index, draw_params.base_vertex,
+                                               draw_params.base_instance);
+                        } else {
+                            cmdbuf.Draw(draw_params.num_vertices, draw_params.num_instances,
+                                        draw_params.base_vertex, draw_params.base_instance);
+                        }
+                    });
+                });
+        });
 
         // Log draw call
         if (GPU::Logging::IsActive() &&
@@ -2473,13 +2743,21 @@ void RasterizerVulkan::DrawIndirect() {
         const auto& buffer = indirect_buffer.first;
         const auto& offset = indirect_buffer.second;
         if (params.is_byte_count) {
-            scheduler.Record([this, buffer_obj = buffer->Handle(), offset,
-                              stride = params.stride](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, buffer_obj = buffer->Handle(), offset, stride = params.stride,
+                              hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
-                                                static_cast<u32>(stride));
+                scheduler.TraceGpuWork(
+                    cmdbuf, hashes.first, hashes.second, {},
+                    [&] {
+                        split.Draw(cmdbuf, [&] {
+                            cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
+                                                            static_cast<u32>(stride));
+                        });
+                    },
+                    'b');
             });
             return;
         }
@@ -2488,38 +2766,51 @@ void RasterizerVulkan::DrawIndirect() {
             const auto& draw_buffer = count.first;
             const auto& offset_base = count.second;
             scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(),
-                              buffer_obj = buffer->Handle(), offset_base, offset,
-                              params](vk::CommandBuffer cmdbuf) {
+                              buffer_obj = buffer->Handle(), offset_base, offset, params,
+                              hashes = trace_draw_hashes,
+                              split = prepass_draw](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                if (params.is_indexed) {
-                    cmdbuf.DrawIndexedIndirectCount(
-                        buffer_obj, offset, draw_buffer_obj, offset_base,
-                        static_cast<u32>(params.max_draw_counts), static_cast<u32>(params.stride));
-                } else {
-                    cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj, offset_base,
-                                             static_cast<u32>(params.max_draw_counts),
-                                             static_cast<u32>(params.stride));
-                }
+                scheduler.TraceGpuWork(
+                    cmdbuf, hashes.first, hashes.second, {},
+                    [&] {
+                        split.Draw(cmdbuf, [&] {
+                            if (params.is_indexed) {
+                                cmdbuf.DrawIndexedIndirectCount(
+                                    buffer_obj, offset, draw_buffer_obj, offset_base,
+                                    static_cast<u32>(params.max_draw_counts),
+                                    static_cast<u32>(params.stride));
+                            } else {
+                                cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj,
+                                                         offset_base,
+                                                         static_cast<u32>(params.max_draw_counts),
+                                                         static_cast<u32>(params.stride));
+                            }
+                        });
+                    },
+                    'i');
             });
             return;
         }
         scheduler.Record([this, buffer_obj = buffer->Handle(), offset, params,
-                          hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                          hashes = trace_draw_hashes,
+                          split = prepass_draw](vk::CommandBuffer cmdbuf) {
             if (scheduler.GraphicsPipelineMissing()) {
                 return;
             }
             scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
-                if (params.is_indexed) {
-                    cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
-                                               static_cast<u32>(params.max_draw_counts),
-                                               static_cast<u32>(params.stride));
-                } else {
-                    cmdbuf.DrawIndirect(buffer_obj, offset,
-                                        static_cast<u32>(params.max_draw_counts),
-                                        static_cast<u32>(params.stride));
-                }
+                split.Draw(cmdbuf, [&] {
+                    if (params.is_indexed) {
+                        cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
+                                                   static_cast<u32>(params.max_draw_counts),
+                                                   static_cast<u32>(params.stride));
+                    } else {
+                        cmdbuf.DrawIndirect(buffer_obj, offset,
+                                            static_cast<u32>(params.max_draw_counts),
+                                            static_cast<u32>(params.stride));
+                    }
+                });
             });
         });
 
@@ -2546,6 +2837,136 @@ VideoCommon::OotNetwork::BypassState* RasterizerVulkan::OotNetworkBypass() {
         return nullptr;
     }
     return &oot_network_bypass;
+}
+
+void RasterizerVulkan::OotNetworkBypassed(u32 output_tic) {
+    if (!OcarinaGuideOnly() || oot_guide_frame == render_trace_frame) {
+        return;
+    }
+    // Logs why a frame has no guide, when the reason changes.
+    const auto fail = [this](const char* reason) {
+        if (std::exchange(oot_guide_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Ocarina motion guide: none for frame {} ({})",
+                     render_trace_frame, reason);
+        }
+    };
+    if (oot_camera_sample_frame != render_trace_frame) {
+        return fail("no scene camera this frame");
+    }
+    if (oot_motion.depth_frame != render_trace_frame) {
+        return fail("no scene depth this frame");
+    }
+    if (oot_motion.camera_channel != gpu_memory || oot_motion.depth_channel != gpu_memory) {
+        return fail("camera and depth from another channel");
+    }
+    using Entry = Tegra::Texture::TICEntry;
+    const auto& table = kepler_compute->regs.tic;
+    const GPUVAddr address = table.Address() + u64{oot_motion.depth_tic} * sizeof(Entry);
+    if (oot_motion.depth_tic > table.limit || output_tic > table.limit ||
+        !gpu_memory->IsFullyMappedRange(address, sizeof(Entry))) {
+        return fail("scene depth descriptor unreadable");
+    }
+    Entry tic{};
+    gpu_memory->ReadBlockUnsafe(address, &tic, sizeof(tic));
+    if (tic.Address() != oot_motion.depth_address || tic.Width() != oot_motion.extent.width ||
+        tic.Height() != oot_motion.extent.height) {
+        return fail("scene depth descriptor changed");
+    }
+
+    std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
+    texture_cache.SynchronizeDescriptors(true);
+    std::array images{VideoCommon::ImageViewInOut{.index = oot_motion.depth_tic},
+                      VideoCommon::ImageViewInOut{.index = output_tic}};
+    texture_cache.FillImageViews(images, true);
+    if (!images[0].id) {
+        return fail("no scene depth image");
+    }
+    auto& depth = texture_cache.GetImageView(images[0].id);
+    const auto* backing = depth.BackingImage();
+    if (!backing || depth.IsRescaled() || depth.format != VideoCore::Surface::PixelFormat::D32_FLOAT ||
+        depth.range != VideoCommon::SubresourceRange{} || backing->info.num_samples != 1) {
+        return fail("unsupported scene depth");
+    }
+    // Without Link's pose the mesh stays empty and the motion comes from the camera alone.
+    static const bool actor_motion = [] {
+        const char* value = std::getenv("EDEN_NX2_EXTRAPOLATE_ACTOR");
+        return !value || *value != '0';
+    }();
+    OcarinaActorMesh mesh{};
+    if (actor_motion) {
+        ReadOcarinaActor(mesh);
+    }
+    try {
+        if (!oot_guide) {
+            oot_guide = std::make_unique<OcarinaMotionGuide>(
+                device, scheduler, descriptor_pool, compute_pass_descriptor_queue, memory_allocator);
+            LOG_INFO(Render_Vulkan,
+                     "Ocarina motion guide: frame extrapolation from the {}x{} scene of bypassed frames",
+                     oot_motion.extent.width, oot_motion.extent.height);
+        }
+        // Nothing offsets the scene draws without FSR; kept for a session that had it on.
+        std::array<f32, 2> jitter{};
+        if (oot_jitter_frame == render_trace_frame) {
+            jitter = oot_jitter_offset;
+        }
+        if (!oot_guide->Record(depth.DepthView(), oot_motion.extent, oot_motion.current,
+                               oot_motion.previous, mesh, render_trace_frame, jitter)) {
+            return fail("cameras give no motion");
+        }
+    } catch (const vk::Exception& error) {
+        LOG_WARNING(Render_Vulkan, "Ocarina motion guide unavailable: {}", error.what());
+        oot_guide_failed = true;
+        return;
+    }
+    oot_guide_frame = render_trace_frame;
+    oot_guide_reason = nullptr;
+    // The copy the game draws its HUD over later, in another image: what tells the HUD apart.
+    oot_guide_scene = VK_NULL_HANDLE;
+    if (images[1].id) {
+        auto& scene = texture_cache.GetImageView(images[1].id);
+        if (scene.BackingImage() && !scene.IsRescaled() &&
+            scene.format == VideoCore::Surface::PixelFormat::B10G11R11_FLOAT &&
+            scene.range == VideoCommon::SubresourceRange{} &&
+            scene.Samples() == VK_SAMPLE_COUNT_1_BIT) {
+            oot_guide_scene = scene.Handle(Shader::TextureType::Color2D);
+            oot_guide_scene_extent = {scene.size.width, scene.size.height};
+        }
+    }
+    const bool same_pixels = oot_guide_scene && oot_tonemapped_frame == render_trace_frame &&
+                             oot_tonemapped_view != oot_guide_scene &&
+                             oot_tonemapped_extent.width == oot_guide_scene_extent.width &&
+                             oot_tonemapped_extent.height == oot_guide_scene_extent.height;
+    oot_guide_reference = same_pixels ? oot_tonemapped_view : VkImageView{};
+    if (!oot_guide_scene && MotionGuideRequested()) {
+        const char* reason = "no usable scene copy (missing, rescaled, not B10G11R11_FLOAT, "
+                             "multisampled or a sub-range of an image)";
+        if (std::exchange(oot_hud_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Frame extrapolation: no HUD mask for frame {}: {}",
+                     render_trace_frame, reason);
+        }
+    }
+}
+
+void RasterizerVulkan::TrackOotTonemappedImage(const GraphicsPipeline& pipeline) {
+    const auto& hashes = pipeline.ShaderHashes();
+    if (std::none_of(hashes.begin(), hashes.end(), VideoCommon::OotNetwork::IsTonemapShader)) {
+        return;
+    }
+    const auto& target = maxwell3d->regs.rt[0];
+    if (target.Address() == 0) {
+        return;
+    }
+    // With dynamic resolution the draw may cover only part of the target.
+    const auto area = VideoCommon::OotNetwork::DrawArea(maxwell3d->regs);
+    std::scoped_lock lock{oot_network_bypass.mutex};
+    if (oot_network_bypass.tonemapped.Address() != target.Address()) {
+        LOG_INFO(Render_Vulkan,
+                 "Ocarina of Time: tonemapped image at {:#x} {}x{}, drawn {},{} to {},{}",
+                 target.Address(), target.width, target.height, area.x0, area.y0, area.x1, area.y1);
+    }
+    oot_network_bypass.tonemapped = target;
+    oot_network_bypass.tonemapped_area = area;
+    oot_network_bypass.tonemapped_fresh = true;
 }
 
 void RasterizerVulkan::TrackOotTonemappedImage() {
@@ -3120,7 +3541,8 @@ void RasterizerVulkan::ClearImpl(Maxwell& regs, u32 layer_count) {
             if (can_defer_clear) {
                 scheduler.DeferColorClear(framebuffer, color_attachment, clear_value);
             } else {
-                scheduler.Record([color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
+                scheduler.RecordEmu(TraceCategory::ClearInPass, {clear_rect.rect.extent.width, clear_rect.rect.extent.height, 0},
+                    [color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
                     const VkClearAttachment attachment{
                         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                         .colorAttachment = color_attachment,
@@ -3168,7 +3590,8 @@ void RasterizerVulkan::ClearImpl(Maxwell& regs, u32 layer_count) {
         ds_value.depthStencil.stencil = regs.clear_stencil;
         scheduler.DeferDepthStencilClear(framebuffer, ds_value);
     } else {
-        scheduler.Record([clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
+        scheduler.RecordEmu(TraceCategory::ClearInPass, {clear_rect.rect.extent.width, clear_rect.rect.extent.height, 1},
+            [clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
                           clear_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
             VkClearAttachment attachment;
             attachment.aspectMask = aspect_flags;
@@ -3474,12 +3897,27 @@ void RasterizerVulkan::DispatchCompute() {
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     const auto list_slot = kepler_compute->GetIndirectListSlot();
-    const bool can_replace =
-        OcarinaTemporalEnabled() &&
-        VideoCommon::FindOcarinaUpscalePass(native_key, pipeline->ShaderHash()) !=
-            VideoCommon::OcarinaUpscalePass::None &&
-        pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
-        !frame_dump.Capturing();
+    // EDEN_NX2_OOT_FSR_ANY: the output pass of any resolution step, as the engine knows it.
+    const bool any_step_pass =
+        OcarinaFsrAnyStep() && kepler_compute->IsNativeMode() &&
+        kepler_compute->IsOotOutputPass(native_key, pipeline->ShaderHash());
+    if (any_step_pass) {
+        oot_fsr_pass_frame = render_trace_frame;
+        static std::set<u64> warned;
+        if (!pipeline->CanReplaceOcarinaUpscale() && warned.size() < 64 &&
+            warned.insert(pipeline->ShaderHash()).second) {
+            LOG_WARNING(Render_Vulkan,
+                        "Ocarina temporal: output pass {:016x} (key {:016x}) is left to the game: "
+                        "its bindings are not ones the replacement can stand in for",
+                        pipeline->ShaderHash(), native_key);
+        }
+    }
+    const bool can_replace = OcarinaTemporalEnabled() &&
+                             (any_step_pass ||
+                              VideoCommon::FindOcarinaUpscalePass(native_key, pipeline->ShaderHash()) !=
+                                  VideoCommon::OcarinaUpscalePass::None) &&
+                             pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
+                             !frame_dump.Capturing();
     // Until a dispatch overwrites the scene, each direct one binds only after the effects are
     // marked. The indirect path records its bind at once.
     const bool marking_effects = oot_effects_frame == render_trace_frame &&
@@ -3920,11 +4358,27 @@ bool RasterizerVulkan::IsGpuTickDone(u64 tick) {
     if (scheduler.IsFree(tick)) {
         return true;
     }
+    // The GPU thread polls a channel suspended on a list copy back to back (it spins for 500 us
+    // before it sleeps): ~190,000 polls a second on Windows. Each asked the back to submit (a
+    // futex wake, a kernel call on Windows) and the driver for the semaphore's value (also a
+    // kernel call there). Both are needed far less often than that.
+    const auto now = std::chrono::steady_clock::now();
     // A deferred submission (Scheduler::DeferFlush) is only made by the split's back: ask it to
-    // submit, or the tick never completes while the front polls.
-    if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active()) {
+    // submit, or the tick never completes while the front polls. Once per tick is enough (the
+    // hook submits everything deferred, so also every earlier tick); again after a millisecond
+    // in case it raced.
+    if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active() &&
+        (tick > poll_submit_requested_tick ||
+         now - poll_submit_requested_at > std::chrono::milliseconds{1})) {
         VideoCommon::GpuSplit::Get().RequestIdleHook();
+        poll_submit_requested_tick = (std::max)(poll_submit_requested_tick, tick);
+        poll_submit_requested_at = now;
     }
+    // The GPU's progress, from the driver at most every 20 us (a copy takes longer than that).
+    if (now - poll_refreshed_at < std::chrono::microseconds{20}) {
+        return false;
+    }
+    poll_refreshed_at = now;
     scheduler.GetMasterSemaphore().Refresh();
     return scheduler.IsFree(tick);
 }
@@ -4585,7 +5039,15 @@ bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
                            !VideoCommon::GpuSplit::OwnsScheduler();
         bool gpu_modified;
         {
-            std::scoped_lock lock{buffer_cache.mutex};
+            // Draws hold the caches for tens of microseconds, thousands of times a second: a game
+            // thread writing buffers meanwhile waited each time (The Duskbloods' five worker threads
+            // spent ~25 ms a frame here). A busy cache leaves the write to the next gather instead,
+            // as for GPU-written memory: the caller collects it, and DmaPusher::Step gathers before
+            // each new command list.
+            std::unique_lock lock{buffer_cache.mutex, std::try_to_lock};
+            if (!lock.owns_lock()) {
+                return true;
+            }
             if (defer) {
                 VideoCommon::t_deferred_page_caching = &deferred;
             }
@@ -4909,10 +5371,17 @@ void RasterizerVulkan::WaitForIdle() {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
 
-    query_cache.NotifyWFI();
+    const bool synced = query_cache.NotifyWFI();
 
     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
+        fence_manager.SignalOrdering();
+        return;
+    }
+    if (synced && VideoCommon::Nx2GpuCost::Query(VideoCommon::Nx2GpuCost::QuerySkipWfiBarrier)) {
+        // EDEN_NX2_GPUCOST_QUERY bit 2: the sync's barrier before its copies waited for every
+        // stage and write of the earlier work, and the one after them made the copies' writes
+        // visible to every later stage, so this one has nothing left to wait for.
         fence_manager.SignalOrdering();
         return;
     }
@@ -5072,6 +5541,37 @@ void RasterizerVulkan::TracePendingCpuWrites(bool compute, std::span<const u64> 
     });
 }
 
+// The tags and reasons follow CheezyEmu's (76f03c3c03, 51eb67792f) for our upscale path.
+std::pair<const char*, const char*> RasterizerVulkan::UpscalerIdleReason() const {
+    if (oot_upscaler_failed.load(std::memory_order_relaxed)) {
+        return {"UNAVAILABLE", "The upscaler cannot run on this GPU or driver (the log says why). "
+                               "The game's own upscaler draws."};
+    }
+    if (oot_upscaler_off.load(std::memory_order_relaxed)) {
+        return {"OFF", "The game's own upscaler draws: Ocarina FSR is off (Graphics), or "
+                       "EDEN_NX2_DLSS_REPLACEMENT=native asks for it."};
+    }
+    const char* const reason = oot_idle_reason.load(std::memory_order_relaxed);
+    if (reason == nullptr) {
+        return {"WAITING", "Waiting for the first frame the upscaler can take."};
+    }
+    const std::string_view why{reason};
+    if (why == "unexpected upscale images") {
+        return {"RES 1X", "The game's images are not the size or format the upscaler takes. "
+                          "A Resolution other than 1X does that: set it to 1X."};
+    }
+    if (why == "no scene camera this frame") {
+        return {"NO CAMERA", "No game camera this frame: menus, cutscenes and loading screens "
+                             "are drawn by the game's own upscaler."};
+    }
+    if (why == "no scene depth this frame") {
+        return {"NO DEPTH", "No scene depth this frame: menus, cutscenes and loading screens "
+                            "are drawn by the game's own upscaler."};
+    }
+    return {"WAITING", "The game's own upscaler draws this scene; the upscaler takes over in "
+                       "gameplay."};
+}
+
 bool RasterizerVulkan::OcarinaTemporalEnabled() const {
     constexpr u64 ocarina_program = 0x0400486024DEC000ULL;
     if (program_id != ocarina_program || oot_live_failed) {
@@ -5081,11 +5581,32 @@ bool RasterizerVulkan::OcarinaTemporalEnabled() const {
         return *oot_backend != VideoCommon::OcarinaUpscaleBackend::Native;
     }
     oot_backend = ResolveOcarinaUpscaler(device);
-    if (*oot_backend == VideoCommon::OcarinaUpscaleBackend::Native &&
-        Settings::values.ocarina_fsr.GetValue() && !Fsr3Upscaler::IsSupported(device)) {
+    const bool native = *oot_backend == VideoCommon::OcarinaUpscaleBackend::Native;
+    // For the status bar: Ocarina FSR asked for but not supported here reads UNAVAILABLE, the
+    // game's own pass for any other reason OFF.
+    const bool fsr_unsupported =
+        native && Settings::values.ocarina_fsr.GetValue() && !Fsr3Upscaler::IsSupported(device);
+    oot_upscaler_off.store(native && !fsr_unsupported, std::memory_order_relaxed);
+    if (fsr_unsupported) {
+        oot_upscaler_failed.store(true, std::memory_order_relaxed);
         LOG_WARNING(Render_Vulkan, "Ocarina FSR 3.1 unsupported on this device; using native upscale");
     }
-    return *oot_backend != VideoCommon::OcarinaUpscaleBackend::Native;
+    return !native;
+}
+
+bool RasterizerVulkan::OcarinaFsrAnyStep() const {
+    return VideoCommon::OotNetwork::FsrAnyStepRequested() && OcarinaTemporalEnabled() &&
+           oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr;
+}
+
+bool RasterizerVulkan::OcarinaGuideOnly() const {
+    return MotionGuideRequested() && !oot_guide_failed &&
+           Settings::values.frame_gen.GetValue() &&
+           VideoCommon::OotNetwork::BypassEnabled(program_id) && !OcarinaTemporalEnabled();
+}
+
+bool RasterizerVulkan::OcarinaMotionTracked() const {
+    return OcarinaTemporalEnabled() || OcarinaGuideOnly();
 }
 
 /// Capture the two camera matrices from a draw targeting the scene color and depth. Terrain and
@@ -5116,7 +5637,7 @@ void RasterizerVulkan::ApplyOcarinaFacts(const OcarinaDrawFacts& facts) {
     // Reflections and half-size passes share the camera layout; the upscale reads the largest.
     if (oot_camera_sample_frame == render_trace_frame &&
         u64{color.size.width} * color.size.height <=
-            u64{oot_motion.image_extent.width} * oot_motion.image_extent.height) {
+            u64{oot_motion.extent.width} * oot_motion.extent.height) {
         return;
     }
 
@@ -5134,9 +5655,27 @@ void RasterizerVulkan::ApplyOcarinaFacts(const OcarinaDrawFacts& facts) {
         return;
     }
     const VideoCommon::OcarinaCameraBuffer& values = *facts.camera;
-    const auto camera = VideoCommon::DecodeOcarinaCamera(
-        values, color.size.width, color.size.height,
-        oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss);
+    VkExtent2D drawn{color.size.width, color.size.height};
+    if (OcarinaFsrAnyStep()) {
+        // A low resolution step renders into part of a wider target (854x480 of 864x480).
+        // The render area is the scene when it is all but the target; the camera may then
+        // describe either.
+        const auto& clip = maxwell3d->regs.surface_clip;
+        const u32 clip_width = clip.width, clip_height = clip.height;
+        if (clip.x == 0 && clip.y == 0 && clip_width != 0 && clip_height != 0 &&
+            clip_width <= drawn.width && clip_height <= drawn.height &&
+            drawn.width - clip_width < 32 && drawn.height - clip_height < 32) {
+            drawn = {clip_width, clip_height};
+        }
+    }
+    const bool dlss = oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss;
+    auto camera = VideoCommon::DecodeOcarinaCamera(values, drawn.width, drawn.height, dlss);
+    if (camera.issue == VideoCommon::OcarinaCameraIssue::Extent && OcarinaFsrAnyStep() &&
+        (drawn.width != color.size.width || drawn.height != color.size.height)) {
+        // The camera described the whole target rather than the clip's scene.
+        drawn = {color.size.width, color.size.height};
+        camera = VideoCommon::DecodeOcarinaCamera(values, drawn.width, drawn.height, dlss);
+    }
     if (camera.issue != VideoCommon::OcarinaCameraIssue::None) {
         refuse(camera.issue == VideoCommon::OcarinaCameraIssue::Extent
                    ? "no scene camera: its size does not match the scene target"
@@ -5147,6 +5686,7 @@ void RasterizerVulkan::ApplyOcarinaFacts(const OcarinaDrawFacts& facts) {
     oot_camera_sample_frame = render_trace_frame;
     oot_motion.camera_channel = facts.channel;
     oot_motion.extent = {camera.width, camera.height};
+    oot_motion.drawn = drawn;
     oot_motion.image_extent = {color.size.width, color.size.height};
     oot_motion.current = camera.current;
     oot_motion.previous = camera.previous;
@@ -5160,14 +5700,19 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
     // half-size passes and full-screen passes (which keep the depth bound without using it, as
     // #678 found, some with depth writes on: with the test off nothing writes depth) stay put.
     const auto& regs = DrawEngine().regs;
-    if (oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr && oot_motion.extent.width != 0 &&
+    // EDEN_NX2_OOT_FSR_ANY: the scene size follows the game's dynamic resolution, and a frame's
+    // first scene draws can come before its camera tells the size. The size is the last replaced
+    // frame's, so the first frame of another step is drawn without an offset, all of it.
+    const VkExtent2D scene = OcarinaFsrAnyStep() ? oot_fsr_scene : oot_motion.extent;
+    if (oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr && scene.width != 0 &&
         oot_dlss_frame && *oot_dlss_frame + 1 >= render_trace_frame && regs.depth_test_enable) {
         const auto& targets = texture_cache.GetRenderTargets();
         if (targets.depth_buffer_id) {
             const auto& depth = texture_cache.GetImageView(targets.depth_buffer_id);
-            if (depth.size.width == oot_motion.extent.width &&
-                depth.size.height == oot_motion.extent.height && !depth.IsRescaled()) {
-                // AMD's phase count for the last FSR frame's scale.
+            if (depth.size.width == scene.width && depth.size.height == scene.height &&
+                !depth.IsRescaled()) {
+                // AMD's phase count for the last FSR frame's scale. PAL clips the viewport to an
+                // integer scissor, so the offset stays non-negative there.
                 const u32 index = static_cast<u32>(render_trace_frame % oot_jitter_phases) + 1;
                 const auto driver = device.GetDriverID();
                 want = VideoCommon::OcarinaJitter(index, driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
@@ -5316,8 +5861,17 @@ void RasterizerVulkan::ReadOcarinaActor(OcarinaActorMesh& mesh) {
 /// Track the scene depth on its reader dispatch, or try to replace a recognized upscale dispatch.
 bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 native_key,
                                          bool replace) {
-    if ((!replace && native_key != VideoCommon::OcarinaDepthReaderKey) ||
-        !OcarinaTemporalEnabled()) {
+    // EDEN_NX2_OOT_FSR_ANY: a second program read the same depth through the same handle in the
+    // same scenes. It gives the depth of frames the first one leaves without. No capture has its
+    // native key, so it is still matched by shader hash, which a lowering change moves.
+    constexpr u64 second_depth_reader = 0x3456eac1b79ed5b8ULL;
+    const u64 upscale_hash = pipeline.ShaderHash();
+    const bool any_step = OcarinaFsrAnyStep();
+    const bool second_reader = any_step && upscale_hash == second_depth_reader &&
+                               oot_motion.depth_frame != render_trace_frame;
+    // The guide for frame extrapolation needs the depth too; it replaces nothing.
+    if ((!replace && native_key != VideoCommon::OcarinaDepthReaderKey && !second_reader) ||
+        !(replace ? OcarinaTemporalEnabled() : OcarinaMotionTracked())) {
         return false;
     }
     const bool native_resolution =
@@ -5355,10 +5909,23 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
         return false;
     }
     // Logs why the game's own upscale draws, when the reason changes and every 120th repeat.
-    const auto fail = [this](const char* reason, std::string_view detail = {}) {
+    // With EDEN_NX2_OOT_FSR_ANY as a warning that names the pass and the sizes known so far.
+    VkExtent2D output_size{};
+    const auto fail = [&](const char* reason, std::string_view detail = {}) {
+        oot_idle_reason.store(reason, std::memory_order_relaxed);
         if (reason != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
-            LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({}{})",
-                     render_trace_frame, reason, detail);
+            if (any_step) {
+                LOG_WARNING(Render_Vulkan,
+                            "Ocarina temporal: the game's upscale draws frame {} ({}): pass "
+                            "{:016x}, scene {}x{} drawn {}x{}, output {}x{}",
+                            render_trace_frame, reason, pipeline.ShaderHash(),
+                            oot_motion.extent.width, oot_motion.extent.height,
+                            oot_motion.drawn.width, oot_motion.drawn.height, output_size.width,
+                            output_size.height);
+            } else {
+                LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({}{})",
+                         render_trace_frame, reason, detail);
+            }
         }
         if (reason != oot_fallback_reason) {
             oot_fallback_reason = reason;
@@ -5409,6 +5976,10 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     auto& target = texture_cache.GetImageView(written[0]);
     using VideoCore::Surface::PixelFormat;
     const auto extent = oot_motion.extent;
+    // What the game drew of the scene images, the upscaler's render size: all of them without
+    // EDEN_NX2_OOT_FSR_ANY, and the camera's scene where DLSS Balanced pads the images.
+    const auto drawn = oot_motion.drawn;
+    output_size = {target.size.width, target.size.height};
     using enum VideoCommon::OcarinaUpscalePass;
     const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, pipeline.ShaderHash());
     const bool target_1440p = target.size.width == 2560 && target.size.height == 1440;
@@ -5425,21 +5996,36 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     const bool upscale_4k = pass_1440p && !native_resolution;
     // The 1440p and scaled passes take any 16:9 scene up to their target: the DLSS render scales
     // shrink it docked, and the game's dynamic resolution handheld (854x480 at its floor).
+    // With EDEN_NX2_OOT_FSR_ANY any scale of the same shape, for any other resolution step's pass.
     const bool scaled_scene = extent.width <= target.size.width &&
                               extent.height <= target.size.height &&
                               std::abs(static_cast<int>(extent.width * 9) -
                                        static_cast<int>(extent.height * 16)) <= 32;
     const bool valid_extents =
-        pass_1440p || pass == Scaled ? scaled_scene
-        : native_size ? target.size.width == extent.width && target.size.height == extent.height
-                      : target.size.width == extent.width * 4 / 3 &&
-                            target.size.height == extent.height * 4 / 3;
+        pass_1440p ? drawn.width <= 2560 && drawn.height <= 1440 &&
+                         std::abs(static_cast<int>(drawn.width * 9) -
+                                  static_cast<int>(drawn.height * 16)) <= 32 &&
+                         target.size.width == 2560 && target.size.height == 1440
+        : pass == Scaled ? scaled_scene
+        : any_step ? drawn.width <= extent.width && drawn.height <= extent.height &&
+                         VideoCommon::OcarinaUpscaleFits(drawn.width, drawn.height,
+                                                         target.size.width, target.size.height)
+        : native_size ? target.size.width == drawn.width && target.size.height == drawn.height
+                      : target.size.width == drawn.width * 4 / 3 &&
+                            target.size.height == drawn.height * 4 / 3;
+    if (any_step && !valid_extents) {
+        return fail("the scene does not scale to the output");
+    }
+    // The upscale's input has the scene's size; with EDEN_NX2_OOT_FSR_ANY it holds what was drawn.
+    const bool color_sized =
+        any_step ? color.size.width >= drawn.width && color.size.height >= drawn.height
+                 : oot_motion.SceneSized(color.size.width, color.size.height);
     if (!valid_extents || !color.BackingImage() || !target.BackingImage() ||
         color.IsRescaled() || target.IsRescaled() ||
         color.Samples() != VK_SAMPLE_COUNT_1_BIT || target.Samples() != VK_SAMPLE_COUNT_1_BIT ||
         color.range != VideoCommon::SubresourceRange{} || target.range != VideoCommon::SubresourceRange{} ||
         color.format != PixelFormat::E5B9G9R9_FLOAT || target.format != PixelFormat::B10G11R11_FLOAT ||
-        !oot_motion.SceneSized(color.size.width, color.size.height) ||
+        !color_sized ||
         color.ImageHandle() == target.ImageHandle() || depth.ImageHandle() == target.ImageHandle()) {
         return fail("unexpected upscale images");
     }
@@ -5474,13 +6060,19 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
         if (oot_jitter_frame == render_trace_frame) {
             jitter = oot_jitter_offset;
         }
-        const VkExtent2D output_extent = native_resolution ? extent
+        const VkExtent2D output_extent = native_resolution ? drawn
                                          : upscale_4k      ? VkExtent2D{3840, 2160}
                                                            : target_extent;
+        // EDEN_NX2_OOT_FSR_ANY: the game's dynamic resolution tops out at 3/4 of its output. FSR
+        // keeps images of that size, so a resolution step costs it neither them nor its history.
+        const VkExtent2D largest = any_step && !pass_1440p
+                                       ? VkExtent2D{target_extent.width * 3 / 4,
+                                                    target_extent.height * 3 / 4}
+                                       : VkExtent2D{};
         const bool recorded = oot_live_dlss->Record(color_view, depth.DepthView(), target_view,
-                                                   extent, output_extent, target_extent, oot_motion.current,
+                                                   drawn, output_extent, target_extent, oot_motion.current,
                                                    oot_motion.previous, mesh, depth.ImageHandle(),
-                                                   render_trace_frame, jitter,
+                                                   render_trace_frame, jitter, largest,
                                                    {depth.size.width, depth.size.height});
         if (!recorded) {
             return fail("temporal upscaler declined the frame");
@@ -5491,15 +6083,54 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
             oot_4k_guest_present = VK_NULL_HANDLE;
         }
         oot_dlss_frame = render_trace_frame;
+        // For the status bar (CheezyEmu 76f03c3c03): which upscaler drew this frame, at what sizes.
+        const auto packed = [](VkExtent2D size) {
+            return (u64{size.width & 0xffff} << 16) | u64{size.height & 0xffff};
+        };
+        oot_upscale_sizes.store((packed(drawn) << 32) | packed(output_extent),
+                                std::memory_order_relaxed);
+        oot_upscaler_name.store(oot_live_dlss->LastUpscalerName(), std::memory_order_relaxed);
+        oot_upscaled_frames.fetch_add(1, std::memory_order_relaxed);
         // AMD's jitter phase count for FSR: 8 * (output / render width)^2, so 18 for 1440p -> 4K
         // and 8 for native AA.
-        const f32 ratio = static_cast<f32>(output_extent.width) / static_cast<f32>(extent.width);
+        const f32 ratio = static_cast<f32>(output_extent.width) / static_cast<f32>(drawn.width);
         oot_jitter_phases = std::max(1U, static_cast<u32>(8.0f * ratio * ratio));
         oot_fallback_reason = nullptr;
+        if (any_step) {
+            // The next frame's scene draws are offset when they have this size.
+            oot_fsr_scene = extent;
+            // Mipmapped textures take the bias of the scale in use (Sampler::MakeKey).
+            const u32 lod_quarters =
+                VideoCommon::OcarinaFsrLodBiasQuarters(drawn.width, output_extent.width);
+            texture_cache_runtime.ocarina_fsr_lod_quarters = static_cast<u8>(lod_quarters);
+            const bool new_sizes = drawn.width != oot_fsr_render.width ||
+                                   drawn.height != oot_fsr_render.height ||
+                                   output_extent.width != oot_fsr_output.width ||
+                                   output_extent.height != oot_fsr_output.height;
+            if (new_sizes && oot_fsr_size_logs < 512) {
+                ++oot_fsr_size_logs;
+                LOG_INFO(Render_Vulkan,
+                         "Ocarina temporal: FSR replaces pass {:016x} from frame {}: {}x{} of "
+                         "{}x{} -> {}x{}, {} jitter phases, texture LOD bias {:.2f}",
+                         pipeline.ShaderHash(), render_trace_frame, drawn.width, drawn.height,
+                         extent.width, extent.height, output_extent.width, output_extent.height,
+                         oot_jitter_phases, -0.25f * static_cast<f32>(lod_quarters));
+            }
+            oot_fsr_render = drawn;
+            oot_fsr_output = output_extent;
+            // The frame before the game draws its HUD over it in another image, which tells
+            // frame extrapolation the HUD apart (as OotNetworkBypassed keeps it).
+            if (MotionGuideRequested() && !upscale_4k) {
+                oot_fsr_hud_scene = target.Handle(Shader::TextureType::Color2D);
+                oot_fsr_hud_extent = target_extent;
+                oot_fsr_hud_frame = render_trace_frame;
+            }
+        }
         return true;
     } catch (const vk::Exception& error) {
         LOG_WARNING(Render_Vulkan, "Ocarina temporal upscaling unavailable: {}", error.what());
         oot_live_failed = true;
+        oot_upscaler_failed.store(true, std::memory_order_relaxed);
         texture_cache_runtime.ocarina_fsr_failed = true; // samplers drop the FSR LOD bias
         return false;
     }
@@ -5935,6 +6566,8 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         !oot_live_dlss->EvaluationFailed() && !frame_dump.Capturing()) {
         try {
             oot_live_dlss->Composite4k(info.image_view, render_trace_frame);
+            oot_hud_composite = info.image_view;
+            oot_hud_frame = render_trace_frame;
             info.image = oot_live_dlss->CompositedImage();
             info.image_view = oot_live_dlss->CompositedView();
             info.scaled_width = 3840;
@@ -5943,10 +6576,97 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         } catch (const vk::Exception& error) {
             LOG_WARNING(Render_Vulkan, "Ocarina temporal 4K presentation unavailable: {}", error.what());
             oot_live_failed = true;
+            oot_upscaler_failed.store(true, std::memory_order_relaxed);
             texture_cache_runtime.ocarina_fsr_failed = true; // samplers drop the FSR LOD bias
         }
     }
+    // The bypassed frame with its HUD, sRGB-encoded as this view reads it.
+    if (oot_guide_frame == render_trace_frame && oot_guide_scene && info.image_view && !scaled &&
+        info.width == oot_guide_scene_extent.width &&
+        info.height == oot_guide_scene_extent.height &&
+        image_view->format == VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM) {
+        oot_hud_composite = info.image_view;
+        oot_hud_frame = render_trace_frame;
+    }
+    // EDEN_NX2_OOT_FSR_ANY: the same for the frame FSR drew at the game's output size.
+    if (oot_fsr_hud_frame == render_trace_frame && oot_fsr_hud_scene && info.image_view &&
+        !scaled && info.width == oot_fsr_hud_extent.width &&
+        info.height == oot_fsr_hud_extent.height &&
+        image_view->format == VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM) {
+        oot_hud_composite = info.image_view;
+        oot_hud_frame = render_trace_frame;
+    }
+    if (MotionGuideRequested() && oot_guide_frame == render_trace_frame && oot_guide_scene &&
+        !oot_guide_reference && oot_hud_frame != render_trace_frame) {
+        // The extrapolation's HUD mask needs the presented image next to the scene copy.
+        const char* reason = !info.image_view ? "no presented image view"
+                             : scaled         ? "the presented image is rescaled"
+                             : info.width != oot_guide_scene_extent.width ||
+                                   info.height != oot_guide_scene_extent.height
+                                 ? "the presented image and the scene differ in size"
+                                 : image_view->format !=
+                                           VideoCore::Surface::PixelFormat::A8B8G8R8_UNORM
+                                     ? "the presented image is not A8B8G8R8_UNORM"
+                                     : "an unknown condition";
+        if (std::exchange(oot_hud_reason, reason) != reason) {
+            LOG_INFO(Render_Vulkan, "Frame extrapolation: no HUD mask for frame {} ({}x{} presented, "
+                     "{}x{} scene): {}", render_trace_frame, info.width, info.height,
+                     oot_guide_scene_extent.width, oot_guide_scene_extent.height, reason);
+        }
+    }
+    // EDEN_NX2_OOT_FSR_ANY: a frame with a scene and no dispatch known as the game's upscale,
+    // logged as TryOcarinaUpscale logs the frames it leaves to the game.
+    if (oot_camera_sample_frame == render_trace_frame &&
+        oot_fsr_pass_frame != render_trace_frame && OcarinaFsrAnyStep()) {
+        static const char* const unknown_pass = "no dispatch known as the game's upscale";
+        if (unknown_pass != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
+            LOG_WARNING(Render_Vulkan,
+                        "Ocarina temporal: the game's upscale draws frame {} ({}): scene {}x{} "
+                        "drawn {}x{}; EDEN_NX2_OOT_BYPASS_OUTPUT=<shader hash> names a pass",
+                        render_trace_frame, unknown_pass, oot_motion.extent.width,
+                        oot_motion.extent.height, oot_motion.drawn.width,
+                        oot_motion.drawn.height);
+        }
+        if (unknown_pass != oot_fallback_reason) {
+            oot_fallback_reason = unknown_pass;
+            oot_fallback_repeats = 0;
+        }
+    }
     return info;
+}
+
+std::optional<ExtrapolationSource> RasterizerVulkan::OcarinaExtrapolationSource() const {
+    if (MotionGuideRequested() && oot_guide && oot_guide_frame == render_trace_frame &&
+        !oot_guide_failed) {
+        auto source = oot_guide->Extrapolation(render_trace_frame);
+        if (source && oot_guide_reference) {
+            // The game drew its HUD over the copy itself.
+            source->hud_reference = oot_guide_reference;
+            source->hud_composite = oot_guide_scene;
+            source->hud_exact = true;
+        } else if (source && oot_hud_frame == render_trace_frame && oot_guide_scene) {
+            source->hud_reference = oot_guide_scene;
+            source->hud_composite = oot_hud_composite;
+            source->hud_reference_linear = true;
+        }
+        return source;
+    }
+    if (!MotionGuideRequested() || !oot_live_dlss || oot_dlss_frame != render_trace_frame ||
+        oot_live_failed || oot_live_dlss->EvaluationFailed()) {
+        return std::nullopt;
+    }
+    auto source = oot_live_dlss->Extrapolation(render_trace_frame);
+    if (source && oot_hud_frame == render_trace_frame) {
+        if (oot_fsr_hud_frame == render_trace_frame) {
+            // EDEN_NX2_OOT_FSR_ANY: the game's own output image, as for a bypassed frame.
+            source->hud_reference = oot_fsr_hud_scene;
+            source->hud_reference_linear = true;
+        } else {
+            source->hud_reference = oot_live_dlss->SceneReferenceView();
+        }
+        source->hud_composite = oot_hud_composite;
+    }
+    return source;
 }
 
 void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
@@ -5996,9 +6716,13 @@ void RasterizerVulkan::FlushWork() {
     case SubmissionPolicy::Action::None:
         break;
     case SubmissionPolicy::Action::Dispatch:
-        scheduler.DispatchWork();
+        scheduler.DispatchWorkUnlessHeld();
         break;
     case SubmissionPolicy::Action::Flush:
+        if (native && !android && DeferBudgetFlush(budget)) {
+            scheduler.DispatchWorkUnlessHeld();
+            break;
+        }
         scheduler.Flush();
         pending_native_work = false;
         break;
@@ -6006,6 +6730,36 @@ void RasterizerVulkan::FlushWork() {
     if (native && !android) {
         pending_native_work = true;
     }
+}
+
+bool RasterizerVulkan::DeferBudgetFlush(u32 budget) {
+    if (!VideoCommon::Nx2Uma::Has(VideoCommon::Nx2Uma::AdaptiveSubmit)) {
+        return false;
+    }
+    // The budget submits early so the host GPU can start on the frame. While it still has
+    // submitted work to run that buys nothing, and each submission costs a render pass, a full
+    // rebind and the driver's submit. Fences, reads and presents submit on their own. The cap
+    // keeps one tick from holding too much of the stream buffer.
+    static constexpr u32 RecheckDraws = 32;
+    static constexpr u32 MaxDeferrals = 12; // budget + 12 * 32 draws: 512 at the default budget
+    const u64 tick = scheduler.CurrentTick();
+    if (budget_defer_tick != tick) {
+        budget_defer_tick = tick;
+        budget_deferrals = 0;
+    }
+    if (budget_deferrals >= MaxDeferrals) {
+        return false;
+    }
+    auto& master_semaphore = scheduler.GetMasterSemaphore();
+    master_semaphore.Refresh();
+    if (master_semaphore.IsFree(tick - 1)) {
+        // Everything submitted has run: the GPU is waiting for this.
+        return false;
+    }
+    ++budget_deferrals;
+    // Advance reset the counter: ask again after RecheckDraws more draws.
+    draw_counter = budget > RecheckDraws ? budget - RecheckDraws : 0;
+    return true;
 }
 
 AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_cache_,
@@ -6113,7 +6867,19 @@ void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
     }
     const auto topology = DrawEngine().draw_manager.draw_state.topology;
     const bool topology_changed = !emulated_mesh && state_tracker.ChangePrimitiveTopology(topology);
-    if (topology_changed) {
+    // The dynamic topology follows the bound pipeline the way its static one does (FillStates):
+    // a patch list with tessellation stages, points for patches without them. Intel honours the
+    // dynamic topology as given (dynamicPrimitiveTopologyUnrestricted), so a tessellation
+    // pipeline drawn as a triangle list put stray, stretched triangles on screen.
+    dynamic_host_topology = MaxwellToVK::PrimitiveTopology(device, topology);
+    if (pipeline != nullptr && pipeline->HasTessellation()) {
+        dynamic_host_topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+    } else if (dynamic_host_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
+        dynamic_host_topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    }
+    const bool host_topology_changed =
+        !emulated_mesh && state_tracker.ChangeHostPrimitiveTopology(dynamic_host_topology);
+    if (topology_changed || host_topology_changed) {
         flags[Dirty::DepthBiasEnable] = true;
         flags[Dirty::PrimitiveRestartEnable] = true;
     }
@@ -6147,9 +6913,8 @@ void RasterizerVulkan::UpdateDynamicStates(const GraphicsPipeline* pipeline) {
             UpdateDepthWriteEnable(regs);
             UpdateStencilTestEnable(regs);
         }
-        if (topology_changed) {
-            RecordDynamic([topology_vk = MaxwellToVK::PrimitiveTopology(device, topology)](
-                                 vk::CommandBuffer cmdbuf) {
+        if (host_topology_changed) {
+            scheduler.Record([topology_vk = dynamic_host_topology](vk::CommandBuffer cmdbuf) {
                 cmdbuf.SetPrimitiveTopologyEXT(topology_vk);
             });
         }
@@ -6600,9 +7365,7 @@ void RasterizerVulkan::UpdatePrimitiveRestartEnable(Tegra::Engines::Maxwell3D::R
     if (device.IsMoltenVK()) {
         enable = true;
     } else if (enable) {
-        const auto topology =
-            MaxwellToVK::PrimitiveTopology(device, DrawEngine().draw_manager.draw_state.topology);
-        enable = IsPrimitiveRestartSupported(device, topology);
+        enable = IsPrimitiveRestartSupported(device, dynamic_host_topology);
     }
 
     RecordDynamic([enable](vk::CommandBuffer cmdbuf) {
@@ -6839,25 +7602,8 @@ void RasterizerVulkan::UpdateBlending(Tegra::Engines::Maxwell3D::Regs& regs,
 
     if (state_tracker.TouchColorMask() || color_output_changed) {
         last_color_output_mask = color_output_mask;
-        std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> setup_masks{};
-        for (size_t index = 0; index < Maxwell::NumRenderTargets; index++) {
-            const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
-            auto& current = setup_masks[index];
-            if (mask.R) {
-                current |= VK_COLOR_COMPONENT_R_BIT;
-            }
-            if (mask.G) {
-                current |= VK_COLOR_COMPONENT_G_BIT;
-            }
-            if (mask.B) {
-                current |= VK_COLOR_COMPONENT_B_BIT;
-            }
-            if (mask.A) {
-                current |= VK_COLOR_COMPONENT_A_BIT;
-            }
-            current &= (color_output_mask >> (index * 4)) & 0xF;
-        }
-        RecordDynamic([setup_masks](vk::CommandBuffer cmdbuf) {
+        auto setup_masks = ColorWriteMasks(regs, color_output_mask);
+        scheduler.Record([setup_masks](vk::CommandBuffer cmdbuf) {
             cmdbuf.SetColorWriteMaskEXT(0, setup_masks);
         });
     }

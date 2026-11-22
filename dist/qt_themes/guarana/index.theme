@@ -1,0 +1,8 @@
+[Icon Theme]
+Name=guarana
+Comment=Guarana Dark
+Inherits=colorful_dark
+Directories=16x16
+
+[16x16]
+Size=16

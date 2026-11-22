@@ -12,11 +12,23 @@ For example, **Super Smash Bros. Ultimate** uses such a framework. See the relat
 
 # Installing Mods for Most Games
 
-1. Right click a game in the game list.
-2. Click **"Open Mod Data Location"**.
-3. Extract the mod into that folder.
+The easy way:
+
+1. Right click a game in the game list and click **Configure Game**.
+2. In the **Add-Ons** tab, click **Import Mod from ZIP** or **Import Mod from Folder** and pick the mod.
+
+Guarana copies the mod into the game's mod folder and leaves the file or folder you picked as it is. If a mod of the same name is already installed, it asks before it replaces that mod. Each imported mod gets a small `mod.json` with its name, what it was imported from and when. The game never sees that file.
+
+By hand:
+
+1. Right click a game in the game list and click **"Open Mod Data Location"**, or click **Open Mods Folder** in the Add-Ons tab.
+2. Extract the mod into that folder.
 
 Each mod should be placed inside **its own subfolder**.
+
+## When two mods change the same file
+
+Mods are applied in the order of their names. When two ticked mods replace the same file of the game, the game gets the file of the mod that comes first. The Add-Ons tab lists such files under the list of mods, with the mod whose file is taken. To get the other mod's file, untick the first mod, or rename the mods' folders so that the one you want comes first.
 
 ---
 
@@ -28,6 +40,24 @@ Each mod should be placed inside **its own subfolder**.
 
 ---
 
+# Built-in Patches
+
+Some games come with patches that are part of Guarana. They need no download and are in the same **Add-Ons** list, with **Built-in** in the Version column:
+
+- **Built-in, recommended**: leave it on. The game misbehaves without it.
+- **Built-in, experimental**: new or little tested, and off until you tick it.
+- **Built-in**: no advice either way. Read what it does and choose.
+
+Click a built-in patch to read under the list what it does. Once the game has been started, the same box says whether the patch was applied. A warning sign next to a ticked patch means it was not, and the box says why:
+
+- **It is made for another version of the game.** The patch does nothing for the version you have.
+- **A mod changes the same part of the game.** Turn that mod off to use the patch.
+- **The game's code is not what it expects.** The patch does nothing for this copy of the game.
+
+Guarana knows this from the last time the game started, and forgets it when it is closed.
+
+---
+
 # Important Note About SD Card Paths
 
 Some mods are designed for real Nintendo Switch consoles and refer to the **SD card root**.
@@ -35,7 +65,7 @@ Some mods are designed for real Nintendo Switch consoles and refer to the **SD c
 The emulated SD card is located at:
 
 ```
-%AppData%\lichii\sdmc
+%AppData%\guarana\sdmc
 ```
 
 Example:
@@ -76,7 +106,7 @@ https://github.com/Raytwo/ARCropolis/releases/
 Extract the **`atmosphere`** folder into:
 
 ```
-%AppData%\lichii\sdmc
+%AppData%\guarana\sdmc
 ```
 
 This is the **emulated SD card directory**.
@@ -112,7 +142,7 @@ The `exefs` folder should be **next to the `romfs` folder**.
 Verify installation by checking that the following file exists:
 
 ```
-%AppData%\lichii\sdmc\atmosphere\contents\01006A800016E000\exefs\subsdk9
+%AppData%\guarana\sdmc\atmosphere\contents\01006A800016E000\exefs\subsdk9
 ```
 
 ---
@@ -164,7 +194,7 @@ sdmc\atmosphere\contents\01006A800016E000\exefs
 - Files were extracted to:
 
 ```
-%AppData%\lichii\sdmc
+%AppData%\guarana\sdmc
 ```
 
 ---

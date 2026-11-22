@@ -1,0 +1,179 @@
+/* The session's numbers (ui/numbers.ts): Home's "Your last measured session" under the seed, and the rolling
+   shader count on the launch stage. The seed's language, not an instrument's: a leaf-shaped pane with
+   a canopy tint, plain-word labels, one light numeral, the pacing strip as a row of stems.
+   Motion: the reels roll by translateY and the strip grows in once by scaleY. Nothing loops. */
+
+/* ---- Rolling numerals ---------------------------------------------------------------------------- */
+
+.odo { display: inline-flex; align-items: baseline; font-variant-numeric: tabular-nums; }
+.odo-reels { display: inline-flex; height: 1em; line-height: 1; }
+.odo-d { display: inline-block; height: 1em; overflow: hidden; contain: paint; }
+.odo-reel { display: flex; flex-direction: column; transition: transform 720ms var(--ease-spring); }
+.odo-reel > span { display: block; height: 1em; line-height: 1; text-align: center; }
+.odo-s { display: inline-block; line-height: 1; }
+/* Leading zeros are quieter but still readable: #f3efe6 at 0.52 is about 5 to 1 on the launch
+   stage's black, and about 4.7 to 1 even on the brightest point of its green glow. */
+.odo .is-lead { opacity: 0.52; transition: opacity 300ms var(--ease-out); }
+/* A fresh set of reels jumps; so does everything while a game has the GPU or motion is reduced. */
+.odo-reels.is-still .odo-reel,
+html[data-paused] .odo-reel,
+html[data-reduced] .odo-reel { transition: none; }
+
+/* ---- Home: the last session, under the seed ------------------------------------------------------- */
+
+.numbers-slot { display: grid; justify-items: center; width: 100%; min-width: 0; }
+.numbers-slot:empty { display: none; }
+.numbers {
+  container-type: inline-size;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 540px);
+  padding: 16px 22px;
+  border: 1px solid color-mix(in srgb, var(--leaf) 16%, transparent);
+  border-radius: var(--r-leaf-lg);
+  background: linear-gradient(165deg, color-mix(in srgb, var(--leaf) 8%, transparent) 0%, color-mix(in srgb, var(--surface) 55%, transparent) 62%);
+  animation: rise 680ms var(--ease-spring) 260ms both;
+}
+.numbers-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+/* A small leaf: the same shape as everything that is alive here. */
+.numbers-kicker::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 9px 2px;
+  background: var(--leaf);
+}
+:root[data-theme="light"] .numbers-kicker::before { background: var(--leaf-ink); }
+
+.numbers-hero { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 18px; }
+.numbers-big {
+  display: inline-flex;
+  align-items: flex-start;
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 3.9vw, 3.9rem);
+  font-weight: 300;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  color: var(--text);
+}
+.numbers-pct { margin: 0.08em 0 0 0.06em; font-size: 0.42em; font-weight: 600; letter-spacing: 0; color: var(--leaf-ink); }
+.numbers-big-label { display: grid; gap: 1px; padding-bottom: 0.3em; line-height: 1.3; }
+.numbers-big-label strong { color: var(--text); font-weight: 650; }
+.numbers-big-label span { color: var(--muted); font-size: var(--fs-sm); }
+
+/* The strip: one stem per frame. On time in leaf, late ones taller and in shell red. */
+.strip { display: grid; gap: 6px; margin: 0; }
+.strip-frame { position: relative; height: clamp(48px, 8.5vh, 92px); }
+.strip-svg { position: absolute; inset: 0 64px 0 0; width: calc(100% - 64px); height: 100%; overflow: visible; transform-origin: 50% 100%; }
+.strip-band { fill: var(--leaf-soft); }
+.strip-bars { fill: none; stroke: var(--leaf); stroke-width: 2; stroke-linecap: round; stroke-opacity: 0.78; }
+.strip-late { fill: none; stroke: var(--fail); stroke-width: 2; stroke-linecap: round; }
+.strip-median { fill: none; stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 2 5; stroke-linecap: round; stroke-opacity: 0.7; }
+:root[data-theme="light"] .strip-bars { stroke: var(--leaf-ink); stroke-opacity: 0.62; }
+/* The median's value sits in its own gutter on the right, at the median's height. */
+.strip-axis {
+  position: absolute;
+  right: 0;
+  top: var(--y, 50%);
+  translate: 0 -50%;
+  width: 56px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.strip-caption { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
+.strip.is-growing .strip-svg { animation: strip-grow 900ms var(--ease-spring) var(--grow-delay, 0ms) both; }
+@keyframes strip-grow { from { opacity: 0; transform: scaleY(0.05); } }
+
+.numbers-readouts {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 1.15fr);
+  gap: 12px 16px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--leaf) 14%, transparent);
+}
+.readout { display: grid; align-content: start; gap: 1px; min-width: 0; }
+.readout-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text);
+}
+.readout-unit { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0; }
+.readout-label { color: var(--text-2); font-size: var(--fs-sm); }
+.readout-note { color: var(--muted); font-size: var(--fs-xs); line-height: 1.35; }
+.readout-text { overflow: hidden; font-size: var(--fs-lg); white-space: nowrap; text-overflow: ellipsis; }
+@container (max-width: 470px) {
+  .readout-value { font-size: var(--fs-lg); }
+  .readout-text { font-size: var(--fs-md); }
+}
+@container (max-width: 380px) {
+  .numbers-readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* No finished session yet: the seed, and one line that says when the numbers come. */
+.numbers.is-empty {
+  gap: 4px;
+  width: min(100%, 420px);
+  padding: 14px 20px;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--leaf) 26%, transparent);
+  background: none;
+}
+.numbers-empty { color: var(--text-2); font-size: var(--fs-sm); }
+
+/* A short window (960 x 620): a tighter pane, so it fits above the hint bar with the seed over it. */
+@media (max-height: 700px) {
+  .numbers { gap: 8px; padding: 12px 16px; }
+  .numbers-big { font-size: clamp(2.2rem, 3.4vw, 3rem); }
+  .strip-frame { height: 44px; }
+  .numbers-readouts { gap: 8px 14px; padding-top: 8px; }
+}
+
+html[data-reduced] .numbers,
+html[data-reduced] .strip-svg { animation: none !important; }
+
+/* ---- Launch: the shader count beside the rings ------------------------------------------------------ */
+
+/* The outer ring reaches 0.69 of the seed from the eye; the count starts just past it. */
+.launch-tally {
+  position: absolute;
+  left: calc(50% + var(--launch-seed-size) * 0.75);
+  top: 50%;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  min-width: 10ch;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  translate: 0 -50%;
+  transform: translateX(-14px);
+  transition: opacity 500ms var(--ease-out), transform 760ms var(--ease-spring);
+}
+.launch-tally.is-on { opacity: 1; transform: none; }
+.tally-count { font-family: var(--font-display); font-size: clamp(1.9rem, 3.1vw, 3rem); font-weight: 300; letter-spacing: -0.035em; line-height: 1; color: #f3efe6; transition: color 600ms var(--ease-out); }
+.tally-of { color: #a3ad9f; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tally-time { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 4px; color: #8e9c90; font-size: var(--fs-xs); }
+.tally-clock { color: #c8c9bb; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.launch-tally.is-done .tally-count { color: #6fe3a0; }
+.launch.is-failed .launch-tally { display: none; }
+/* Too narrow beside the rings: it joins the flow under the seed, centred, below the outer ring's
+   lower arc (0.19 of the seed past the box), so it takes its own room instead of overlapping the
+   rings or the status line. screens.css trims the space under it to match. */
+@media (max-width: 900px) {
+  .launch-tally { position: static; margin-top: calc(var(--launch-seed-size) * 0.2); justify-items: center; translate: none; transform: translateY(8px); text-align: center; }
+}

@@ -5,11 +5,16 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 
+#include "common/device_profile.h"
 #include "common/dynamic_library.h"
+#include "common/shutdown_progress.h"
+#include "core/game_settings.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/renderer_base.h"
 #ifdef HAS_LSFG
@@ -39,8 +44,30 @@ class GPU;
 
 namespace Vulkan {
 
-Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dld,
-                    VkSurfaceKHR surface);
+/// The machine as it is read once, before the device is made: the GPU from the physical device,
+/// the host's CPU, RAM and power, and the refresh rate of the display the window is on. The GPU
+/// vendor is read here once (by PCI vendor ID), and the device class and the GPU family are
+/// derived from this profile once; the game's switch defaults and its settings presets both take
+/// them from here.
+struct DeviceStartProfile {
+    Common::DeviceProfile machine;
+    Common::DeviceClassification classification;
+    Core::GameSettings::GPUVendor vendor{Core::GameSettings::GPUVendor::Unknown};
+    /// The GPU's compute units or SMs where the driver reports them (VK_AMD_shader_core_properties,
+    /// VK_NV_shader_sm_builtins), else 0; what it counts is `gpu_cores_unit`. A resolver input
+    /// only. Intel's Windows driver reports neither.
+    u32 gpu_cores{};
+    std::string_view gpu_cores_unit;
+};
+
+/// window: the native window (an HWND on Windows) whose display's refresh rate the profile and
+/// the game's switch defaults take. Null (the Android and turbo mode callers): the profile's
+/// refresh rate is 0, and the switch defaults take the primary display's, where the host says it.
+/// on_capabilities gets the profile too. start_out, when given, receives the profile.
+Device CreateDevice(
+    const vk::Instance& instance, const vk::InstanceDispatch& dld, VkSurfaceKHR surface,
+    const std::function<void(const Device&, const DeviceStartProfile&)>& on_capabilities = {},
+    void* window = nullptr, DeviceStartProfile* start_out = nullptr);
 
 class RendererVulkan final : public VideoCore::RendererBase {
 public:
@@ -78,12 +105,114 @@ public:
     [[nodiscard]] VideoCore::DlssStatus GetDlssStatus() const override;
 #endif
 
+    [[nodiscard]] VideoCore::UpscalerStatus GetUpscalerStatus() const override;
+
     void RequestGpuBusySample() override {
         scheduler.RequestGpuBusySample();
     }
 
     [[nodiscard]] std::optional<double> GetGpuBusyMs() const override {
         return scheduler.GpuBusyMs();
+    }
+
+    [[nodiscard]] std::optional<VideoCore::VideoMemoryUsage> GetVideoMemoryUsage() const override;
+
+    bool RequestGpuCostSampling(bool on) override {
+        return scheduler.RequestCostSampling(on);
+    }
+
+    [[nodiscard]] bool IsGpuCostSampling() const override {
+        return scheduler.CostSampling();
+    }
+
+    [[nodiscard]] VideoCore::GpuCostSnapshot GetGpuCosts() const override {
+        return scheduler.GpuCosts();
+    }
+
+    [[nodiscard]] bool IsGpuPerfSupported() const override {
+        return scheduler.Perf().Supported();
+    }
+
+    [[nodiscard]] std::string GpuPerfReason() const override {
+        return scheduler.Perf().Reason();
+    }
+
+    bool RequestGpuPerfSampling(u32 frames) override {
+        return scheduler.Perf().RequestSampling(frames);
+    }
+
+    [[nodiscard]] bool IsGpuPerfSampling() const override {
+        return scheduler.Perf().Sampling();
+    }
+
+    [[nodiscard]] std::vector<VideoCore::RendererBase::GpuPerfSample> ReadGpuPerf() override {
+        std::vector<VideoCore::RendererBase::GpuPerfSample> samples;
+        for (const PerfQuery::Sample& sample : scheduler.Perf().Read()) {
+            samples.push_back({sample.name, sample.value, sample.unit});
+        }
+        return samples;
+    }
+
+    [[nodiscard]] u64 GpuPerfFramesSampled() const override {
+        return scheduler.Perf().FramesSampled();
+    }
+    [[nodiscard]] std::string GpuPerfDiag() const override {
+        return scheduler.Perf().Diag();
+    }
+
+    [[nodiscard]] std::optional<VideoCore::RendererBase::PresentStatsView>
+    GetPresentStats() const override {
+        const PresentManager::PresentStats s = present_manager.GetPresentStats();
+        VideoCore::RendererBase::PresentStatsView view{};
+        view.fluid = s.fluid;
+        view.fallback = s.fallback;
+        view.shown_stats = s.shown_stats;
+        view.slot_count = s.slots;
+        view.hits = s.hits;
+        view.no_frame = s.no_frame;
+        view.not_done = s.not_done;
+        view.uncovered = s.uncovered;
+        view.rolled = s.rolled;
+        view.spare = s.spare;
+        view.stale = s.stale;
+        view.queued = s.queued;
+        view.overslept = s.overslept;
+        view.in_order = s.in_order;
+        view.late = s.late;
+        view.dropped = s.dropped;
+        view.received = s.received;
+        view.held = s.held;
+        view.age_ms = s.age_ms;
+        view.latency_ms = s.latency_ms;
+        view.latency_samples = s.latency_samples;
+        view.presents = s.presents;
+        view.acquire_ms = s.acquire_ms;
+        view.acquire_max_ms = s.acquire_max_ms;
+        view.copy_waits = s.copy_waits;
+        view.copy_wait_timeouts = s.copy_wait_timeouts;
+        view.copy_wait_ms = s.copy_wait_ms;
+        view.copy_wait_max_ms = s.copy_wait_max_ms;
+        view.lock_ms = s.lock_ms;
+        view.lock_max_ms = s.lock_max_ms;
+        view.call_ms = s.call_ms;
+        view.call_max_ms = s.call_max_ms;
+        view.margin_ms = s.margin_ms;
+        view.margin_min_ms = s.margin_min_ms;
+        view.margin_samples = s.margin_samples;
+        view.after_vblank = s.after_vblank;
+        view.copy_gpu_samples = s.copy_gpu_samples;
+        view.copy_gpu_ms = s.copy_gpu_ms;
+        view.copy_gpu_max_ms = s.copy_gpu_max_ms;
+        view.refresh_hz = s.refresh_hz;
+        view.vblank_index = s.vblank_index;
+        view.divisor = s.divisor;
+        view.lead_ms = s.lead_ms;
+        view.clock_latency_ms = s.clock_latency_ms;
+        view.queued_frames = s.queued_frames;
+        view.free_frames = s.free_frames;
+        view.frame_count = s.frame_count;
+        view.swapchain_images = s.swapchain_images;
+        return view;
     }
 
     // Enhanced platform-specific initialization
@@ -102,9 +231,40 @@ private:
     /// The surface the swapchain is made for, once the device exists.
     VkSurfaceKHR PresentationSurface();
 
+#ifdef HAS_LSFG
+    /// EDEN_NX2_FLUID: gives the real frame the first slot its GPU work can be done for, and when
+    /// its motion can be extrapolated, records a prediction for each slot until the next real
+    /// frame is due and one more, each as of its slot's time.
+    void RecordFluidFrames(Frame* frame, const HdrPresent& output,
+                           std::vector<Frame*>& predicted_frames);
+    /// EDEN_NX2_FLUID_INTERP: records the in-between frames of the last two real frames, each on
+    /// the slot before the next, and gives the real frame the slot after them.
+    void RecordFluidInterpolated(Frame* frame, const HdrPresent& output, size_t generations,
+                                 std::vector<Frame*>& interpolated_frames);
+    u64 fluid_batch{}; ///< real frames recorded for the FLUID presenter
+    /// EDEN_NX2_FLUID_INTERP: the last real frame's slot and recording time.
+    u64 fluid_last_real_slot{};
+    std::chrono::steady_clock::time_point fluid_last_real_recorded{};
+#endif
+
     /// The encoding and luminances this frame is presented with; picks the swapchain format
     /// again when the HDR settings or the monitor's state changed.
     HdrPresent UpdateHdrPresent();
+
+    /// EDEN_NX2_FLUID_COMPOSE: decides whether the slot pass composes this composite's frames
+    /// (compose_active), before any of them is drawn.
+    void PlanCompose(std::span<const Tegra::FramebufferConfig> framebuffers,
+                     const HdrPresent& output);
+    /// Marks a frame of this composite as one the slot pass composes.
+    void TagComposeFrame(Frame* frame) const;
+    bool compose_active{};
+    bool compose_native{};
+    FluidComposeMath::Rect compose_rect{};
+    /// The peak size of the game's frames, the size the slot pass's frames are drawn at.
+    FluidComposeMath::Extent compose_internal{};
+    /// The layout this composite's frames are drawn at: the window's, or with the slot pass
+    /// scaling them the game's size with the screen covering all of it.
+    [[nodiscard]] Layout::FramebufferLayout FrameLayout() const;
     /// SDR, with the luminances the game was told: screenshots and captures tone map HDR layers.
     HdrPresent CaptureHdrPresent() const;
 
@@ -134,16 +294,26 @@ private:
 
     vk::SurfaceKHR surface;
 
+    /// Read once, before the device (CreateDevice fills it).
+    DeviceStartProfile start_profile;
+
+    // Each marker ends the teardown step (#239) of the members declared after it, up to the next
+    // marker: members are destroyed in reverse order. The rasterizer ends steps of its own.
+    Common::ShutdownStepMarker device_destroyed{"GPU: Vulkan device"};
     Device device;
+    Common::ShutdownStepMarker allocator_destroyed{"GPU: memory allocator and state tracker"};
     MemoryAllocator memory_allocator;
     StateTracker state_tracker;
+    Common::ShutdownStepMarker scheduler_destroyed{"GPU: scheduler"};
     Scheduler scheduler;
+    Common::ShutdownStepMarker presentation_destroyed{"GPU: swapchain, presenter and blits"};
     Swapchain swapchain;
     PresentManager present_manager;
     BlitScreen blit_swapchain;
     BlitScreen blit_capture;
     BlitScreen blit_applet;
     RasterizerVulkan rasterizer;
+    Common::ShutdownStepMarker frames_destroyed{"GPU: frame generation and frames"};
 #ifdef HAS_LSFG
     FrameGen frame_gen;
 #endif

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "description": "What the community device reports show per GPU family (the engine's Common::GpuFamily), game and build: counts of reports and devices, and the effects measured by paired tools/bench rows. Generated from site/data/community.json by tools/ingest/evidence.py; edit the issues, not this file. Nothing reads it to change a default.",
+  "updated": "2026-11-16",
+  "source": "site/data/community.json",
+  "reports": 1,
+  "fields": {
+    "tiers": "observed: any listed report, numbers as reported. verified: a tools/bench row that is valid with scene_ok true. paired: two such rows of one report that differ only in switches or settings both rows set, on the same machine, scene, build and power source, measured within two hours of each other with the background CPU measured. Only a pair measures an effect; a baseline row sets nothing and pairs with nothing.",
+    "devices": "Distinct devices: reports with the same device model, CPU and GPU family count once, the model and CPU compared by their letters and digits. Two machines of the same model count once, and one machine whose model is written two different ways counts twice: check the issues before trusting a count.",
+    "families": "Every GPU family of the engine (src/common/device_profile.cpp) with its label and how many reports and devices it has: all of them, verified ones and paired ones.",
+    "coverage": "Per GPU family, game and build: reports and devices (all, verified, paired), their power source and the issues. Counts only.",
+    "effects": "Per GPU family, game, scene, change, context (the switches and settings both rows set alike), build and power source: the pairs. fps_change_pct and p99_change_pct are the rows with `set` against the rows with `against`, in percent (a lower p99 is better), within_2ms_change_pt in percentage points. per_device holds each device's median over its pairs; min, median and max are over the devices.",
+    "unresolved": "Reports whose GPU family is not known, by their Graphics card answer, with the families they may be. The GPU's exact name (a tools/bench row, or the launcher's \"GPU:\" line) resolves them.",
+    "outside": "Reports whose GPU is in no family: discrete cards, older or smaller integrated GPUs."
+  },
+  "families": {
+    "IntelArcMeteorLake": {
+      "label": "Intel Arc Graphics (Meteor Lake)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "IntelArrowLakeH": {
+      "label": "Intel Arc 140T / 130T (Arrow Lake-H)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "IntelArcLunarLake": {
+      "label": "Intel Arc 140V / 130V (Lunar Lake)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "IntelGraphicsPantherLake": {
+      "label": "Intel Graphics (Panther Lake, 4 Xe3 cores or fewer)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "IntelArcB370": {
+      "label": "Intel Arc B370 (Panther Lake)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "IntelArcB390": {
+      "label": "Intel Arc B390 (Panther Lake)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdRadeon780M": {
+      "label": "AMD Radeon 780M",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdRadeon880M": {
+      "label": "AMD Radeon 880M",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdRadeon890M": {
+      "label": "AMD Radeon 890M",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdRadeon8060S": {
+      "label": "AMD Radeon 8060S",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdCustomGpu0405": {
+      "label": "Steam Deck LCD (AMD Custom GPU 0405)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    },
+    "AmdCustomGpu0932": {
+      "label": "Steam Deck OLED (AMD Custom GPU 0932)",
+      "reports": 0,
+      "devices": 0,
+      "verified_devices": 0,
+      "paired_devices": 0
+    }
+  },
+  "coverage": [],
+  "effects": [],
+  "unresolved": [],
+  "outside": {
+    "reports": 1,
+    "issues": [
+      282
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "baseline",
+  "description": "The emulator's settings as they are on this machine, windowed. No overrides.",
+  "settings": {},
+  "env": {}
+}

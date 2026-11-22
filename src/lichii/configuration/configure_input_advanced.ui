@@ -2656,7 +2656,7 @@
                    <item row="2" column="0">
                      <widget class="QCheckBox" name="enable_raw_input">
                        <property name="toolTip">
-                         <string>Requires restarting Lichii</string>
+                         <string>Requires restarting Guarana</string>
                        </property>
                        <property name="minimumSize">
                          <size>
@@ -2698,7 +2698,7 @@
                    <item row="5" column="0">
                       <widget class="QCheckBox" name="enable_joycon_driver">
                        <property name="toolTip">
-                         <string>Requires restarting Lichii</string>
+                         <string>Requires restarting Guarana</string>
                        </property>
                        <property name="minimumSize">
                          <size>
@@ -2714,7 +2714,7 @@
                    <item row="6" column="0">
                       <widget class="QCheckBox" name="enable_procon_driver">
                        <property name="toolTip">
-                         <string>Requires restarting Lichii</string>
+                         <string>Requires restarting Guarana</string>
                        </property>
                        <property name="minimumSize">
                          <size>
@@ -2770,6 +2770,38 @@
                        </property>
                        <property name="text">
                          <string>Disable SDL WGI/XInput (Requires restart)</string>
+                       </property>
+                     </widget>
+                   </item>
+                   <item row="10" column="0">
+                     <widget class="QCheckBox" name="controller_auto_configure">
+                       <property name="toolTip">
+                         <string>Automatically maps player 1 to a connected controller when it has no mapping, uses the default keyboard mapping, or uses a controller that is not connected. Mappings you made for a connected controller are never changed.</string>
+                       </property>
+                       <property name="minimumSize">
+                         <size>
+                           <width>0</width>
+                           <height>23</height>
+                         </size>
+                       </property>
+                       <property name="text">
+                         <string>Auto-configure controllers</string>
+                       </property>
+                     </widget>
+                   </item>
+                   <item row="11" column="0">
+                     <widget class="QCheckBox" name="controller_positional_face_buttons">
+                       <property name="toolTip">
+                         <string>Auto-configured controllers use Nintendo positional face buttons (A is the right button). Uncheck to match the Xbox/PlayStation labels instead.</string>
+                       </property>
+                       <property name="minimumSize">
+                         <size>
+                           <width>0</width>
+                           <height>23</height>
+                         </size>
+                       </property>
+                       <property name="text">
+                         <string>Nintendo face button layout for auto-configured controllers</string>
                        </property>
                      </widget>
                    </item>

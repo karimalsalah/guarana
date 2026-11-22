@@ -230,6 +230,27 @@ std::optional<u64> ProgramStamp(std::span<const u8> payload) {
     return stamp;
 }
 
+std::optional<ProgramIdentity> ReadProgramIdentity(std::span<const u8> payload) {
+    // Laid out as EncodeProgram writes them
+    constexpr size_t StageOffset = 4 + 1 + 1 + 2;
+    constexpr size_t UniqueHashOffset = StageOffset + 7 * 4 + 3 * 8;
+    constexpr size_t SphOffset = UniqueHashOffset + 8;
+    ProgramIdentity identity;
+    u32 version{};
+    if (payload.size() < SphOffset + identity.sph.size()) {
+        return std::nullopt;
+    }
+    std::memcpy(&version, payload.data(), sizeof(version));
+    if (version != ProgramPayloadVersion) {
+        return std::nullopt;
+    }
+    std::memcpy(&identity.stage, payload.data() + StageOffset, sizeof(identity.stage));
+    std::memcpy(&identity.unique_hash, payload.data() + UniqueHashOffset,
+                sizeof(identity.unique_hash));
+    std::memcpy(identity.sph.data(), payload.data() + SphOffset, identity.sph.size());
+    return identity;
+}
+
 std::vector<u8> EncodeUsed(const UsedRecord& record) {
     PayloadWriter out;
     out.Put(record.session_time);
@@ -241,6 +262,26 @@ std::vector<u8> EncodeUsed(const UsedRecord& record) {
 std::optional<UsedRecord> DecodeUsed(std::span<const u8> payload) {
     PayloadReader in{payload};
     UsedRecord record;
+    u64 count{};
+    if (!in.Get(record.session_time) || !in.Get(count) || !in.GetVector(record.pipelines, count) ||
+        !in.AtEnd()) {
+        return std::nullopt;
+    }
+    return record;
+}
+
+std::vector<u8> EncodeUseOrder(const UseOrderRecord& record) {
+    static_assert(sizeof(UseOrderRecord::Entry) == 16);
+    PayloadWriter out;
+    out.Put(record.session_time);
+    out.Put(static_cast<u64>(record.pipelines.size()));
+    out.PutSpan(std::span<const UseOrderRecord::Entry>{record.pipelines});
+    return out.Take();
+}
+
+std::optional<UseOrderRecord> DecodeUseOrder(std::span<const u8> payload) {
+    PayloadReader in{payload};
+    UseOrderRecord record;
     u64 count{};
     if (!in.Get(record.session_time) || !in.Get(count) || !in.GetVector(record.pipelines, count) ||
         !in.AtEnd()) {

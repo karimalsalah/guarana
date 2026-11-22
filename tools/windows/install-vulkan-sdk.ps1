@@ -33,8 +33,26 @@ if (Test-Path $VULKAN_SDK) {
 }
 
 echo "Downloading Vulkan SDK $VulkanSDKVer from $Uri"
-$WebClient = New-Object System.Net.WebClient
-$WebClient.DownloadFile($Uri, $Destination)
+# LunarG's download server fails a CI job now and then; try it a few times before giving up.
+$Attempts = 4
+for ($Attempt = 1; $Attempt -le $Attempts; $Attempt++) {
+    try {
+        $WebClient = New-Object System.Net.WebClient
+        $WebClient.DownloadFile($Uri, $Destination)
+        if ((Get-Item $Destination).Length -gt 50MB) {
+            break
+        }
+        throw "the download is only $((Get-Item $Destination).Length) bytes"
+    } catch {
+        if ($Attempt -eq $Attempts) {
+            throw "Downloading $ExeFile failed $Attempts times: $_"
+        }
+        $Wait = 15 * $Attempt
+        echo "Download attempt $Attempt failed ($_); retrying in $Wait s"
+        Remove-Item -Force -ErrorAction SilentlyContinue $Destination
+        Start-Sleep -Seconds $Wait
+    }
+}
 echo "Finished downloading $ExeFile"
 
 $Arguments = "--root `"$VULKAN_SDK`" --accept-licenses --default-answer --confirm-command install"

@@ -7,10 +7,12 @@
 
 package io.github.zortos293.lichii.utils
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import io.github.zortos293.lichii.R
@@ -25,6 +27,28 @@ class ForegroundService : Service() {
         const val EMULATION_RUNNING_NOTIFICATION = 0x1000
 
         const val ACTION_STOP = "stop"
+    }
+
+    private var emulationWakeLock: PowerManager.WakeLock? = null
+
+    @SuppressLint("WakelockTimeout")
+    private fun acquireEmulationWakeLock() {
+        if (emulationWakeLock?.isHeld == true) {
+            return
+        }
+        val powerManager = getSystemService(PowerManager::class.java) ?: return
+        val lock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "guarana:emulation")
+        lock.setReferenceCounted(false)
+        lock.acquire()
+        emulationWakeLock = lock
+    }
+
+    private fun releaseEmulationWakeLock() {
+        val lock = emulationWakeLock
+        emulationWakeLock = null
+        if (lock != null && lock.isHeld) {
+            lock.release()
+        }
     }
 
     private fun showRunningNotification() {
@@ -53,6 +77,8 @@ class ForegroundService : Service() {
     }
 
     override fun onCreate() {
+        acquireEmulationWakeLock()
+        AdpfBooster.start(this)
         showRunningNotification()
     }
 
@@ -68,12 +94,17 @@ class ForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        acquireEmulationWakeLock()
+        AdpfBooster.start(this)
         if (intent != null) {
             showRunningNotification()
         }
         return START_STICKY
     }
 
-    override fun onDestroy() =
+    override fun onDestroy() {
+        AdpfBooster.stop()
+        releaseEmulationWakeLock()
         NotificationManagerCompat.from(this).cancel(EMULATION_RUNNING_NOTIFICATION)
+    }
 }

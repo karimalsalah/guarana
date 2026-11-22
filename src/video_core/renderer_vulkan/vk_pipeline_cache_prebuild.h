@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -55,6 +56,16 @@ class ScheduledPrebuild {
     struct Entry {
         VideoCommon::ShaderJobHandle job;
         std::unique_ptr<Pipeline> pipeline;
+        /// Add's `done`, called once: by the job when it ends, or by the lookup that drops it
+        /// while it is still queued.
+        Common::UniqueFunction<void> done;
+        std::atomic_flag done_called;
+
+        void Done() {
+            if (done && !done_called.test_and_set()) {
+                done();
+            }
+        }
     };
 
 public:
@@ -81,18 +92,26 @@ public:
     ScheduledPrebuild(const ScheduledPrebuild&) = delete;
     ScheduledPrebuild& operator=(const ScheduledPrebuild&) = delete;
 
-    /// Submits the build of a pipeline, unless one of its key is queued. `job` gets its job.
-    bool Add(const Key& key, u64 cpu_bytes, u64 driver_bytes, Translate translate,
-             VideoCommon::ShaderJobHandle* job = nullptr) {
+    /// Submits the build of a pipeline whose translation holds `capture_bytes` until it runs,
+    /// unless one of its key is queued or the captures queued would pass the limit
+    /// `done` is called once when the job ends (built, failed, translated to nothing or stopped by
+    /// a request) or when a lookup drops it while it is still queued; a job the scheduler cancels
+    /// before it ran calls nothing.
+    /// `job` gets its job.
+    bool Add(const Key& key, u64 capture_bytes, u64 cpu_bytes, u64 driver_bytes,
+             Translate translate,
+             VideoCommon::ShaderJobPriority priority = VideoCommon::ShaderJobPriority::Background,
+             Common::UniqueFunction<void> done = {}, VideoCommon::ShaderJobHandle* job = nullptr) {
         std::scoped_lock lock{mutex};
         if (stopped || entries.contains(key)) {
             return false;
         }
         ++translating;
         auto entry = std::make_shared<Entry>();
+        entry->done = std::move(done);
         entry->job = jobs.Submit(
             {
-                .priority = VideoCommon::ShaderJobPriority::Background,
+                .priority = priority,
                 .cpu_bytes = cpu_bytes,
                 .driver_bytes = driver_bytes,
                 .cpu = [this, entry, translate = std::move(translate)](
@@ -105,27 +124,34 @@ public:
                             Translated();
                         };
                         if (context.StopRequested()) {
+                            entry->Done();
                             return {};
                         }
                         pipeline = translate();
                     }
                     if (!pipeline) {
-                        std::scoped_lock failed_lock{mutex};
-                        ++failed;
+                        {
+                            std::scoped_lock failed_lock{mutex};
+                            ++failed;
+                        }
+                        entry->Done();
                         return {};
                     }
                     return [this, entry, pipeline = std::move(pipeline)]() mutable {
                         const auto begin = std::chrono::steady_clock::now();
                         pipeline->Build();
                         const auto elapsed = std::chrono::steady_clock::now() - begin;
-                        std::scoped_lock entry_lock{mutex};
-                        driver_builds.Add(elapsed);
-                        if (pipeline->Failed()) {
-                            ++failed;
-                            return;
+                        {
+                            std::scoped_lock entry_lock{mutex};
+                            driver_builds.Add(elapsed);
+                            if (pipeline->Failed()) {
+                                ++failed;
+                            } else {
+                                ++built;
+                                entry->pipeline = std::move(pipeline);
+                            }
                         }
-                        ++built;
-                        entry->pipeline = std::move(pipeline);
+                        entry->Done();
                     };
                 },
             },
@@ -157,6 +183,9 @@ public:
                 if (*cancelled == VideoCommon::ShaderJobStatus::Queued) {
                     Translated();
                 }
+                // The caller builds the pipeline itself: for whoever counts this build (the
+                // async boot), it has ended.
+                entry->Done();
                 std::scoped_lock lock{mutex};
                 ++taken_unfinished;
                 return nullptr;
@@ -172,6 +201,29 @@ public:
             }
         }
         return std::move(entry->pipeline);
+    }
+
+    /// Like Take, but never builds or waits. Returns the pipeline once the job of `key` has ended.
+    /// A job still queued or building is raised to NeedNow and its entry stays: `pending` is set
+    /// and null returned. Null with `pending` false: no entry, or its build gave nothing.
+    std::unique_ptr<Pipeline> TryTake(const Key& key, bool& pending) {
+        pending = false;
+        std::shared_ptr<Entry> entry;
+        {
+            std::scoped_lock lock{mutex};
+            const auto it = entries.find(key);
+            if (it == entries.end()) {
+                return nullptr;
+            }
+            entry = it->second;
+            if (entry->job.Ready()) {
+                entries.erase(it);
+                return std::move(entry->pipeline);
+            }
+        }
+        jobs.Promote(entry->job, VideoCommon::ShaderJobPriority::NeedNow);
+        pending = true;
+        return nullptr;
     }
 
     /// Returns nullopt while the job is pending, leaving it registered for a later lookup.

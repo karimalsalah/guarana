@@ -14,7 +14,9 @@
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/present_trace.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/renderer_vulkan/present_error_policy.h"
 
 namespace Layout {
 struct FramebufferLayout;
@@ -52,12 +54,14 @@ public:
         VkFormat requested_format = VK_FORMAT_B8G8R8A8_UNORM,
         VkColorSpaceKHR requested_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
 
-    /// Acquires the next image in the swapchain, waits as needed. Returns true when no image was
-    /// acquired (out of date) and the swapchain has to be recreated first.
+    /// Acquires the next image, returning Ready, Recreate or Drop; fatal results throw.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
+    /// `pace`: false skips the wait for the image's last GPU tick and the frame pacing sleep.
     /// `game_frame_presents`: how many presents show this game frame, its generated frames
     /// included; Frame Pacing Mode targets game frames.
-    bool AcquireNextImage(bool may_flush = true, u32 game_frame_presents = 1);
+    PresentPolicy::Acquire AcquireNextImage(bool may_flush = true, bool pace = true,
+                                            u32 game_frame_presents = 1,
+                                            PresentTrace* trace = nullptr);
 
     /// Presents the rendered image to the swapchain. A non-zero `present_id` is chained as the
     /// present's id when the swapchain has ids (HasPresentIds). Returns whether the present was
@@ -122,24 +126,13 @@ public:
         return image_count;
     }
 
-    std::size_t GetImageIndex() const {
-        return image_index;
-    }
-
-    std::size_t GetFrameIndex() const {
-        return frame_index;
-    }
-
-    VkImage GetImageIndex(std::size_t index) const {
-        return images[index];
+    /// The present mode of the swapchain the last Create made.
+    VkPresentModeKHR GetPresentMode() const {
+        return present_mode;
     }
 
     VkImage CurrentImage() const {
         return images[image_index];
-    }
-
-    VkFormat GetImageViewFormat() const {
-        return image_view_format;
     }
 
     VkFormat GetImageFormat() const {
@@ -163,12 +156,41 @@ public:
         return requested_color_space;
     }
 
+    /// The index of the acquired image.
+    u32 CurrentImageIndex() const {
+        return image_index;
+    }
+
+    /// EDEN_NX2_FLUID_COMPOSE: whether the images were created with STORAGE usage and have the
+    /// storage views StorageViews lists. Any thread.
+    bool HasStorage() const {
+        return storage_enabled.load(std::memory_order_relaxed);
+    }
+
+    /// Counts the swapchains made, so the descriptors of their storage views are written again.
+    u64 StorageGeneration() const {
+        return storage_generation;
+    }
+
+    /// A storage view of each image, in the format of the swapchain; empty without HasStorage.
+    std::span<const VkImageView> StorageViews() const {
+        return storage_view_handles;
+    }
+
     VkSemaphore CurrentPresentSemaphore() const {
         return *present_semaphores[frame_index];
     }
 
     VkSemaphore CurrentRenderSemaphore() const {
         return *render_semaphores[image_index];
+    }
+
+    /// The last Present: nanoseconds waiting for the submit lock, then in vkQueuePresentKHR.
+    s64 LastPresentLockNs() const {
+        return last_present_lock_ns;
+    }
+    s64 LastPresentCallNs() const {
+        return last_present_call_ns;
     }
 
     u32 GetWidth() const {
@@ -184,7 +206,7 @@ public:
     }
 
 private:
-    void CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities);
+    bool CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities);
     void CreateSemaphores();
     void CreateImageViews();
 
@@ -211,16 +233,24 @@ private:
     std::vector<u64> resource_ticks;
     std::vector<vk::Semaphore> present_semaphores;
     std::vector<vk::Semaphore> render_semaphores;
+    std::vector<vk::ImageView> storage_views;
+    std::vector<VkImageView> storage_view_handles;
+    std::atomic<bool> storage_enabled{};
+    u64 storage_generation{};
 
     u32 width;
     u32 height;
 
     u32 image_index{};
     u32 frame_index{};
+    s64 last_present_lock_ns{};
+    s64 last_present_call_ns{};
 
     VkFormat image_view_format{};
     VkExtent2D extent{};
     VkPresentModeKHR present_mode{};
+    VkPresentModeKHR logged_present_mode{VK_PRESENT_MODE_MAX_ENUM_KHR};
+    std::size_t logged_image_count{};
     VkSurfaceFormatKHR surface_format{};
     std::atomic<VkFormat> sdr_image_format{VK_FORMAT_B8G8R8A8_UNORM};
     VkFormat requested_format{VK_FORMAT_B8G8R8A8_UNORM};

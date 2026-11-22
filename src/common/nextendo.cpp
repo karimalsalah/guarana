@@ -1061,7 +1061,7 @@ SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
             }
             response.set_content(parsed.error.empty()
                                      ? "Signed in to Nextendo. You can close this tab and go back "
-                                       "to Lichii."
+                                       "to Guarana."
                                      : "Nextendo sign-in failed: " + parsed.error,
                                  "text/plain; charset=utf-8");
             if (!callback) {
@@ -1079,7 +1079,7 @@ SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
         server = make_server();
         port = server->bind_to_any_port("127.0.0.1");
         if (port <= 0) {
-            out.error = "Lichii could not listen for the sign-in reply on 127.0.0.1.";
+            out.error = "Guarana could not listen for the sign-in reply on 127.0.0.1.";
             return out;
         }
         LOG_INFO(Common, "127.0.0.1:{} is taken; the Nextendo sign-in listens on port {}",
@@ -1107,7 +1107,7 @@ SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
         const auto pkce = MakePkce();
         auto next_state = RandomToken();
         if (!pkce || !next_state) {
-            out.error = "Lichii could not generate a random sign-in key.";
+            out.error = "Guarana could not generate a random sign-in key.";
             return out;
         }
         std::string url;

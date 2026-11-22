@@ -13,6 +13,7 @@
 
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -49,8 +50,10 @@
 #include "lichii/game/game_list.h"
 #include "lichii/mod_store/mod_store_dialog.h"
 #include "lichii/nup_dialogs.h"
+#include "lichii/problem_report.h"
 #include "lichii/recommended_settings_dialog.h"
 #include "lichii/shader_warm_dialog.h"
+#include "lichii/guarana_ui.h"
 #include "lichii/whats_new_dialog.h"
 #include "lichii/bug_report_dialog.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
@@ -158,8 +161,11 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #endif
 
 // Common //
+#include "common/boot_timing.h"
+#include "common/device_profile.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
+#include "lichii/configuration/controller_auto_configure.h"
 #include "common/memory_detect.h"
 #include "common/nextendo.h"
 #include "common/npln_patch_catalog.h"
@@ -245,11 +251,26 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 
 #include <QPlatformSurfaceEvent>
 #include <QSettings>
+#include <QUrl>
 #include <dwmapi.h>
 #include <windows.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "Dwmapi.lib")
 #endif
+
+// Help > Check for Updates hands off to the Guarana launcher, which installs and switches versions
+// (issue #44): its Updates screen, through the guarana:// link its installer registers for the
+// current user. Without the launcher, the releases page.
+static void OpenLauncherUpdates() {
+    const QSettings scheme(QStringLiteral("HKEY_CURRENT_USER\\Software\\Classes\\guarana"),
+                           QSettings::NativeFormat);
+    if (scheme.contains(QStringLiteral("URL Protocol")) &&
+        QDesktopServices::openUrl(QUrl(QStringLiteral("guarana://updates")))) {
+        return;
+    }
+    QDesktopServices::openUrl(
+        QUrl(QStringLiteral("https://github.com/karimalsalah/guarana/releases/latest")));
+}
 
 static inline void ApplyWindowsTitleBarDarkMode(HWND hwnd, bool enabled) {
     if (!hwnd)
@@ -362,7 +383,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
-constexpr int default_mouse_hide_timeout = 2500;
+#include "lichii/startup_checks.h"
+
+constexpr int default_mouse_hide_timeout = 2000;
 constexpr int default_input_update_timeout = 1;
 constexpr int EmuThreadStopTimeoutMs = 10'000;
 // A teardown that keeps making progress (Common::ShutdownProgress) is waited for this long at
@@ -461,6 +484,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
+    // From the process start: the Vulkan startup check (a child process) and Qt's start.
+    Common::BootTiming::Mark("frontend: logging started");
+    if (const VulkanCheckOutcome& check = GetVulkanCheckOutcome(); check.end > 0.0) {
+        Common::BootTiming::Span(fmt::format("startup: Vulkan check {}", check.reason),
+                                 check.start, check.end);
+    }
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
@@ -492,6 +521,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     default_theme_paths = QIcon::themeSearchPaths();
 
+    // The first launch after an interface update switches to Lichii Dark and explains what moved.
+    const bool whats_new_pending =
+        UISettings::values.whats_new_version.GetValue() < WhatsNewDialog::Version;
+    if (whats_new_pending) {
+        UISettings::values.whats_new_version = WhatsNewDialog::Version;
+        UISettings::values.theme =
+            UISettings::themes[static_cast<size_t>(UISettings::default_theme)].second;
+    }
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -513,9 +550,19 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     QtCommon::SetupHID();
     controller_dialog->refreshConfiguration();
 
+    setWindowIcon(Guarana::AppIcon());
+    render_window->setWindowIcon(Guarana::AppIcon());
     UpdateWindowTitle();
 
-    show();
+    // A launcher session (--launcher-session, parsed with the other options below) shows the
+    // window only when the game goes fullscreen, so its desktop form never appears.
+    launcher_session = QApplication::arguments().contains(QStringLiteral("--launcher-session"));
+    if (!launcher_session) {
+        show();
+    }
+    // The launcher follows the boot on stdout until the game is on screen (Hidden, below).
+    Common::BootTiming::SetSessionOutput(launcher_session);
+    Common::BootTiming::Mark("frontend: main window shown");
 
 #ifdef ENABLE_UPDATE_CHECKER
     connect(&update_watcher, &QFutureWatcher<UpdateChecker::CheckResult>::finished, this,
@@ -532,14 +579,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 case Common::Nextendo::SignOutReason::None:
                     return;
                 case Common::Nextendo::SignOutReason::SessionExpired:
-                    why = tr("Your Nextendo session expired, so Lichii signed you out.");
+                    why = tr("Your Nextendo session expired, so Guarana signed you out.");
                     break;
                 case Common::Nextendo::SignOutReason::SessionRevoked:
-                    why = tr("Your session was ended on nextendo.network, so Lichii signed you "
+                    why = tr("Your session was ended on nextendo.network, so Guarana signed you "
                              "out.");
                     break;
                 case Common::Nextendo::SignOutReason::MissingScope:
-                    why = tr("Your Nextendo sign-in didn't allow online play, so Lichii signed "
+                    why = tr("Your Nextendo sign-in didn't allow online play, so Guarana signed "
                              "you out.");
                     break;
                 }
@@ -627,25 +674,24 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
-
-    std::optional<Core::LaunchParams> launch;
+    // Parsed before the Vulkan devices are listed: a game started from the command line (a
+    // launcher or a shortcut) boots without the list.
+    std::optional<Core::LaunchParams> launch_params;
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {
         QList<QByteArray> qba{};
-        for (auto const& e : args) {
+        for (auto const& e : args)
             qba.push_back(e.toUtf8());
-        }
         std::vector<char*> args_cstr{};
-        for (auto& e : qba) {
+        for (auto& e : qba)
             args_cstr.push_back(e.data());
-        }
-        launch =
-            Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(), args_cstr.data(), nullptr);
+
+        launch_params = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(),
+                                                args_cstr.data(), nullptr);
     }
-    const bool launch_home = launch && launch->filepath.empty() && !launch->launch_setup &&
-                             launch->launch_qlaunch;
-    const bool launching_content =
-        launch && (!launch->filepath.empty() || launch->launch_setup || launch->launch_qlaunch ||
-                   launch->launch_hlaunch);
+    const bool direct_launch =
+        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
+                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
+    const bool launching_content = direct_launch;
     const auto build = WhatsNewDialog::ParseBuildTag(Common::g_build_release_tag);
     const auto whats_new_action = WhatsNewDialog::OnStartup(
         build, UISettings::values.last_seen_release.GetValue(), first_start, launching_content,
@@ -653,8 +699,21 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (whats_new_action == WhatsNewDialog::StartupAction::Remember) {
         config->SaveLastSeenRelease(build);
     }
-    if (!launch_home) {
+    // A HOME-menu launch (no game path) scans the list later, to feed the QLaunch applet.
+    const bool launch_home = launch_params && launch_params->filepath.empty() &&
+                             !launch_params->launch_setup && launch_params->launch_qlaunch;
+
+    // A launcher session never shows the game list, so it does not scan for it.
+    if (!launcher_session && !launch_home) {
         game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+    Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
+
+    // The launcher shows a version's notes in its own Updates screen; a launcher session goes
+    // straight to the game.
+    if (whats_new_pending && !launcher_session && !UISettings::values.first_start.GetValue() &&
+        UISettings::values.show_whats_new.GetValue()) {
+        QTimer::singleShot(0, this, &MainWindow::OnWhatsNew);
     }
 
     // Set up game list mode checkboxes.
@@ -668,9 +727,26 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(&mouse_hide_timer, &QTimer::timeout, this, &MainWindow::HideMouseCursor);
     connect(ui->menubar, &QMenuBar::hovered, this, &MainWindow::ShowMouseCursor);
 
+    // Auto-map player 1 to a connected gamepad (on first pump and on every hotplug)
+    ControllerAutoConfigure::Install(*input_subsystem, QtCommon::system->HIDCore(),
+                                     [this] { config->SaveAllValues(); });
+
     update_input_timer.setInterval(default_input_update_timeout);
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
+
+
+    // EDEN_NX2_STARTUP_CHECK_ASYNC: the Vulkan check's child ran while the frontend started.
+    // Nothing above uses Vulkan; the device list and the game below do, so its verdict comes first.
+    if (GetVulkanCheckOutcome().beside_start) {
+        const double wait_start = Common::BootTiming::Now();
+        has_broken_vulkan = FinishVulkanCheck() || has_broken_vulkan;
+        const VulkanCheckOutcome& check = GetVulkanCheckOutcome();
+        Common::BootTiming::Span(
+            fmt::format("startup: Vulkan check {}, beside the start", check.reason), check.start,
+            check.end);
+        Common::BootTiming::Mark("startup: waited for the Vulkan check", wait_start);
+    }
 
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
@@ -686,8 +762,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         UpdateAPIText();
         renderer_status_button->setDisabled(true);
         renderer_status_button->setChecked(false);
+    } else if (direct_launch) {
+        Common::BootTiming::Mark(
+            "frontend: Vulkan device list left to the settings dialogs (direct launch)");
     } else {
-        VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+        ListVulkanDevices(false);
     }
 
     // On macOS, SDL video would pump AppKit events alongside Qt and disrupt native menus.
@@ -696,7 +775,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     // Set a screensaver inhibition reason string. Currently passed to DBus by SDL and visible to
     // the user through their desktop environment.
-    //: TRANSLATORS: This string is shown to the user to explain why Lichii needs to prevent the
+    //: TRANSLATORS: This string is shown to the user to explain why Guarana needs to prevent the
     //: computer from sleeping
     QByteArray wakelock_reason = tr("Running a game").toUtf8();
     SDL_SetHint(SDL_HINT_SCREENSAVER_INHIBIT_ACTIVITY_NAME, wakelock_reason.data());
@@ -714,6 +793,15 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
+    // A launcher session needs a game; without one the desktop window opens after all.
+    if (launcher_session &&
+        (!launch_params || !launch_params->launcher_session || launch_params->filepath.empty())) {
+        launcher_session = false;
+        Common::BootTiming::SetSessionOutput(false);
+        show();
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+
     // Once FixProfiles has read the configured NAND and -u may have picked another user.
     Common::Nextendo::MigrateAccountFile(
         Service::Account::Nextendo::CurrentProfile(*QtCommon::system));
@@ -730,7 +818,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (!orphans.empty()) {
         const auto answer = QMessageBox::question(
             this, tr("Nextendo Sign-ins"),
-            tr("Lichii found Nextendo sign-ins for %n profile(s) this NAND doesn't have. Profiles "
+            tr("Guarana found Nextendo sign-ins for %n profile(s) this NAND doesn't have. Profiles "
                "deleted in an older build left theirs behind.\n\nRemove and sign out those "
                "sign-ins? Keep them if the profiles are in another NAND folder.",
                "", static_cast<int>(orphans.size())));
@@ -767,12 +855,20 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         game_list->PopulateAsync(UISettings::values.game_dirs);
     }
 
-    if (launch) {
-        const auto& lp = *launch;
+    if (launch_params) {
+        auto const& lp = *launch_params;
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
-            ui->action_Fullscreen->setChecked(lp.fullscreen);
+            ui->action_Fullscreen->setChecked(lp.fullscreen || launcher_session);
+        }
+
+        // The launcher session plays in the main window, where the loading screen is, until the
+        // window closes. Separate windows would leave the loading screen in a hidden window.
+        if (launcher_session && !ui->action_Single_Window_Mode->isChecked()) {
+            launcher_session_separate_window = true;
+            ui->action_Single_Window_Mode->setChecked(true);
+            ToggleWindowMode();
         }
 
         if (!lp.filepath.empty()) {
@@ -796,6 +892,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 }
 
 MainWindow::~MainWindow() {
+    delete guarana_toast;
     if (nup_cancel) {
         nup_cancel->store(true);
     }
@@ -1190,6 +1287,11 @@ void MainWindow::InitializeWidgets() {
         if (emulation_running) {
             render_window->show();
             render_window->setFocus();
+            Common::BootTiming::Mark("frontend: loading screen hidden, game shown");
+            // A launcher session's output ends here: the launcher has handed over to the game.
+            if (launcher_session) {
+                Common::BootTiming::SetSessionOutput(false);
+            }
         }
     });
 
@@ -1367,6 +1469,20 @@ void MainWindow::InitializeWidgets() {
                 frame_gen_status_button->repaint();
             });
     statusBar()->insertPermanentWidget(0, frame_gen_status_button);
+
+    // The game-specific upscaler (Ocarina of Time's FSR or DLSS): which one runs and at what sizes,
+    // or why not (CheezyEmu 76f03c3c03). A click turns Ocarina FSR on or off between games.
+    upscale_status_button = new QPushButton();
+    upscale_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    upscale_status_button->setProperty("chip", QStringLiteral("upscale"));
+    upscale_status_button->setFocusPolicy(Qt::NoFocus);
+    upscale_status_button->setCheckable(true);
+    connect(upscale_status_button, &QPushButton::clicked, this, [this] {
+        Settings::values.ocarina_fsr.SetValue(!Settings::values.ocarina_fsr.GetValue());
+        UpdateUpscaleButton();
+    });
+    UpdateUpscaleButton();
+    statusBar()->insertPermanentWidget(0, upscale_status_button);
 
 #ifdef HAS_RESHADE
     post_shader_status_button = new QPushButton();
@@ -1657,6 +1773,14 @@ void MainWindow::InitializeHotkeys() {
     };
 
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
+        // A launcher session has no desktop window to leave to: the key stops the game (with the
+        // usual confirmation) and the launcher comes back.
+        if (launcher_session) {
+            if (emulation_running) {
+                OnStopGame();
+            }
+            return;
+        }
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
             ui->action_Fullscreen->setChecked(false);
             ToggleFullscreen();
@@ -1701,6 +1825,21 @@ void MainWindow::InitializeHotkeys() {
         SetFPSSuffix();
     });
 
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        const auto connect_frame_target = [this, &connect_shortcut](const QString& action_name,
+                                                                  u32 target) {
+            connect_shortcut(action_name, [this, target] { SetFrameTargetFromHotkey(target); });
+            // LoadHotkeys does not load the context for an empty keyboard binding. These
+            // defaults are empty, but must also work with the separate game window focused.
+            hotkey_registry.GetHotkey("Main Window", action_name.toStdString(), this)
+                ->setContext(Qt::ApplicationShortcut);
+        };
+        connect_frame_target(QStringLiteral("Frame target 30"), 30);
+        connect_frame_target(QStringLiteral("Frame target 40"), 40);
+        connect_frame_target(QStringLiteral("Frame target 60"), 60);
+        connect_frame_target(QStringLiteral("Cycle frame target"), 0);
+    }
+
     connect_shortcut(QStringLiteral("Toggle Renderdoc Capture"), [] {
         if (Settings::values.enable_renderdoc_hotkey) {
             QtCommon::system->GetRenderdocAPI().ToggleCapture();
@@ -1730,6 +1869,9 @@ void MainWindow::SetDefaultUIGeometry() {
 void MainWindow::RestoreUIState() {
     setWindowFlags(windowFlags() & ~Qt::FramelessWindowHint);
     restoreGeometry(UISettings::values.geometry);
+    if (UISettings::values.guarana_remember_window.GetValue()) {
+        Guarana::RestoreGeometry(this, UISettings::values.guarana_window_geometry.GetValue());
+    }
     // Work-around because the games list isn't supposed to be full screen
     if (isFullScreen()) {
         showNormal();
@@ -1757,7 +1899,11 @@ void MainWindow::RestoreUIState() {
         UISettings::values.show_perf_overlay.GetValue());
     if (perf_overlay)
         perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
-    Debugger::ToggleConsole();
+    // A game the launcher starts is the one window on screen: no debug console beside it ("Show
+    // Log in Console" in Configure > Debug). This runs before `launcher_session` is set.
+    if (!QApplication::arguments().contains(QStringLiteral("--launcher-session"))) {
+        Debugger::ToggleConsole();
+    }
 }
 
 void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
@@ -1793,13 +1939,14 @@ void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
 }
 
 void MainWindow::ConnectWidgetEvents() {
+    // Guarana's reports go to its own GitHub forms through Help > Report a problem, with this
+    // game's session, not to upstream's compatibility site (CompatibilityReporting::Site).
     connect(game_list, &GameList::ReportCompatibilityRequested, this, [this](u64 program_id) {
         if (!report_session || report_session->program_id != program_id || emulation_running ||
             boot_in_progress || close_pending) {
             return;
         }
-        CompatibilityReporting::Dialog dialog(*report_session, this);
-        dialog.exec();
+        OnReportProblem();
     });
     connect(game_list, &GameList::BootGame, this, &MainWindow::BootGameFromList);
     connect(game_list, &GameList::GameChosen, this, &MainWindow::OnGameListLoadFile);
@@ -1853,6 +2000,10 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::AddDirectory, this, &MainWindow::OnGameListAddDirectory);
     connect(game_list_placeholder, &GameListPlaceholder::AddDirectory, this,
             &MainWindow::OnGameListAddDirectory);
+    connect(game_list_placeholder, &GameListPlaceholder::InstallKeys, this,
+            [this] { ui->action_Install_Keys->trigger(); });
+    connect(game_list_placeholder, &GameListPlaceholder::InstallFirmware, this,
+            [this] { ui->menuInstall_Firmware->popup(QCursor::pos()); });
     connect(game_list, &GameList::ShowList, this, &MainWindow::OnGameListShowList);
     connect(game_list, &GameList::PopulatingCompleted,
             [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
@@ -1895,6 +2046,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Stop, &MainWindow::OnStopGame);
     connect_menu(ui->action_Open_Mods_Page, &MainWindow::OnOpenModsPage);
     connect_menu(ui->action_Open_UserHandbook, &MainWindow::OnOpenUserHandbook);
+    connect_menu(ui->action_Report_Problem, &MainWindow::OnReportProblem);
     connect_menu(ui->action_Restart, &MainWindow::OnRestartGame);
     connect_menu(ui->action_Configure, &MainWindow::OnConfigure);
     connect_menu(ui->action_Configure_Current_Game, &MainWindow::OnConfigurePerGame);
@@ -2014,7 +2166,9 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
     connect_menu(ui->action_Mod_Store, &MainWindow::OnOpenModStore);
-#ifdef ENABLE_UPDATE_CHECKER
+#if defined(_WIN32)
+    connect_menu(ui->action_Check_For_Updates, [] { OpenLauncherUpdates(); });
+#elif defined(ENABLE_UPDATE_CHECKER)
     connect_menu(ui->action_Check_For_Updates, [this] { CheckForUpdates(true); });
 #else
     ui->action_Check_For_Updates->setVisible(false);
@@ -2293,7 +2447,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         case Core::SystemResultStatus::ErrorMemoryAllocation:
             QMessageBox::critical(
                 this, tr("Not enough memory to start the game"),
-                tr("Lichii could not allocate the game's memory. Close other applications and "
+                tr("Guarana could not allocate the game's memory. Close other applications and "
                    "check that your system has enough available memory and paging-file space, "
                    "then try again."));
             break;
@@ -2307,7 +2461,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
                 this, tr("An error occurred initializing the video core."),
                 tr("This is usually caused by outdated GPU drivers. "
                    "Please see the log for more details. See: "
-                   "<a href='https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md'>"
+                   "<a href='https://github.com/karimalsalah/guarana/blob/main/docs/TROUBLESHOOTING.md#first-find-the-log'>"
                    "How to access log files</a>."));
             break;
         default:
@@ -2438,15 +2592,24 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     game_list->SetScanEnabled(false);
     QElapsedTimer boot_timer;
     boot_timer.start();
+    Common::BootTiming::Mark("boot: game boot requested");
     SCOPE_EXIT {
         boot_in_progress = false;
         LOG_INFO(Frontend, "Launch finished: elapsed_ms={} running={}", boot_timer.elapsed(),
                  emulation_running);
-        if (!emulation_running && !close_pending) {
+        Common::BootTiming::Mark("boot: launch finished, the loading screen waits for the game");
+        if (!emulation_running && !close_pending && !launcher_session) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
             if (startup_whats_new_pending) {
                 QTimer::singleShot(0, this, &MainWindow::MaybeShowStartupWhatsNew);
+            }
+        }
+        if (launcher_session && !emulation_running) {
+            // The game did not start (an error, or a dialog cancelled): back to the launcher.
+            launcher_session_failed = true;
+            if (!close_pending) {
+                QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
             }
         }
         if (close_pending) {
@@ -2459,7 +2622,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Lichii starting...");
+    LOG_INFO(Frontend, "Guarana starting...");
     report_session.reset();
     game_list->SetReportableProgramId(0);
 
@@ -2486,6 +2649,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     const auto v_file = Core::GetGameFileFromPath(QtCommon::vfs, filename.toUtf8().constData());
     const auto loader =
         Loader::GetLoader(*QtCommon::system, v_file, params.program_id, params.program_index);
+    Common::BootTiming::Mark(
+        loader != nullptr
+            ? fmt::format("boot: {} loader ready", Loader::GetFileTypeString(loader->GetFileType()))
+            : std::string{"boot: no loader for the file"});
 
     if (loader != nullptr && loader->ReadProgramId(title_id) == Loader::ResultStatus::Success &&
         type == StartGameType::Normal) {
@@ -2574,11 +2741,13 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     QElapsedTimer load_timer;
     load_timer.start();
+    Common::BootTiming::Mark("boot: settings applied, core load starting");
     if (!LoadROM(filename, params)) {
         LOG_ERROR(Frontend, "Core load failed: elapsed_ms={}", load_timer.elapsed());
         return;
     }
     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
+    Common::BootTiming::Mark("boot: core load done");
 
     const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
     if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {
@@ -2622,7 +2791,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         }
         session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);
         session.updates = CompatibilityReporting::SummarizeEnabledAddons(updates);
-        session.build = QStringLiteral("Lichii %1 (%2)")
+        session.build = QStringLiteral("Guarana %1 (%2)")
                             .arg(QString::fromUtf8(Common::g_build_version),
                                  QString::fromUtf8(Common::g_scm_rev).left(12));
 #ifdef ARCHITECTURE_x86_64
@@ -2657,7 +2826,9 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     QtCommon::system->SetShuttingDown(false);
     game_list->setDisabled(true);
 
-    // Create and start the emulation thread
+    // Create and start the emulation thread. Its stop's watchdog names no step before the
+    // teardown begins.
+    Common::ClearLastShutdownStep();
     QtCommon::emu_thread = std::make_unique<EmuThread>();
     emit EmulationStarting();
     QtCommon::emu_thread->start();
@@ -2691,6 +2862,15 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
 
     connect(QtCommon::emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
             &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+    if (launcher_session) {
+        // The launcher shows the shader counts too: one line per stage and whole percent.
+        connect(
+            QtCommon::emu_thread.get(), &EmuThread::LoadProgress, this,
+            [](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+                Common::BootTiming::SessionProgress(static_cast<int>(stage), value, total);
+            },
+            Qt::QueuedConnection);
+    }
 
     connect(
         QtCommon::emu_thread.get(), &EmuThread::ShaderCacheReloadStarted, this,
@@ -2717,6 +2897,11 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     status_bar_update_timer.start(500);
     renderer_status_button->setDisabled(true);
     frame_gen_status_button->setDisabled(true);
+    upscale_status_button->setDisabled(true);
+    upscale_frames = 0;
+    upscale_running = false;
+    upscale_game = false;
+    upscale_name.clear();
     frame_gen_state = VideoCore::FrameGenState::Pending;
     frame_gen_frames = 0;
     frame_gen_generating = false;
@@ -2773,6 +2958,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     loading_screen->show();
 
     emulation_running = true;
+    // Hidden until the first status update says the game has the upscaler.
+    UpdateUpscaleButton();
     if (ui->action_Fullscreen->isChecked()) {
         ShowFullscreen();
     } else if (!(ui->action_Single_Window_Mode->isChecked() ? isMaximized()
@@ -2803,6 +2990,32 @@ void MainWindow::RememberSpeedLimitBeforeHotkey() {
     }
 }
 
+void MainWindow::SetFrameTargetFromHotkey(u32 target) {
+    if (!emulation_running) {
+        return;
+    }
+    if (!Settings::values.frame_gen.GetValue()) {
+        ShowHotkeyMessage(tr("Frame generation is off"));
+        return;
+    }
+    // Publish only the session override; configuration storage is not safe for live writes.
+    const u32 next = target != 0 ? target
+                                 : Common::FrameTargetHotkeys::NextPreset(
+                                       Settings::FrameGenTargetRate());
+    Common::FrameTargetHotkeys::SessionTarget.Set(next);
+    UpdateFrameGenButton();
+    ShowHotkeyMessage(tr("Frame target: %1 FPS").arg(next));
+}
+
+void MainWindow::ShowHotkeyMessage(const QString& text) {
+    // The toast shows in fullscreen too, where the status bar is hidden.
+    if (guarana_toast == nullptr) {
+        guarana_toast = new Guarana::Toast(this);
+    }
+    guarana_toast->ShowMessage(text, 2500, render_window);
+    statusBar()->showMessage(text, 2500);
+}
+
 void MainWindow::UndoSessionSpeedChanges() {
     // Undo the session's frame rate limit hotkey and turbo/slow modes. Only what the hotkeys
     // changed is put back, in the scope (global or per-game) it was changed in: forcing the
@@ -2822,8 +3035,12 @@ bool MainWindow::OnShutdownBegin() {
         return false;
     }
 
-    if (ui->action_Fullscreen->isChecked()) {
+    // A launcher session stays fullscreen until its window closes: no desktop window in between.
+    if (ui->action_Fullscreen->isChecked() && !launcher_session) {
         HideFullscreen();
+    }
+    if (guarana_toast != nullptr) {
+        guarana_toast->hide();
     }
 
     AllowOSSleep();
@@ -2917,12 +3134,23 @@ static void StartExitWatchdog() {
     });
 }
 
+/// The emulation thread's CPU time so far, where the host can read it
+static std::optional<u64> EmuThreadCpuTimeNs() {
+    return QtCommon::emu_thread ? QtCommon::emu_thread->CpuTimeNs() : std::nullopt;
+}
+
+/// The last step the emulation teardown finished (its log has one line per step, with its time)
+static const char* LastShutdownStepName() {
+    const char* const step = Common::LastShutdownStep();
+    return step != nullptr ? step : "none, the teardown has not begun";
+}
+
 void MainWindow::OnEmulationStopTimeExpired() {
     if (QtCommon::emu_thread) {
         StartExitWatchdog();
         QtCommon::emu_thread->ForceStop();
         emu_force_stop_clock.start();
-        shutdown_progress_seen = Common::ShutdownProgress();
+        shutdown_watch.Reset(Common::ShutdownProgress(), EmuThreadCpuTimeNs());
         emu_terminate_timer.setSingleShot(true);
         emu_terminate_timer.start(EmuThreadStopTimeoutMs);
         connect(&emu_terminate_timer, &QTimer::timeout, this, &MainWindow::OnEmulationStopTimeout,
@@ -2931,9 +3159,9 @@ void MainWindow::OnEmulationStopTimeExpired() {
 }
 
 bool MainWindow::EmulationShutdownProgressing() {
-    const u64 progress = Common::ShutdownProgress();
-    const bool moved = progress != shutdown_progress_seen;
-    shutdown_progress_seen = progress;
+    // A step that notes no progress, as freeing guest memory, keeps the thread busy; a hung one
+    // waits without using the CPU.
+    const bool moved = shutdown_watch.Moved(Common::ShutdownProgress(), EmuThreadCpuTimeNs());
     return moved && emu_force_stop_clock.isValid() &&
            emu_force_stop_clock.elapsed() < MaxEmuThreadShutdownMs;
 }
@@ -2943,8 +3171,9 @@ void MainWindow::OnEmulationStopTimeout() {
     // another timeout. A stalled teardown ends the process (see ExitIfEmulationThreadStuck).
     if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning() &&
         EmulationShutdownProgressing()) {
-        LOG_INFO(Frontend, "Emulation thread still shutting down after {} ms, waiting",
-                 emu_force_stop_clock.elapsed());
+        LOG_INFO(Frontend,
+                 "Emulation thread still shutting down after {} ms (last step done: {}), waiting",
+                 emu_force_stop_clock.elapsed(), LastShutdownStepName());
         emu_terminate_timer.start(EmuThreadStopTimeoutMs);
         return;
     }
@@ -2963,9 +3192,9 @@ void MainWindow::ExitIfEmulationThreadStuck() {
     // The stuck thread can hold a lock that the save needs. The save gets this long.
     exit_deadline_ms.store(SteadyNowMs() + 5'000, std::memory_order_relaxed);
     LOG_ERROR(Frontend,
-              "Emulation thread failed to stop after {} ms (shutdown progress {}); saving "
-              "settings and exiting",
-              emu_force_stop_clock.elapsed(), Common::ShutdownProgress());
+              "Emulation thread failed to stop after {} ms (shutdown progress {}, last step "
+              "done: {}); saving settings and exiting",
+              emu_force_stop_clock.elapsed(), Common::ShutdownProgress(), LastShutdownStepName());
     play_time_manager->Stop();
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
@@ -2984,6 +3213,8 @@ void MainWindow::OnEmulationStopped() {
     if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
         return;
     }
+    QElapsedTimer cleanup_clock;
+    cleanup_clock.start();
     if (bug_report_dialog) {
         bug_report_dialog->StopCapture();
     }
@@ -3004,6 +3235,9 @@ void MainWindow::OnEmulationStopped() {
     emulation_running = false;
     nextendo_version_check.reset();
 
+    if (Common::FrameTargetHotkeys::Enabled()) {
+        Common::FrameTargetHotkeys::SessionTarget.Reset();
+    }
     nextendo_social_timer.stop();
     if (Common::Nextendo::OnlinePlayActive()) {
         const auto post_offline =
@@ -3037,12 +3271,15 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
-        game_list_placeholder->show();
-    } else {
-        game_list->show();
+    // A launcher session closes instead (below), so its window stays black.
+    if (!launcher_session) {
+        if (game_list->IsEmpty()) {
+            game_list_placeholder->show();
+        } else {
+            game_list->show();
+        }
+        game_list->SetFilterFocus();
     }
-    game_list->SetFilterFocus();
     tas_label->clear();
     input_subsystem->GetTas()->Stop();
     OnTasStateChanged();
@@ -3068,6 +3305,10 @@ void MainWindow::OnEmulationStopped() {
     emu_frametime_label->setVisible(false);
     renderer_status_button->setEnabled(!UISettings::values.has_broken_vulkan);
     frame_gen_status_button->setEnabled(true);
+    upscale_status_button->setEnabled(true);
+    upscale_running = false;
+    upscale_game = false;
+    UpdateUpscaleButton();
     refresh_button->setEnabled(true);
 
     if (!firmware_label->text().isEmpty()) {
@@ -3085,8 +3326,11 @@ void MainWindow::OnEmulationStopped() {
     Settings::RestoreGlobalState(QtCommon::system->IsPoweredOn());
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
-    LOG_INFO(Frontend, "Emulation cleanup completed");
-    if (close_pending) {
+    LOG_INFO(Frontend, "Emulation cleanup completed in {} ms", cleanup_clock.elapsed());
+    if (launcher_session) {
+        // Back to the launcher rather than the game list, unless a restart boots again.
+        QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);
+    } else if (close_pending) {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
         game_list->SetScanEnabled(true);
@@ -3955,6 +4199,11 @@ void MainWindow::OnRestartGame() {
     if (ConfirmShutdownGame()) {
         // Make a copy since ShutdownGame edits game_path
         const auto current_game = QString(current_game_path);
+        // ShutdownGame runs a nested event loop: the session must not end in it before the reboot.
+        launcher_session_rebooting = true;
+        SCOPE_EXIT {
+            launcher_session_rebooting = false;
+        };
         ShutdownGame();
         BootGame(current_game, ApplicationAppletParameters());
     }
@@ -4015,6 +4264,16 @@ bool MainWindow::ConfirmShutdownGame() {
 void MainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
 
+    // An old graphics driver is named once per run of the program, not at every game start.
+    static bool driver_advice_shown = false;
+    if (const std::string advice = Common::DriverAdvice();
+        !advice.empty() && !std::exchange(driver_advice_shown, true)) {
+        if (guarana_toast == nullptr) {
+            guarana_toast = new Guarana::Toast(this);
+        }
+        guarana_toast->ShowMessage(QString::fromStdString(advice), 12000, render_window);
+    }
+
     perf_overlay = new PerformanceOverlay(this);
     perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
 
@@ -4031,6 +4290,11 @@ void MainWindow::OnExecuteProgram(std::size_t program_index) {
     LOG_INFO(Frontend, "ExecuteProgram requested, program_index={} previous_program_id={:016X}",
              program_index, previous_program_id);
 
+    // As in OnRestartGame: a launcher session survives the nested event loop of ShutdownGame.
+    launcher_session_rebooting = true;
+    SCOPE_EXIT {
+        launcher_session_rebooting = false;
+    };
     ShutdownGame();
 
     auto params = ApplicationAppletParameters();
@@ -4179,11 +4443,24 @@ void MainWindow::OnOpenModsPage() {
 }
 
 void MainWindow::OnOpenUserHandbook() {
-    OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
+    OpenURL(QUrl(QStringLiteral("https://github.com/karimalsalah/guarana/blob/main/docs/user/README.md")));
+}
+
+void MainWindow::OnReportProblem() {
+    ProblemReport::Context context{.session = report_session};
+    for (const VkDeviceInfo::Record& record : vk_device_records) {
+        context.vulkan_devices << QString::fromStdString(record.name);
+    }
+    ProblemReport::Run(this, context);
 }
 
 void MainWindow::ToggleFullscreen() {
     if (!emulation_running) {
+        return;
+    }
+    if (launcher_session && !ui->action_Fullscreen->isChecked()) {
+        // A launcher session has no desktop window to go back to: it stays fullscreen.
+        ui->action_Fullscreen->setChecked(true);
         return;
     }
     if (ui->action_Fullscreen->isChecked()) {
@@ -4223,23 +4500,54 @@ void MainWindow::ShowFullscreen() {
         window->setWindowState(window->windowState() & ~Qt::WindowMaximized);
         window->setWindowFlags(window->windowFlags() | Qt::FramelessWindowHint);
         const auto screen_geometry = GuessCurrentScreen(window)->geometry();
+        // One row taller keeps an OpenGL window composed. A Vulkan window that covers the screen
+        // exactly can get independent flip: no desktop composition, up to a refresh less latency.
+        const bool vulkan =
+            Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
         window->setGeometry(screen_geometry.x(), screen_geometry.y(), screen_geometry.width(),
-                            screen_geometry.height() + 1);
+                            screen_geometry.height() + (vulkan ? 0 : 1));
         window->raise();
         window->showNormal();
     };
 
     if (ui->action_Single_Window_Mode->isChecked()) {
-        UISettings::values.geometry = saveGeometry();
+        // A launcher session never has the desktop geometry: the one restored at start stays.
+        if (!launcher_session) {
+            UISettings::values.geometry = saveGeometry();
+        }
 
         ui->menubar->hide();
         statusBar()->hide();
 
         show_fullscreen(this);
+        if (launcher_session) {
+            // First shown seconds after the launcher started this process: ask for the foreground
+            // (the launcher allows it) so the game does not open behind the launcher.
+            raise();
+            activateWindow();
+        }
+        ShowMenuHintToast();
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
         show_fullscreen(render_window);
     }
+}
+
+void MainWindow::ShowMenuHintToast() {
+    if (!emulation_running || !UISettings::values.guarana_play_toast.GetValue()) {
+        return;
+    }
+    if (guarana_toast == nullptr) {
+        guarana_toast = new Guarana::Toast(this);
+    }
+    // After the window has settled into fullscreen
+    QTimer::singleShot(600, this, [this] {
+        if (emulation_running && ui->action_Fullscreen->isChecked()) {
+            // A launcher session has no menu: its hint names the way back to the launcher.
+            guarana_toast->ShowMessage(launcher_session ? Guarana::LauncherSessionHintText()
+                                                        : Guarana::MenuHintText());
+        }
+    });
 }
 
 void MainWindow::HideFullscreen() {
@@ -4413,7 +4721,27 @@ void MainWindow::ToggleShowGameName() {
     game_list->RefreshGameDirectory();
 }
 
+void MainWindow::ListVulkanDevices(bool for_dialog) {
+    if (vk_device_records_listed || UISettings::values.has_broken_vulkan) {
+        return;
+    }
+    vk_device_records_listed = true;
+    const double start = Common::BootTiming::Now();
+    if (for_dialog) {
+        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+    }
+    VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+    if (for_dialog) {
+        QApplication::restoreOverrideCursor();
+    }
+    Common::BootTiming::Mark(for_dialog
+                                 ? "frontend: Vulkan devices listed when a settings dialog opened"
+                                 : "frontend: Vulkan devices listed for the settings",
+                             start);
+}
+
 void MainWindow::OnConfigure() {
+    ListVulkanDevices(true);
     const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
@@ -4438,6 +4766,8 @@ void MainWindow::OnConfigure() {
             &MainWindow::OnLanguageChanged);
     connect(&configure_dialog, &ConfigureDialog::ExternalContentDirsChanged, this,
             &MainWindow::OnGameListRefresh);
+    connect(&configure_dialog, &ConfigureDialog::ReportProblemRequested, this,
+            &MainWindow::OnReportProblem);
 
     const auto result = configure_dialog.exec();
     if (result != QDialog::Accepted && !UISettings::values.configuration_applied &&
@@ -4881,6 +5211,7 @@ bool MainWindow::OpenModStore(QWidget* parent, u64 initial_title_id, const std::
 }
 
 void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_name) {
+    ListVulkanDevices(true);
     Settings::SetConfiguringGlobal(false);
     ConfigurePerGame dialog(this, title_id, file_name, vk_device_records, *QtCommon::system);
     dialog.LoadFromFile(Core::GetGameFileFromPath(QtCommon::vfs, file_name));
@@ -5170,7 +5501,8 @@ void MainWindow::OnToggleFilterBar() {
 }
 
 void MainWindow::OnToggleStatusBar() {
-    statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
+    // A launcher session never shows the status bar; the setting is kept for the desktop window.
+    statusBar()->setVisible(!launcher_session && ui->action_Show_Status_Bar->isChecked());
 }
 
 void MainWindow::OnTogglePerfOverlay() {
@@ -5953,7 +6285,7 @@ void MainWindow::OnEmulatorUpdateAvailable() {
             QMessageBox::information(
                 this, title,
                 tr("This is a test or development build (%1) without a published release tag, so "
-                   "Lichii cannot compare it with published releases. Download a release from "
+                   "Guarana cannot compare it with published releases. Download a release from "
                    "GitHub to get updates.")
                     .arg(QString::fromUtf8(Common::g_build_version)));
             break;
@@ -5977,7 +6309,7 @@ void MainWindow::OnEmulatorUpdateAvailable() {
     }
     if (result.failure == UpdateChecker::Failure::RateLimited) {
         statusBar()->showMessage(
-            tr("Could not check for updates: GitHub rate limit reached. Lichii will try again at "
+            tr("Could not check for updates: GitHub rate limit reached. Guarana will try again at "
                "the next start."),
             15000);
         return;
@@ -6073,6 +6405,11 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
+    if (Guarana::UseCleanTitle()) {
+        setWindowTitle(Guarana::CleanWindowTitle(title_name));
+        return;
+    }
+
     static const std::string build_id = std::string{Common::g_build_id};
     static const std::string lichii_title =
         fmt::format("{} | {} | {}", std::string{Common::g_build_name},
@@ -6162,7 +6499,7 @@ void MainWindow::UpdateStatusBar() {
 
     auto results = QtCommon::system->GetAndResetPerfStats();
     auto& shader_notify = QtCommon::system->GPU().ShaderNotify();
-    const int shaders_building = shader_notify.ShadersBuilding();
+    shaders_building = shader_notify.ShadersBuilding();
 
     // Before statsUpdated, so the performance overlay reads this update's generated frame rate.
     const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
@@ -6210,6 +6547,28 @@ void MainWindow::UpdateStatusBar() {
     dlss_evaluations = dlss.evaluations;
     dlss_status_label->setText(dlss_status_text);
     dlss_status_label->setVisible(!dlss_status_text.isEmpty());
+
+    constexpr u64 ocarina_program = 0x0400486024DEC000ULL;
+    const auto upscaler = QtCommon::system->GPU().Renderer().GetUpscalerStatus();
+    // A renderer without the game's upscaler (OpenGL) reports neither a name nor a reason.
+    upscale_game = QtCommon::system->GetApplicationProcessProgramID() == ocarina_program &&
+                   !(upscaler.name.empty() && upscaler.idle_tag.empty());
+    upscale_running = upscaler.upscaled_frames > upscale_frames;
+    upscale_frames = upscaler.upscaled_frames;
+    if (!upscaler.name.empty()) {
+        upscale_name = QString::fromStdString(upscaler.name);
+    }
+    upscale_sizes = tr("%1p → %2p", "Render and output heights, e.g. 720p → 1080p")
+                        .arg(upscaler.render_height)
+                        .arg(upscaler.output_height);
+    upscale_size_detail = tr("%1x%2 to %3x%4")
+                              .arg(upscaler.render_width)
+                              .arg(upscaler.render_height)
+                              .arg(upscaler.output_width)
+                              .arg(upscaler.output_height);
+    upscale_idle_tag = QString::fromStdString(upscaler.idle_tag);
+    upscale_idle_reason = QString::fromStdString(upscaler.idle_reason);
+    UpdateUpscaleButton();
 
     emit statsUpdated(results, shader_notify);
 
@@ -6329,6 +6688,54 @@ void MainWindow::UpdatePostShaderText() {
 }
 #endif
 
+QString MainWindow::UpscaleStatusText() const {
+    if (!upscale_status_button || !emulation_running || !upscale_game) {
+        return {};
+    }
+    return upscale_status_button->text();
+}
+
+void MainWindow::UpdateUpscaleButton() {
+    if (!upscale_status_button) {
+        return;
+    }
+    if (!emulation_running) {
+        const bool enabled = Settings::values.ocarina_fsr.GetValue();
+        upscale_status_button->setVisible(true);
+        upscale_status_button->setChecked(enabled);
+        upscale_status_button->setText(enabled ? tr("FSR") : tr("NO FSR"));
+        upscale_status_button->setToolTip(
+            enabled ? tr("Ocarina FSR is on: in The Legend of Zelda: Ocarina of Time, FSR replaces "
+                         "the game's own upscaler. Whether it runs shows here once the game "
+                         "starts. Click to turn it off.")
+                    : tr("Ocarina FSR is off: Ocarina of Time uses its own upscaler. Click to "
+                         "turn FSR on."));
+        return;
+    }
+    // Only Ocarina of Time has a game-specific upscaler.
+    upscale_status_button->setVisible(upscale_game);
+    if (!upscale_game) {
+        return;
+    }
+    const QString upscaler = upscale_name.isEmpty() ? tr("FSR") : upscale_name;
+    if (upscale_running) {
+        upscale_status_button->setChecked(true);
+        // DLSS's mode and preset have their own label; this one adds the sizes.
+        upscale_status_button->setText(upscale_name == QStringLiteral("DLSS")
+                                           ? upscale_sizes
+                                           : tr("%1 %2").arg(upscaler, upscale_sizes));
+        upscale_status_button->setToolTip(
+            tr("%1 is upscaling the game from %2.").arg(upscaler, upscale_size_detail));
+        return;
+    }
+    upscale_status_button->setChecked(false);
+    upscale_status_button->setText(upscale_idle_tag.isEmpty()
+                                       ? tr("%1 (IDLE)").arg(upscaler)
+                                       : tr("%1 (%2)").arg(upscaler, upscale_idle_tag));
+    upscale_status_button->setToolTip(
+        tr("%1 is not upscaling. %2").arg(upscaler, upscale_idle_reason));
+}
+
 void MainWindow::UpdateFrameGenButton() {
     const bool enabled = Settings::values.frame_gen.GetValue();
     frame_gen_status_button->setChecked(enabled);
@@ -6354,7 +6761,7 @@ void MainWindow::UpdateFrameGenButton() {
     const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
                              ? QStringLiteral("DLSS-G")
                              : ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
-    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+    const u32 target_rate = Settings::FrameGenTargetRate();
     const QString mode = target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
                              : tr("FG %1 AUTO").arg(type);
@@ -6456,6 +6863,7 @@ void MainWindow::UpdateStatusButtons() {
     UpdateFilterText();
     UpdateAAText();
     UpdateFrameGenButton();
+    UpdateUpscaleButton();
     UpdateVolumeUI();
 }
 
@@ -6464,6 +6872,12 @@ void MainWindow::UpdateUISettings() {
     if (!ui->action_Fullscreen->isChecked()) {
         UISettings::values.geometry = saveGeometry();
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
+        if (UISettings::values.guarana_remember_window.GetValue() && !isFullScreen() &&
+            !isMinimized()) {
+            std::string store = UISettings::values.guarana_window_geometry.GetValue();
+            Guarana::RememberGeometry(this, store);
+            UISettings::values.guarana_window_geometry = store;
+        }
     }
     UISettings::values.state = saveState();
     UISettings::values.single_window_mode = ui->action_Single_Window_Mode->isChecked();
@@ -6571,7 +6985,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Lichii to apply the X11 backend."));
+                                 tr("Restart Guarana to apply the X11 backend."));
     }
 }
 #endif
@@ -6698,8 +7112,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Lichii?");
-    return question(this, tr("Lichii"), text);
+    const auto text = tr("Are you sure you want to close Guarana?");
+    return question(this, tr("Guarana"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -6726,6 +7140,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     LOG_INFO(Frontend, "Closing frontend after emulation cleanup");
 
+    if (launcher_session_separate_window) {
+        // The launcher session borrowed single window mode: save the player's own.
+        ui->action_Single_Window_Mode->setChecked(false);
+    }
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
     UISettings::SaveWindowState();
@@ -6744,7 +7162,30 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     QtCommon::system->HIDCore().UnloadInputDevices();
     Network::Shutdown();
 
+    if (launcher_session) {
+        // Hand back to the launcher, which waits for this process. The loop is ended here because
+        // the window may never have been shown (a game that did not start), so closing it would
+        // not end the application on its own.
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        LOG_INFO(Frontend, "Launcher session over, exiting with {}", *launcher_session_exit);
+        QCoreApplication::exit(*launcher_session_exit);
+    }
+
     QWidget::closeEvent(event);
+}
+
+void MainWindow::EndLauncherSession() {
+    // A restart or a sub-program stops the emulation and boots again; wait for that to settle.
+    if (launcher_session_exit || launcher_session_rebooting || emulation_running ||
+        boot_in_progress) {
+        return;
+    }
+    // closeEvent ends the application. A window Qt closes without that event (one it never
+    // created natively) must not leave a process the launcher waits on.
+    if (close() && !launcher_session_exit) {
+        launcher_session_exit = launcher_session_failed ? 1 : 0;
+        QCoreApplication::exit(*launcher_session_exit);
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
@@ -6805,7 +7246,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Lichii"),
+        this, tr("Guarana"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -6814,10 +7255,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Lichii to not exit.\n\n"
+    const auto text = tr("The currently running application has requested Guarana to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Lichii"), text);
+    return question(this, tr("Guarana"), text);
 }
 
 void MainWindow::RequestGameExit() {
@@ -6836,7 +7277,9 @@ void MainWindow::filterBarSetChecked(bool state) {
 static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
 
-    if (UISettings::values.theme == "lichii")
+    if (UISettings::IsGuaranaTheme())
+        new_pal.setColor(QPalette::Link, QColor(0xfb, 0xbf, 0x24));
+    else if (UISettings::values.theme == "lichii")
         new_pal.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
@@ -6850,12 +7293,14 @@ static void AdjustLinkColor() {
 // Lichii Dark styles most widgets through its stylesheet; the palette covers what Qt draws
 // without one: item view text, disabled text, links and the native parts of dialogs.
 static QPalette LichiiPalette() {
+    // Guarana Dark: the same palette on the launcher's navy with the ember accent.
+    const bool guarana = UISettings::IsGuaranaTheme();
     QPalette palette;
-    const QColor window(0x17, 0x18, 0x1b);
-    const QColor surface(0x20, 0x21, 0x25);
-    const QColor text(0xec, 0xec, 0xef);
-    const QColor disabled(0x55, 0x57, 0x5d);
-    const QColor accent(0xf0, 0x38, 0x6b);
+    const QColor window = guarana ? QColor(0x0b, 0x10, 0x1d) : QColor(0x17, 0x18, 0x1b);
+    const QColor surface = guarana ? QColor(0x0e, 0x15, 0x27) : QColor(0x20, 0x21, 0x25);
+    const QColor text = guarana ? QColor(0xee, 0xf1, 0xf6) : QColor(0xec, 0xec, 0xef);
+    const QColor disabled = guarana ? QColor(0x4d, 0x57, 0x6b) : QColor(0x55, 0x57, 0x5d);
+    const QColor accent = guarana ? QColor(0xf2, 0x85, 0x1a) : QColor(0xf0, 0x38, 0x6b);
     palette.setColor(QPalette::Window, window);
     palette.setColor(QPalette::WindowText, text);
     palette.setColor(QPalette::Base, window);
@@ -6874,8 +7319,9 @@ static QPalette LichiiPalette() {
     palette.setColor(QPalette::Shadow, Qt::black);
     palette.setColor(QPalette::Highlight, accent);
     palette.setColor(QPalette::HighlightedText, Qt::white);
-    palette.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
-    palette.setColor(QPalette::LinkVisited, QColor(0xd4, 0x2c, 0x5a));
+    palette.setColor(QPalette::Link, guarana ? QColor(0xfb, 0xbf, 0x24) : QColor(0xf4, 0x5a, 0x85));
+    palette.setColor(QPalette::LinkVisited,
+                     guarana ? QColor(0xd9, 0x72, 0x0f) : QColor(0xd4, 0x2c, 0x5a));
     palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
     palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
@@ -6935,6 +7381,7 @@ void MainWindow::UpdateMenuIcons() {
         {ui->action_Launch_PhotoViewer, "image"},
         {ui->action_Open_Mods_Page, "puzzle"},
         {ui->action_Open_UserHandbook, "help"},
+        {ui->action_Report_Problem, "bug"},
         {ui->action_Apply_Recommended_Settings, "wand"},
         {ui->action_Restore_Previous_Settings, "restart"},
         {ui->action_Check_For_Updates, "download"},
@@ -6955,7 +7402,7 @@ void MainWindow::UpdateUITheme() {
         current_theme = default_theme;
 
     static bool lichii_palette = false;
-    if (current_theme == QStringLiteral("lichii")) {
+    if (current_theme == QStringLiteral("lichii") || current_theme == QStringLiteral("guarana")) {
         qApp->setPalette(LichiiPalette());
         lichii_palette = true;
     } else if (lichii_palette) {

@@ -82,6 +82,7 @@ import io.github.zortos293.lichii.features.settings.utils.SettingsFile
 import io.github.zortos293.lichii.model.DriverViewModel
 import io.github.zortos293.lichii.model.EmulationViewModel
 import io.github.zortos293.lichii.model.Game
+import io.github.zortos293.lichii.model.GameFileType
 import io.github.zortos293.lichii.overlay.model.OverlayControl
 import io.github.zortos293.lichii.overlay.model.OverlayLayout
 import io.github.zortos293.lichii.utils.DirectoryInitialization
@@ -237,12 +238,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         if (intent.action == CustomSettingsHandler.CUSTOM_CONFIG_ACTION) {
             handleEmuReadyIntent(intent)
             return
-        } else if (intentUri != null) {
-            intentGame = if (Game.extensions.contains(FileUtil.getExtension(intentUri))) {
-                GameHelper.getGame(requireActivity().intent.data!!, false)
-            } else {
-                null
-            }
+        }
+        if (intentUri != null &&
+            GameFileType.fromFilename(FileUtil.getFilename(intentUri)) != GameFileType.UNSUPPORTED
+        ) {
+            intentGame = GameHelper.getGame(intentUri, false)
         }
 
         if (emulationViewModel.isEmulationStopping.value) {

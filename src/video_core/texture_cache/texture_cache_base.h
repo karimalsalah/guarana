@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
@@ -44,6 +45,7 @@
 #include "video_core/game_dlss_status.h"
 #include "video_core/surface.h"
 #include "video_core/texture_cache/descriptor_table.h"
+#include "video_core/texture_cache/draw_template.h"
 #include "video_core/texture_cache/image_base.h"
 #include "video_core/texture_cache/image_info.h"
 #include "video_core/texture_cache/image_view_base.h"
@@ -62,6 +64,15 @@ struct ChannelState;
 } // namespace Tegra
 
 namespace VideoCommon {
+
+/// EDEN_NX2_ALIAS_TRACE=1: once a second, the image pairs the texture cache copied most.
+[[nodiscard]] inline bool Nx2AliasTrace() noexcept {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_ALIAS_TRACE");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
 
 using Tegra::Texture::TICEntry;
 using Tegra::Texture::TSCEntry;
@@ -127,6 +138,17 @@ struct AsyncDecodeContext {
 };
 
 using TextureCacheGPUMap = ::Common::unordered_map<u64, std::vector<ImageId>, Common::IdentityHash<u64>>;
+
+/// The current draw's render targets as the asynchronous shaders' skip rule sees them
+/// (TextureCache::ClassifyDrawTargets): the class of the draw, and the target that gave it (the
+/// first of the draw's least safe class; address 0 for a draw without targets).
+struct DrawTargets {
+    DrawTargetClass kind{DrawTargetClass::Recurring};
+    GPUVAddr gpu_addr{};
+    u32 width{};
+    u32 height{};
+    VideoCore::Surface::PixelFormat format{};
+};
 
 class TextureCacheChannelInfo : public ChannelInfo {
 public:
@@ -352,6 +374,26 @@ public:
     void MemoizeTextures(SampledTextureMemo& memo, std::span<const TextureHandleRead> reads,
                          std::span<const ImageViewInOut> views, std::span<const SamplerId> samplers);
 
+    /// What besides its handle words selects the textures a graphics draw samples now.
+    [[nodiscard]] DrawTemplateContext GraphicsTextureContext(u64 owner) const noexcept;
+
+    /// The texture and sampler descriptors the draw's textures were resolved from, for a draw
+    /// template; false when one can't be kept, as for MemoizeTextures.
+    [[nodiscard]] bool KeepTemplateTextures(std::span<const TextureHandleRead> reads,
+                                            std::span<const ImageViewInOut> views,
+                                            std::span<const SamplerId> samplers,
+                                            std::vector<DrawTemplateTexture>& textures);
+
+    /// Prepares the images of the views a draw template gave, as resolving them would; false
+    /// when that deleted images and the views have to be resolved again.
+    [[nodiscard]] bool PrepareTemplateViews(std::span<const ImageViewInOut> views);
+
+    /// Bumped each time the slot's view is deleted: a kept id names the same view while its
+    /// generation holds.
+    [[nodiscard]] u32 ImageViewGeneration(ImageViewId id) const noexcept {
+        return id.index < image_view_generations.size() ? image_view_generations[id.index] : 0;
+    }
+
     /// Handle feedback loops during draws.
     void CheckFeedbackLoop(std::span<const ImageViewInOut> views);
 
@@ -393,11 +435,17 @@ public:
 
     /// Update bound render targets and upload memory if necessary
     /// @param is_clear True when the render targets are being used for clears
-    void UpdateRenderTargets(bool is_clear);
+    /// @param is_draw True for a guest draw, whose write masks are in the 3D registers
+    void UpdateRenderTargets(bool is_clear, bool is_draw = false);
 
     /// Find a framebuffer with the currently bound render targets
     /// UpdateRenderTargets should be called before this
     Framebuffer* GetFramebuffer();
+
+    /// Whether render target 0 of the current draw was first written in an earlier frame
+    /// (cleared this frame or not): a target the game draws every frame rather than one it
+    /// fills once (Eglantine #874).
+    [[nodiscard]] bool ColorTargetWrittenBeforeThisFrame() noexcept;
 
     /// Whether render target `index` was first written in an earlier frame: a target the title
     /// draws every frame, rather than one it fills once (Eglantine #874).
@@ -426,6 +474,12 @@ public:
 
     /// Mark images in a range as modified from the CPU
     void WriteMemory(DAddr cpu_addr, size_t size);
+
+    /// EDEN_NX2_ASYNC_DISCARD=2: classifies the render targets the current registers bind (the
+    /// bound ones when they are current, otherwise the registered images at the registers'
+    /// addresses; nothing is created). Takes the cache's lock. Meant for a draw whose pipeline is
+    /// missing, so it runs per miss, not per draw.
+    [[nodiscard]] DrawTargets ClassifyDrawTargets();
 
     /// After a DMA copy of [src_addr, +size) to [dest_addr, +size) in guest memory: marks the
     /// images over the destination whose contents guest memory now holds. gpu_written_dest are
@@ -554,6 +608,11 @@ private:
     /// Runs the Garbage Collector; at_critical collects as if usage were at the critical threshold.
     void RunGarbageCollector(bool out_of_memory, bool at_critical);
 
+    void RetireStaleTargets();
+    void CollectStaleReferences();
+    bool StaleTargetReferenced(ImageId image_id) const;
+    void MarkStaleTransfer(ImageBase& image);
+
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
 
@@ -576,7 +635,7 @@ private:
     /// Find or create an image from the given parameters
     [[nodiscard]] ImageId FindOrInsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
                                             RelaxedOptions options = RelaxedOptions{},
-                                            bool* retry = nullptr);
+                                            bool render_target = false, bool* retry = nullptr);
 
     /// Find an image from the given parameters
     [[nodiscard]] ImageId FindImage(const ImageInfo& info, GPUVAddr gpu_addr,
@@ -584,11 +643,12 @@ private:
 
     /// Create an image from the given parameters
     [[nodiscard]] ImageId InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
-                                      RelaxedOptions options);
+                                      RelaxedOptions options, bool render_target = false);
 
     /// Create a new image and join perfectly matching existing images
     /// Remove joined images from the cache
-    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr);
+    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr,
+                                     bool render_target);
 
     [[nodiscard]] ImageId FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr);
 
@@ -662,6 +722,12 @@ private:
     /// Synchronize image aliases, copying data if needed
     void SynchronizeAliases(ImageId image_id);
 
+    /// EDEN_NX2_ALIAS_TRACE: counts one image copy and logs the busiest pairs once a second.
+    void TraceAliasCopy(ImageId dst_id, ImageId src_id, std::span<const ImageCopy> copies);
+    void ReportAliasTrace();
+    /// EDEN_NX2_ALIAS_TRACE: a draw or clear bound the image as a render target.
+    void TraceAliasTarget(ImageId image_id, u64 tick_before, bool can_write, bool marked);
+
     /// Prepare an image view to be used
     void PrepareImageView(ImageViewId image_view_id, bool is_modification, bool invalidate);
 
@@ -677,6 +743,10 @@ private:
 
     /// Returns true if the current clear parameters clear the whole image of a given image view
     [[nodiscard]] bool IsFullClear(ImageViewId id);
+
+    /// UpdateRenderTargets(true): records a full clear on the targets the clear writes (the
+    /// colour target it names, the depth target when depth is cleared), for ClassifyDrawTargets.
+    void NoteFullClears();
 
     /// Returns true if the current clear's render area and scissor cover a width x height image
     [[nodiscard]] bool ClearCovers(u32 width, u32 height) const;
@@ -863,6 +933,7 @@ private:
     u64 overlap_download_bytes{};
     u64 overlap_download_wait_us{};
     void ClearStale(DAddr addr, size_t size);
+    void ClearStaleImage(const ImageBase& image);
     /// The memory manager a downloaded image is written back through (see WriteBackMemory), or
     /// null when no live address space maps it.
     std::shared_ptr<Tegra::MemoryManager> WriteBackMemory(const ImageBase& image);
@@ -873,6 +944,10 @@ private:
     /// Clears every device range [gpu_addr, gpu_addr + size) maps to in memory.
     void ClearStaleGpu(Tegra::MemoryManager& memory, GPUVAddr gpu_addr, size_t size);
     StalePages stale_pages;
+    ::Common::unordered_set<ImageId> stale_references;
+    /// RetireStaleTargets: matching candidates in front of the point where its last scan
+    /// stopped at its examination bound (0 after a scan that reached the end).
+    size_t stale_retire_resume{};
     u64 tc_stale_skips{};        ///< Uploads skipped (last 600 frames)
     u64 tc_stale_skip_bytes{};
     u64 tc_stale_gpu_written{};  ///< Stale but buffer-written pages: uploaded after all
@@ -880,12 +955,53 @@ private:
     /// The CPU address an image at gpu_addr is keyed by: its backing, or a fixed stand-in.
     [[nodiscard]] std::optional<DAddr> ImageCpuAddress(GPUVAddr gpu_addr, size_t size) const;
 
+    void BumpImageViewGeneration(ImageViewId id) {
+        if (id.index >= image_view_generations.size()) {
+            image_view_generations.resize(id.index + 1);
+        }
+        ++image_view_generations[id.index];
+    }
+
     bool has_deleted_images = false;
+    std::vector<u32> image_view_generations; ///< ImageViewGeneration
     std::vector<ImageId>* prepare_log{}; ///< LogPrepares
     bool prepare_log_dry{};
     /// True while a clear binds its render targets (UpdateRenderTargets(true)), so JoinImages can
     /// skip the upload of a new target the clear overwrites whole.
     bool clearing_render_targets = false;
+
+    struct AliasTracePair {
+        ImageId dst;
+        ImageId src;
+        GPUVAddr dst_addr{};
+        GPUVAddr src_addr{};
+        ImageInfo dst_info;
+        ImageInfo src_info;
+        Extent3D extent{};  ///< Of the first region of the first copy
+        u32 regions{};      ///< Of the first copy
+        u32 copies{};
+        u32 sync{};         ///< Copies made by SynchronizeAliases
+        u32 dst_rt{};       ///< The destination was a bound render target
+        u32 dst_read{};     ///< The destination was prepared to be read (sampled by the draw)
+        u32 src_rt{};       ///< The source was a bound render target
+        u32 src_nowrite{};  ///< The source's newest tick came from a draw that could not write it
+        u32 needless{};     ///< ... and the destination already held its last real change
+    };
+    /// A render target's ticks: the newest one from something that could write it, and the one
+    /// the last draw that could not write it left (0 when a writing draw came after).
+    struct AliasTraceTicks {
+        u64 genuine{};
+        u64 fake{};
+    };
+    std::vector<AliasTracePair> alias_trace_pairs;
+    std::unordered_map<u32, AliasTraceTicks> alias_trace_ticks;
+    std::chrono::steady_clock::time_point alias_trace_next{};
+    u32 alias_trace_draws{};
+    u32 alias_trace_untracked{};
+    u64 alias_trace_dst_tick{};   ///< SynchronizeAliases: the image's tick before it
+    bool alias_trace_in_sync{};   ///< SynchronizeAliases is copying
+    bool alias_trace_dst_write{}; ///< PrepareImage: the image is prepared to be written
+
     /// True while a draw binds its render targets (UpdateRenderTargets(false)): only these writes
     /// set first_written_frame, not blits, copies or DMA.
     bool drawing_render_targets = false;

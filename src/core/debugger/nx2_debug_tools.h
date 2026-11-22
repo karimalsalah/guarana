@@ -93,6 +93,18 @@ struct InputStep {
 /// nothing before start and from the end of the last step on.
 [[nodiscard]] std::optional<HID::InjectedInput> InputAt(std::span<const InputStep> steps, u64 start,
                                                        u64 now);
+
+/// input_latency: how far each shown frame's picture is from the first picture, as the mean absolute
+/// difference of their B, G and R bytes (0 to 255), and the first frame over the threshold.
+struct PictureOnset {
+    std::vector<double> differences; ///< per frame; negative where a frame has no picture
+    std::optional<size_t> onset;     ///< the first frame whose difference is over the threshold
+};
+
+/// `pictures[i]` is frame i's picture index in `pixels` (BGRA8, width x height each), -1 for none.
+[[nodiscard]] PictureOnset FindPictureOnset(std::span<const s32> pictures,
+                                            std::span<const u8> pixels, u32 width, u32 height,
+                                            double threshold);
 /// Guest-present intervals within [begin_ns, end_ns], using only retained ring timestamps;
 /// intervals_ms lists the last recent_limit of them.
 [[nodiscard]] nlohmann::json ReadFrameTimes(u64 before, u64 after, u64 begin_ns, u64 end_ns,

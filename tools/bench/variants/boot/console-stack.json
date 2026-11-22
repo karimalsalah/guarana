@@ -1,0 +1,14 @@
+{
+  "name": "console-stack",
+  "description": "The boot switches together: the stacked arm of docs/console-boot.md.",
+  "cache_states": [
+    "cold",
+    "second",
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_VULKAN_INSTANCE_ONCE": "1",
+    "EDEN_NX2_BOOT_ASYNC": "1",
+    "EDEN_NX2_CACHE_MMAP": "1"
+  }
+}

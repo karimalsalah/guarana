@@ -142,6 +142,9 @@ void ConfigureInputAdvanced::ApplyConfiguration() {
     Settings::values.disable_wgi_xinput = ui->disable_wgi_xinput->isChecked();
     Settings::values.enable_udp_controller = ui->enable_udp_controller->isChecked();
     Settings::values.controller_navigation = ui->controller_navigation->isChecked();
+    Settings::values.controller_auto_configure = ui->controller_auto_configure->isChecked();
+    Settings::values.controller_positional_face_buttons =
+        ui->controller_positional_face_buttons->isChecked();
     Settings::values.enable_ring_controller = ui->enable_ring_controller->isChecked();
     Settings::values.enable_ir_sensor = ui->enable_ir_sensor->isChecked();
     Settings::values.enable_joycon_driver = ui->enable_joycon_driver->isChecked();
@@ -178,6 +181,9 @@ void ConfigureInputAdvanced::LoadConfiguration() {
     ui->disable_wgi_xinput->setChecked(Settings::values.disable_wgi_xinput.GetValue());
     ui->enable_udp_controller->setChecked(Settings::values.enable_udp_controller.GetValue());
     ui->controller_navigation->setChecked(Settings::values.controller_navigation.GetValue());
+    ui->controller_auto_configure->setChecked(Settings::values.controller_auto_configure.GetValue());
+    ui->controller_positional_face_buttons->setChecked(
+        Settings::values.controller_positional_face_buttons.GetValue());
     ui->enable_ring_controller->setChecked(Settings::values.enable_ring_controller.GetValue());
     ui->enable_ir_sensor->setChecked(Settings::values.enable_ir_sensor.GetValue());
     ui->enable_joycon_driver->setChecked(Settings::values.enable_joycon_driver.GetValue());

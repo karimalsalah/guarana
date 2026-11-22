@@ -1,0 +1,42 @@
+{
+  "name": "game-network-a1b",
+  "description": "Step A1b of docs/design/game-reconstruction-and-motion.md on the Arc 140T (an Intel GPU whose driver lists 8x8x16 with fp32 accumulators and no 8x16x16 fp16 shape): Ocarina of Time's own network in software (the baseline), on 8x8x16 cooperative matrices (EDEN_NX2_INTEL_COOP_MATRIX_8X8) and on them with EDEN_NX2_HMMA_ZERO_C. The network runs in every variant: game presets off, anti-aliasing Game, frame generation off, the Max Resolution add-on on (its default). EDEN_NX2_TENSOR_LOG=1 logs the path each tensor program takes. The cost to compare is the output pass's GPU time in each row's gpu_costs (work, shader 6bd913e1f34e83eb). A matrix row counts only when its log has the EDEN_NX2_TENSOR_LOG line for that shader naming the 8x8x16 path and no 'anti-aliasing network bypassed' line; the software row needs the line with the software path. Every arm translates the network afresh: run the suite twice in one session and read only the second pass, comparing its two software rows first.",
+  "scene": "../scenes/oot-hyrule-field.json",
+  "options": {},
+  "base": {
+    "env": {
+      "EDEN_NX2_NO_PRESETS": "1",
+      "EDEN_NX2_COST_SAMPLING": "1",
+      "EDEN_NX2_TENSOR_LOG": "1"
+    },
+    "settings": {
+      "Renderer": {
+        "oot_anti_aliasing": 0,
+        "frame_gen": false
+      }
+    }
+  },
+  "baseline": "software",
+  "runs": [
+    {
+      "variants": [
+        {
+          "name": "software"
+        },
+        {
+          "name": "coop-8x8",
+          "env": {
+            "EDEN_NX2_INTEL_COOP_MATRIX_8X8": "1"
+          }
+        },
+        {
+          "name": "coop-8x8-zero-c",
+          "env": {
+            "EDEN_NX2_INTEL_COOP_MATRIX_8X8": "1",
+            "EDEN_NX2_HMMA_ZERO_C": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

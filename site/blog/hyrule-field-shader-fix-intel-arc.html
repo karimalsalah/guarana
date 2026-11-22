@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shader fix: Hyrule Field from 14.8 to 22.8 fps on Intel Arc iGPU</title>
+<meta name="description" content="How EDEN_NX2_GM=11 cut a foliage draw from 15.7 to 5.8 ms and took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T iGPU, and where the proof stops.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="author" content="Guarana contributors">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site.css">
+<link rel="stylesheet" href="blog.css">
+<link rel="alternate" type="application/rss+xml" title="Guarana blog" href="https://karimalsalah.github.io/guarana/blog/feed.xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU">
+<meta property="og:description" content="How EDEN_NX2_GM=11 cut a foliage draw from 15.7 to 5.8 ms and took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T iGPU, and where the proof stops.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta property="article:published_time" content="2026-11-13">
+<meta property="article:modified_time" content="2026-11-13">
+<meta property="article:section" content="Shaders">
+<meta property="article:tag" content="Intel Arc">
+<meta property="article:tag" content="iGPU">
+<meta property="article:tag" content="Shaders">
+<meta property="article:tag" content="Switch 2 emulator">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU">
+<meta name="twitter:description" content="How EDEN_NX2_GM=11 cut a foliage draw from 15.7 to 5.8 ms and took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T iGPU, and where the proof stops.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html#article",
+      "headline": "How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU",
+      "description": "How EDEN_NX2_GM=11 cut a foliage draw from 15.7 to 5.8 ms and took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T iGPU, and where the proof stops.",
+      "datePublished": "2026-11-13",
+      "dateModified": "2026-11-13",
+      "author": {
+        "@type": "Organization",
+        "name": "Guarana contributors",
+        "url": "https://github.com/karimalsalah/guarana/graphs/contributors"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://karimalsalah.github.io/guarana/assets/logo-mark.svg"
+        }
+      },
+      "image": {
+        "@type": "ImageObject",
+        "url": "https://karimalsalah.github.io/guarana/assets/social-preview.png",
+        "width": 1280,
+        "height": 640
+      },
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html"
+      },
+      "isPartOf": {
+        "@type": "Blog",
+        "@id": "https://karimalsalah.github.io/guarana/blog/#blog",
+        "name": "Guarana blog",
+        "url": "https://karimalsalah.github.io/guarana/blog/"
+      },
+      "inLanguage": "en",
+      "articleSection": "Shaders",
+      "keywords": "Intel Arc, Arc 140T, iGPU, integrated GPU, Switch 2 emulator, shader recompiler, global memory, SPIR-V, Vulkan, Hyrule Field, frame rate",
+      "about": {
+        "@type": "SoftwareApplication",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "applicationCategory": "GameApplication"
+      },
+      "wordCount": 1148
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Blog",
+          "item": "https://karimalsalah.github.io/guarana/blog/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Shader fix on Intel Arc",
+          "item": "https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="../">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="../wins.html">Open wins</a></li>
+        <li><a href="./" class="is-section">Blog</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<article aria-labelledby="post-title">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="../">Home</a></li><li><a href="./">Blog</a></li><li><span aria-current="page">Shader fix on Intel Arc</span></li></ol></nav>
+  <p class="post-kicker">Shaders &middot; Intel Arc &middot; Measured</p>
+  <h1 id="post-title">How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU</h1>
+  <p class="post-meta"><span>By Guarana contributors</span><span><time datetime="2026-11-13">November 13, 2026</time></span><span>6 min read</span></p>
+  <p class="lede">One laptop, one scene, one switch turned off and then on. This is what the global-memory routing fix in Guarana does, how we found it, and where the evidence stops.</p>
+</div>
+<div class="wrap">
+<div class="prose post-body">
+
+<aside class="in-short" aria-labelledby="in-short-title">
+  <h2 id="in-short-title">In short</h2>
+  <ul>
+    <li><strong>What changed:</strong> <code>EDEN_NX2_GM=11</code> makes translated shaders find the buffer behind a memory address with much less repeated work.</li>
+    <li><strong>Measured:</strong> in Ocarina of Time's Hyrule Field, game fps went from 14.8 to 22.8 with frame generation off, same spot, switch off and then on. The foliage draw went from 15.7 to 5.8 ms of GPU time.</li>
+    <li><strong>Machine:</strong> Core Ultra 9 285H with an Arc 140T iGPU, Intel driver 32.0.101.9175.</li>
+    <li><strong>Scope:</strong> verified in one game, and on by default only there since v20.0.1. A known issue is tracked in <a href="https://github.com/karimalsalah/guarana/issues/6">#6</a>.</li>
+  </ul>
+</aside>
+
+<h2 id="slow-scene">A scene that was slower than it should be</h2>
+<p>Hyrule Field is where we measure. It is a wide, open view full of grass and foliage, and on the Arc 140T it ran at 14.8 game fps. Game fps counts only the frames the game renders itself. Frames made by frame generation never count, and frame generation was off for everything in this post.</p>
+<p>An integrated GPU shares its memory and its power budget with the CPU, so there is no headroom to waste. The first job was to find out where the GPU time went. Per-draw GPU timing pointed at one draw: the foliage, drawn with mesh shaders, at 15.7 ms of GPU time. A 60 Hz display gives a whole frame 16.67 ms, so this one draw was using nearly all of it on its own.</p>
+<p>Rather than keep guessing at why a foliage draw would be that heavy, we read the shader the emulator had generated for it.</p>
+
+<h2 id="why-search">Why an emulator searches for memory</h2>
+<p>Switch 2 shaders can read and write memory through raw 64-bit addresses, a model usually called global memory. A Vulkan shader on a PC cannot follow a guest address like that. It reaches memory only through buffers that the emulator binds for the draw.</p>
+<p>So the shader translator, inherited through the yuzu, Eden, Eglantine and Lichii line, maps each memory access to a bound buffer while it translates the program. When it can prove where an address comes from, the access becomes a plain buffer read. When it cannot, the access stays global, and the generated SPIR-V finds the right buffer at run time by comparing the address against the bound buffers until one matches.</p>
+<p>That fallback is correct and general, and on most draws it costs little. In the foliage program it ran on access after access.</p>
+
+<h2 id="what-it-did">What the foliage shader was spending its time on</h2>
+<p>The translated program spent its time on address routing rather than on foliage. Two things stood out:</p>
+<ul>
+  <li>The buffer base addresses never changed while the program ran, yet every access worked them out again.</li>
+  <li>Each address was built from a pointer the program had just loaded from a known buffer, so only the buffers that pointer could point into were real candidates. Every access still compared the address against all of the bound buffers.</li>
+</ul>
+<p>Neither of those is a GPU or driver problem. It is work the translated shader repeats because, in general, it cannot know better. In this program it could.</p>
+
+<h2 id="the-fix">The fix: three bits in one switch</h2>
+<p><code>EDEN_NX2_GM</code> is a set of bits, and <code>11</code> turns on three of them:</p>
+<div class="table-wrap">
+<table class="stack">
+  <caption>What each bit of <code>EDEN_NX2_GM=11</code> does</caption>
+  <thead><tr><th scope="col">Bit</th><th scope="col">Effect</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Bit"><code>1</code></td><td data-label="Effect">Computes the buffer base addresses once per shader invocation instead of in every access, in programs that cannot change them.</td></tr>
+    <tr><td data-label="Bit"><code>2</code></td><td data-label="Effect">A load searches only the pointer buffers its address is built from, instead of every bound buffer.</td></tr>
+    <tr><td data-label="Bit"><code>8</code></td><td data-label="Effect">With bit 2: when the address is in none of those buffers, the load returns zero instead of falling back to a search of every buffer.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Bits 1 and 2 remove repeated work. Bit 8 is different: it changes behaviour when an address falls outside the buffers the translator expected. That load now reads zero, where the full search might have found the address somewhere else. The fix is verified in Ocarina of Time. Everywhere else it is unproven, which is why the switch is scoped the way it is.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 640 250" role="img" aria-labelledby="gm-title gm-desc">
+    <title id="gm-title">Run-time routing of one memory access, before and after</title>
+    <desc id="gm-desc">Before, an address is compared against every bound buffer. After, it is compared only against the buffers its pointer was loaded from, and an address in none of them reads zero.</desc>
+    <text class="d-strong" x="0" y="22">Before</text>
+    <text class="d-small" x="64" y="22">every unresolved access</text>
+    <rect class="d-box" x="0" y="40" width="96" height="36" rx="8"/>
+    <text class="d-mono" x="48" y="63" text-anchor="middle">address</text>
+    <path class="d-line" d="M100 58H136"/>
+    <rect class="d-box" x="140" y="40" width="70" height="36" rx="6"/>
+    <rect class="d-box" x="218" y="40" width="70" height="36" rx="6"/>
+    <rect class="d-box" x="296" y="40" width="70" height="36" rx="6"/>
+    <rect class="d-box" x="374" y="40" width="70" height="36" rx="6"/>
+    <text class="d-text" x="463" y="64">&#8230;</text>
+    <rect class="d-box" x="490" y="40" width="70" height="36" rx="6"/>
+    <text class="d-small" x="175" y="63" text-anchor="middle">buffer</text>
+    <text class="d-small" x="253" y="63" text-anchor="middle">buffer</text>
+    <text class="d-small" x="331" y="63" text-anchor="middle">buffer</text>
+    <text class="d-small" x="409" y="63" text-anchor="middle">buffer</text>
+    <text class="d-small" x="525" y="63" text-anchor="middle">buffer</text>
+    <text class="d-small" x="140" y="98">compare against each bound buffer, base addresses recomputed every time</text>
+    <path class="d-grid" d="M0 122H640"/>
+    <text class="d-strong" x="0" y="152">After</text>
+    <text class="d-mono" x="64" y="152">EDEN_NX2_GM=11</text>
+    <rect class="d-box" x="0" y="170" width="96" height="36" rx="8"/>
+    <text class="d-mono" x="48" y="193" text-anchor="middle">address</text>
+    <path class="d-line" d="M100 188H136"/>
+    <rect class="d-hit" x="140" y="170" width="150" height="36" rx="6"/>
+    <text class="d-text" x="215" y="193" text-anchor="middle">its pointer's buffers</text>
+    <path class="d-line d-dash" d="M294 188H330"/>
+    <rect class="d-box" x="334" y="170" width="70" height="36" rx="6"/>
+    <text class="d-mono" x="369" y="193" text-anchor="middle">0</text>
+    <text class="d-small" x="414" y="186">in none of them:</text>
+    <text class="d-small" x="414" y="202">zero (bit 8)</text>
+    <text class="d-small" x="140" y="232">base addresses computed once per invocation (bit 1)</text>
+  </svg>
+  <figcaption>Illustration of one global memory access. The number of bound buffers varies by program.</figcaption>
+</figure>
+
+<h2 id="result">The result, and its limits</h2>
+<div class="table-wrap">
+<table class="stack">
+  <caption>Hyrule Field, Arc 140T, same spot, switch off and then on</caption>
+  <thead><tr><th scope="col">Measure</th><th scope="col" class="num">Switch off</th><th scope="col" class="num"><code>EDEN_NX2_GM=11</code></th></tr></thead>
+  <tbody>
+    <tr><td data-label="Measure">Game fps, frame generation off</td><td data-label="Switch off" class="num">14.8</td><td data-label="EDEN_NX2_GM=11" class="num"><strong>22.8</strong></td></tr>
+    <tr><td data-label="Measure">Foliage mesh draw, GPU time</td><td data-label="Switch off" class="num">15.7 ms</td><td data-label="EDEN_NX2_GM=11" class="num"><strong>5.8 ms</strong></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="table-note">Core Ultra 9 285H with Arc 140T, Intel driver 32.0.101.9175, The Legend of Zelda: Ocarina of Time.</p>
+<p>Read this as one data point: one laptop, one game, one scene. Other Intel iGPUs, AMD Radeon iGPUs, other drivers, games and scenes are unknown until someone measures them. The <a href="../benchmarks.html">benchmarks page</a> has the full table and the frame-generation play configuration, and the <a href="../devices/arc-140t.html">Arc 140T page</a> has the machine details.</p>
+
+<h2 id="scope">Where it is on, and the known issue</h2>
+<ul>
+  <li>Since v20.0.1, <code>EDEN_NX2_GM=11</code> is on by default only for Ocarina of Time, the one game it is verified in. An explicit <code>EDEN_NX2_GM</code> value still wins.</li>
+  <li>You can try it in another game by setting it in your <code>nx2_switches.txt</code>. If the game renders wrong with it, set <code>EDEN_NX2_GM=0</code> and <a href="https://github.com/karimalsalah/guarana/issues/new/choose">report the game</a>.</li>
+  <li>Known issue <a href="https://github.com/karimalsalah/guarana/issues/6">#6</a>: with bit 2, a narrowed load keeps its buffer list in instruction flags that another pass also reads as its "coherent" bit. It is under review, and the switch gets measured again once it is settled.</li>
+</ul>
+<p>For setup, follow the <a href="https://github.com/karimalsalah/guarana#quick-start">README quick start</a> and the switch reference in <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/switches.md">docs/switches.md</a>. Those two are kept current.</p>
+
+<h2 id="measure">Measure it on your device</h2>
+<p>The most useful next step is the same A/B on hardware we do not have. <a href="https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md"><code>tools/bench</code></a> plays a fixed scene, checks with a screenshot that it reached the right spot, and writes one JSON row with personal details scrubbed. A paired run, switch off and then on in one session, is the evidence that counts. <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/BENCHMARKING.md">docs/BENCHMARKING.md</a> has the steps.</p>
+
+<section class="qa" aria-labelledby="qa">
+  <h2 id="qa">Questions people ask</h2>
+  <h3>Does frame generation add to these numbers?</h3>
+  <p>No. Game fps counts only frames the game renders, and frame generation was off for this A/B. How frame generation and pacing work is in <a href="frame-pacing-frame-generation-120hz-oled.html">the post on 16.67 ms</a>.</p>
+  <h3>Will the fix help on AMD Radeon iGPUs?</h3>
+  <p>Unknown. The routing code the translator emits does not depend on the GPU vendor, but nothing has been measured on an AMD iGPU yet. A <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> from an AMD handheld is one of the most useful things you can send.</p>
+  <h3>Why not resolve every address while translating?</h3>
+  <p>The translator can turn an access into a plain buffer read only when it can prove where the address comes from. Everything else has to be routed at run time to stay correct. The fix makes that routing cheaper; it does not guess.</p>
+</section>
+
+<div class="cta-box">
+  <h2>Help make it fast on your hardware</h2>
+  <p>Every device except the Arc 140T is untested by the maintainers. Send a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a>, run the benchmark, or pick an <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready+-label%3Aneeds-triage"><code>agent-ready</code> issue</a>. Shader people: issue <a href="https://github.com/karimalsalah/guarana/issues/6">#6</a> is open. <a href="../contribute.html">How to contribute</a>.</p>
+</div>
+
+<nav class="more-posts" aria-labelledby="more-title">
+  <h2 id="more-title">More from the blog</h2>
+  <ul>
+    <li><a href="frame-pacing-frame-generation-120hz-oled.html">Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</a></li>
+    <li><a href="switch-2-emulator-boot-time.html">Booting a Switch 2 emulator in half the time: what the boot marks found</a></li>
+    <li><a href="emulator-built-for-ai-agents.html">An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR</a></li>
+  </ul>
+</nav>
+
+</div>
+</div>
+</article>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+        <li><a href="https://discord.gg/urz7vMdRM">Discord: discord.gg/urz7vMdRM</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="../wins.html">Open wins</a></li>
+        <li><a href="../legacy.html">Hall of fame</a></li>
+        <li><a href="./">Blog</a></li>
+        <li><a href="../legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="../llms.txt">llms.txt</a></li>
+        <li><a href="../llms-full.txt">llms-full.txt</a></li>
+        <li><a href="../sitemap.xml">sitemap.xml</a></li>
+        <li><a href="feed.xml">Blog RSS feed</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+</body>
+</html>

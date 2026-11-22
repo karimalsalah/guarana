@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -37,11 +38,27 @@ class FakeEmulator:
     def answer(self, request):
         method = request["method"]
         if method == "status":
-            return {"result": {"title": "Test", "presents": 3}}
+            return {"result": {"title": "Test", "presents": 3,
+                               "resolution": {"resolved": True, "pacing_set": "144hz"}}}
         if method == "frame_times":
             return {"result": {"frames": 2, "intervals_ms": [16.7, 33.3], "truncated": False}}
         if method == "screenshot":
             return {"result": {"width": 1280, "height": 720, "png_base64": PNG}}
+        if method == "shown_frames":
+            frames = [{"index": 0, "kind": "real", "slot": 960, "scheduled_us": 120,
+                       "presented_us": 0, "late_us": -120, "picture": True,
+                       "tile": {"x": 4, "y": 10, "width": 432, "height": 270},
+                       "png_base64": PNG},
+                      {"index": 1, "kind": "predicted", "slot": 961, "scheduled_us": 8453,
+                       "presented_us": 8330, "late_us": -123, "picture": True,
+                       "tile": {"x": 440, "y": 10, "width": 432, "height": 270}}]
+            if not request["params"].get("pictures", True):
+                for frame in frames:
+                    frame.pop("png_base64", None)
+                    frame["picture"] = False
+                return {"result": {"count": 2, "presenter": "fluid", "frames": frames}}
+            return {"result": {"count": 2, "presenter": "fluid", "frames": frames,
+                               "sheet_png_base64": PNG}}
         if method == "capture_frame":
             return {"result": {"directory": self.capture_dir, "entries_total": 1}}
         if method == "capture_bundle":
@@ -53,6 +70,20 @@ class FakeEmulator:
             return {"error": "GPU address 0x5000 is not mapped"}
         if method in ("input", "input_sequence"):
             return {"result": {"controller": "player1", "frames": 3}}
+        if method == "speed_limit":
+            on = request["params"].get("on", True)
+            return {"result": {"previous": True, "on": on}}
+        if method == "autopilot":
+            return {"result": {"running": False, "windows": 0}}
+        if method == "gpu_perf":
+            if not request["params"].get("enable", True):
+                return {"result": {"supported": True, "sampling": False, "frames_sampled": 0,
+                                   "counters": [], "gpu_busy_pct": None, "stall_pct": None,
+                                   "occupancy_pct": None, "freq_mhz": None}}
+            return {"result": {"supported": True, "sampling": True, "frames_sampled": 30,
+                               "counters": [{"name": "GpuBusy", "value": 62.5, "unit": "pct"}],
+                               "gpu_busy_pct": 62.5, "stall_pct": 12.0,
+                               "occupancy_pct": 71.0, "freq_mhz": 1850.0}}
         return {"error": f"unknown method \"{method}\""}
 
     def serve(self):
@@ -104,12 +135,74 @@ class AdapterTest(unittest.TestCase):
         self.assertIsNone(self.adapter.handle({"method": "notifications/initialized"}))
         names = [tool["name"] for tool in self.adapter.handle({"id": 2, "method": "tools/list"})
                  ["result"]["tools"]]
-        self.assertEqual(names, ["status", "frame_times", "screenshot", "log_tail", "log_filter", "capture_frame",
-                                 "capture_image", "capture_bundle", "reject_shaders", "sample", "read_memory",
-                                 "search_memory", "read_gpu_memory", "input",
-                                 "input_sequence", "host_timing", "render_follower", "trace_record",
-                                 "trace_stop", "trace_status"])
+        self.assertEqual(names, ["status", "frame_times", "screenshot", "shown_frames", "log_tail",
+                                 "log_filter", "capture_frame", "capture_image", "capture_bundle",
+                                 "reject_shaders", "set_shading_rate", "set_prepass", "sample",
+                                 "speed_limit", "read_memory", "search_memory", "read_gpu_memory",
+                                 "input", "input_sequence", "input_latency", "host_timing",
+                                 "render_follower", "power", "power_set", "gpu_costs", "gpu_perf",
+                                 "frame_budget", "autopilot", "memory", "trace_record",
+                                 "trace_stop", "trace_status", "thread_stats", "present_stats",
+                                 "cache_stats", "readbacks", "boot_timing"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)
+
+    def test_every_server_method_is_offered(self):
+        # The emulator's methods are the keys of MakeHandlers; the adapter must offer each one,
+        # or --call and MCP refuse a documented method before it reaches the emulator.
+        source = os.path.join(HERE, "..", "..", "src", "core", "debugger", "nx2_debug_tools.cpp")
+        if not os.path.isfile(source):
+            self.skipTest("emulator source not checked out")
+        with open(source, encoding="utf-8") as file:
+            handlers = file.read().partition("Handlers MakeHandlers(")[2]
+        server = set(re.findall(r'\{"(\w+)", (?:handler|waiting)\(', handlers))
+        self.assertGreater(len(server), 20)
+        self.assertEqual(server, debug_mcp.TOOL_NAMES - {"capture_image"})
+
+    def test_speed_limit_and_autopilot_are_forwarded(self):
+        result = self.call("speed_limit", {"on": False})
+        self.assertFalse(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), {"previous": True, "on": False})
+        self.assertEqual(self.fake.requests[-1]["method"], "speed_limit")
+        self.assertEqual(self.fake.requests[-1]["params"], {"on": False})
+        result = self.call("autopilot")
+        self.assertFalse(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"])["running"], False)
+        self.assertEqual(self.fake.requests[-1]["method"], "autopilot")
+
+    def test_boot_timing_lists_the_split_and_forwards_a_mark(self):
+        tool = next(tool for tool in debug_mcp.TOOLS if tool["name"] == "boot_timing")
+        for field in ("held_draw_ms", "held_dispatch_ms", "builds", "graphics_monolithic",
+                      "graphics_library", "graphics_fast_link", "graphics_optimized_link",
+                      "compute", "file_read_ms", "first_frame", "marks", "since_first_frame"):
+            self.assertIn(field, tool["description"])
+        mark = tool["inputSchema"]["properties"]["mark"]
+        self.assertEqual((mark["type"], mark["minLength"], mark["maxLength"]), ("string", 1, 64))
+        # The same names, in the same order, as BuildKindNames in src/common/boot_split.h.
+        header = os.path.join(HERE, "..", "..", "src", "common", "boot_split.h")
+        if os.path.isfile(header):
+            with open(header, encoding="utf-8") as file:
+                names = re.search(r"BuildKindNames\{(.*?)\};", file.read(), re.S).group(1)
+            kinds = re.findall(r'"(\w+)"', names)
+            self.assertEqual(len(kinds), 6)
+            self.assertEqual(kinds[0], "graphics_monolithic")
+            self.assertEqual(kinds[-1], "compute")
+            for kind in kinds:
+                self.assertIn(kind.replace("_pre_rasterization", "").replace("_fragment", ""),
+                              tool["description"])
+        self.call("boot_timing", {"mark": "gameplay"})
+        self.assertEqual(self.fake.requests[-1]["method"], "boot_timing")
+        self.assertEqual(self.fake.requests[-1]["params"], {"mark": "gameplay"})
+
+    def test_call_once_reaches_speed_limit(self):
+        # docs/nx2/debug-mcp.md: speed_limit is used through --call.
+        stdout = io.StringIO()
+        code = debug_mcp.call_once(self.adapter, '{"method":"speed_limit","params":{"on":false}}',
+                                   None, stdout)
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(json.loads(stdout.getvalue()), {"previous": True, "on": False})
+        self.assertEqual(self.fake.requests[-1], {"id": self.fake.requests[-1]["id"],
+                                                  "method": "speed_limit",
+                                                  "params": {"on": False}})
 
     def test_frame_times_is_forwarded(self):
         arguments = {"seconds": 0.5, "refresh_hz": 59.94}
@@ -140,6 +233,37 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(json.loads(result["content"][0]["text"])["title"], "Test")
         self.assertEqual(self.fake.requests[-1]["params"], {"fps_window_ms": 0})
 
+    def test_status_lists_the_resolution_fields(self):
+        # status.resolution is built in nx2_debug_tools.cpp (ResolutionState) from the resolver's
+        # record; every field it has is named in the adapter's description of status and in the
+        # docs, so a field added to one is added to the others.
+        fields = ["resolved", "title_id", "presets_enabled", "inputs", "preset", "settings",
+                  "addons", "pacing_set", "pacing_why", "switches", "vendor", "integrated",
+                  "software_tensor_math", "device_class", "gpu_family", "refresh_hz", "display",
+                  "output_width", "output_height", "gpu_cores", "gpu_cores_unit",
+                  "pixels_per_core", "decision", "reason", "evidence", "measured", "where",
+                  "player_value", "shipped", "label", "available", "current", "name", "disabled",
+                  "community"]
+        result = self.call("status", {"fps_window_ms": 0})
+        status = json.loads(result["content"][0]["text"])
+        self.assertEqual(status["resolution"]["pacing_set"], "144hz")
+        description = next(tool["description"] for tool in debug_mcp.TOOLS
+                           if tool["name"] == "status")
+        self.assertIn("resolution", description)
+        source = os.path.join(HERE, "..", "..", "src", "core", "debugger", "nx2_debug_tools.cpp")
+        docs = os.path.join(HERE, "..", "..", "docs", "nx2", "debug-mcp.md")
+        if not (os.path.isfile(source) and os.path.isfile(docs)):
+            self.skipTest("emulator source not checked out")
+        with open(source, encoding="utf-8") as file:
+            whole = file.read()
+        body = whole.partition("json ResolutionState()")[2].partition("json Status(")[0]
+        with open(docs, encoding="utf-8") as file:
+            text = file.read()
+        for field in fields:
+            self.assertIn('["%s"]' % field, body, field)
+            self.assertIn("`%s`" % field, text, field)
+        self.assertIn('{"resolution", ResolutionState()}', whole)
+
     def test_memory_reads_are_forwarded(self):
         arguments = {"address": "0x8000001000", "size": 4, "as": "hex"}
         result = self.call("read_memory", arguments)
@@ -164,6 +288,36 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(result["content"][0], {"type": "image", "data": PNG,
                                                 "mimeType": "image/png"})
         self.assertNotIn("png_base64", result["content"][1]["text"])
+
+    def test_shown_frames_become_one_contact_sheet(self):
+        arguments = {"count": 2, "height": 270}
+        result = self.call("shown_frames", arguments)
+        self.assertFalse(result["isError"])
+        self.assertEqual(self.fake.requests[-1]["params"], arguments)
+        self.assertEqual(result["content"][0], {"type": "image", "data": PNG,
+                                                "mimeType": "image/png"})
+        self.assertNotIn("png_base64", result["content"][1]["text"])
+        answer = json.loads(result["content"][1]["text"])
+        self.assertEqual([frame["kind"] for frame in answer["frames"]], ["real", "predicted"])
+        self.assertEqual(answer["frames"][1]["tile"]["x"], 440)
+        self.assertEqual(debug_mcp.default_timeout("shown_frames", {}), 10)
+        # Timing only: no image, only the text.
+        timing = self.call("shown_frames", {"pictures": False})
+        self.assertFalse(timing["isError"])
+        self.assertEqual(len(timing["content"]), 1)
+        self.assertEqual(json.loads(timing["content"][0]["text"])["frames"][0]["picture"], False)
+
+    def test_call_once_saves_the_contact_sheet(self):
+        out = os.path.join(self.temp.name, "sheet.png")
+        stdout = io.StringIO()
+        code = debug_mcp.call_once(self.adapter, '{"method":"shown_frames","params":{"count":2}}',
+                                   out, stdout)
+        self.assertEqual(code, 0)
+        with open(out, "rb") as file:
+            self.assertEqual(file.read(), PNG_BYTES)
+        result = json.loads(stdout.getvalue())
+        self.assertNotIn("sheet_png_base64", result)
+        self.assertEqual(result["count"], 2)
 
     def test_emulator_errors_are_tool_errors(self):
         result = self.call("log_filter", {"filter": "*:Debug"})
@@ -199,6 +353,7 @@ class AdapterTest(unittest.TestCase):
                                 "params": {"name": "status", "arguments": {}}})
         self.assertTrue(reply["result"]["isError"])
         self.assertIn("EDEN_NX2_DEBUG_SERVER", reply["result"]["content"][0]["text"])
+        self.assertIn("Guarana (guarana.exe)", reply["result"]["content"][0]["text"])
 
     def test_stdio_framing(self):
         stdin = io.StringIO('{"jsonrpc":"2.0","id":1,"method":"ping"}\n\nnot json\n')
@@ -245,6 +400,28 @@ class AdapterTest(unittest.TestCase):
             stdout = io.StringIO()
             self.assertEqual(debug_mcp.call_once(self.adapter, request, None, stdout), 1, request)
             self.assertIn("error", json.loads(stdout.getvalue()), request)
+
+    def test_call_once_takes_a_bare_method_name(self):
+        # PowerShell drops the inner quotes of '{"method":"status"}' on its way to a native
+        # program; a bare method name has none to drop.
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, " status\n", None, stdout), 0,
+                         stdout.getvalue())
+        self.assertEqual(json.loads(stdout.getvalue()),
+                         {"title": "Test", "presents": 3,
+                          "resolution": {"resolved": True, "pacing_set": "144hz"}})
+        self.assertEqual(self.fake.requests[-1]["method"], "status")
+        self.assertEqual(self.fake.requests[-1]["params"], {})
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, "{method:status}", None, stdout), 1)
+        error = json.loads(stdout.getvalue())["error"]
+        self.assertIn("double quotes", error)
+        self.assertIn("PowerShell", error)
+        self.assertIn("--call status", error)
+
+    def test_initialize_names_guarana(self):
+        reply = self.adapter.handle({"id": 0, "method": "initialize", "params": {}})
+        self.assertEqual(reply["result"]["serverInfo"]["name"], "guarana-debug")
 
     def test_call_runs_from_the_command_line(self):
         out = os.path.join(self.temp.name, "cli.png")

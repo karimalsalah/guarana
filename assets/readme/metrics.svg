@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 208" width="960" height="208" role="img" aria-labelledby="t d">
+  <title id="t">v20.3 frame pacing in Hyrule Field</title>
+  <desc id="d">v20.3 defaults in Ocarina of Time, Hyrule Field, on a Core Ultra 9 285H with an Arc 140T, Intel driver 32.0.101.9175 and a 120 Hz OLED: 599 of 600 slots on time in the best run, 531-599 over two paired rounds; 0 late flips in both paired rounds, against about 200 per 10 s before; 99.5% of frames within 2 ms of the median in the best run; 20 real frames a second, one per 20 Hz game tick, with frame generation 3x toward 60.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-variant-numeric: tabular-nums; }
+    .k { font-size: 12px; font-weight: 700; letter-spacing: 1.6px; fill: #949cab; }
+    .n { font-size: 52px; font-weight: 800; letter-spacing: -1.5px; fill: #eef0f3; }
+    .u { font-size: 19px; font-weight: 600; letter-spacing: 0; fill: #c3c8d1; }
+    .s { font-size: 12.5px; font-weight: 500; fill: #c3c8d1; }
+    .dev { font-size: 12.5px; font-weight: 600; fill: #949cab; }
+    .t1 { animation: up .9s ease-out both; }
+    .t2 { animation: up .9s .12s ease-out both; }
+    .t3 { animation: up .9s .24s ease-out both; }
+    .t4 { animation: up .9s .36s ease-out both; }
+    @keyframes up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0c10"/><stop offset="1" stop-color="#151a24"/></linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".055"/><stop offset="1" stop-color="#ffffff" stop-opacity=".02"/></linearGradient>
+  </defs>
+  <rect x=".5" y=".5" width="959" height="207" rx="18" fill="url(#bg)" stroke="#ffffff" stroke-opacity=".10"/>
+  <g class="t1">
+    <rect x="16" y="16" width="223" height="150" rx="14" fill="url(#tile)" stroke="#ffffff" stroke-opacity=".10"/>
+    <rect x="34" y="32" width="26" height="3" rx="1.5" fill="#2fbf71"/>
+    <text class="k" x="34" y="56">SLOTS ON TIME</text>
+    <text x="34" y="108"><tspan class="n">599</tspan><tspan class="u" dx="7">of 600</tspan></text>
+    <text class="s" x="34" y="134">best run</text>
+    <text class="s" x="34" y="152">two paired rounds: 531-599</text>
+  </g>
+  <g class="t2">
+    <rect x="251" y="16" width="223" height="150" rx="14" fill="url(#tile)" stroke="#ffffff" stroke-opacity=".10"/>
+    <rect x="269" y="32" width="26" height="3" rx="1.5" fill="#2fbf71"/>
+    <text class="k" x="269" y="56">LATE FLIPS</text>
+    <text x="269" y="108"><tspan class="n">0</tspan></text>
+    <text class="s" x="269" y="134">in both paired rounds</text>
+    <text class="s" x="269" y="152">about 200 per 10 s before</text>
+  </g>
+  <g class="t3">
+    <rect x="486" y="16" width="223" height="150" rx="14" fill="url(#tile)" stroke="#ffffff" stroke-opacity=".10"/>
+    <rect x="504" y="32" width="26" height="3" rx="1.5" fill="#2fbf71"/>
+    <text class="k" x="504" y="56">EVENLY PACED</text>
+    <text x="504" y="108"><tspan class="n">99.5%</tspan></text>
+    <text class="s" x="504" y="134">of frames within 2 ms</text>
+    <text class="s" x="504" y="152">of the median, best run</text>
+  </g>
+  <g class="t4">
+    <rect x="721" y="16" width="223" height="150" rx="14" fill="url(#tile)" stroke="#ffffff" stroke-opacity=".10"/>
+    <rect x="739" y="32" width="26" height="3" rx="1.5" fill="#f2851a"/>
+    <text class="k" x="739" y="56">REAL FRAMES</text>
+    <text x="739" y="108"><tspan class="n">20</tspan><tspan class="u" dx="7">a second</tspan></text>
+    <text class="s" x="739" y="134">one per 20 Hz game tick</text>
+    <text class="s" x="739" y="152">frame gen 3x toward 60</text>
+  </g>
+  <text class="dev" x="480" y="192" text-anchor="middle">v20.3 defaults · Ocarina of Time, Hyrule Field · Core Ultra 9 285H · Arc 140T · Intel 32.0.101.9175 · 120 Hz OLED</text>
+</svg>

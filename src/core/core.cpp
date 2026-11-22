@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <optional>
+#include <algorithm>
 #include <array>
-#include <cstdlib>
 #include <chrono>
+#include <cstdlib>
+#include <vector>
 #include <atomic>
 #include <memory>
 #include <new>
@@ -13,11 +15,16 @@
 #include "game_settings.h"
 #include "common/cpu_features.h"
 #include "audio_core/audio_core.h"
+#include "common/boot_split.h"
+#include "common/boot_timing.h"
 #include "common/fs/fs.h"
 #include "common/literals.h"
 #include "common/logging.h"
 #include "common/memory_detect.h"
 #include "common/nx2_sampler.h"
+#include "common/power_policy.h"
+#include "common/power_tuning.h"
+#include "common/thread.h"
 #include "common/adpf.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -32,6 +39,8 @@
 #include "core/cpu_manager.h"
 #include "core/debugger/debugger.h"
 #include "core/debugger/nx2_debug_tools.h"
+#include "core/nx2_autopilot_session.h"
+#include "core/nx2_power_session.h"
 #include "core/device_memory.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
@@ -96,9 +105,47 @@ namespace Core {
 std::atomic<u64> g_nx2_present_count{};
 static_assert(std::atomic<u64>::is_always_lock_free);
 std::array<std::atomic<u64>, 4096> g_nx2_present_times_ns{};
+std::atomic<u32> g_nx2_present_time_services{};
+
+double Nx2RecentFrameMs() {
+    const u64 capacity = g_nx2_present_times_ns.size();
+    const u64 last = g_nx2_present_count.load(std::memory_order_relaxed);
+    const u64 now = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
+    const u64 window = 1'000'000'000;
+    std::vector<double> intervals;
+    u64 previous = 0;
+    for (u64 frame = last; frame != 0 && last - frame < capacity - 1; --frame) {
+        const u64 timestamp =
+            g_nx2_present_times_ns[frame % capacity].load(std::memory_order_relaxed);
+        if (timestamp > now || now - timestamp > window ||
+            (previous != 0 && timestamp > previous)) {
+            if (frame == last) {
+                // The counter advances before its slot is stored.
+                continue;
+            }
+            break;
+        }
+        if (previous != 0) {
+            intervals.push_back(static_cast<double>(previous - timestamp) / 1'000'000.0);
+        }
+        previous = timestamp;
+    }
+    if (intervals.size() < 3) {
+        return 0.0;
+    }
+    const auto middle = intervals.begin() + intervals.size() / 2;
+    std::ranges::nth_element(intervals, middle);
+    return *middle;
+}
 
 void RecordGuestPresent() {
     const u64 present = g_nx2_present_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (present == 1) {
+        // The debug server's boot_timing samples the held-draw, build and file read totals here.
+        Common::BootSplit::NoteFirstFrame(present);
+    }
     const u64 present_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
                                .count();
@@ -220,7 +267,10 @@ struct System::Impl {
                                ? Reporter::FSAccessLogPolicy::Disabled
                                : Reporter::FSAccessLogPolicy::Disk},
           applet_manager{system}, frontend_applets{system},
-          profile_manager{std::make_shared<Service::Account::ProfileManager>(profile_storage)} {}
+          profile_manager{std::make_shared<Service::Account::ProfileManager>(profile_storage)} {
+        // A session that crashed with EDEN_NX2_POWER_POLICY left the power scheme changed.
+        Common::PowerPolicy::RecoverStale();
+    }
 
     u64 program_id;
 
@@ -388,6 +438,7 @@ struct System::Impl {
         debugger.emplace(system, port);
     }
 
+    /// Prepares the device memory and the kernel for the next program.
     SystemResultStatus InitializeKernel(System& system) {
         LOG_DEBUG(Core, "initialized OK");
 
@@ -427,6 +478,7 @@ struct System::Impl {
             return result;
         }
         host1x_core.emplace(system);
+        Common::BootTiming::Mark("core: host1x ready, creating the GPU and renderer");
         VideoCore::CreateGPU(gpu_core, emu_window, system);
         if (!gpu_core) {
             // As Load does: the kernel is up, and destroying it without its shutdown crashes.
@@ -441,11 +493,7 @@ struct System::Impl {
     SystemResultStatus SetupForApplicationProcess(
         System& system, Frontend::EmuWindow& emu_window,
         std::shared_ptr<const Service::SystemDataView> isolated_system_data = {}) {
-        if (profile_manager->IsScratch() != (isolated_system_data != nullptr)) {
-            LOG_ERROR(Core, "Isolated system data and a scratch profile must be selected together");
-            return SystemResultStatus::ErrorSystemFiles;
-        }
-
+        Common::BootTiming::Mark("core: system setup started");
         std::shared_ptr<Service::Glue::Time::TimeZoneBinary> isolated_time_zone;
         u64 isolated_process_id{};
         if (isolated_system_data) {
@@ -466,7 +514,9 @@ struct System::Impl {
         }
 
         host1x_core.emplace(system);
+        Common::BootTiming::Mark("core: host1x ready, creating the GPU and renderer");
         VideoCore::CreateGPU(gpu_core, emu_window, system);
+        Common::BootTiming::Mark("core: GPU and renderer created");
         if (!gpu_core)
             return SystemResultStatus::ErrorVideoCore;
 
@@ -490,6 +540,28 @@ struct System::Impl {
         return SystemResultStatus::Success;
     }
 
+    /// The video side of Load without a program: kernel and device memory, the GPU and its
+    /// renderer. The program id and the game overrides are set as Load sets them.
+    SystemResultStatus SetupHeadlessVideo(System& system, Frontend::EmuWindow& emu_window,
+                                          u64 title_id) {
+        Settings::SetCurrentProgramID(title_id);
+        Settings::SetCurrentProgramIsSwitch2(false);
+        Settings::SetAstcRecompressionOverride(std::nullopt);
+        Settings::ClearPresetValues();
+        if (const auto kernel_result = InitializeKernel(system);
+            kernel_result != SystemResultStatus::Success) {
+            return kernel_result;
+        }
+        host1x_core.emplace(system);
+        VideoCore::CreateGPU(gpu_core, emu_window, system);
+        if (!gpu_core) {
+            return SystemResultStatus::ErrorVideoCore;
+        }
+        GameSettings::LoadOverrides(title_id, gpu_core->Renderer());
+        return SystemResultStatus::Success;
+    }
+
+    /// Creates the program's process and sets up the rest of the system to run it.
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
         if (profile_manager->IsScratch()) {
             return SystemResultStatus::ErrorSystemFiles;
@@ -497,6 +569,9 @@ struct System::Impl {
 
         VideoCommon::StutterTrace::BootMarker("boot_start");
         EnsureFilesystem();
+        Common::BootTiming::Mark("core: load started");
+        // The Vulkan instance does not depend on the game (EDEN_NX2_BOOT_ASYNC)
+        VideoCore::PrepareRenderer(emu_window);
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
@@ -505,9 +580,11 @@ struct System::Impl {
         const auto switch2_program_id =
             FindSwitch2Program(file, params.program_id, params.program_index);
         const bool switch2_program = switch2_program_id.has_value();
+        Common::BootTiming::Mark("core: program platform found");
         Kernel::KSystemControl::SetApplicationProgramId(switch2_program_id.value_or(0));
         Settings::SetCurrentProgramIsSwitch2(switch2_program);
         Settings::SetAstcRecompressionOverride(std::nullopt);
+        Settings::ClearPresetValues();
         Network::LocalRedirect::Configure();
 
         if (const auto ram = Common::GetHostRam();
@@ -555,6 +632,7 @@ struct System::Impl {
         if (kernel_result != SystemResultStatus::Success) {
             return kernel_result;
         }
+        Common::BootTiming::Mark("core: kernel initialized");
 
         if (params.applet_type == Service::AM::AppletType::Application) {
             current_application_filepath = filepath;
@@ -581,6 +659,7 @@ struct System::Impl {
             ShutdownMainProcess();
             return SystemResultStatus::ErrorGetLoader;
         }
+        Common::BootTiming::Mark("core: application process created (loader, modules, RomFS)");
 
         kernel.SetApplicationProcess(process->GetHandle());
 #ifdef HAS_HYPERVISOR
@@ -671,14 +750,33 @@ struct System::Impl {
         VideoCore::Nx2Debug::BeginSession();
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
+        Common::PowerTuning::LogState();
+        Common::LogHybridPlacement();
+        power_session = Nx2PowerSession::MaybeStart(system);
+        autopilot_session = Nx2AutopilotSession::MaybeStart(system);
+        Common::BootTiming::Mark("core: load done");
         return SystemResultStatus::Success;
     }
 
+    /// Stops the running program and releases what it used, keeping the System reusable for
+    /// the next Load.
     void ShutdownMainProcess() {
+        // Each step is logged with its time (#239); each done also tells the frontend that the
+        // teardown still moves (see Common::ShutdownProgress).
+        Common::BeginShutdownSteps();
+        // A Switch 2 program's guest memory is released at the end: its zero-page trim stops now,
+        // and a pass in progress ends at its next check, instead of reading memory that goes.
+        const bool release_guest_memory = Settings::CurrentProgramIsSwitch2();
+        if (release_guest_memory && device_memory) {
+            device_memory->StopZeroTrim();
+        }
+        autopilot_session.reset();
+        power_session.reset();
         VideoCore::Nx2Debug::EndSession();
         debug_service.reset();
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
+        Common::ShutdownStepDone("debug server, power and autopilot sessions");
 
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
@@ -688,6 +786,7 @@ struct System::Impl {
         // they crashed it (a null ServiceManager at a stop, #1950). Its destructor waits for a
         // run in progress.
         cheat_engine.reset();
+        Common::ShutdownStepDone("cheats");
 
         // Once powered off, services stop writing replies, so a guest thread whose IPC call
         // completes would read its own request back and abort (2010-0212, a Userspace PANIC on
@@ -699,36 +798,44 @@ struct System::Impl {
         exit_requested = false;
         if (gpu_core)
             gpu_core->NotifyShutdown();
+        Common::ShutdownStepDone("GPU threads stopped");
 
         stop_event.request_stop();
         core_timing.SyncPause(false);
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
+        Common::ShutdownStepDone("guest threads suspended");
         if (service_manager) {
             // Services on host threads that still wait for one on the guest cores give up (after
             // a close during the boot shader load, the guest cores never started).
             service_manager->Close();
         }
         kernel.CloseServices();
+        Common::ShutdownStepDone("services closed");
         applet_manager.DropPendingProcess();
         kernel.ShutdownCores();
-        // Each step done tells the frontend the teardown still moves (see
-        // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("guest cores stopped");
         services.reset();
         service_manager.reset();
+        Common::ShutdownStepDone("services destroyed");
         fs_controller.Reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("file systems and loader");
         audio_core.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("audio");
+        // The renderer ends steps of its own (pipeline caches, texture cache, Vulkan device); this
+        // one is what is left after the last of them (the Vulkan instance and library).
         gpu_core.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("GPU: Vulkan instance and the rest");
         host1x_core.reset();
+        Common::ShutdownStepDone("host1x");
+        // The renderer reads the preset values until it is gone.
+        Settings::ClearPresetValues();
         perf_stats.reset();
         cpu_manager.Shutdown();
         debugger.reset();
+        Common::ShutdownStepDone("CPU manager and debugger");
         {
             // The general channel's event is a kernel object made on first use. Left for ~Impl,
             // it closed at exit() on a kernel already shut down (SIGSEGV in KAutoObject::Close).
@@ -738,6 +845,7 @@ struct System::Impl {
             general_channel_context.reset();
         }
         kernel.Shutdown();
+        Common::ShutdownStepDone("kernel");
         stop_event = {};
         Network::RestartSocketOperations();
 
@@ -748,16 +856,18 @@ struct System::Impl {
 
         // Reset all glue registrations
         arp_manager.ResetAll();
+        Common::ShutdownStepDone("network and glue registrations");
 
         // The guest RAM section keeps every page the game touched until it is destroyed (up to
         // 12 GiB), and the next Load reuses it. Switch 2 only: Switch 1 keeps its behaviour.
         // InitializeKernel creates it again, sized for the next game.
-        if (Settings::CurrentProgramIsSwitch2()) {
+        if (release_guest_memory) {
             device_memory.reset();
             guest_memory_released = true;
+            Common::ShutdownStepDone("guest memory released");
         }
 
-        LOG_DEBUG(Core, "Shutdown OK");
+        Common::EndShutdownSteps();
     }
 
     bool IsShuttingDown() const {
@@ -851,7 +961,10 @@ struct System::Impl {
     bool nvdec_active : 1 = false;
     /// EDEN_NX2_DEBUG_SERVER; the last member, so it stops before anything it reads goes away.
     std::unique_ptr<Nx2Debug::Service> debug_service;
+    std::unique_ptr<Nx2PowerSession> power_session;
+    std::unique_ptr<Nx2AutopilotSession> autopilot_session;
 
+    /// Creates the general channel's event on first use after a kernel (re)start.
     void EnsureGeneralChannelInitialized(System& system) {
         if (!general_channel_event) {
             general_channel_context.emplace(system, "GeneralChannel");
@@ -940,6 +1053,10 @@ SystemResultStatus System::InitializeForGpuReplay(Frontend::EmuWindow& emu_windo
 SystemResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,
                                 Service::AM::FrontendAppletParameters& params) {
     return impl->Load(*this, emu_window, filepath, params);
+}
+
+SystemResultStatus System::SetupHeadlessVideo(Frontend::EmuWindow& emu_window, u64 title_id) {
+    return impl->SetupHeadlessVideo(*this, emu_window, title_id);
 }
 
 bool System::IsPoweredOn() const {

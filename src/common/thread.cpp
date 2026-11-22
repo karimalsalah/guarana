@@ -18,6 +18,7 @@
 #include "common/error.h"
 #include "common/event_wait.h"
 #include "common/logging.h"
+#include "common/settings.h"
 #include "common/assert.h"
 #include "common/thread.h"
 #ifdef __APPLE__
@@ -48,6 +49,7 @@
 
 #ifdef __linux__
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <algorithm>
 
 namespace {
@@ -502,7 +504,8 @@ const WindowsCpuSets& CpuSets() {
                 const u32 core =
                     (static_cast<u32>(info->CpuSet.Group) << 8) | info->CpuSet.CoreIndex;
                 result.processors.push_back({static_cast<u32>(info->CpuSet.Id), core,
-                                             static_cast<u8>(info->CpuSet.EfficiencyClass)});
+                                             static_cast<u8>(info->CpuSet.EfficiencyClass),
+                                             info->CpuSet.LastLevelCacheIndex});
                 best = (std::max)(best, static_cast<u8>(info->CpuSet.EfficiencyClass));
             }
             offset += info->Size;
@@ -545,6 +548,72 @@ void SelectCurrentThreadCpuSets(const std::vector<ULONG>& ids) {
              static_cast<ULONG>(ids.size()))) {
         LOG_WARNING(Common, "SetThreadSelectedCpuSets failed: {}", Common::GetLastErrorMsg());
     }
+}
+
+void SelectCurrentThreadCpuSetIds(const std::vector<u32>& ids) {
+    SelectCurrentThreadCpuSets(std::vector<ULONG>(ids.begin(), ids.end()));
+}
+
+// EDEN_NX2_HYBRID=1: a plan that replaces the legacy placement above on hybrid CPUs with at least
+// MinHybridPerformanceCores physical performance cores. Latency-critical threads get performance
+// processors (on four-P CPUs only the GPU front, back and Vulkan worker; the others also the
+// efficiency cores) and high QoS, background pools the efficiency cores and EcoQoS, and the
+// low-power cores (no L3, slow) are left to nothing that waits on them.
+struct WindowsHybrid {
+    Common::HybridPlan plan;
+    bool requested = false;
+};
+
+const WindowsHybrid& Hybrid() {
+    static const WindowsHybrid hybrid = [] {
+        WindowsHybrid result;
+        const char* text = std::getenv("EDEN_NX2_HYBRID");
+        result.requested = text != nullptr && std::strtol(text, nullptr, 10) != 0;
+        if (!result.requested) {
+            return result;
+        }
+        const WindowsCpuSets& sets = CpuSets();
+        result.plan = Common::PlanHybridCores(sets.processors,
+                                              Settings::values.pin_gpu_threads.GetValue());
+        if (result.plan.active && result.plan.efficiency.empty()) {
+            result.plan.efficiency = result.plan.low_power;
+        }
+        using PFN_SetProcessDefaultCpuSets = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
+        const auto set_default = reinterpret_cast<PFN_SetProcessDefaultCpuSets>(
+            reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+                                                   "SetProcessDefaultCpuSets")));
+        // Threads without a role of their own (audio, drivers, Qt, SDL) stay off the low-power
+        // cores too.
+        const std::vector<ULONG> responsive_ids(result.plan.responsive.begin(),
+                                                result.plan.responsive.end());
+        if (result.plan.active && !result.plan.low_power.empty() && set_default != nullptr &&
+            !set_default(GetCurrentProcess(), responsive_ids.data(),
+                         static_cast<ULONG>(responsive_ids.size()))) {
+            LOG_WARNING(Common, "SetProcessDefaultCpuSets failed: {}", Common::GetLastErrorMsg());
+        }
+        return result;
+    }();
+    return hybrid;
+}
+
+bool HybridActive() {
+    return Hybrid().plan.active;
+}
+
+std::string FormatIds(const std::vector<u32>& ids) {
+    std::string text;
+    for (size_t i = 0; i < ids.size();) {
+        size_t last = i;
+        while (last + 1 < ids.size() && ids[last + 1] == ids[last] + 1) {
+            ++last;
+        }
+        text += fmt::format("{}{}", text.empty() ? "" : ",", ids[i]);
+        if (last > i) {
+            text += fmt::format("-{}", ids[last]);
+        }
+        i = last + 1;
+    }
+    return text.empty() ? "-" : text;
 }
 } // Anonymous namespace
 #endif
@@ -626,19 +695,24 @@ void SetCurrentThreadAffinity(const std::vector<u32>& cpus) {
 
 namespace Common {
 
+#ifdef _WIN32
+namespace {
+int WindowsThreadPriority(ThreadPriority priority) {
+    switch (priority) {
+    case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
+    case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
+    case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
+    case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
+    case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
+    default: return THREAD_PRIORITY_NORMAL;
+    }
+}
+} // Anonymous namespace
+#endif
+
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
 #ifdef _WIN32
-    int windows_priority = [&]() {
-        switch (new_priority) {
-        case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
-        case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
-        case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
-        case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
-        case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
-        default: return THREAD_PRIORITY_NORMAL;
-        }
-    }();
-    SetThreadPriority(GetCurrentThread(), windows_priority);
+    SetThreadPriority(GetCurrentThread(), WindowsThreadPriority(new_priority));
 #elif defined(__HAIKU__)
     // TODO: We have priorities for 3D rendering applications - may help lavapipe?
     int priority = [&]() {
@@ -677,6 +751,44 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
             min_prio + static_cast<s32>(static_cast<u32>(max_prio - min_prio) * level) / 4;
         pthread_setschedparam(pthread_self(), SCHED_OTHER, &params);
     }
+#endif
+}
+
+ThreadPriorityToken OpenCurrentThreadPriorityToken() {
+#ifdef _WIN32
+    HANDLE handle{};
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle,
+                         THREAD_SET_LIMITED_INFORMATION, FALSE, 0)) {
+        return 0;
+    }
+    return reinterpret_cast<ThreadPriorityToken>(handle);
+#elif defined(__linux__) && !defined(__ANDROID__)
+    return static_cast<ThreadPriorityToken>(static_cast<pid_t>(::syscall(SYS_gettid)));
+#else
+    return 0;
+#endif
+}
+
+void CloseThreadPriorityToken([[maybe_unused]] ThreadPriorityToken token) {
+#ifdef _WIN32
+    if (token != 0) {
+        CloseHandle(reinterpret_cast<HANDLE>(token));
+    }
+#endif
+}
+
+bool SetThreadPriorityOf(ThreadPriorityToken token, [[maybe_unused]] ThreadPriority priority) {
+    if (token == 0) {
+        return false;
+    }
+#ifdef _WIN32
+    return SetThreadPriority(reinterpret_cast<HANDLE>(token), WindowsThreadPriority(priority)) !=
+           0;
+#elif defined(__linux__) && !defined(__ANDROID__)
+    return setpriority(PRIO_PROCESS, static_cast<id_t>(token), NiceValueForPriority(priority)) ==
+           0;
+#else
+    return false;
 #endif
 }
 
@@ -722,8 +834,31 @@ void SetCurrentThreadToPerformanceCores() {
     }
     SetCurrentThreadCoreGroup(CoreGroup::Performance);
 #elif defined(_WIN32)
-    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.latency);
+        SetCurrentThreadEcoQoS(false);
+    } else if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets(sets.performance);
+    }
+#endif
+}
+
+void SetCurrentThreadToRenderCores() {
+#if defined(_WIN32)
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.render);
+        SetCurrentThreadEcoQoS(false);
+        return;
+    }
+#endif
+    SetCurrentThreadToPerformanceCores();
+}
+
+void SetCurrentThreadToResponsiveCores() {
+#if defined(_WIN32)
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.responsive);
+        SetCurrentThreadEcoQoS(false);
     }
 #endif
 }
@@ -756,6 +891,9 @@ void PinCurrentThread(PinnedRole role) {
                                                                   : pinned.guest;
     if (!ids.empty()) {
         SelectCurrentThreadCpuSets(ids);
+        if (HybridActive()) {
+            SetCurrentThreadEcoQoS(false);
+        }
     }
 #elif defined(__linux__) && !defined(__ANDROID__)
     static const GpuThreadPinning plan = [] {
@@ -795,7 +933,10 @@ void SetCurrentThreadToEfficiencyCores() {
     }
     SetCurrentThreadCoreGroup(CoreGroup::Efficiency);
 #elif defined(_WIN32)
-    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.efficiency);
+        SetCurrentThreadEcoQoS(true);
+    } else if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets(sets.efficiency);
     }
 #endif
@@ -806,7 +947,10 @@ void SetCurrentThreadToBackgroundWork() {
     ADPF::AddCurrentThread(ADPF::Session::Background);
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
 #elif defined(_WIN32)
-    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+    if (HybridActive()) {
+        SelectCurrentThreadCpuSetIds(Hybrid().plan.efficiency);
+        SetCurrentThreadEcoQoS(true);
+    } else if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
 #endif
@@ -820,6 +964,64 @@ void SetCurrentThreadToAllCores() {
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
+#endif
+}
+
+void SetCurrentThreadEcoQoS(bool enable) {
+#if defined(_WIN32) && defined(THREAD_POWER_THROTTLING_CURRENT_VERSION)
+    THREAD_POWER_THROTTLING_STATE state{};
+    state.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+    state.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+    state.StateMask = enable ? THREAD_POWER_THROTTLING_EXECUTION_SPEED : 0;
+    if (!SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &state, sizeof(state))) {
+        LOG_WARNING(Common, "SetThreadInformation(ThreadPowerThrottling) failed: {}",
+                    GetLastError());
+    }
+#else
+    (void)enable;
+#endif
+}
+
+bool HybridPlacementActive() {
+#ifdef _WIN32
+    return HybridActive();
+#else
+    return false;
+#endif
+}
+
+size_t HybridBackgroundProcessors() {
+#ifdef _WIN32
+    return Hybrid().plan.efficiency.size();
+#else
+    return 0;
+#endif
+}
+
+void LogHybridPlacement() {
+#ifdef _WIN32
+    const WindowsHybrid& hybrid = Hybrid();
+    if (!hybrid.requested) {
+        return;
+    }
+    const Common::HybridPlan& plan = hybrid.plan;
+    if (!plan.active) {
+        LOG_INFO(Common,
+                 "EDEN_NX2_HYBRID=1: not applied, {} processors, {} physical performance cores "
+                 "(needs a hybrid CPU with {})",
+                 CpuSets().processors.size(), plan.performance_cores,
+                 Common::MinHybridPerformanceCores);
+        return;
+    }
+    LOG_INFO(Common,
+             "EDEN_NX2_HYBRID=1 CPU set ids ({} layout): performance {} ({} cores), efficiency {}, "
+             "low-power {}; guest cores and latency threads {} with high QoS, GPU front {}, "
+             "GPU back {}, Vulkan worker {}; background pools {} with EcoQoS; other threads {}",
+             plan.four_p ? "four-P" : "six-P", FormatIds(plan.performance), plan.performance_cores,
+             FormatIds(plan.efficiency), FormatIds(plan.low_power), FormatIds(plan.latency),
+             FormatIds(plan.front), FormatIds(plan.back), FormatIds(plan.render),
+             FormatIds(plan.efficiency),
+             plan.low_power.empty() ? "unrestricted" : "off the low-power cores");
 #endif
 }
 

@@ -18,16 +18,23 @@ namespace Vulkan {
 /// @param index_count    Index count of the draw.
 /// @param vertex_count   Vertex count of the draw.
 /// @param discard_native Allow skipping depth-tested native draws (EDEN_NX2_ASYNC_DISCARD=1).
+/// @param recurring_target Every render target of the draw is cleared and redrawn every frame
+///                         (EDEN_NX2_ASYNC_DISCARD=2 asks; otherwise true). Native draws into any
+///                         other target wait.
 /// @return True when the draw may be skipped.
 constexpr bool CanDiscardPendingDraw(bool native, bool depth_enabled, u32 index_count,
-                                    u32 vertex_count, bool discard_native = false) {
+                                    u32 vertex_count, bool discard_native = false,
+                                    bool recurring_target = true) {
     // Native draws can produce persistent resources, even with depth enabled. They are only
     // skipped when the user opts in (EDEN_NX2_ASYNC_DISCARD=1), trading a possible missing
-    // effect for no stall while a new pipeline builds.
+    // effect for no stall while a new pipeline builds. With EDEN_NX2_ASYNC_DISCARD=2 only those
+    // into targets the frame clears and redraws are (Fritchii a962f20533): a skipped draw into a
+    // layer rendered once is missing for good (title text, chat bubbles), one into a per-frame
+    // target for a frame.
     if (native) {
         // Eglantine #785 (7a940ca19d): Star Fox builds persistent font atlases with no
         // depth buffer and 30-672 vertices. Skipping a draw loses its glyph for the session.
-        return discard_native && depth_enabled;
+        return discard_native && recurring_target && depth_enabled;
     }
     // Preserve the legacy async-shader heuristic.
     return depth_enabled || (index_count > 6 && vertex_count > 6);
@@ -79,6 +86,35 @@ constexpr NativeDrawAction DecideNativePending(NativePendingMode mode, bool can_
         return NativeDrawAction::Skip;
     }
     return NativeDrawAction::WaitTimed;
+}
+
+/// Eglantine #874 (EDEN_NX2_SKIP_REDRAWN): whether a native draw whose pipeline is still building
+/// may be skipped, because the game draws into that target every frame: the draw tests depth,
+/// writes a color target, and render target 0 was first written in an earlier frame. It is back
+/// once its pipeline is built. Such a draw is handled as Bounded (wait within the frame's budget,
+/// then skip); a draw into a target first written this frame (a font atlas, a texture filled for
+/// later frames) or a depth-only draw keeps waiting.
+/// @param depth_test             A depth buffer is bound and the depth test is on.
+/// @param active_color_targets   Bound color targets with a format and a write mask.
+/// @param target_written_before  Render target 0 was first written in an earlier frame.
+constexpr bool MaySkipRedrawnNativeDraw(bool depth_test, u32 active_color_targets,
+                                        bool target_written_before) {
+    return depth_test && active_color_targets != 0 && target_written_before;
+}
+
+/// Whether a draw may be dropped at once because its pipeline is not even translated yet, so that
+/// nothing is built or waited for on the calling thread. A native draw follows the native pending
+/// mode: only an outcome of Skip drops it (Bounded with budget left waits for the build).
+/// @param native         The draw comes from a Switch 2 (native Turing macro) program.
+/// @param mode           The native pending mode.
+/// @param can_discard    The legacy heuristic allows skipping this draw.
+/// @param budget_left_us Microseconds left of this frame's wait budget.
+constexpr bool MaySkipUnbuiltDraw(bool native, NativePendingMode mode, bool can_discard,
+                                  s64 budget_left_us) {
+    if (native) {
+        return DecideNativePending(mode, can_discard, budget_left_us) == NativeDrawAction::Skip;
+    }
+    return can_discard;
 }
 
 /// Waits for a pending pipeline at most what is left of this frame's wait budget, and takes the

@@ -16,6 +16,7 @@
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
+#include "common/shutdown_progress.h"
 #ifdef HAS_NCE
 #include "common/settings.h"
 #endif
@@ -157,7 +158,9 @@ struct KernelCore::Impl {
                 LOG_WARNING(Kernel, "Application process still had {} references at shutdown",
                             references);
             }
+            Common::ShutdownStepDone("kernel: application process closed");
             system.DeviceMemory().buffer.ResetVirtualMappings();
+            Common::ShutdownStepDone("kernel: guest memory unmapped");
 #ifdef HAS_NCE
         } else if (system.DeviceMemory().buffer.IsDirectMapped()) {
             system.DeviceMemory().buffer.ResetVirtualMappings();
@@ -1059,6 +1062,7 @@ void KernelCore::RunServer(std::unique_ptr<Service::ServerManager>&& server_mana
     {
         std::scoped_lock lk{impl->server_lock};
         if (impl->is_shutting_down || impl->services_closed) {
+            impl->refused_servers.emplace_back(std::move(server_manager));
             refused = true;
         } else {
             impl->server_managers.emplace_back(std::move(server_manager));
@@ -1124,6 +1128,7 @@ static std::jthread RunHostThreadFunc(KernelCore& kernel, KProcess* process, std
     return std::jthread([&kernel, thread, thread_name_{std::move(thread_name)}, func_{std::move(func)}] {
         // Set the thread name.
         Common::SetCurrentThreadName(thread_name_.c_str());
+        Common::SetCurrentThreadToResponsiveCores();
 
         // Set the thread as current.
         kernel.RegisterHostThread(thread);

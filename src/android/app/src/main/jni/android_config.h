@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "frontend_common/config.h"
 
 class AndroidConfig final : public Config {

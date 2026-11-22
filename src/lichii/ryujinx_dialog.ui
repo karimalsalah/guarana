@@ -25,7 +25,7 @@
      <property name="text">
       <string>Ryujinx save ID: %1
 
-Choose which save both emulators should use. Replaced saves are kept as backups. Close any running game in Lichii and Ryujinx before linking.</string>
+Choose which save both emulators should use. Replaced saves are kept as backups. Close any running game in Guarana and Ryujinx before linking.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
@@ -37,7 +37,7 @@ Choose which save both emulators should use. Replaced saves are kept as backups.
      <item>
       <widget class="QPushButton" name="eden">
        <property name="text">
-      <string>From Lichii</string>
+      <string>From Guarana</string>
        </property>
       </widget>
      </item>

@@ -1,0 +1,11 @@
+{
+  "name": "gpl-on",
+  "description": "Graphics pipeline libraries on. On Intel this equals the baseline for Ocarina of Time (an A/A arm: its spread is the run-to-run noise); on AMD it is what GPL gives.",
+  "cache_states": [
+    "cold",
+    "second"
+  ],
+  "env": {
+    "EDEN_NX2_GPL": "1"
+  }
+}

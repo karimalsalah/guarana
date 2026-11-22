@@ -16,6 +16,7 @@ import io.github.zortos293.lichii.NativeLibrary
 import io.github.zortos293.lichii.LichiiApplication
 import io.github.zortos293.lichii.model.Game
 import io.github.zortos293.lichii.model.GameDir
+import io.github.zortos293.lichii.model.GameFileType
 import io.github.zortos293.lichii.model.MinimalDocumentFile
 import androidx.core.content.edit
 import androidx.core.net.toUri
@@ -106,10 +107,6 @@ object GameHelper {
         NativeLibrary.addFileToFilesystemProvider(game.path)
     }
 
-    // File extensions considered as external content, buuut should
-    // be done better imo.
-    private val externalContentExtensions = setOf("nsp", "xci", "nsz", "xcz")
-
     private fun scanContentContainersRecursive(
         files: Array<MinimalDocumentFile>,
         depth: Int,
@@ -126,11 +123,8 @@ object GameHelper {
                     depth - 1,
                     onContainerFound
                 )
-            } else {
-                val extension = FileUtil.getExtension(it.uri).lowercase()
-                if (externalContentExtensions.contains(extension)) {
-                    onContainerFound(it)
-                }
+            } else if (GameFileType.fromFilename(it.filename) == GameFileType.CONTAINER) {
+                onContainerFound(it)
             }
         }
     }
@@ -156,16 +150,16 @@ object GameHelper {
                     mountedContainerUris
                 )
             } else {
-                val extension = FileUtil.getExtension(it.uri).lowercase()
+                val type = GameFileType.fromFilename(it.filename)
                 val filePath = it.uri.toString()
 
-                val mountedContainer = externalContentExtensions.contains(extension) &&
+                val mountedContainer = type == GameFileType.CONTAINER &&
                     mountedContainerUris.add(filePath)
                 if (mountedContainer) {
                     NativeLibrary.addGameFolderFileToFilesystemProvider(filePath)
                 }
 
-                if (Game.extensions.contains(extension)) {
+                if (type != GameFileType.UNSUPPORTED) {
                     val game = getGame(it.uri, true, false)
                     if (game != null) {
                         games.add(game)
@@ -229,8 +223,7 @@ object GameHelper {
                 return@forEach
             }
 
-            val extension = sibling.extension.lowercase()
-            if (externalContentExtensions.contains(extension)) {
+            if (GameFileType.fromFilename(sibling.name) == GameFileType.CONTAINER) {
                 val containerUri = Uri.fromFile(sibling).toString()
                 if (mountedContainerUris.add(containerUri)) {
                     NativeLibrary.addGameFolderFileToFilesystemProvider(containerUri)

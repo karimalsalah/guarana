@@ -44,6 +44,10 @@ public:
         VkImageView reactive_mask{}; ///< Optional render-size mask, 0..1.
         VkImageView transparency_mask{}; ///< Optional render-size transparency/composition mask.
         f32 vertical_fov = 1.04719755f; ///< Radians; 60 degrees when the camera is unknown.
+        /// Dynamic resolution: the largest render size to come. The render-size images are made
+        /// that large once and a smaller frame uses their top-left part, so a change of render
+        /// size neither reallocates them nor loses the history. Zero: the render size.
+        VkExtent2D max_render_size{};
     };
 
     explicit Fsr3Upscaler(const Device& device, Scheduler& scheduler,
@@ -112,7 +116,7 @@ private:
     Texture unit_exposure;
     Texture output;
 
-    VkExtent2D render_extent{};
+    VkExtent2D render_extent{}; ///< Of the render-size images; a frame may use less of them.
     VkExtent2D upscale_extent{};
     std::array<s32, 2> previous_render_size{};
     std::array<s32, 2> previous_upscale_size{};

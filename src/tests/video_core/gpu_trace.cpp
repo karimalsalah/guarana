@@ -215,6 +215,30 @@ TEST_CASE("The upload sample GPU trace writes new buffer data before every part 
     CHECK(writes == 2 + 4 * 8 * 3);
     CHECK(submits == 4 * 8);
     CHECK(presents == 4);
+TEST_CASE("The sample GPU trace written without presents keeps its submits",
+          "[video_core][gpu_trace]") {
+    const Tests::TempDir directory{"lichii-gpu-trace-sample-no-presents"};
+    const auto path = directory / "trace.lxtrace";
+    REQUIRE(WriteSampleTrace(path, false));
+    {
+        Reader reader{path};
+        REQUIRE(reader.Error().empty());
+        size_t submits = 0;
+        size_t presents = 0;
+        bool end = false;
+        while (const auto record = reader.Next()) {
+            if (record->type == RecordType::Submit) {
+                ++submits;
+            } else if (record->type == RecordType::Present) {
+                ++presents;
+            }
+            end = record->type == RecordType::End;
+        }
+        CHECK(reader.Error().empty());
+        CHECK(end);
+        CHECK(submits == 2);
+        CHECK(presents == 0);
+    }
 }
 
 TEST_CASE("GPU trace reader reads format 1 traces, not newer ones than its own",

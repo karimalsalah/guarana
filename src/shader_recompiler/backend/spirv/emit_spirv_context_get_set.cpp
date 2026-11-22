@@ -490,6 +490,11 @@ void EmitSetPatch(EmitContext& ctx, IR::Patch patch, Id value) {
 }
 
 void EmitSetFragColor(EmitContext& ctx, u32 index, u32 component, Id value) {
+    if (ctx.runtime_info.depth_only_discard &&
+        (component != 3 || !Sirit::ValidId(ctx.frag_color.at(index)))) {
+        // Depth pass of a prepass split: only the alpha the alpha test reads is stored.
+        return;
+    }
     const Id component_id{ctx.Const(component)};
     const AttributeType type{ctx.runtime_info.color_output_types[index]};
     if (type == AttributeType::Float) {

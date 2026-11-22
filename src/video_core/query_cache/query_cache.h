@@ -328,12 +328,27 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                                         static_cast<u32>(cur_addr & Core::DEVICE_PAGEMASK));
     };
     const u64 report_size = has_timestamp ? 16 : 4;
+    // A fence-flagged payload release writes a constant, so at low accuracy with Default fences
+    // it stays synchronized as before #337: its fence may be skipped and the query freed at once.
+    // Only reports of GPU counters wait for their fence to run. A release over a report still
+    // pending waits too, so the older report can't land after it (Lichii #1099, from #874).
+    const bool is_synced = is_fence && counter_type == QueryType::Payload &&
+                           (Settings::IsGPUFenceBehaviorDefault()
+                                ? !Settings::IsGPULevelHigh()
+                                : !Settings::IsGPUFenceBehaviorBalanced() &&
+                                      !Settings::IsGPUFenceBehaviorAccurate()) &&
+                           !HoldsQueries(cpu_addr, report_size);
+    const bool immediate =
+        !is_fence && !Settings::IsGPULevelHigh() && counter_type == QueryType::Payload;
     // Written later: the buffer cache keeps GPU writes over it until then (NoteReportPending).
+    // A synchronized release is written inside SignalFence, before any later GPU work.
     if (!posted && VideoCommon::GpuSplit::TracksPendingReports()) {
         NotePendingReport(cpu_addr);
     }
     const bool report_noted =
-        posted ? posted->noted : impl->rasterizer.NoteReportPending(cpu_addr, report_size);
+        posted ? posted->noted
+               : (!immediate && !is_synced &&
+                  impl->rasterizer.NoteReportPending(cpu_addr, report_size));
     // What the operation needs, small enough for MSVC's std::function to hold without allocating:
     // a report per draw (Ocarina of Time's occlusion counts) allocated one each. Host pointers are
     // looked up when it runs.
@@ -347,6 +362,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         bool mirrored;
         bool wide;
         bool noted;
+        bool synced;
     };
     const ReportOp report_op{
         .query = query,
@@ -358,7 +374,10 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         .mirrored = mirrored,
         .wide = has_timestamp,
         .noted = report_noted,
+        .synced = is_synced,
     };
+    // Locals are prefixed: GCC -Wshadow rejects the report lambda reusing CounterReport's names
+    // (Lichii #1760). The synced-release branches below are Guarana's and stay.
     const auto operation_body = [this, op = report_op] {
         const DAddr op_cpu_addr = op.cpu_addr;
         const GPUVAddr op_addr = op.addr;
@@ -386,7 +405,9 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                          trace, asid, op_addr, op_cpu_addr, static_cast<u32>(op_counter_type),
                          static_cast<u32>(query_base->flags));
             }
-            impl->pending_unregister.push_back(op_location);
+            if (!op.synced) {
+                impl->pending_unregister.push_back(op_location);
+            }
             return;
         }
         if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
@@ -399,7 +420,9 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             }
             LOG_ERROR(HW_GPU,
                       "Query report value not synchronized. Consider increasing GPU accuracy.");
-            impl->pending_unregister.push_back(op_location);
+            if (!op.synced) {
+                impl->pending_unregister.push_back(op_location);
+            }
             return;
         }
         query_base->value += op_streamer->GetAmendValue();
@@ -438,15 +461,21 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
                      wide ? 8 : 4, wide ? query_base->value : static_cast<u32>(query_base->value),
                      static_cast<u32>(query_base->flags));
         }
-        impl->pending_unregister.push_back(op_location);
+        if (!op.synced) {
+            impl->pending_unregister.push_back(op_location);
+        }
     };
     static_assert(sizeof(operation_body) <= 48,
                   "the report operation must fit MSVC's std::function storage");
     std::function<void()> operation(operation_body);
     if (is_fence) {
-        VideoCore::g_signaling_query_report_fence = true;
+        VideoCore::g_signaling_query_report_fence = !is_synced;
         impl->rasterizer.SignalFence(std::move(operation));
         VideoCore::g_signaling_query_report_fence = false;
+        if (is_synced) {
+            streamer->Free(new_query_id);
+            return;
+        }
     } else {
         impl->rasterizer.SyncOperation(std::move(operation));
     }
@@ -553,19 +582,20 @@ void QueryCacheBase<Traits>::UnregisterPending() {
 }
 
 template <typename Traits>
-void QueryCacheBase<Traits>::NotifyWFI() {
+bool QueryCacheBase<Traits>::NotifyWFI() {
     VideoCommon::GpuSplit::RenderOwned("QueryCache::NotifyWFI");
     bool should_sync = false;
     impl->ForEachStreamer(
         [&should_sync](StreamerInterface* streamer) { should_sync |= streamer->HasPendingSync(); });
     if (!should_sync) {
-        return;
+        return false;
     }
 
     impl->ForEachStreamer([](StreamerInterface* streamer) { streamer->PresyncWrites(); });
     impl->runtime.Barriers(true);
     impl->ForEachStreamer([](StreamerInterface* streamer) { streamer->SyncWrites(); });
     impl->runtime.Barriers(false);
+    return true;
 }
 
 template <typename Traits>

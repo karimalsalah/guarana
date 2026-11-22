@@ -12,6 +12,13 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
+#include <cstdlib>
+#include <string_view>
+
+#include <windows.h>
+#endif
+
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
@@ -37,6 +44,9 @@
 #include "video_core/nx2.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
+#ifdef _WIN32
+#include "video_core/vulkan_common/vulkan.h"
+#endif
 
 namespace VideoCommon::GpuTrace {
 namespace {
@@ -44,11 +54,68 @@ using Clock = std::chrono::steady_clock;
 
 class HeadlessContext final : public Core::Frontend::GraphicsContext {};
 
+#ifdef _WIN32
+/// Whether the Vulkan loader lists an instance extension, asked of the loader itself: the replay
+/// has no instance yet when it makes its window.
+bool HasInstanceExtension(std::string_view name) {
+    const HMODULE loader = LoadLibraryW(L"vulkan-1.dll");
+    if (loader == nullptr) {
+        return false;
+    }
+    using Enumerate = VkResult(VKAPI_PTR*)(const char*, uint32_t*, VkExtensionProperties*);
+    const auto enumerate = reinterpret_cast<Enumerate>(reinterpret_cast<void*>(
+        GetProcAddress(loader, "vkEnumerateInstanceExtensionProperties")));
+    bool found = false;
+    uint32_t count = 0;
+    if (enumerate != nullptr && enumerate(nullptr, &count, nullptr) == VK_SUCCESS) {
+        std::vector<VkExtensionProperties> extensions(count);
+        const VkResult result = enumerate(nullptr, &count, extensions.data());
+        if (result == VK_SUCCESS || result == VK_INCOMPLETE) {
+            extensions.resize(count);
+            found = std::ranges::any_of(extensions, [name](const VkExtensionProperties& entry) {
+                return name == entry.extensionName;
+            });
+        }
+    }
+    FreeLibrary(loader);
+    return found;
+}
+#endif
+
 class HeadlessWindow final : public Core::Frontend::EmuWindow {
 public:
     HeadlessWindow(u32 width, u32 height) {
         window_info.type = Core::Frontend::WindowSystemType::Headless;
+#ifdef _WIN32
+        // Intel's Windows driver has no VK_EXT_headless_surface (32.0.101.9175 on an Arc 140T
+        // lists none), so the replay could not start on it. A window that is never shown gives it
+        // a surface there. Its presents must not wait for the display: no vertical sync, and
+        // none of the presenters a title's switch defaults turn on.
+        if (!HasInstanceExtension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
+            hidden = CreateWindowExW(0, L"STATIC", L"GPU trace replay", WS_POPUP, 0, 0,
+                                     static_cast<int>(width), static_cast<int>(height), nullptr,
+                                     nullptr, GetModuleHandleW(nullptr), nullptr);
+        }
+        if (hidden != nullptr) {
+            window_info.type = Core::Frontend::WindowSystemType::Windows;
+            window_info.render_surface = hidden;
+            Settings::values.vsync_mode.SetValue(Settings::VSyncMode::Immediate);
+            for (const char* name : {"EDEN_NX2_FLUID", "EDEN_NX2_EXTRAPOLATE"}) {
+                if (std::getenv(name) == nullptr) {
+                    _putenv_s(name, "0");
+                }
+            }
+        }
+#endif
         UpdateCurrentFramebufferLayout(width, height);
+    }
+
+    ~HeadlessWindow() override {
+#ifdef _WIN32
+        if (hidden != nullptr) {
+            DestroyWindow(hidden);
+        }
+#endif
     }
 
     std::unique_ptr<Core::Frontend::GraphicsContext> CreateSharedContext() const override {
@@ -58,6 +125,11 @@ public:
     bool IsShown() const override {
         return true;
     }
+
+private:
+#ifdef _WIN32
+    HWND hidden{};
+#endif
 };
 
 struct HashKey {
@@ -153,6 +225,8 @@ private:
 
     nlohmann::json frames = nlohmann::json::array();
     Clock::time_point last_frame;
+    /// When the work of the frame being replayed began: after the frame before it was saved
+    Clock::time_point frame_begin;
     u32 presents = 0;
     bool stop = false;
 };
@@ -163,6 +237,12 @@ bool Replayer::Run(std::string& error) {
         return false;
     }
     if (!ReadSnapshot(error) || !BringUp(error) || !Stream(error)) {
+        return false;
+    }
+    if (presents == 0) {
+        // A recording ended before its first present (the game closed during the snapshot)
+        // is a well-formed file with nothing to show or compare.
+        error = "the trace has no frame to replay: its recording ended before the first present";
         return false;
     }
     nlohmann::json summary;
@@ -372,6 +452,7 @@ bool Replayer::BringUp(std::string& error) {
     states.clear();
     std::filesystem::create_directories(options.out);
     last_frame = Clock::now();
+    frame_begin = last_frame;
     return true;
 }
 
@@ -543,31 +624,40 @@ bool Replayer::Present(const Record& record, std::string& error) {
     for (size_t i = 0; i < pixels.size(); i += 4) {
         std::swap(pixels[i], pixels[i + 2]);
     }
-    const std::string name = fmt::format("frame-{:04}.png", presents);
-    const auto path = options.out / name;
-    std::vector<u8> png;
-    const auto append = [](void* context, void* data, int size) {
-        auto& out = *static_cast<std::vector<u8>*>(context);
-        const auto* bytes = static_cast<const u8*>(data);
-        out.insert(out.end(), bytes, bytes + size);
-    };
-    std::ofstream file{path, std::ios::binary};
-    if (stbi_write_png_to_func(append, &png, static_cast<int>(width), static_cast<int>(height), 4,
-                               pixels.data(), static_cast<int>(width * 4)) == 0 ||
-        !file.write(reinterpret_cast<const char*>(png.data()),
-                    static_cast<std::streamsize>(png.size()))) {
-        error = "can't write " + path.string();
-        return false;
-    }
-    frames.push_back({
+    // "ms" is the time since the frame before was composited, so it holds that frame's hash and
+    // PNG encoding too. "replay_ms" is only this frame's commands, composite and read-back: the
+    // number to compare two replays by.
+    nlohmann::json frame{
         {"index", presents},
-        {"file", name},
         {"width", width},
         {"height", height},
         {"hash", HashString(HashBytes(pixels))},
         {"ms", std::chrono::duration<double, std::milli>(now - last_frame).count()},
-    });
+        {"replay_ms", std::chrono::duration<double, std::milli>(now - frame_begin).count()},
+    };
+    if (options.images) {
+        const std::string name = fmt::format("frame-{:04}.png", presents);
+        const auto path = options.out / name;
+        std::vector<u8> png;
+        const auto append = [](void* context, void* data, int size) {
+            auto& out = *static_cast<std::vector<u8>*>(context);
+            const auto* bytes = static_cast<const u8*>(data);
+            out.insert(out.end(), bytes, bytes + size);
+        };
+        std::ofstream file{path, std::ios::binary};
+        if (stbi_write_png_to_func(append, &png, static_cast<int>(width),
+                                   static_cast<int>(height), 4, pixels.data(),
+                                   static_cast<int>(width * 4)) == 0 ||
+            !file.write(reinterpret_cast<const char*>(png.data()),
+                        static_cast<std::streamsize>(png.size()))) {
+            error = "can't write " + path.string();
+            return false;
+        }
+        frame["file"] = name;
+    }
+    frames.push_back(std::move(frame));
     last_frame = now;
+    frame_begin = Clock::now();
     ++presents;
     if (options.max_frames != 0 && presents >= options.max_frames) {
         stop = true;

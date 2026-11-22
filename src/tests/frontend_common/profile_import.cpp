@@ -92,36 +92,41 @@ TEST_CASE("Move remaps every raw imported storage path before the source disappe
 }
 
 #if !defined(_WIN32) && !defined(__ANDROID__)
+namespace {
+constexpr std::array<const char*, 3> xdg_names{"XDG_DATA_HOME", "XDG_CONFIG_HOME",
+                                               "XDG_CACHE_HOME"};
+
+// Points the XDG folders and the working directory into a fixture, and puts them back afterwards.
+struct XdgHome {
+    fs::path cwd = fs::current_path();
+    std::array<std::optional<std::string>, 3> env;
+    explicit XdgHome(const fs::path& root) {
+        for (std::size_t i = 0; i < xdg_names.size(); ++i) {
+            const auto* value = std::getenv(xdg_names[i]);
+            env[i] = value ? std::optional<std::string>{value} : std::nullopt;
+        }
+        fs::current_path(root);
+        setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+        setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
+        setenv("XDG_CACHE_HOME", (root / "cache").c_str(), 1);
+    }
+    ~XdgHome() {
+        fs::current_path(cwd);
+        for (std::size_t i = 0; i < xdg_names.size(); ++i) {
+            if (env[i]) {
+                setenv(xdg_names[i], env[i]->c_str(), 1);
+            } else {
+                unsetenv(xdg_names[i]);
+            }
+        }
+        Common::FS::SetAppDirectory("");
+    }
+};
+} // namespace
+
 TEST_CASE("CLI-first configuration is blocked and portable user stays untouched", "[migration]") {
     Fixture fixture;
-    const auto cwd = fs::current_path();
-    const auto read_env = [](const char* name) {
-        const auto* value = std::getenv(name);
-        return value ? std::optional<std::string>{value} : std::nullopt;
-    };
-    const auto data_env = read_env("XDG_DATA_HOME");
-    const auto config_env = read_env("XDG_CONFIG_HOME");
-    const auto cache_env = read_env("XDG_CACHE_HOME");
-    struct Restore {
-        fs::path cwd;
-        std::array<std::optional<std::string>, 3> env;
-        ~Restore() {
-            fs::current_path(cwd);
-            const std::array names{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"};
-            for (std::size_t i = 0; i < names.size(); ++i) {
-                if (env[i]) {
-                    setenv(names[i], env[i]->c_str(), 1);
-                } else {
-                    unsetenv(names[i]);
-                }
-            }
-            Common::FS::SetAppDirectory("");
-        }
-    } restore{cwd, {data_env, config_env, cache_env}};
-    fs::current_path(fixture.root);
-    setenv("XDG_DATA_HOME", (fixture.root / "data").c_str(), 1);
-    setenv("XDG_CONFIG_HOME", (fixture.root / "config").c_str(), 1);
-    setenv("XDG_CACHE_HOME", (fixture.root / "cache").c_str(), 1);
+    const XdgHome home{fixture.root};
     fs::create_directories(fixture.root / "data/eden");
     fs::create_directories(fixture.root / "config/lichii");
     Common::FS::SetAppDirectory("");
@@ -139,5 +144,39 @@ TEST_CASE("CLI-first configuration is blocked and portable user stays untouched"
     CHECK_FALSE(NeedsLegacyProfileImport());
     CHECK_NOTHROW(CheckLegacyProfileBeforeConfig());
     CHECK(fs::is_empty(fixture.root / "user"));
+}
+
+TEST_CASE("An import settled before the rename is not asked again", "[migration]") {
+    Fixture fixture;
+    const XdgHome home{fixture.root};
+    // A Lichii user after the rename copy: the old data next to the new folder, and the answer to
+    // the import prompt still in the pre-rename state folder.
+    fs::create_directories(fixture.root / "data/eden");
+    fs::create_directories(fixture.root / "data/guarana");
+    const auto old_state = fixture.root / "data/lichii.migration";
+    fs::create_directories(old_state);
+    const auto touch = [](const fs::path& path) { std::ofstream file{path}; };
+    Common::FS::SetAppDirectory("");
+    REQUIRE(Migration::GetState(ProfileImportStateDirectory()) == Migration::State::Unresolved);
+    // Nothing settled yet anywhere: asked, as before.
+    CHECK(NeedsLegacyProfileImport());
+
+    SECTION("started fresh in Lichii") {
+        touch(old_state / "fresh");
+        CHECK_FALSE(NeedsLegacyProfileImport());
+        CHECK_NOTHROW(CheckLegacyProfileBeforeConfig());
+    }
+    SECTION("imported in Lichii") {
+        touch(old_state / "complete");
+        CHECK_FALSE(NeedsLegacyProfileImport());
+        CHECK_NOTHROW(CheckLegacyProfileBeforeConfig());
+    }
+    SECTION("an import left unfinished in Lichii still asks") {
+        touch(old_state / "pending");
+        CHECK(NeedsLegacyProfileImport());
+    }
+    // The old folder is only read, never written or removed.
+    CHECK(fs::is_directory(old_state));
+    CHECK_FALSE(fs::exists(ProfileImportStateDirectory()));
 }
 #endif

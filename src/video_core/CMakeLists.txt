@@ -36,6 +36,10 @@ add_library(video_core STATIC
     control/channel_state_cache.h
     control/scheduler.cpp
     control/scheduler.h
+    auto_shading_rate.cpp
+    auto_shading_rate.h
+    cost_governor.cpp
+    cost_governor.h
     delayed_destruction_ring.h
     dirty_flags.cpp
     dirty_flags.h
@@ -63,6 +67,14 @@ add_library(video_core STATIC
     engines/maxwell_dma.h
     engines/puller.cpp
     engines/puller.h
+    autopilot_controller.cpp
+    autopilot_controller.h
+    autopilot_feed.cpp
+    autopilot_feed.h
+    frame_budget.cpp
+    frame_budget.h
+    frame_budget_controller.cpp
+    frame_budget_controller.h
     framebuffer_config.cpp
     framebuffer_config.h
     render_trace.h
@@ -108,6 +120,7 @@ add_library(video_core STATIC
     front_qmd.h
     gpu.cpp
     gpu.h
+    gpu_costs.h
     gpu_timestamp.h
     gpu_split.cpp
     gpu_split.h
@@ -140,11 +153,14 @@ add_library(video_core STATIC
     nx2_back_idle_trace.h
     nx2_list_macro_trace.cpp
     nx2_list_macro_trace.h
+    nx2_cache_stats.h
     nx2_mme_capture.cpp
     nx2_mme_capture.h
     nx2_cmdpage_diag.h
     nx2_debug_control.cpp
     nx2_debug_control.h
+    nx2_shown_frames.cpp
+    nx2_shown_frames.h
     nx2_fast_draw.cpp
     nx2_fast_draw.h
     nx2_list_indirect.h
@@ -155,12 +171,18 @@ add_library(video_core STATIC
     nx2_render_view.h
     nx2_stutter_trace.cpp
     nx2_stutter_trace.h
+    nx2_frame_predictor.cpp
+    nx2_frame_predictor.h
     nx2_perf.h
+    nx2_gpucost.h
+    nx2_uma.h
+    nx2_hitch.h
     nx2_async_readback.h
     nx2_backx.h
     nx2_download_trace.h
     nx2_drain_check.h
     pending_maps.h
+    pipeline_cache_policy.h
     present.h
     pte_kind.h
     query_cache/bank_base.h
@@ -168,6 +190,7 @@ add_library(video_core STATIC
     query_cache/query_cache_base.h
     query_cache/query_cache.h
     query_cache/query_stream.h
+    query_cache/running_query_bound.h
     query_cache/types.h
     query_cache.h
     query_dma.h
@@ -185,6 +208,8 @@ add_library(video_core STATIC
     renderer_vulkan/present/anti_alias_pass.h
     renderer_vulkan/present/filters.cpp
     renderer_vulkan/present/filters.h
+    renderer_vulkan/present/fluid_compose.cpp
+    renderer_vulkan/present/fluid_compose.h
     renderer_vulkan/present/fsr.cpp
     renderer_vulkan/present/fsr.h
     renderer_vulkan/present/fsr3.cpp
@@ -208,6 +233,10 @@ add_library(video_core STATIC
     renderer_vulkan/blit_image.h
     renderer_vulkan/fixed_pipeline_state.cpp
     renderer_vulkan/fixed_pipeline_state.h
+    renderer_vulkan/fluid_compose_math.h
+    renderer_vulkan/fluid_present_mode.h
+    renderer_vulkan/present_telemetry.h
+    renderer_vulkan/fluid_slot_math.h
     renderer_vulkan/framebuffer_clear_layers.h
     renderer_vulkan/framebuffer_limits.h
     renderer_vulkan/maxwell_to_vk.cpp
@@ -225,8 +254,10 @@ add_library(video_core STATIC
     renderer_vulkan/pipeline_shader_emission.h
     renderer_vulkan/pipeline_statistics.cpp
     renderer_vulkan/pipeline_statistics.h
+    renderer_vulkan/present_trace.h
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/renderer_vulkan.cpp
+    renderer_vulkan/unoptimized_first.h
     renderer_vulkan/vk_blit_screen.cpp
     renderer_vulkan/vk_blit_screen.h
     renderer_vulkan/vk_buffer_cache_base.cpp
@@ -250,6 +281,7 @@ add_library(video_core STATIC
     vulkan_common/ffx_runtime.h
     renderer_vulkan/vk_dlss_network_probe.cpp
     renderer_vulkan/vk_dlss_network_probe.h
+    renderer_vulkan/present/extrapolation_source.h
     renderer_vulkan/vk_ocarina_camera_motion.cpp
     renderer_vulkan/vk_ocarina_camera_motion.h
     renderer_vulkan/vk_compute_pipeline.cpp
@@ -266,10 +298,14 @@ add_library(video_core STATIC
     renderer_vulkan/vk_frame_dump.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
+    renderer_vulkan/vk_pipeline_library.cpp
+    renderer_vulkan/vk_pipeline_library.h
     renderer_vulkan/vk_multi_range_buffer.cpp
     renderer_vulkan/vk_multi_range_buffer.h
     renderer_vulkan/vk_master_semaphore.cpp
     renderer_vulkan/vk_master_semaphore.h
+    renderer_vulkan/vk_perf_query.cpp
+    renderer_vulkan/vk_perf_query.h
     renderer_vulkan/vk_pipeline_cache.cpp
     renderer_vulkan/vk_pipeline_cache.h
     renderer_vulkan/vk_pipeline_cache_records.cpp
@@ -280,8 +316,12 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_cache_v2.h
     renderer_vulkan/vk_present_manager.cpp
     renderer_vulkan/vk_present_manager.h
+    renderer_vulkan/vk_present_predict.cpp
+    renderer_vulkan/vk_shown_capture.cpp
+    renderer_vulkan/vk_shown_capture.h
     renderer_vulkan/vk_query_cache.cpp
     renderer_vulkan/vk_query_cache.h
+    renderer_vulkan/vk_query_copy.h
     renderer_vulkan/vk_rasterizer.cpp
     renderer_vulkan/vk_rasterizer.h
     renderer_vulkan/submission_policy.h
@@ -296,6 +336,9 @@ add_library(video_core STATIC
     renderer_vulkan/vk_scheduler.cpp
     renderer_vulkan/vk_scheduler.h
     renderer_vulkan/fragment_barrier_state.h
+    renderer_vulkan/mesh_before_pass.h
+    renderer_vulkan/vk_shader_reuse.cpp
+    renderer_vulkan/vk_shader_reuse.h
     renderer_vulkan/vk_shader_util.cpp
     renderer_vulkan/vk_shader_util.h
     renderer_vulkan/vk_staging_buffer_pool.cpp
@@ -318,6 +361,8 @@ add_library(video_core STATIC
     vulkan_common/vulkan_debug_callback.h
     vulkan_common/vulkan_device.cpp
     vulkan_common/vulkan_device.h
+    vulkan_common/graphics_pipeline_library_policy.h
+    vulkan_common/pipeline_binaries_policy.h
     vulkan_common/vulkan_instance.cpp
     vulkan_common/vulkan_instance.h
     vulkan_common/vulkan_library.cpp
@@ -356,6 +401,7 @@ add_library(video_core STATIC
     evicted_pointer_slots.h
     bounded_store.h
     shader_handle_program.h
+    shader_job_boost.h
     shader_jobs.cpp
     shader_jobs.h
     shader_notify.cpp
@@ -368,6 +414,7 @@ add_library(video_core STATIC
     shader_warm/shader_warm_builder.h
     shader_warm/warm_records.cpp
     shader_warm/warm_records.h
+    shown_governor.h
     smaa_area_tex.h
     smaa_search_tex.h
     surface.cpp
@@ -428,8 +475,15 @@ if (ENABLE_LSFG)
         frame_gen/lossless_dll.h
         frame_gen/lsfg_translate.cpp
         frame_gen/lsfg_translate.h
+        renderer_vulkan/present/frame_extrapolation.cpp
+        renderer_vulkan/present/frame_extrapolation.h
+        renderer_vulkan/present/game_motion_interpolation.cpp
+        renderer_vulkan/present/game_motion_interpolation.h
+        renderer_vulkan/present/game_motion_warp.h
         renderer_vulkan/present/frame_gen.cpp
         renderer_vulkan/present/frame_gen.h
+        renderer_vulkan/present/fsr3_frame_gen.cpp
+        renderer_vulkan/present/fsr3_frame_gen.h
         renderer_vulkan/present/optical_flow_frame_gen.cpp
         renderer_vulkan/present/optical_flow_frame_gen.h
         renderer_vulkan/present/frame_gen_pacer.cpp

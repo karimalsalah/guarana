@@ -35,11 +35,17 @@ struct LaunchParams {
     std::optional<std::string> edit_nup_icon{};
     std::optional<std::string> edit_nup_version{};
     std::optional<std::string> edit_nup_publisher{};
+    // --warm-pipelines <title id, hex>: builds a title's cached pipelines into the driver's
+    // caches without booting it, then exits (eden-cli, docs/warm-up.md).
+    std::optional<std::string> warm_pipelines_title{};
     u16 port = Network::DefaultRoomPort;
     bool use_multiplayer = false;
     bool fullscreen = false;
     bool force_null_render = false;
     bool force_single_core = false;
+    // --launcher-session: the Guarana launcher started the game. The Qt frontend shows only the
+    // fullscreen game, never its desktop window, and exits when the emulation stops.
+    bool launcher_session = false;
     // print
     bool print_version = false;
     bool print_help = false;

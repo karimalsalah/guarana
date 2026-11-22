@@ -15,6 +15,11 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 option(LICHII_USE_PENDING_RELEASE_NOTES "Show the staged What's new notes for this build" OFF)
+# The About dialog's "Guarana contributors" list: names from CONTRIBUTORS.md, read at configure time.
+include(GuaranaContributors)
+guarana_contributors_header("${CMAKE_CURRENT_SOURCE_DIR}/../../CONTRIBUTORS.md"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/guarana_contributors.h.in"
+                            "${CMAKE_CURRENT_BINARY_DIR}/guarana_contributors.h")
 
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
@@ -93,11 +98,15 @@ add_executable(lichii
     configuration/configure_graphics_advanced.h
     configuration/configure_graphics_advanced.ui
     configuration/configure_graphics_extensions.cpp
+    configuration/configure_guarana.cpp
+    configuration/configure_guarana.h
     configuration/configure_graphics_extensions.h
     configuration/configure_graphics_extensions.ui
     configuration/configure_hotkeys.cpp
     configuration/configure_hotkeys.h
     configuration/configure_hotkeys.ui
+    configuration/controller_auto_configure.cpp
+    configuration/controller_auto_configure.h
     configuration/configure_input.cpp
     configuration/configure_input.h
     configuration/configure_input.ui
@@ -190,6 +199,8 @@ add_executable(lichii
     hotkeys.h
     install_dialog.cpp
     install_dialog.h
+    guarana_ui.cpp
+    guarana_ui.h
     loading_screen.cpp
     loading_screen.h
     loading_screen.ui
@@ -249,6 +260,7 @@ add_executable(lichii
     lichii.rc
     migration_dialog.h migration_dialog.cpp
     nup_dialogs.h nup_dialogs.cpp
+    problem_report.h problem_report.cpp
     shader_warm_dialog.h shader_warm_dialog.cpp
     recommended_settings_dialog.h recommended_settings_dialog.cpp
     whats_new_dialog.h whats_new_dialog.cpp
@@ -268,15 +280,18 @@ add_executable(lichii
     configuration/addon/mod_select_dialog.h configuration/addon/mod_select_dialog.cpp configuration/addon/mod_select_dialog.ui
 
     render/performance_overlay.h render/performance_overlay.cpp
+    render/performance_overlay_model.h
     updater/update_dialog.h updater/update_dialog.cpp updater/update_dialog.ui
     game/common.h
     game/carousel.h game/carousel.cpp
 )
 
-set_target_properties(lichii PROPERTIES OUTPUT_NAME "lichii")
+set_target_properties(lichii PROPERTIES OUTPUT_NAME "guarana")
 target_compile_definitions(lichii PRIVATE
     LICHII_USE_PENDING_RELEASE_NOTES=$<BOOL:${LICHII_USE_PENDING_RELEASE_NOTES}>)
 
+# Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
+# startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\guarana overrides it.
 set(_nx2_switches "${PROJECT_SOURCE_DIR}/dist/nx2_switches.txt")
 if (APPLE)
     set_source_files_properties("${_nx2_switches}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
@@ -426,6 +441,12 @@ if (APPLE)
     target_sources(lichii PRIVATE ${_icons})
 
     set_target_properties(lichii PROPERTIES MACOSX_BUNDLE TRUE)
+    # The bundle keeps the patch packs in Contents/Resources (FileSys::ShippedPatchPackDirectory).
+    add_custom_command(TARGET lichii POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_BUNDLE_CONTENT_DIR:lichii>/Resources/patch-packs"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/dist/patch-packs"
+            "$<TARGET_BUNDLE_CONTENT_DIR:lichii>/Resources/patch-packs"
+        VERBATIM)
     set_target_properties(lichii PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist)
 
     if (HAS_HYPERVISOR)
@@ -465,6 +486,8 @@ target_link_libraries(lichii PRIVATE common core input_common frontend_common ne
 target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network QuaZip::QuaZip)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(lichii PRIVATE ZLIB::ZLIB)
+# Help > Report a Problem zips the logs (qt_common/util/compress.h) on every platform.
+target_link_libraries(lichii PRIVATE QuaZip::QuaZip)
 if (WIN32)
     target_link_libraries(lichii PRIVATE advapi32)
 endif()

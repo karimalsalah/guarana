@@ -3,6 +3,7 @@
 #pragma once
 
 #include <jni.h>
+#include <string>
 
 #include "core/frontend/applets/software_keyboard.h"
 

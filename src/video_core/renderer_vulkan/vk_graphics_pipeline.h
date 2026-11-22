@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -29,8 +30,10 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
+#include "video_core/renderer_vulkan/vk_pipeline_library.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
+#include "video_core/texture_cache/draw_template.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace VideoCore {
@@ -116,6 +119,23 @@ struct MeshEmulationSetup {
     std::array<u32, 4> position_lines{~0U, ~0U, ~0U, ~0U}; ///< line of PositionX..W
 };
 
+/// Alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): the fragment program's two other shaders,
+/// emitted with the pipeline's stages. A draw of such a pipeline is recorded as a depth pass with
+/// `depth_only`, then a colour pass at equal depth with `early_test` (PrepassDraw).
+struct PrepassShaders {
+    std::vector<u32> depth_only; ///< no colour outputs: only what decides a discard is left
+    std::vector<u32> early_test; ///< the fragment shader with early fragment tests
+    /// The stages before the fragment one decorate Position as Invariant
+    /// (EDEN_NX2_PREPASS_INVARIANT), which makes them other shaders than without the split.
+    bool invariant_position{};
+};
+/// The sampled textures and image descriptors of a draw, kept across frames (ConfigureImpl).
+using DrawTemplate =
+    VideoCommon::DrawTemplate<DescriptorUpdateEntry,
+                              Tegra::Engines::Maxwell3D::Regs::MaxShaderStage,
+                              Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS>;
+using DrawTemplates = VideoCommon::DrawTemplateTable<DrawTemplate>;
+
 /// What an evicted graphics pipeline needs to be built again without translating its shaders
 struct KeptGraphicsStages {
     static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
@@ -124,27 +144,42 @@ struct KeptGraphicsStages {
     std::array<std::unique_ptr<Shader::Info>, NUM_STAGES> infos;
     std::optional<MeshEmulationSetup> mesh_emulation;
     VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    bool libraries{}; ///< built from graphics pipeline libraries (per-stage descriptor sets)
 
     /// Memory it holds, roughly
     [[nodiscard]] u64 Bytes() const noexcept;
+};
+
+/// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
+/// from shared per-stage libraries.
+struct GraphicsPipelineLibraryParams {
+    GraphicsPipelineLibraryCache* library_cache{};
 };
 
 class GraphicsPipeline {
     static constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
 
 public:
+    /// Graphics pipeline libraries (EDEN_NX2_GPL): non-null `library_cache` builds the pipeline
+    /// from per-stage libraries; the stages were emitted with one descriptor set per stage.
+    // Declared outside the class: GCC rejects a default argument `= {}` of a nested struct
+    // with member initializers inside its enclosing class.
+    using LibraryParams = GraphicsPipelineLibraryParams;
+
     explicit GraphicsPipeline(
         Scheduler& scheduler, BufferCache& buffer_cache, TextureCache& texture_cache,
         vk::PipelineCache& pipeline_cache, PipelineBinaries* binaries,
-        VideoCore::ShaderNotify* shader_notify,
-        const Device& device, DescriptorPool& descriptor_pool,
-        GuestDescriptorQueue& guest_descriptor_queue,
-        DescriptorBufferRing& descriptor_buffer_ring, const PipelineBuildQueue& build_queue,
-        PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
-        const GraphicsPipelineCacheKey& key, std::array<std::vector<u32>, NUM_STAGES> stages,
+        VideoCore::ShaderNotify* shader_notify, const Device& device,
+        DescriptorPool& descriptor_pool, GuestDescriptorQueue& guest_descriptor_queue,
+        DescriptorBufferRing& descriptor_buffer_ring, DrawTemplates& draw_templates,
+        const PipelineBuildQueue& build_queue, PipelineStatistics* pipeline_statistics,
+        RenderPassCache& render_pass_cache, const GraphicsPipelineCacheKey& key,
+        std::array<std::vector<u32>, NUM_STAGES> stages,
         const std::array<const Shader::Info*, NUM_STAGES>& infos,
         std::function<std::array<std::vector<u32>, NUM_STAGES>()> emit_stages = {},
-        std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt);
+        std::optional<MeshEmulationSetup> mesh_emulation = std::nullopt,
+        std::shared_ptr<PrepassShaders> prepass_shaders = nullptr,
+        LibraryParams library_params = {});
 
     static std::chrono::nanoseconds TakeHoldTime() noexcept;
     /// Draws resolved from the texture memo and in full since the last call.
@@ -205,9 +240,32 @@ public:
         return key.state.extended_dynamic_state != 0;
     }
 
+    /// The colour write masks are dynamic state (VK_EXT_extended_dynamic_state3).
+    bool UsesDynamicColorWriteMask() const noexcept {
+        return key.state.extended_dynamic_state_3_blend != 0;
+    }
+
+    /// Made with the shaders of an alpha-test prepass split (PrepassShaders), and once built, with
+    /// the two passes' pipelines: its draws can be recorded as two passes when the draw's state
+    /// allows it too.
+    [[nodiscard]] bool HasPrepassSplit() const noexcept {
+        return prepass_split && (!IsBuilt() || prepass_pipelines[1]);
+    }
+
+    /// Worker thread, once built: the pipelines of the split's depth pass and colour pass. Null
+    /// handles when they could not be built.
+    [[nodiscard]] std::array<VkPipeline, 2> PrepassPipelines() const noexcept {
+        return {*prepass_pipelines[0], *prepass_pipelines[1]};
+    }
+
     /// Switch 2 task/mesh pipeline: drawn with vkCmdDrawMeshTasksEXT.
     [[nodiscard]] bool IsMeshPipeline() const noexcept {
         return stage_infos[0].is_task || stage_infos[0].is_mesh;
+    }
+
+    /// Has tessellation control and evaluation stages: drawn as a patch list.
+    [[nodiscard]] bool HasTessellation() const noexcept {
+        return has_tessellation;
     }
 
     /// Mesh pipeline drawn through the compute emulation (MeshEmulationSetup).
@@ -388,6 +446,34 @@ public:
         return build->Failed();
     }
 
+    /// The background build (optimized link, or EDEN_NX2_UNOPT_FIRST's optimized libraries) is
+    /// running: destroying the pipeline now would wait for it. GPU thread, once IsBuilt() (the
+    /// build sets `optimized_build` before it completes).
+    [[nodiscard]] bool BackgroundBuildRunning() const noexcept {
+        return IsBuilt() && optimized_build && optimized_build->Running();
+    }
+
+    /// Waits for the primary build job to finish without running deferred emission here.
+    void WaitForBuild() const {
+        if (build) {
+            build->Wait();
+        }
+    }
+
+    /// Waits if a background build (optimized GPL link or EDEN_NX2_UNOPT_FIRST replacement) has
+    /// already been claimed by a worker, leaving unstarted ones queued.
+    void WaitForRunningBackgroundBuild() const {
+        if (optimized_build && optimized_build->Running()) {
+            optimized_build->Wait();
+        }
+    }
+
+    /// Drops an unstarted background build (optimized GPL link or EDEN_NX2_UNOPT_FIRST
+    /// replacement) or waits for a running one. Call only once the primary build has finished.
+    void FinishBackgroundBuild() {
+        optimized_build.reset();
+    }
+
     /// Fast draw (nx2_fast_draw.h): whether draws can keep the image views and samplers the last
     /// captured Configure resolved. Handles computed at draw time are evaluated again for each
     /// delta draw (ComputedHandlesChanged).
@@ -469,6 +555,16 @@ private:
 
     void KeepImageDescriptors(size_t stage, size_t first_entry);
 
+    /// Keeps the draw's textures and image descriptors, which the guest descriptor queue holds
+    /// at `ranges`, for later draws with the same key. With `verified`, the template the key
+    /// found is compared with them first (EDEN_NX2_DRAW_TEMPLATE_VERIFY).
+    void KeepDrawTemplate(DrawTemplate* verified, const VideoCommon::DrawTemplateContext& context,
+                          std::span<const u32> handles, u64 hash,
+                          std::span<const VideoCommon::TextureHandleRead> reads,
+                          std::span<const VideoCommon::ImageViewInOut> views,
+                          std::span<const VideoCommon::SamplerId> samplers,
+                          const std::array<std::pair<u32, u32>, NUM_STAGES>& ranges,
+                          const RescalingPushConstant& rescaling);
     void CheckColorFeedbackLoop(std::span<const VideoCommon::ImageViewInOut> views,
                                 const std::array<bool, NUM_STAGES>& stages, size_t fragment_entry);
 
@@ -478,7 +574,56 @@ private:
 
     void RecordBinding(const PreparedBinding& binding, const DescriptorUpdateEntry* descriptor_data);
 
-    void MakePipeline(VkRenderPass render_pass);
+    /// The pipeline itself, or one of the two an alpha-test prepass split draws with: the depth
+    /// pass (the depth-only fragment shader, no colour written) and the colour pass (the fragment
+    /// shader with early fragment tests, depth compared for equality and not written).
+    enum class PipelineVariant : u8 {
+        Main,
+        PrepassDepth,
+        PrepassColor,
+    };
+
+    void MakePipeline(VkRenderPass render_pass, PipelineVariant variant = PipelineVariant::Main);
+
+    /// Builds the split's two pipelines after the pipeline itself, from the same modules for the
+    /// stages before the fragment one. A failure leaves the pipeline without them.
+    void MakePrepassPipelines(VkRenderPass render_pass);
+
+    struct PipelineStates;
+
+    /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
+    void FillStates(PipelineStates& states, PipelineVariant variant) const;
+
+    /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then links them
+    /// with this pipeline's vertex input and fragment output parts. False when a library
+    /// failed; the caller then builds the pipeline the monolithic way.
+    bool MakeLibraryPipeline(VkRenderPass render_pass);
+
+    /// `unoptimized`: built with VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT
+    /// (EDEN_NX2_UNOPT_FIRST), which is part of its key.
+    GplLibrary MakeShaderLibrary(GplPart part, const PipelineStates& states,
+                                 VkRenderPass render_pass, bool unoptimized) const;
+
+    std::string ShaderLibraryKey(GplPart part, const PipelineStates& states,
+                                 VkRenderPass render_pass, bool unoptimized) const;
+
+    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized,
+                               const std::array<std::shared_ptr<const GplLibrary>, 2>& shaders);
+
+    /// EDEN_NX2_UNOPT_FIRST, in the background: the optimized shader libraries in place of the
+    /// unoptimized ones, linked into the pipeline the draw swaps in (ConfigureDraw).
+    void BuildOptimizedReplacement(VkRenderPass render_pass, const PipelineStates& states);
+
+    /// EDEN_NX2_UNOPT_FIRST: whether `stage`'s shader module is kept for that job, which reads
+    /// only the modules of the parts built unoptimized and releases them itself.
+    bool KeepsModuleForReplacement(size_t stage) const;
+
+    /// Build body with libraries: the fast link (or monolithic fallback), then the optimized link
+    /// in the background.
+    void MakeLibraryBuild(VkRenderPass render_pass);
+
+    /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
+    void FallBackToMonolithic(VkRenderPass render_pass);
 
     void Validate();
 
@@ -493,6 +638,10 @@ private:
     Scheduler& scheduler;
     GuestDescriptorQueue& guest_descriptor_queue;
     DescriptorBufferRing& descriptor_buffer_ring;
+    DrawTemplates& draw_templates;
+    const u64 template_owner;
+    VideoCommon::DrawTemplateRecorder template_recorder;
+    u64 last_template_context{}; ///< Hash of the last kept template's context (verify, profile)
 
     bool (*configure_func)(GraphicsPipeline*, bool, std::optional<PreparedBinding>*){};
     std::array<bool, NUM_STAGES> stages_present{};
@@ -517,12 +666,13 @@ private:
     size_t num_image_elements{};
     std::vector<SampledImage> sampled_images;
     u32 num_textures{};
+    bool has_tessellation{};
     bool fragment_has_color0_output{};
     bool on_far_plane{};
     u32 color_output_mask{};
     bool writes_storage{};
     /// Every texture is sampled with a handle read from a constant buffer: ConfigureImpl can
-    /// resolve them from texture_memo.
+    /// resolve them from texture_memo or a draw template.
     bool texture_memo_eligible{};
     VideoCommon::SampledTextureMemo texture_memo;
     bool writes_images{};
@@ -565,11 +715,56 @@ private:
     u64 kept_scale_epoch{};
     bool kept_images_valid{};
 
-    VkDescriptorSetLayout descriptor_set_layout{}; ///< Owned by the PipelineLayoutCache
+    /// Graphics pipeline libraries (EDEN_NX2_GPL): one descriptor set per stage (set index =
+    /// stage index), the shader libraries, and this pipeline's own vertex input and fragment
+    /// output libraries.
+    GraphicsPipelineLibraryCache* const library_cache;
+    std::array<u128, NUM_STAGES> spirv_hashes{};
+    std::array<vk::DescriptorSetLayout, NUM_STAGES> stage_set_layouts;
+    std::array<std::string, NUM_STAGES> stage_set_signatures;
+    std::array<DescriptorAllocator, NUM_STAGES> stage_allocators;
+    std::array<vk::DescriptorUpdateTemplate, NUM_STAGES> stage_templates;
+    std::array<size_t, NUM_STAGES> stage_descriptor_offsets{}; ///< Bytes into the update data
+    bool has_stage_sets{};
+    std::array<std::shared_ptr<const GplLibrary>, 2> shader_libraries;
+    vk::Pipeline vertex_input_library;
+    vk::Pipeline fragment_output_library;
+    vk::DescriptorSetLayout fallback_empty_set_layout;
+    std::atomic_bool linked{};
+    /// The render pass the libraries were linked with, for an optimized link a draw queues
+    /// (EDEN_NX2_GPL_OPTIMIZE_CACHED). Written by the build, read by the GPU thread after IsBuilt().
+    VkRenderPass library_render_pass{};
+
+    vk::DescriptorSetLayout descriptor_set_layout;
     DescriptorAllocator descriptor_allocator;
-    VkPipelineLayout pipeline_layout{}; ///< Owned by the PipelineLayoutCache
+    vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
+    /// Optimized link (GplOptimizeEnabled): the optimized pipeline once its build is done, and
+    /// the first one kept alive after the swap for the command buffers that bound it.
+    vk::Pipeline optimized_pipeline;
+    vk::Pipeline retired_pipeline;
+    std::atomic_bool optimized_ready{};
+    bool optimized_bound{};
+    /// EDEN_NX2_UNOPT_FIRST: which shader libraries the build took unoptimized, and whether it
+    /// linked the pipeline from any (written by the build before it completes, read by the GPU
+    /// thread after IsBuilt()); the fixed-function state the optimized libraries are built from,
+    /// until their job takes it; the optimized libraries once built; and on the GPU thread, when
+    /// the first draw with this pipeline was recorded.
+    std::array<bool, 2> unoptimized_libraries{};
+    bool unoptimized_first{};
+    std::shared_ptr<PipelineStates> replacement_states;
+    std::array<std::shared_ptr<const GplLibrary>, 2> optimized_libraries;
+    std::chrono::steady_clock::time_point first_draw{};
+    /// The build produced a pipeline. Written by the build before it completes, read by the GPU
+    /// thread after IsBuilt(), unlike `pipeline`, which the scheduler thread may swap.
+    bool has_pipeline{};
+    /// The scheduler of the build's job (PipelineBuildQueue::jobs), which also runs the optimized
+    /// build as a Background job. Null when built without jobs.
+    VideoCommon::ShaderJobScheduler* const build_jobs;
+    /// The build job's priority (PipelineBuildQueue::priority), also given to the fragment
+    /// library's job of EDEN_NX2_GPL_PARALLEL_PARTS.
+    const VideoCommon::ShaderJobPriority build_priority;
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
@@ -586,6 +781,8 @@ private:
     vk::ShaderModule mesh_vertex_module;
     vk::Pipeline mesh_compute_pipeline;
     VkDescriptorSet mesh_descriptor_set{}; ///< shared by the dispatch and the draw it feeds
+    /// The draw samples one of its render targets (EDEN_NX2_MESH_BEFORE_PASS keeps it in place).
+    bool mesh_reads_targets{};
     VkBuffer mesh_output_buffer{};
     VkDeviceSize mesh_output_offset{};
     VkDeviceSize mesh_output_size{};
@@ -601,7 +798,59 @@ private:
     std::array<MeshEmulationBuffer, 4> mesh_task_buffers{};
     u32 mesh_capacity{};
 
+    // Alpha-test prepass split: the shaders until the build has made their modules, and the
+    // pipelines of the depth pass [0] and the colour pass [1].
+    std::shared_ptr<PrepassShaders> prepass_shaders;
+    const bool prepass_split;
+    const bool prepass_invariant;
+    std::array<vk::ShaderModule, 2> prepass_modules;
+    std::array<vk::Pipeline, 2> prepass_pipelines;
+
+    /// Declared before `build`: destroyed after it, so the first build (which starts this one)
+    /// has finished when this one is waited for.
+    std::optional<PipelineBuild> optimized_build;
     std::optional<PipelineBuild> build;
+};
+
+/// One draw of an alpha-test prepass split, captured by the draw's recorded command. Without a
+/// pipeline, or when the split's pipelines could not be built, it is the draw as recorded before.
+struct PrepassDraw {
+    const GraphicsPipeline* pipeline{};
+    bool dynamic_depth{};      ///< depth compare op and write enable are dynamic state
+    bool dynamic_color_mask{}; ///< the colour write masks are dynamic state
+    /// The draw's own colour write masks, set again for the colour pass
+    std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> color_masks{};
+
+    /// Worker thread, with the draw's pipeline, descriptors and dynamic state bound. `draw`
+    /// records the draw call; it is called twice for a split.
+    template <typename Func>
+    void Draw(vk::CommandBuffer cmdbuf, Func&& draw) const {
+        std::array<VkPipeline, 2> passes{};
+        if (pipeline != nullptr) {
+            passes = pipeline->PrepassPipelines();
+        }
+        if (passes[0] == VK_NULL_HANDLE || passes[1] == VK_NULL_HANDLE) {
+            draw();
+            return;
+        }
+        static constexpr std::array<VkColorComponentFlags, Maxwell::NumRenderTargets> no_color{};
+        // Depth pass: the guest's depth test and write, nothing written to the colour targets.
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, passes[0]);
+        if (dynamic_color_mask) {
+            cmdbuf.SetColorWriteMaskEXT(0, no_color);
+        }
+        draw();
+        // Colour pass: only the fragments whose depth the first pass left in the buffer.
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, passes[1]);
+        if (dynamic_color_mask) {
+            cmdbuf.SetColorWriteMaskEXT(0, color_masks);
+        }
+        if (dynamic_depth) {
+            cmdbuf.SetDepthCompareOpEXT(VK_COMPARE_OP_EQUAL);
+            cmdbuf.SetDepthWriteEnableEXT(false);
+        }
+        draw();
+    }
 };
 
 } // namespace Vulkan

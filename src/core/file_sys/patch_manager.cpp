@@ -6,13 +6,22 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "common/assert.h"
+#include "common/boot_timing.h"
+#include "common/fs/path_util.h"
 #include "common/hex_util.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #ifndef _WIN32
 #include "common/string_util.h"
@@ -23,7 +32,9 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/ips_layer.h"
+#include "core/file_sys/oot_render_scale.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/patch_pack.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs/vfs_cached.h"
@@ -52,6 +63,10 @@ struct BuiltinPatchRecord {
     std::span<const u8> bytes;
     std::span<const u8> original;
     bool executable_padding = false;
+    // A patch pack's record checks the game's bytes by their SHA-256 instead of `original`: the
+    // hash of the original_size bytes at module_offset.
+    std::span<const u8> original_sha256{};
+    size_t original_size = 0;
 };
 
 // A hook at an instruction known only by its function: `pattern` must occur once, word-aligned,
@@ -103,7 +118,9 @@ struct BuiltinPatch {
     bool skip_on_cheat_overlap = false;
     // Built-ins that patch the same place: the first one applied (in this list's order) wins.
     std::string_view group{};
+    // What the patch does, for a player: Add-Ons shows it. Every listed built-in has one.
     std::string_view description{};
+    BuiltinPatchLevel level = BuiltinPatchLevel::Standard;
 };
 
 constexpr std::string_view MAX_RESOLUTION_NAME = "Max Resolution (built-in)";
@@ -494,6 +511,8 @@ constexpr std::array FPS_UNLOCK_RECORDS{
     BuiltinPatchRecord{0x3C46B30, CLOTH_DT_ROUTINE_S2, {}, true},
 };
 
+// The built-ins compiled in. More are data, applied after these: the patch packs in
+// dist/patch-packs (docs/patch-packs.md), Ocarina's text speeds among them.
 // Convert 2 * step to game seconds. Short steps keep a per-clock fraction (x19+0x3c);
 // all other amounts retain the retail conversion, including the ordinary 60 FPS case.
 // The nine zero-filled .text alignment slots are listed for E0F3CCFA in the KaeGae
@@ -569,36 +588,6 @@ constexpr std::array DYNAMIC_FPS_STATES{BuiltinPatchState{0x4E9FE00, 0x98}};
 constexpr std::array FPS_UNLOCK_STATES{
     BuiltinPatchState{0x4E9FE00, 0xA8},
     BuiltinPatchState{0x4E9EE00, 0x110},
-};
-
-// Text speed (port of NotRexed/Hookshot#402): main+0xAFE140 steps a text pane's letter
-// animation. At 0xAFE1B4, the start of the letters' block, s0 holds the frame time that moves
-// the letters' clock (+0x60 += rate * time) and counts down pauses (+0x58 -= time); the
-// auto-advance timer before it keeps the game's time. The site branches to a cave that scales
-// s0 (s16 is unused in the function), redoes the displaced ldrh and branches back.
-constexpr size_t TEXT_SPEED_SITE = 0xAFE1B4;
-constexpr size_t TEXT_SPEED_CAVE = 0x3C46F00;
-constexpr std::array<u8, 4> TEXT_SPEED_ORIGINAL{0x69, 0xDE, 0x40, 0x79}; // ldrh w9, [x19, #0x6e]
-constexpr std::array<u8, 4> TEXT_SPEED_BRANCH{0x53, 0x23, 0xC5, 0x14};   // b 0x3C46F00
-// ldr s16, scale ; fmul s0, s0, s16 ; ldrh w9, [x19, #0x6e] ; b 0xAFE1B8 ; scale (float)
-#define TEXT_SPEED_CAVE_CODE                                                                       \
-    0x90, 0x00, 0x00, 0x1C, 0x00, 0x08, 0x30, 0x1E, 0x69, 0xDE, 0x40, 0x79, 0xAB, 0xDC, 0x3A, 0x17
-constexpr std::array<u8, 20> TEXT_SPEED_2X_CAVE{TEXT_SPEED_CAVE_CODE, 0x00, 0x00, 0x00, 0x40};
-constexpr std::array<u8, 20> TEXT_SPEED_4X_CAVE{TEXT_SPEED_CAVE_CODE, 0x00, 0x00, 0x80, 0x40};
-// 1e6: a page at once (a frame per pause), like the game's own skip on A.
-constexpr std::array<u8, 20> TEXT_SPEED_INSTANT_CAVE{TEXT_SPEED_CAVE_CODE, 0x00, 0x24, 0x74, 0x49};
-#undef TEXT_SPEED_CAVE_CODE
-constexpr std::array TEXT_SPEED_2X_RECORDS{
-    BuiltinPatchRecord{TEXT_SPEED_SITE, TEXT_SPEED_BRANCH, TEXT_SPEED_ORIGINAL},
-    BuiltinPatchRecord{TEXT_SPEED_CAVE, TEXT_SPEED_2X_CAVE, {}, true},
-};
-constexpr std::array TEXT_SPEED_4X_RECORDS{
-    BuiltinPatchRecord{TEXT_SPEED_SITE, TEXT_SPEED_BRANCH, TEXT_SPEED_ORIGINAL},
-    BuiltinPatchRecord{TEXT_SPEED_CAVE, TEXT_SPEED_4X_CAVE, {}, true},
-};
-constexpr std::array TEXT_SPEED_INSTANT_RECORDS{
-    BuiltinPatchRecord{TEXT_SPEED_SITE, TEXT_SPEED_BRANCH, TEXT_SPEED_ORIGINAL},
-    BuiltinPatchRecord{TEXT_SPEED_CAVE, TEXT_SPEED_INSTANT_CAVE, {}, true},
 };
 
 constexpr std::array<u8, 1> YOSHI_SCENE_PROFILE_ORIGINAL{0x35};
@@ -749,6 +738,9 @@ constexpr std::array BUILTIN_PATCHES{
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = MAX_RESOLUTION_RECORDS,
+        .description =
+            "Draws the 3D scene at full resolution all the time. Without it the game lowers its "
+            "resolution when the GPU is slow, down to 480p.",
     },
     // With Max Resolution the guard house outgrows the initial pool and dereferences a null
     // allocation.
@@ -758,6 +750,10 @@ constexpr std::array BUILTIN_PATCHES{
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = TEXTURE_POOL_RECORDS,
+        .description =
+            "Doubles the graphics memory pool the game starts with. With Max Resolution on, the "
+            "game outgrows that pool in the guard house and crashes. Leave it on.",
+        .level = BuiltinPatchLevel::Recommended,
     },
     // Dark's routine with a tail that also lowers the step above 60 fps, so the game keeps real
     // speed at any frame rate limit (Settings frame_rate_limit).
@@ -770,6 +766,11 @@ constexpr std::array BUILTIN_PATCHES{
         .states = FPS_UNLOCK_STATES,
         .hooks = FPS_UNLOCK_HOOKS,
         .replaces = "Dynamic FPS by Dark (built-in)",
+        .description =
+            "Keeps the game at its real speed at any frame rate: below 60 FPS, and above 60 FPS "
+            "when the frame rate limit is raised. It also keeps sound, water, cloth and timers "
+            "right above 60 FPS.",
+        .level = BuiltinPatchLevel::Recommended,
     },
     BuiltinPatch{
         .name = "Epona jump (FPS Unlock)",
@@ -786,6 +787,9 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = DYNAMIC_FPS_RECORDS,
         .states = DYNAMIC_FPS_STATES,
+        .description =
+            "Keeps the game at its real speed when the frame rate drops below 60 FPS. FPS Unlock "
+            "does this and more, so this one is used only while FPS Unlock is off or cannot apply.",
     },
     BuiltinPatch{
         .name = "OoT day/night clock (FPS Unlock)",
@@ -821,34 +825,6 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
-    },
-    // Text speed: off until checked in Add-Ons; with more than one checked, the fastest wins.
-    BuiltinPatch{
-        .name = "Text Speed Instant (built-in)",
-        .title_id = 0x0400486024DEC000,
-        .module = "main",
-        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
-        .records = TEXT_SPEED_INSTANT_RECORDS,
-        .off_by_default = true,
-        .group = "Text Speed",
-    },
-    BuiltinPatch{
-        .name = "Text Speed 4x (built-in)",
-        .title_id = 0x0400486024DEC000,
-        .module = "main",
-        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
-        .records = TEXT_SPEED_4X_RECORDS,
-        .off_by_default = true,
-        .group = "Text Speed",
-    },
-    BuiltinPatch{
-        .name = "Text Speed 2x (built-in)",
-        .title_id = 0x0400486024DEC000,
-        .module = "main",
-        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
-        .records = TEXT_SPEED_2X_RECORDS,
-        .off_by_default = true,
-        .group = "Text Speed",
     },
     BuiltinPatch{
         .name = "Deku Tree floor web (FPS Unlock)",
@@ -894,6 +870,151 @@ constexpr std::array BUILTIN_PATCHES{
     },
 };
 
+// The bytes of the game a record checks before it writes: its original bytes, or those a pack's
+// hash covers.
+size_t OriginalSize(const BuiltinPatchRecord& record) {
+    return record.original_sha256.empty() ? record.original.size() : record.original_size;
+}
+
+// `game` starts at the record's offset in the module as the game has it, before any mod.
+bool OriginalMatches(const BuiltinPatchRecord& record, std::span<const u8> game) {
+    if (record.original_sha256.empty()) {
+        return std::equal(record.original.begin(), record.original.end(), game.begin());
+    }
+    std::array<u8, 32> digest{};
+    return PatchPackSha256(game.first(record.original_size), digest) &&
+           std::equal(digest.begin(), digest.end(), record.original_sha256.begin(),
+                      record.original_sha256.end());
+}
+
+// What PatchNSO, GetPatches and the overlap check go through: BUILTIN_PATCHES, then the patches
+// of the packs, in file name order and each pack's own order. A set never changes once made, and
+// holds the packs its patches view.
+class BuiltinPatchSet {
+public:
+    BuiltinPatchSet(std::vector<PatchPack> candidates, std::vector<std::string> load_errors);
+    BuiltinPatchSet(const BuiltinPatchSet&) = delete;
+    BuiltinPatchSet& operator=(const BuiltinPatchSet&) = delete;
+
+    std::vector<BuiltinPatch> patches;
+    std::vector<std::string> errors;
+
+private:
+    std::vector<PatchPack> packs;
+    std::vector<std::vector<BuiltinPatchRecord>> pack_records;
+    std::vector<std::vector<BuiltinPatchState>> pack_states;
+};
+
+BuiltinPatchSet::BuiltinPatchSet(std::vector<PatchPack> candidates,
+                                 std::vector<std::string> load_errors)
+    : errors{std::move(load_errors)} {
+    // A name is the built-in's [DisabledAddOns] key: a pack that reuses one its title already has
+    // is left out.
+    std::vector<std::pair<u64, std::string>> taken;
+    for (const auto& builtin : BUILTIN_PATCHES) {
+        taken.emplace_back(builtin.title_id, std::string{builtin.name});
+    }
+    for (auto& candidate : candidates) {
+        const auto clash =
+            std::ranges::find_if(candidate.patches, [&](const PatchPackPatch& pack_patch) {
+                return std::find(taken.begin(), taken.end(),
+                                 std::pair{candidate.title_id, pack_patch.name}) != taken.end();
+            });
+        if (clash != candidate.patches.end()) {
+            errors.push_back(fmt::format(
+                "{}: left out: another built-in of {:016X} is already named \"{}\"",
+                candidate.source, candidate.title_id, clash->name));
+            continue;
+        }
+        for (const auto& pack_patch : candidate.patches) {
+            taken.emplace_back(candidate.title_id, pack_patch.name);
+        }
+        packs.push_back(std::move(candidate));
+    }
+
+    size_t pack_patch_count = 0;
+    for (const auto& pack : packs) {
+        pack_patch_count += pack.patches.size();
+    }
+    patches.reserve(BUILTIN_PATCHES.size() + pack_patch_count);
+    patches.assign(BUILTIN_PATCHES.begin(), BUILTIN_PATCHES.end());
+    // Reserved up front: the patches view the record lists while they are being added.
+    pack_records.reserve(pack_patch_count);
+    pack_states.reserve(pack_patch_count);
+    for (const auto& pack : packs) {
+        for (const auto& pack_patch : pack.patches) {
+            auto& records = pack_records.emplace_back();
+            auto& states = pack_states.emplace_back();
+            if (pack_patch.state_size != 0) {
+                states.push_back(BuiltinPatchState{pack_patch.state_offset, pack_patch.state_size});
+            }
+            records.reserve(pack_patch.records.size());
+            for (const auto& record : pack_patch.records) {
+                records.push_back(BuiltinPatchRecord{
+                    .module_offset = record.offset,
+                    .bytes = record.bytes,
+                    .original = {},
+                    .executable_padding = record.cave,
+                    .original_sha256 = record.cave ? std::span<const u8>{}
+                                                   : std::span<const u8>{record.original_sha256},
+                    .original_size = record.cave ? size_t{0} : record.original_size,
+                });
+            }
+            patches.push_back(BuiltinPatch{
+                .name = pack_patch.name,
+                .title_id = pack.title_id,
+                .module = pack.module,
+                .build_id = pack.build_id,
+                .records = records,
+                .states = states,
+                .replaces = pack_patch.replaces,
+                .off_by_default = pack_patch.off_by_default,
+                .group = pack_patch.group,
+                .description = pack_patch.description,
+                .level = pack_patch.level,
+            });
+        }
+    }
+}
+
+struct BuiltinPatchSetSlot {
+    std::mutex mutex;
+    std::shared_ptr<const BuiltinPatchSet> current;
+};
+
+BuiltinPatchSetSlot& CurrentSlot() {
+    static BuiltinPatchSetSlot slot;
+    return slot;
+}
+
+// The set in use. The first call reads the shipped packs; no file is read again after that. A
+// caller keeps the set for as long as it uses views into it.
+std::shared_ptr<const BuiltinPatchSet> CurrentBuiltinPatches() {
+    auto& slot = CurrentSlot();
+    std::scoped_lock lock{slot.mutex};
+    if (!slot.current) {
+        // The folder next to the program, over the copies compiled in: a program without the
+        // folder (Android) keeps the packs, and a file edited there is the one used.
+        const auto directory = ShippedPatchPackDirectory();
+        auto load = LoadPatchPacks(directory, EmbeddedPatchPacks());
+        const auto compiled_count = static_cast<size_t>(std::ranges::count_if(
+            load.packs, [](const PatchPack& pack) { return pack.compiled_in; }));
+        const auto folder_count = load.packs.size() - compiled_count;
+        std::shared_ptr<const BuiltinPatchSet> made =
+            std::make_shared<BuiltinPatchSet>(std::move(load.packs), std::move(load.errors));
+        for (const auto& problem : made->errors) {
+            LOG_ERROR(Loader, "Patch packs: {}", problem);
+        }
+        LOG_INFO(Loader, "Patch packs: {} built-in patches; {} packs from {}, {} compiled in",
+                 made->patches.size() - BUILTIN_PATCHES.size(), folder_count,
+                 directory.empty() ? std::string{"(no folder)"}
+                                   : Common::FS::PathToUTF8String(directory),
+                 compiled_count);
+        slot.current = std::move(made);
+    }
+    return slot.current;
+}
+
 } // Anonymous namespace
 
 std::string EnabledAddonKey(std::string_view name) {
@@ -901,7 +1022,8 @@ std::string EnabledAddonKey(std::string_view name) {
 }
 
 std::vector<std::string> StoredDisabledAddons(u64 title_id, std::vector<std::string> unchecked) {
-    for (const auto& patch : BUILTIN_PATCHES) {
+    const auto builtins = CurrentBuiltinPatches();
+    for (const auto& patch : builtins->patches) {
         if (patch.title_id != title_id || !patch.off_by_default) {
             continue;
         }
@@ -915,7 +1037,77 @@ std::vector<std::string> StoredDisabledAddons(u64 title_id, std::vector<std::str
     return unchecked;
 }
 
+bool HasListedBuiltinPatches(u64 title_id) {
+    // As GetPatches lists them: the DLSS render scales follow a setting and are not listed.
+    const auto builtins = CurrentBuiltinPatches();
+    return std::ranges::any_of(builtins->patches, [title_id](const BuiltinPatch& patch) {
+        return patch.title_id == title_id && !patch.dlss_quality;
+    });
+}
+
+std::vector<std::string> PatchPackErrors() {
+    return CurrentBuiltinPatches()->errors;
+}
+
+void UsePatchPacksForTesting(std::optional<std::vector<PatchPack>> packs) {
+    std::shared_ptr<const BuiltinPatchSet> made;
+    if (packs) {
+        made = std::make_shared<BuiltinPatchSet>(std::move(*packs), std::vector<std::string>{});
+    }
+    auto& slot = CurrentSlot();
+    std::scoped_lock lock{slot.mutex};
+    slot.current = std::move(made);
+}
+
 namespace {
+
+// The names are owned: the set they came from may be replaced before they are read.
+using BuiltinResultList = std::vector<std::pair<std::string, BuiltinPatchResult>>;
+
+// What PatchNSO did with the built-ins of a title's module the last time it was loaded. The game
+// list worker and Add-Ons read it through GetPatches while a game may be loading.
+struct BuiltinResults {
+    std::mutex mutex;
+    std::map<std::pair<u64, std::string>, BuiltinResultList> by_module;
+};
+
+BuiltinResults& LastBuiltinResults() {
+    static BuiltinResults results;
+    return results;
+}
+
+void StoreBuiltinResults(u64 title_id, std::string_view module_name, BuiltinResultList results) {
+    auto& last = LastBuiltinResults();
+    std::scoped_lock lock{last.mutex};
+    std::pair<u64, std::string> key{title_id, std::string{module_name}};
+    if (results.empty()) {
+        last.by_module.erase(key);
+    } else {
+        last.by_module.insert_or_assign(std::move(key), std::move(results));
+    }
+}
+
+BuiltinPatchResult LastBuiltinResult(u64 title_id, const BuiltinPatch& patch) {
+    auto& last = LastBuiltinResults();
+    std::scoped_lock lock{last.mutex};
+    const auto found = last.by_module.find({title_id, std::string{patch.module}});
+    if (found == last.by_module.end()) {
+        return BuiltinPatchResult::NotLoaded;
+    }
+    for (const auto& [name, result] : found->second) {
+        if (name == patch.name) {
+            return result;
+        }
+    }
+    return BuiltinPatchResult::NotLoaded;
+}
+
+// A module's build id as BuiltinPatch::build_id names it, the form PatchNSO compares: upper-case
+// hex without its trailing zeros.
+std::string BuiltinBuildIdKey(const PatchManager::BuildID& build_id) {
+    const auto hex = Common::HexToString(build_id);
+    return hex.substr(0, hex.find_last_not_of('0') + 1);
+}
 
 enum class TitleVersionFormat : u8 {
     ThreeElements, ///< vX.Y.Z
@@ -1032,7 +1224,71 @@ std::string GetUpdateVersionStringFromSlot(const ContentProvider* provider, u64 
 LICHII_NO_INLINE std::optional<u64> GetParentApplicationId(const ContentProvider* provider, u64 title_id) {
     return provider == nullptr ? std::nullopt : provider->GetParentApplicationId(title_id);
 }
-std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
+} // Anonymous namespace
+
+std::vector<BuiltinPatchRange> BuiltinPatchRanges() {
+    const auto builtins = CurrentBuiltinPatches();
+    std::vector<BuiltinPatchRange> out;
+    for (const auto& patch : builtins->patches) {
+        // One render scale at a time: NVIDIA DLSS's quality or EDEN_NX2_OOT_RENDER_SCALE picks it.
+        const std::string_view alternatives =
+            patch.group.empty() && patch.dlss_quality ? "render scale" : patch.group;
+        const auto add = [&](BuiltinPatchRange::Kind kind, size_t offset, size_t size) {
+            out.push_back({.patch = std::string{patch.name},
+                           .title_id = patch.title_id,
+                           .module = std::string{patch.module},
+                           .build_id = std::string{patch.build_id},
+                           .kind = kind,
+                           .offset = offset,
+                           .size = size,
+                           .replaces = std::string{patch.replaces},
+                           .alternatives = std::string{alternatives}});
+        };
+        for (const auto& record : patch.records) {
+            // A record also relies on the original bytes it checks, which can be more than it
+            // writes.
+            add(record.executable_padding ? BuiltinPatchRange::Kind::CodeCave
+                                          : BuiltinPatchRange::Kind::Code,
+                record.module_offset, (std::max)(record.bytes.size(), OriginalSize(record)));
+        }
+        for (const auto& state : patch.states) {
+            add(BuiltinPatchRange::Kind::State, state.offset, state.size);
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> FindBuiltinPatchOverlaps(std::span<const BuiltinPatchRange> ranges) {
+    const auto together = [](const BuiltinPatchRange& a, const BuiltinPatchRange& b) {
+        if (a.title_id != b.title_id || a.module != b.module || a.build_id != b.build_id) {
+            return false;
+        }
+        if (a.patch == b.patch) {
+            return true;
+        }
+        if (a.replaces == b.patch || b.replaces == a.patch) {
+            return false;
+        }
+        return a.alternatives.empty() || a.alternatives != b.alternatives;
+    };
+    const auto describe = [](const BuiltinPatchRange& range) {
+        return fmt::format("\"{}\" {}+{:#x}..{:#x}", range.patch, range.module, range.offset,
+                           range.offset + range.size);
+    };
+    std::vector<std::string> out;
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        for (size_t j = i + 1; j < ranges.size(); ++j) {
+            const auto& a = ranges[i];
+            const auto& b = ranges[j];
+            if (a.offset < b.offset + b.size && b.offset < a.offset + a.size && together(a, b)) {
+                out.push_back(fmt::format("{} overlaps {}", describe(a), describe(b)));
+            }
+        }
+    }
+    return out;
+}
+
+static std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
     u64 title_id, std::span<const std::string_view> applied_patches,
     std::span<const Core::Memory::CheatEntry> cheats,
     std::span<const InstalledBuiltinHook> installed_hooks) {
@@ -1091,8 +1347,6 @@ std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
     }
     return overlaps;
 }
-
-} // Anonymous namespace
 
 std::vector<BuiltinCheatOverlap> FindBuiltinCheatOverlaps(
     u64 title_id, std::span<const std::string_view> applied_patches,
@@ -1372,6 +1626,18 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     if (name == "main") {
         Settings::SetAppliedOcarinaRenderScale(std::nullopt);
     }
+    // What becomes of each listed built-in of this module, for Add-Ons (GetPatches). Stored on
+    // every way out, so a module that is not patched leaves no result of an earlier start behind.
+    BuiltinResultList results;
+    SCOPE_EXIT {
+        StoreBuiltinResults(title_id, name, std::move(results));
+    };
+    const auto note_result = [&results](const BuiltinPatch& patch, BuiltinPatchResult result) {
+        // The DLSS render scales follow a setting and are not listed.
+        if (!patch.dlss_quality) {
+            results.emplace_back(patch.name, result);
+        }
+    };
     if (nso.size() < sizeof(Loader::NSOHeader)) {
         return nso;
     }
@@ -1433,6 +1699,17 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     const auto disabled = GetDisabledAddons();
     std::vector<std::string_view> replaced;
     std::vector<std::string_view> applied_groups;
+    // EDEN_NX2_OOT_RENDER_SCALE (oot_render_scale.h): read once per module, off unless 75 or 50.
+    const auto render_scale =
+        OotRenderScale::ParseRequest(std::getenv("EDEN_NX2_OOT_RENDER_SCALE"));
+#ifdef EGLANTINE_STREAMLINE
+    const bool dlss_scale_in_use = Settings::OcarinaDlssRenderScale().has_value();
+#else
+    constexpr bool dlss_scale_in_use = false;
+#endif
+    bool max_resolution_applied = false;
+    // Held to the end: `replaced` and `applied_groups` view its names.
+    const auto builtins = CurrentBuiltinPatches();
     std::vector<std::string_view> applied;
     std::vector<InstalledBuiltinHook> installed_hooks;
     std::optional<std::vector<Core::Memory::CheatEntry>> cheats;
@@ -1442,7 +1719,8 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         }
         return *cheats;
     };
-    for (const auto& patch : BUILTIN_PATCHES) {
+    for (const auto& patch : builtins->patches) {
+        BuiltinPatchResult skipped = BuiltinPatchResult::UnexpectedCode;
         if (patch.title_id != title_id || patch.module != name) {
             continue;
         }
@@ -1453,10 +1731,19 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (patch.off_by_default) {
             if (std::find(disabled.cbegin(), disabled.cend(), EnabledAddonKey(patch.name)) ==
                 disabled.cend()) {
+                note_result(patch, BuiltinPatchResult::Disabled);
                 continue;
             }
         } else if (std::find(disabled.cbegin(), disabled.cend(), patch.name) != disabled.cend()) {
             LOG_INFO(Loader, "    - Skipping \"{}\": disabled in Add-Ons", patch.name);
+            note_result(patch, BuiltinPatchResult::Disabled);
+            continue;
+        }
+        if (!patch.group.empty() && std::find(applied_groups.cbegin(), applied_groups.cend(),
+                                              patch.group) != applied_groups.cend()) {
+            LOG_INFO(Loader, "    - Skipping \"{}\": another {} built-in is applied", patch.name,
+                     patch.group);
+            note_result(patch, BuiltinPatchResult::GroupTaken);
             continue;
         }
         if (!patch.group.empty() && std::find(applied_groups.cbegin(), applied_groups.cend(),
@@ -1468,8 +1755,10 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (std::find(replaced.cbegin(), replaced.cend(), patch.name) != replaced.cend()) {
             LOG_INFO(Loader, "    - Skipping \"{}\": included in an applied built-in patch",
                      patch.name);
+            note_result(patch, BuiltinPatchResult::Replaced);
             continue;
         }
+        bool render_scale_by_switch = false;
         if (patch.dlss_quality) {
 #ifdef EGLANTINE_STREAMLINE
             const bool wanted = Settings::OcarinaDlssRenderScale() == patch.dlss_quality &&
@@ -1478,13 +1767,24 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
 #else
             constexpr bool wanted = false;
 #endif
-            if (!wanted) {
+            if (render_scale == OotRenderScale::Request::Invalid &&
+                patch.dlss_quality == Settings::NvidiaDlssQuality::Performance) {
+                // Once per module: the three records share the request.
+                LOG_WARNING(Loader,
+                            "    - EDEN_NX2_OOT_RENDER_SCALE is neither 75 nor 50: ignored");
+            }
+            render_scale_by_switch =
+                !wanted && OotRenderScale::WantedBySwitch(render_scale, *patch.dlss_quality,
+                                                          max_resolution_applied,
+                                                          dlss_scale_in_use);
+            if (!wanted && !render_scale_by_switch) {
                 continue;
             }
         }
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
                      patch.build_id);
+            note_result(patch, BuiltinPatchResult::WrongBuild);
             continue;
         }
         const auto fits = [](const std::vector<u8>& data, size_t offset, size_t size) {
@@ -1502,17 +1802,23 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                 !fits(out, state.offset, state.size)) {
                 LOG_WARNING(Loader, "    - Skipping \"{}\": state at {}+{:#x} is outside BSS",
                             patch.name, name, state.offset);
+                note_result(patch, BuiltinPatchResult::UnexpectedCode);
                 apply = false;
                 break;
             }
             const size_t offset = sizeof(Loader::NSOHeader) + state.offset;
-            if (!std::all_of(nso.begin() + offset, nso.begin() + offset + state.size,
-                             [](u8 byte) { return byte == 0; }) ||
+            const bool zero_filled =
+                std::all_of(nso.begin() + offset, nso.begin() + offset + state.size,
+                            [](u8 byte) { return byte == 0; });
+            if (!zero_filled ||
                 !std::equal(nso.begin() + offset, nso.begin() + offset + state.size,
                             out.begin() + offset)) {
                 LOG_WARNING(Loader,
                             "    - Skipping \"{}\": state at {}+{:#x} is not zero-filled",
                             patch.name, name, state.offset);
+                // Zero in the game's module but not after the user mods: a mod wrote there.
+                note_result(patch, zero_filled ? BuiltinPatchResult::ModConflict
+                                               : BuiltinPatchResult::UnexpectedCode);
                 apply = false;
                 break;
             }
@@ -1523,7 +1829,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         for (const auto& record : patch.records) {
             if (!fits(nso, record.module_offset, record.bytes.size()) ||
                 !fits(out, record.module_offset, record.bytes.size()) ||
-                !fits(nso, record.module_offset, record.original.size())) {
+                !fits(nso, record.module_offset, OriginalSize(record))) {
                 LOG_WARNING(Loader, "    - Skipping \"{}\": {}+{:#x} is past the module's end",
                             patch.name, name, record.module_offset);
                 apply = false;
@@ -1546,7 +1852,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                     break;
                 }
             }
-            if (!std::equal(record.original.begin(), record.original.end(), nso.begin() + offset)) {
+            if (!OriginalMatches(record, std::span{nso}.subspan(offset))) {
                 LOG_WARNING(Loader, "    - Skipping \"{}\": unexpected original bytes at {}+{:#x}",
                             patch.name, name, record.module_offset);
                 apply = false;
@@ -1556,11 +1862,13 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                             out.begin() + offset)) {
                 LOG_INFO(Loader, "    - Skipping \"{}\": a user mod already patched {}+{:#x}",
                          patch.name, name, record.module_offset);
+                skipped = BuiltinPatchResult::ModConflict;
                 apply = false;
                 break;
             }
         }
         if (!apply) {
+            note_result(patch, skipped);
             continue;
         }
         if (!patch.requires_patch.empty() || patch.skip_on_cheat_overlap) {
@@ -1576,6 +1884,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             std::memcpy(out.data() + sizeof(Loader::NSOHeader) + record.module_offset,
                         record.bytes.data(), record.bytes.size());
         }
+        // A hook whose site is missing, duplicated, or already modified is left out. The rest of
+        // the patch still applies; the game keeps its own instruction and the cave is never
+        // reached.
         for (const auto& hook : patch.hooks) {
             const auto& text = header.segments[0];
             const u64 text_end = u64{text.location} + text.size;
@@ -1634,6 +1945,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             LOG_INFO(Loader, "    - \"{}\": {} hook at {}+{:#x}", patch.name, hook.name, name,
                      site);
         }
+        note_result(patch, BuiltinPatchResult::Applied);
         LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
                  patch.records.size(), name);
         applied.push_back(patch.name);
@@ -1643,7 +1955,16 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (patch.unlocks_frame_rate && frame_rate_unlocked != nullptr) {
             *frame_rate_unlocked = true;
         }
-        if (patch.dlss_quality) {
+        if (patch.name == MAX_RESOLUTION_NAME) {
+            max_resolution_applied = true;
+        }
+        if (render_scale_by_switch) {
+            // The render size only: the applied-scale state would turn FSR on and the network
+            // bypass off.
+            LOG_INFO(Loader,
+                     "    - EDEN_NX2_OOT_RENDER_SCALE: the game draws at {}% of its output",
+                     OotRenderScale::Percent(render_scale));
+        } else if (patch.dlss_quality) {
             Settings::SetAppliedOcarinaRenderScale(patch.dlss_quality);
         }
         if (!patch.group.empty()) {
@@ -1678,7 +1999,8 @@ bool PatchManager::HasNSOPatch(const BuildID& build_id_, std::string_view name) 
 
     LOG_INFO(Loader, "Querying NSO patch existence for build_id={}, name={}", build_id, name);
 
-    if (std::ranges::any_of(BUILTIN_PATCHES, [&](const BuiltinPatch& patch) {
+    const auto builtins = CurrentBuiltinPatches();
+    if (std::ranges::any_of(builtins->patches, [&](const BuiltinPatch& patch) {
             if (patch.title_id != title_id || patch.module != name || patch.build_id != build_id) {
                 return false;
             }
@@ -1798,13 +2120,20 @@ void PatchManager::ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) co
         return;
     }
 
+    // TODO: a NUP or loose dump's RomFS was packed from a directory tree when the game loaded
+    // (Ocarina of Time: 186k files), and is unpacked here and packed again with the mods, about
+    // 0.3 s at boot. Handing the loader's tree to LayeredFS would skip the unpack and first pack;
+    // the loader and RomFSFactory pass only the packed file today.
+    const double unpack_start = Common::BootTiming::Now();
     auto extracted = ExtractRomFS(romfs);
     if (extracted == nullptr) {
         return;
     }
+    Common::BootTiming::Mark("romfs: base RomFS unpacked for LayeredFS", unpack_start);
 
     layers.emplace_back(std::move(extracted));
 
+    const double pack_start = Common::BootTiming::Now();
     auto layered = LayeredVfsDirectory::MakeLayeredDirectory(std::move(layers));
     auto layered_ext = LayeredVfsDirectory::MakeLayeredDirectory(std::move(layers_ext));
     if (layered == nullptr && layered_ext == nullptr) {
@@ -1815,6 +2144,7 @@ void PatchManager::ApplyLayeredFS(VirtualFile& romfs, ContentRecordType type) co
     if (packed == nullptr) {
         return;
     }
+    Common::BootTiming::Mark("romfs: mods layered and the RomFS packed again", pack_start);
 
     LOG_INFO(Loader, "    RomFS: LayeredFS patches applied successfully");
     for (const auto& mod : mods) {
@@ -1832,6 +2162,11 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
         LOG_INFO(Loader, "{}", log_string);
     } else {
         LOG_DEBUG(Loader, "{}", log_string);
+    }
+    const bool timed = type == ContentRecordType::Program;
+    const double patch_start = timed ? Common::BootTiming::Now() : 0.0;
+    if (timed) {
+        Common::BootTiming::Mark("romfs: game RomFS patch started (the game opened its RomFS)");
     }
 
     auto romfs = base_romfs;
@@ -1948,10 +2283,14 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
         ApplyLayeredFS(romfs, type);
     }
 
+    if (timed) {
+        Common::BootTiming::Mark("romfs: game RomFS patch done", patch_start);
+    }
     return romfs;
 }
 
-std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
+std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw,
+                                            const std::optional<BuildID>& main_build_id) const {
     if (title_id == 0) {
         return {};
     }
@@ -2227,9 +2566,16 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
         }
     }
 
-    for (const auto& patch : BUILTIN_PATCHES) {
+    const auto main_build = main_build_id ? BuiltinBuildIdKey(*main_build_id) : std::string{};
+    const auto builtins = CurrentBuiltinPatches();
+    for (const auto& patch : builtins->patches) {
         if (patch.title_id != title_id || patch.dlss_quality || !patch.requires_patch.empty()) {
             continue;
+        }
+        auto build = BuiltinPatchBuild::Unknown;
+        if (main_build_id && patch.module == "main") {
+            build = patch.build_id == main_build ? BuiltinPatchBuild::Matches
+                                                 : BuiltinPatchBuild::Other;
         }
         const auto is_disabled = [&](std::string_view name) {
             return std::find(disabled.begin(), disabled.end(), name) != disabled.end();
@@ -2237,23 +2583,27 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
         // Name an enabled built-in that contains this one, so unchecking only this one is not
         // mistaken for turning the change off. Whether it applies is only known in PatchNSO (a
         // user mod can make it skip), hence "when it applies".
-        const auto replacing = std::ranges::find_if(BUILTIN_PATCHES, [&](const BuiltinPatch& other) {
+        const auto replacing = std::ranges::find_if(builtins->patches, [&](const BuiltinPatch& other) {
             return other.title_id == title_id && other.replaces == patch.name &&
                    !is_disabled(other.name);
         });
         out.push_back({.enabled = patch.off_by_default ? is_disabled(EnabledAddonKey(patch.name))
                                                        : !is_disabled(patch.name),
                        .name = std::string{patch.name},
-                       .version = replacing != BUILTIN_PATCHES.end()
-                                      ? fmt::format("IPS, replaced by {} when it applies",
-                                                    replacing->name)
-                                      : std::string{"IPS"},
+                       .version = std::string{BUILTIN_PATCH_LABEL},
                        .type = PatchType::Mod,
                        .program_id = title_id,
                        .title_id = title_id,
                        .source = PatchSource::Unknown,
                        .off_by_default = patch.off_by_default,
-                       .description = std::string{patch.description}});
+                       .builtin = true,
+                       .description = std::string{patch.description},
+                       .level = patch.level,
+                       .replaced_by = replacing != builtins->patches.end()
+                                          ? std::string{replacing->name}
+                                          : std::string{},
+                       .last_result = LastBuiltinResult(title_id, patch),
+                       .build = build});
     }
 
     // DLC

@@ -45,6 +45,36 @@ enum class PatchSource {
     Packed,
 };
 
+// The version label of every built-in patch in a patch list.
+inline constexpr std::string_view BUILTIN_PATCH_LABEL = "Built-in";
+
+// How Add-Ons marks a built-in patch.
+enum class BuiltinPatchLevel : u8 {
+    Standard,     // No mark: a choice between two ways to play
+    Recommended,  // Leave it on: the game misbehaves without it
+    Experimental, // New or little tested: it may cause problems
+};
+
+// What PatchNSO did with a built-in patch when the game's module was last loaded in this session.
+enum class BuiltinPatchResult : u8 {
+    NotLoaded,      // The game has not started since the emulator did
+    Applied,
+    Disabled,       // Unchecked in Add-Ons
+    Replaced,       // An applied built-in contains it
+    GroupTaken,     // Another built-in of its group was applied first
+    WrongBuild,     // The game's build id is not the one the patch was made for
+    UnexpectedCode, // The module is not laid out or filled as the patch expects
+    ModConflict,    // A user mod already changed bytes the patch writes
+};
+
+// Whether a built-in patch is made for the build of the game, from the header of the game's main
+// module read without starting it.
+enum class BuiltinPatchBuild : u8 {
+    Unknown, // Not read, or the patch is for another module
+    Matches,
+    Other, // Made for another build: PatchNSO skips it as WrongBuild
+};
+
 struct Patch {
     bool enabled;
     std::string name;
@@ -57,7 +87,16 @@ struct Patch {
     u32 numeric_version{0};
     // Off until the user turns it on: disabled_addons then holds EnabledAddonKey(name).
     bool off_by_default{false};
-    std::string description{};
+    // The rest is set for built-in patches only. `name` stays the key disabled_addons stores.
+    bool builtin{false};
+    // What the patch does, for a player.
+    std::string description;
+    BuiltinPatchLevel level{BuiltinPatchLevel::Standard};
+    // An enabled built-in that contains this one: while that one applies, this one is not used.
+    std::string replaced_by;
+    BuiltinPatchResult last_result{BuiltinPatchResult::NotLoaded};
+    // Set when GetPatches was given the build id of the game's main module.
+    BuiltinPatchBuild build{BuiltinPatchBuild::Unknown};
 };
 
 // The disabled_addons entry that turns on an add-on that is off by default.
@@ -68,6 +107,40 @@ struct Patch {
 // Frontends only need to list what is unchecked.
 [[nodiscard]] std::vector<std::string> StoredDisabledAddons(u64 title_id,
                                                             std::vector<std::string> unchecked);
+
+// Whether GetPatches lists a built-in patch for the title.
+[[nodiscard]] bool HasListedBuiltinPatches(u64 title_id);
+
+// A run of bytes of its module that a built-in patch writes, checks or keeps its state in. For the
+// test that no two built-ins that can be applied together touch the same bytes.
+struct BuiltinPatchRange {
+    enum class Kind : u8 {
+        Code,     // Over the game's code, or checked there before the patch applies
+        CodeCave, // In the executable padding after the text
+        State,    // Zero-filled BSS that the patch's routines keep their state in
+    };
+
+    std::string patch; // The built-in's name
+    u64 title_id{};
+    std::string module;
+    std::string build_id;
+    Kind kind{Kind::Code};
+    size_t offset{}; // Module offset of the first byte
+    size_t size{};
+    // PatchNSO never applies two built-ins together when one names the other in `replaces`, or when
+    // both are of the same set of alternatives (a group, or the render scales).
+    std::string replaces;
+    std::string alternatives;
+};
+
+// Every range of every built-in patch, listed in Add-Ons or not.
+[[nodiscard]] std::vector<BuiltinPatchRange> BuiltinPatchRanges();
+
+// The overlapping pairs among `ranges` that PatchNSO can meet in one module: two ranges of one
+// patch, or of two patches for the same title, module and build id that can be applied together.
+// One line per pair, empty when there is none. A range may end where the next one begins.
+[[nodiscard]] std::vector<std::string> FindBuiltinPatchOverlaps(
+    std::span<const BuiltinPatchRange> ranges);
 // An enabled cheat that writes code or state of an applied built-in patch. Ranges are main module
 // offsets, end exclusive.
 struct BuiltinCheatOverlap {
@@ -129,8 +202,12 @@ public:
                                          VirtualFile packed_update_raw = nullptr,
                                          bool apply_layeredfs = true) const;
 
-    // Returns a vector of patches
-    [[nodiscard]] std::vector<Patch> GetPatches(VirtualFile update_raw = nullptr) const;
+    // Returns a vector of patches. Given the build id of the game's main module, each built-in for
+    // main says whether it is made for that build (Patch::build); the game list gives none, so
+    // nothing is read for it.
+    [[nodiscard]] std::vector<Patch> GetPatches(
+        VirtualFile update_raw = nullptr,
+        const std::optional<BuildID>& main_build_id = std::nullopt) const;
 
     // If the game update exists, returns the u32 version field in its Meta-type NCA. If that fails,
     // it will fallback to the Meta-type NCA of the base game. If that fails, the result will be

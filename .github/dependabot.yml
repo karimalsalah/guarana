@@ -1,0 +1,64 @@
+# Dependency updates, once a week, in small grouped pull requests (docs/LANES.md): the minor and
+# patch updates of each ecosystem come as one pull request, each major update on its own. A
+# version has to be a week old before it is proposed. Security updates are not held back.
+version: 2
+updates:
+  # The actions the workflows use, by tag or by commit.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
+      - ci
+
+  # The launcher's Rust crates (launcher/src-tauri/Cargo.lock).
+  - package-ecosystem: cargo
+    directory: /launcher/src-tauri
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: launcher
+    labels:
+      - dependencies
+
+  # The launcher's npm tools and its web UI, each with its own package-lock.json.
+  - package-ecosystem: npm
+    directories:
+      - /launcher
+      - /launcher/ui
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: launcher
+    labels:
+      - dependencies

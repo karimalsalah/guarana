@@ -18,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.libsdl.app.SDL
 import java.lang.ref.WeakReference
 import io.github.zortos293.lichii.activities.EmulationActivity
+import io.github.zortos293.lichii.utils.AdpfBooster
 import io.github.zortos293.lichii.fragments.CoreErrorDialogFragment
 import io.github.zortos293.lichii.utils.DocumentsTree
 import io.github.zortos293.lichii.utils.FileUtil
@@ -449,6 +450,19 @@ object NativeLibrary {
     fun onEmulationStarted() {
         sEmulationActivity.get()!!.onEmulationStarted()
     }
+
+    /**
+     * Present-thread frame report. [workDurationNs] is the time since the previous displayed frame.
+     * The ADPF session uses it as the actual work duration.
+     */
+    @Keep
+    @JvmStatic
+    fun onFramePresented(workDurationNs: Long) {
+        AdpfBooster.onFramePresented(workDurationNs)
+    }
+
+    /** Emulation and present thread ids for the ADPF hint session. Empty until those threads run. */
+    external fun getEmulationThreadIds(): IntArray
 
     @Keep
     @JvmStatic

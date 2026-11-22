@@ -262,10 +262,16 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
             continue;
         }
 
+        // A built-in option nobody checked is not one of the game's add-ons yet.
+        if (patch.builtin && patch.off_by_default && !patch.enabled) {
+            continue;
+        }
+
         const QString type =
             QString::fromStdString(patch.enabled ? patch.name : "[D] " + patch.name);
 
-        if (patch.version.empty()) {
+        // A built-in's name already says what its version label would.
+        if (patch.version.empty() || patch.builtin) {
             out.append(QStringLiteral("%1\n").arg(type));
         } else {
             auto ver = patch.version;

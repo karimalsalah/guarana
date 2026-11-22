@@ -151,6 +151,13 @@
           "ee2f3d785bab823201f8486fc967af61"
         ]
       }
+    },
+    {
+      "id": "sample-no-presents",
+      "source": "generated",
+      "generate": ["--no-presents"],
+      "description": "the sample without its presents, as a recording that ends before its first frame leaves it: the replay refuses it",
+      "expect_failure": "no frame to replay"
     }
   ]
 }

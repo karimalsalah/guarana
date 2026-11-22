@@ -30,8 +30,11 @@
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/nx2_hitch.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
+#include "video_core/vulkan_common/pipeline_binaries_policy.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_address_map.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -433,6 +436,26 @@ std::vector<const char*> ExtensionListForVulkan(
     return output;
 }
 
+/// EDEN_NX2_FLUID with EDEN_NX2_FLUID_QUEUE (experimental, off unless set): the FLUID presenter's
+/// screen copy gets a queue of its own. 1: the queue at high global priority, also presenting.
+/// 2: default priority. 3: the copy only, presents stay on the original queue. 4: the queue is
+/// created but nothing uses it. 5: as 3 at default priority, so the copy runs beside the game's
+/// rendering without preempting it. On the Arc 140T (driver 9175), presenting from the compute
+/// family (1, 2) starves the presenter, and 3 removes the "last copy still queued" misses but cost
+/// 17% of the real frame rate in Hyrule Field (20.0 against 24.0 fps) in one unpaired run.
+/// 6: as 5 on the GPU's copy engine, a transfer-only family, when there is one, so the copy does
+/// not share the shader cores with the game's rendering (on the Arc 140T family 1 is compute and
+/// family 2 transfer only). 7: as 6, also presenting from that queue. Both not yet measured in a
+/// paired run.
+[[nodiscard]] u32 FluidQueueMode() {
+    const char* fluid = std::getenv("EDEN_NX2_FLUID");
+    if (fluid == nullptr || std::strtoul(fluid, nullptr, 10) == 0) {
+        return 0;
+    }
+    const char* queue = std::getenv("EDEN_NX2_FLUID_QUEUE");
+    return queue == nullptr ? 0U : static_cast<u32>(std::strtoul(queue, nullptr, 10));
+}
+
 constexpr u32 NvidiaDriverVersion(u32 major, u32 minor, u32 secondary) {
     return (major << 22) | (minor << 14) | (secondary << 6);
 }
@@ -508,6 +531,17 @@ void Device::RemoveExtensionFeature(bool& extension, Feature& feature,
     feature.pNext = pNext;
 }
 
+VkExtent2D Device::ClampFragmentShadingRate(VkExtent2D wanted) const {
+    VkExtent2D best{1, 1};
+    for (const VkExtent2D rate : fragment_shading_rates) {
+        if (rate.width <= wanted.width && rate.height <= wanted.height &&
+            rate.width * rate.height > best.width * best.height) {
+            best = rate;
+        }
+    }
+    return best;
+}
+
 template <typename Feature>
 void Device::RemoveExtensionFeatureIfUnsuitable(bool is_suitable, Feature& feature,
                                                 const std::string& extension_name) {
@@ -542,7 +576,8 @@ bool WantsFsr4Port(VkDriverId driver_id) {
 } // Anonymous namespace
 
 Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR surface,
-               const vk::InstanceDispatch& dld_)
+               const vk::InstanceDispatch& dld_,
+               const std::function<void(const Device&)>& on_capabilities)
     : instance{instance_}, dld{dld_}, physical{physical_},
     format_properties(GetFormatProperties(physical)) {
     // Get suitability and device properties.
@@ -586,6 +621,76 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 
     SetupFamilies(surface);
     auto queue_cis = GetDeviceQueueCreateInfos();
+
+    // EDEN_NX2_FLUID_QUEUE: one queue of another compute or transfer family for the presenter's
+    // screen copy, at high global priority when the driver allows it.
+    static constexpr float FLUID_QUEUE_PRIORITY = 1.0f;
+    VkDeviceQueueGlobalPriorityCreateInfoKHR fluid_global_priority{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR,
+        .pNext = nullptr,
+        .globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR,
+    };
+    bool fluid_high_priority = false;
+    bool fluid_presents = false;
+    size_t fluid_queue_ci = 0;
+    const u32 fluid_queue_mode = FluidQueueMode();
+    if (fluid_queue_mode != 0) {
+        const std::vector family_properties = physical.GetQueueFamilyProperties();
+        std::optional<u32> chosen;
+        int chosen_score = -1;
+        const bool copy_engine = fluid_queue_mode == 6 || fluid_queue_mode == 7;
+        for (u32 index = 0; index < static_cast<u32>(family_properties.size()); ++index) {
+            const VkQueueFamilyProperties& family = family_properties[index];
+            if (index == graphics_family || index == present_family || family.queueCount == 0 ||
+                (family.queueFlags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) == 0) {
+                continue;
+            }
+            const bool presents = surface && physical.GetSurfaceSupportKHR(index, surface);
+            const bool copy_only =
+                (family.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) == 0;
+            const int score =
+                copy_engine ? (copy_only ? 4 : 0) + (presents ? 2 : 0)
+                            : (presents ? 2 : 0) + ((family.queueFlags & VK_QUEUE_COMPUTE_BIT) ? 1 : 0);
+            if (score > chosen_score) {
+                chosen = index;
+                chosen_score = score;
+                fluid_presents = presents && fluid_queue_mode != 3 && fluid_queue_mode != 5 &&
+                                 fluid_queue_mode != 6;
+            }
+        }
+        if (chosen) {
+            fluid_family = *chosen;
+            has_fluid_queue = true;
+            fluid_family_compute =
+                (family_properties[fluid_family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
+            const auto priorities = physical.GetQueueFamilyGlobalPriorities(fluid_family);
+            fluid_high_priority =
+                fluid_queue_mode != 2 && fluid_queue_mode != 5 && !copy_engine &&
+                (supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) ||
+                 supported_extensions.contains(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)) &&
+                std::ranges::find(priorities, VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR) !=
+                    priorities.end();
+            if (fluid_high_priority) {
+                loaded_extensions.insert(
+                    supported_extensions.contains(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)
+                        ? VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME
+                        : VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
+            }
+            fluid_queue_ci = queue_cis.size();
+            queue_cis.push_back(VkDeviceQueueCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = fluid_high_priority ? &fluid_global_priority : nullptr,
+                .flags = 0,
+                .queueFamilyIndex = fluid_family,
+                .queueCount = 1,
+                .pQueuePriorities = &FLUID_QUEUE_PRIORITY,
+            });
+        } else {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID_QUEUE: no compute or transfer queue family besides the "
+                     "graphics and present ones; presenting from the graphics queue");
+        }
+    }
 
     // GetSuitability has already configured the linked list of features for us.
     // Reuse it here.
@@ -640,6 +745,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     supports_conditional_barriers =
         !is_intel_windows && driver_id != VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA;
 
+    if (on_capabilities) {
+        on_capabilities(*this);
+    }
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
 
@@ -968,10 +1076,37 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         }
     }
 #endif
-    logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    try {
+        logical = vk::Device::Create(physical, queue_cis,
+                                     ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    } catch (const vk::Exception& exception) {
+        // High global priority can need privileges the process lacks: take the default.
+        if (!(has_fluid_queue && fluid_high_priority &&
+              exception.GetResult() == VK_ERROR_NOT_PERMITTED_KHR)) {
+            throw;
+        }
+        fluid_high_priority = false;
+        queue_cis[fluid_queue_ci].pNext = nullptr;
+        logical = vk::Device::Create(physical, queue_cis,
+                                     ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    }
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
+    if (has_fluid_queue) {
+        fluid_queue = logical.GetQueue(fluid_family);
+        fluid_queue_presents = fluid_presents;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_FLUID_QUEUE {}: the present copy runs on queue family {} index 0 at {} "
+                 "priority, presents from {}",
+                 fluid_queue_mode, fluid_family, fluid_high_priority ? "high global" : "default",
+                 fluid_presents ? "that queue" : "the original present queue after a semaphore "
+                                                 "hand-over");
+        if (fluid_queue_mode == 4) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_QUEUE 4: the queue is left unused");
+            has_fluid_queue = false;
+        }
+    }
 
 #ifdef EGLANTINE_STREAMLINE
     if (streamline_extensions) {
@@ -1281,7 +1416,7 @@ void Device::ReportLoss() const {
         Common::Log::Flush();
         std::this_thread::sleep_for(std::chrono::seconds{60});
     }
-    LOG_CRITICAL(Render_Vulkan, "Closing Lichii: the GPU driver lost the Vulkan device");
+    LOG_CRITICAL(Render_Vulkan, "Closing Guarana: the GPU driver lost the Vulkan device");
     Common::Log::Flush();
 #ifdef _WIN32
     // Skips DLL detach, which runs the GPU driver's teardown on the lost device.
@@ -1534,6 +1669,38 @@ bool Device::GetSuitability(bool requires_swapchain) {
     FOR_EACH_VK_FEATURE_EXT(FEATURE_EXTENSION);
     FOR_EACH_VK_EXTENSION(EXTENSION);
 
+    // Shader libraries setting or EDEN_NX2_GPL=1: graphics pipelines linked from per-stage
+    // libraries (vk_pipeline_library).
+    graphics_pipeline_library_requested = [] {
+        if (Settings::values.use_graphics_pipeline_library.GetValue()) {
+            return true;
+        }
+        const char* value = std::getenv("EDEN_NX2_GPL");
+        return value && *value && *value != '0';
+    }();
+    if (graphics_pipeline_library_requested &&
+        supported_extensions.contains(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
+        supported_extensions.contains(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+        loaded_extensions.insert(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+        loaded_extensions.insert(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+    } else {
+        graphics_pipeline_library_requested = false;
+    }
+
+    // EDEN_NX2_GPU_PERF=1: VK_KHR_performance_query for the gpu_perf counter sampler.
+    // Kept out of the extension tables so a run without the switch creates the device
+    // exactly as before.
+    performance_query_requested = [] {
+        const char* const value = std::getenv("EDEN_NX2_GPU_PERF");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (performance_query_requested &&
+        supported_extensions.contains(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME)) {
+        loaded_extensions.insert(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
+    } else {
+        performance_query_requested = false;
+    }
+
     // The spec requires enabling VK_KHR_portability_subset on devices that expose it.
     if (supported_extensions.contains(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
         loaded_extensions.insert(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
@@ -1735,6 +1902,18 @@ bool Device::GetSuitability(bool requires_swapchain) {
                            VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME);
     }
 
+    if (graphics_pipeline_library_requested) {
+        graphics_pipeline_library_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT;
+        SetNext(next, graphics_pipeline_library_features);
+    }
+
+    if (performance_query_requested) {
+        performance_query_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR;
+        SetNext(next, performance_query_features);
+    }
+
     // The features the driver reports are enabled through the same chain at device creation.
     if (loaded_extensions.contains(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
         portability_subset_features.sType = PORTABILITY_SUBSET_FEATURES_STYPE;
@@ -1755,6 +1934,16 @@ bool Device::GetSuitability(bool requires_swapchain) {
     if (AddressMap::Wanted()) {
         LOG_INFO(Render_Vulkan, "EDEN_NX2_FAULT_MAP: device address binding reports {}",
                  address_binding_report ? "on" : "not supported by the driver");
+    }
+
+    if (performance_query_requested) {
+        performance_query_enabled =
+            performance_query_features.performanceCounterQueryPools == VK_TRUE;
+        if (!performance_query_enabled) {
+            loaded_extensions.erase(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_GPU_PERF: the device has no performance counter query pools");
+        }
     }
 
     // Base Vulkan 1.0 features are always valid regardless of instance version.
@@ -1866,10 +2055,21 @@ bool Device::GetSuitability(bool requires_swapchain) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
         SetNext(next, properties.cooperative_matrix);
     }
+    if (extensions.fragment_shading_rate) {
+        properties.fragment_shading_rate.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
+        SetNext(next, properties.fragment_shading_rate);
+    }
     if (supported_extensions.contains(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME)) {
         properties.integer_dot_product.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES;
         SetNext(next, properties.integer_dot_product);
+    }
+
+    if (graphics_pipeline_library_requested) {
+        properties.graphics_pipeline_library.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT;
+        SetNext(next, properties.graphics_pipeline_library);
     }
 
     // Perform the property fetch.
@@ -1927,7 +2127,21 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Disable VertexInputDynamicState on old Intel Windows drivers
     if (extensions.vertex_input_dynamic_state) {
         const u32 version = (properties.properties.driverVersion << 3) >> 3;
-        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && version < VK_MAKE_API_VERSION(27, 20, 100, 0))
+        // EDEN_NX2_INTEL_VIDS=1: Intel Windows packs driverVersion as (major << 14) | minor
+        // (101.9175 is 1663959), below the 0x65064000 it is compared with on every driver, so
+        // all of them lose the extension. With the switch only drivers before 101.x do.
+        static const bool intel_vids = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_VIDS");
+            return value && std::string_view{value} == "1";
+        }();
+        const bool intel_broken = intel_vids
+                                      ? (properties.properties.driverVersion >> 14) < 101
+                                      : version < VK_MAKE_API_VERSION(27, 20, 100, 0);
+        if (intel_vids && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && !intel_broken) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_VIDS: keeping VK_EXT_vertex_input_dynamic_state");
+        }
+        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && intel_broken)
         || (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY && properties.properties.driverVersion < NvidiaDriverVersion(580, 119, 2))) {
             LOG_WARNING(Render_Vulkan, "Disabling broken VK_EXT_vertex_input_dynamic_state");
             RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
@@ -2098,6 +2312,23 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_atomic_int64, features.shader_atomic_int64,
                                        VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
 
+    // VK_EXT_shader_atomic_float: storage buffer float32 atomic add in hardware instead of a
+    // compare-exchange loop. Intel only for now (the GPU it was measured on): on an Arc B580 a
+    // contended loop of Ocarina of Time (1e1964184a291f00, 96 groups) took 2 ms of each frame.
+    // EDEN_NX2_NO_FLOAT_ATOMICS=1 keeps the loop.
+    {
+        constexpr u32 intel_vendor_id = 0x8086;
+        const char* const no_float_atomics = std::getenv("EDEN_NX2_NO_FLOAT_ATOMICS");
+        extensions.shader_atomic_float =
+            extensions.shader_atomic_float &&
+            properties.properties.vendorID == intel_vendor_id &&
+            features.shader_atomic_float.shaderBufferFloat32AtomicAdd &&
+            !(no_float_atomics != nullptr && no_float_atomics[0] == '1');
+        RemoveExtensionFeatureIfUnsuitable(extensions.shader_atomic_float,
+                                           features.shader_atomic_float,
+                                           VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+    }
+
     // VK_EXT_shader_demote_to_helper_invocation
     extensions.shader_demote_to_helper_invocation =
         features.shader_demote_to_helper_invocation.shaderDemoteToHelperInvocation;
@@ -2128,13 +2359,21 @@ void Device::RemoveUnsuitableExtensions() {
                                        features.vertex_input_dynamic_state,
                                        VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
 
-    // VK_KHR_pipeline_executable_properties
-    if (Settings::values.renderer_shader_feedback.GetValue()) {
+    // VK_KHR_pipeline_executable_properties: with the shader feedback setting, or for
+    // EDEN_NX2_PIPELINE_STATS=<dir> (PipelineExecutableDump).
+    const char* const pipeline_stats_env{std::getenv("EDEN_NX2_PIPELINE_STATS")};
+    const bool pipeline_stats{pipeline_stats_env != nullptr && *pipeline_stats_env != '\0'};
+    if (Settings::values.renderer_shader_feedback.GetValue() || pipeline_stats) {
         extensions.pipeline_executable_properties =
             features.pipeline_executable_properties.pipelineExecutableInfo;
         RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_executable_properties,
                                            features.pipeline_executable_properties,
                                            VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        if (pipeline_stats) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_PIPELINE_STATS: VK_KHR_pipeline_executable_properties {}",
+                     extensions.pipeline_executable_properties ? "enabled" : "not available");
+        }
     } else {
         RemoveExtensionFeature(extensions.pipeline_executable_properties,
                                features.pipeline_executable_properties,
@@ -2145,7 +2384,10 @@ void Device::RemoveUnsuitableExtensions() {
     // the two stages are used; the multiview, shading rate and query features need more.
     features.mesh_shader.multiviewMeshShader = VK_FALSE;
     features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    features.mesh_shader.meshShaderQueries = VK_FALSE;
+    // Kept for EDEN_NX2_DRAW_STATS only.
+    if (std::getenv("EDEN_NX2_DRAW_STATS") == nullptr) {
+        features.mesh_shader.meshShaderQueries = VK_FALSE;
+    }
     extensions.mesh_shader = features.mesh_shader.taskShader && features.mesh_shader.meshShader;
     // EDEN_NX2_FORCE_MESH_FALLBACK=1: leave VK_EXT_mesh_shader disabled, so task/mesh draws take
     // the compute fallback a device without it uses.
@@ -2184,6 +2426,65 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
+    // VK_KHR_fragment_shading_rate, only with EDEN_NX2_VRS: guest pipelines then take the rate
+    // of their fragment shader when they are built. Only the per-draw rate is used.
+    features.fragment_shading_rate.primitiveFragmentShadingRate = VK_FALSE;
+    features.fragment_shading_rate.attachmentFragmentShadingRate = VK_FALSE;
+    extensions.fragment_shading_rate = extensions.fragment_shading_rate &&
+                                       features.fragment_shading_rate.pipelineFragmentShadingRate &&
+                                       instance_version >= VK_API_VERSION_1_2 &&
+                                       std::getenv("EDEN_NX2_VRS") != nullptr;
+    fragment_shading_rates.clear();
+    if (extensions.fragment_shading_rate) {
+        std::string rates;
+        for (const VkPhysicalDeviceFragmentShadingRateKHR& rate :
+             physical.GetFragmentShadingRatesKHR()) {
+            if ((rate.sampleCounts & VK_SAMPLE_COUNT_1_BIT) == 0) {
+                continue;
+            }
+            fragment_shading_rates.push_back(rate.fragmentSize);
+            rates += fmt::format(" {}x{}", rate.fragmentSize.width, rate.fragmentSize.height);
+        }
+        const VkExtent2D max_size = properties.fragment_shading_rate.maxFragmentSize;
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_VRS: VK_KHR_fragment_shading_rate enabled, rates:{}, max {}x{}", rates,
+                 max_size.width, max_size.height);
+    } else if (loaded_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
+        // Not a warning: the extension is left out unless asked for.
+        RemoveExtensionFeature(extensions.fragment_shading_rate, features.fragment_shading_rate,
+                               VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    }
+
+    // VK_EXT_graphics_pipeline_library (EDEN_NX2_GPL): used only with fast linking, which makes
+    // a link cost a fraction of a millisecond.
+    if (graphics_pipeline_library_requested) {
+        const bool usable = CanUseGraphicsPipelineLibraries(
+            graphics_pipeline_library_features.graphicsPipelineLibrary,
+            properties.graphics_pipeline_library.graphicsPipelineLibraryFastLinking,
+            properties.properties.limits.maxBoundDescriptorSets,
+            properties.graphics_pipeline_library
+                .graphicsPipelineLibraryIndependentInterpolationDecoration);
+        if (!usable) {
+            LOG_WARNING(Render_Vulkan,
+                        "Nx2Perf gpl: feature {}, fast linking {}, descriptor sets {}/{}, "
+                        "independent interpolation decoration {}; "
+                        "falling back to monolithic pipelines",
+                        graphics_pipeline_library_features.graphicsPipelineLibrary,
+                        properties.graphics_pipeline_library.graphicsPipelineLibraryFastLinking,
+                        properties.properties.limits.maxBoundDescriptorSets,
+                        GraphicsPipelineLibraryDescriptorSetCount,
+                        properties.graphics_pipeline_library
+                            .graphicsPipelineLibraryIndependentInterpolationDecoration);
+            loaded_extensions.erase(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+            loaded_extensions.erase(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+            graphics_pipeline_library_features.graphicsPipelineLibrary = VK_FALSE;
+        }
+        graphics_pipeline_library_enabled = usable;
+        if (usable) {
+            LOG_INFO(Render_Vulkan, "Nx2Perf gpl: graphics pipeline libraries on (fast linking)");
+        }
+    }
+
     // VK_KHR_shader_quad_control
     // Quad control depends on maximal reconvergence; advertise neither unless
     // the dependency is enabled on the logical device too.
@@ -2210,9 +2511,10 @@ void Device::RemoveUnsuitableExtensions() {
         if (extensions.cooperative_matrix) {
             shapes = physical.GetCooperativeMatrixPropertiesKHR();
         }
-        const auto has_shape = [&](u32 columns) {
+        // Whether the driver lists a rows x columns x 16 fp16 subgroup shape without saturation.
+        const auto has_shape = [&](u32 rows, u32 columns) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
-                return shape.MSize == 16 && shape.NSize == columns && shape.KSize == 16 &&
+                return shape.MSize == rows && shape.NSize == columns && shape.KSize == 16 &&
                        shape.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
                        shape.CType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
@@ -2258,7 +2560,7 @@ void Device::RemoveUnsuitableExtensions() {
                             extensions.subgroup_size_control &&
                             features.subgroup_size_control.computeFullSubgroups;
         cooperative_hmma_16x8x16 =
-            usable && has_shape(8) &&
+            usable && has_shape(16, 8) &&
             (properties.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
             properties.subgroup_properties.subgroupSize == GuestWarpSize &&
             // Compute subgroups may vary between these sizes (always with SPIR-V 1.6), and the
@@ -2266,7 +2568,60 @@ void Device::RemoveUnsuitableExtensions() {
             properties.subgroup_size_control.minSubgroupSize == GuestWarpSize &&
             properties.subgroup_size_control.maxSubgroupSize == GuestWarpSize;
         cooperative_hmma_16x16x16 =
-            usable && has_shape(16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            usable && has_shape(16, 16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+        // EDEN_NX2_INTEL_COOP_MATRIX=1 (default off, parsed with strtoul like its neighbours):
+        // Intel's drivers list only an 8x16x16 shape, so the two paths above never apply. Each HMMA
+        // then runs through shared memory as 8-row products (Fritchii-Intel-Fixes 0007 and 0008,
+        // zortos293/Lichii#779). The condition is what the driver reports, on an Intel device:
+        // the shape, 32-lane compute subgroups and the features `usable` checks. Intel's Windows
+        // driver turns shaderFloat16 off for shaders ("broken float16 math", float16_math), but
+        // the device keeps it for the matrices, so that workaround does not matter here.
+        static const bool intel_coop_matrix = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COOP_MATRIX");
+            return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        }();
+        constexpr u32 intel_vendor_id = 0x8086;
+        if (intel_coop_matrix && properties.properties.vendorID == intel_vendor_id) {
+            const bool has_8x16x16 = has_shape(8, 16);
+            const bool guest_warp = IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            cooperative_hmma_8x16x16 = usable && has_8x16x16 && guest_warp;
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_COOP_MATRIX: {} cooperative matrix shapes listed, 8x16x16 "
+                     "fp16 {}, 32-lane compute subgroups {}, usable {}: 8x16x16 HMMA {}",
+                     shapes.size(), has_8x16x16, guest_warp, usable,
+                     cooperative_hmma_8x16x16);
+        }
+        // EDEN_NX2_INTEL_COOP_MATRIX_8X8=1 (default off, parsed like the switch above): Intel's
+        // Xe-LPG+ driver (Arc 140T, 101.9175) lists no fp16-accumulator shape, only 8x8x16 with fp16
+        // inputs and fp32 accumulator and result (and 8x8x32 8-bit). Each HMMA then runs as two
+        // 8x8x16 products through shared memory, rounding once to fp16 (emit_spirv_tensor.cpp).
+        // Only where none of the paths above applies.
+        static const bool intel_coop_matrix_8x8 = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COOP_MATRIX_8X8");
+            return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+        }();
+        if (intel_coop_matrix_8x8 && properties.properties.vendorID == intel_vendor_id) {
+            const bool has_8x8x16 = std::ranges::any_of(
+                shapes, [](const VkCooperativeMatrixPropertiesKHR& shape) {
+                    return shape.MSize == 8 && shape.NSize == 8 && shape.KSize == 16 &&
+                           shape.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                           shape.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                           shape.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+                           shape.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+                           shape.saturatingAccumulation == VK_FALSE &&
+                           shape.scope == VK_SCOPE_SUBGROUP_KHR;
+                });
+            const bool other_path =
+                cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16 || cooperative_hmma_8x16x16;
+            const bool guest_warp = IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+            cooperative_hmma_8x8x16 = usable && has_8x8x16 && guest_warp && !other_path;
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_INTEL_COOP_MATRIX_8X8: {} cooperative matrix shapes listed, 8x8x16 "
+                     "fp16 with fp32 accumulators {}, 32-lane compute subgroups {}, usable {}, "
+                     "another path {}: 8x8x16 HMMA {}",
+                     shapes.size(), has_8x8x16, guest_warp, usable, other_path,
+                     cooperative_hmma_8x8x16);
+        }
         const auto has_fp32_result_shape = [&](VkComponentTypeKHR input) {
             return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
                 return shape.MSize == 16 && shape.NSize == 16 && shape.KSize == 16 &&
@@ -2279,7 +2634,8 @@ void Device::RemoveUnsuitableExtensions() {
         };
         fp8_matrix_shapes = has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT16_KHR) &&
                             has_fp32_result_shape(VK_COMPONENT_TYPE_FLOAT8_E4M3_EXT);
-        extensions.cooperative_matrix = cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16;
+        extensions.cooperative_matrix = cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16 ||
+                                        cooperative_hmma_8x16x16 || cooperative_hmma_8x8x16;
         features.cooperative_matrix.cooperativeMatrixRobustBufferAccess = VK_FALSE;
         RemoveExtensionFeatureIfUnsuitable(extensions.cooperative_matrix,
                                            features.cooperative_matrix,
@@ -2324,7 +2680,21 @@ void Device::RemoveUnsuitableExtensions() {
     // with VK_DYNAMIC_STATE_VERTEX_INPUT_EXT (#770), so an RX 6650 XT rebuilt ~5,800 boot
     // pipelines at ~120 ms each (12-15 min to the first frame) at every boot, and turning dynamic
     // vertex input off lost the device on the first pipeline. The store keeps them instead.
-    const bool amd_binaries = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
+    // EDEN_NX2_PIPELINE_BINARIES=0 or 1 overrides that choice (pipeline_binaries_policy.h), never
+    // where the driver lacks the extension, the feature or maintenance5.
+    const char* const pipeline_binaries_env = std::getenv("EDEN_NX2_PIPELINE_BINARIES");
+    const PipelineBinariesOverride pipeline_binaries_requested =
+        ParsePipelineBinariesOverride(pipeline_binaries_env);
+    const PipelineBinariesDecision pipeline_binaries_decision = DecidePipelineBinaries({
+        .extension = extensions.pipeline_binary,
+        .feature = features.pipeline_binary.pipelineBinaries != VK_FALSE,
+        .maintenance5 = extensions.maintenance5,
+        .prefers_internal_cache =
+            properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
+        .driver_caches_pipelines = DriverCachesPipelines(),
+        .amd_proprietary = properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY,
+        .requested = pipeline_binaries_requested,
+    });
     if (extensions.pipeline_binary) {
         LOG_INFO(Render_Vulkan,
                  "VK_KHR_pipeline_binary: pipelineBinaries {}, internal cache {}, prefers internal "
@@ -2334,10 +2704,15 @@ void Device::RemoveUnsuitableExtensions() {
                  properties.pipeline_binary.pipelineBinaryPrefersInternalCache != VK_FALSE,
                  properties.pipeline_binary.pipelineBinaryCompressedData != VK_FALSE);
     }
-    extensions.pipeline_binary =
-        features.pipeline_binary.pipelineBinaries && extensions.maintenance5 &&
-        !properties.pipeline_binary.pipelineBinaryPrefersInternalCache &&
-        (!DriverCachesPipelines() || amd_binaries);
+    if (ShouldLogPipelineBinariesDecision(pipeline_binaries_decision.reason, pipeline_binaries_env)) {
+        const bool value_ignored = pipeline_binaries_env != nullptr && *pipeline_binaries_env &&
+                                   pipeline_binaries_requested == PipelineBinariesOverride::Unset;
+        LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary store: {} ({}){}",
+                 pipeline_binaries_decision.enabled ? "on" : "off",
+                 PipelineBinariesReasonText(pipeline_binaries_decision.reason),
+                 value_ignored ? ", EDEN_NX2_PIPELINE_BINARIES is neither 0 nor 1: ignored" : "");
+    }
+    extensions.pipeline_binary = pipeline_binaries_decision.enabled;
     RemoveExtensionFeatureIfUnsuitable(extensions.pipeline_binary, features.pipeline_binary,
                                        VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
 
@@ -2577,7 +2952,14 @@ void Device::CollectPhysicalMemoryInfo() {
     }
     if (is_integrated) {
         const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
-        const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
+        u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
+        // EDEN_NX2_HITCH_UMA_BUDGET_MIB: a machine with room to spare may use more of its system
+        // memory as device memory (the texture cache's thresholds follow this budget).
+        if (const u64 hitch_mib = VideoCommon::Hitch::UmaBudgetMiB(); hitch_mib != 0) {
+            memory_size = hitch_mib << 20;
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_HITCH_UMA_BUDGET_MIB: integrated device budget cap {} MiB",
+                     hitch_mib);
+        }
         device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
     } else {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);

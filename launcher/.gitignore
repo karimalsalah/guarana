@@ -1,0 +1,4 @@
+# Installed and built by npm: CI and the build scripts recreate them.
+node_modules/
+ui/node_modules/
+ui/dist/

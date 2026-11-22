@@ -213,7 +213,7 @@ HttpResult HttpGet(const std::string& full_url, std::chrono::steady_clock::time_
         client.set_max_timeout(remaining);
         client.set_follow_location(true);
         Common::Net::ConfigureCaStore(client);
-        httplib::Headers headers{{"User-Agent", "Lichii"}};
+        httplib::Headers headers{{"User-Agent", "Guarana"}};
         if (!bearer_token.empty()) {
             headers.emplace("Authorization", "Bearer " + bearer_token);
         }

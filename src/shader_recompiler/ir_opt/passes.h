@@ -73,7 +73,8 @@ std::vector<u32> JoinStorageInfo(Info& base, Info& source, size_t limit = Info::
 /// added to another at the indices they have there
 void RemapTextureDescriptors(IR::Program& program, const JoinedDescriptors& descriptors);
 /// Points the storage buffer instructions of a program whose storage buffers JoinStorageInfo
-/// added to another at the bindings they have there
+/// added to another at the bindings they have there, with the buffer lists of its narrowed global
+/// loads (IR::GlobalLoadFlags)
 void RemapStorageBindings(IR::Program& program, std::span<const u32> bindings);
 
 } // namespace Shader::Optimization

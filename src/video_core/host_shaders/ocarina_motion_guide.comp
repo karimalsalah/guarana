@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+
+// Half-size camera motion and depth for frame extrapolation, straight from the scene depth:
+// ocarina_camera_motion.comp and ocarina_extrapolation_guide.comp in one pass, for frames no
+// temporal upscaler needs full-size motion of.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene_depth;
+layout(binding = 1, rgba16f) uniform writeonly image2D guide;
+
+layout(push_constant, row_major) uniform Parameters {
+    mat4 clip_to_previous_clip;
+    vec2 jitter;
+} params;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(guide)))) {
+        return;
+    }
+
+    // The nearest of each 2x2 block, as the guide pass keeps.
+    ivec2 size = textureSize(scene_depth, 0);
+    ivec2 limit = size - 1;
+    float nearest = 2.0;
+    ivec2 chosen = min(pixel * 2, limit);
+    for (int i = 0; i < 4; ++i) {
+        ivec2 texel = min(pixel * 2 + ivec2(i & 1, i >> 1), limit);
+        float depth = texelFetch(scene_depth, texel, 0).r;
+        if (depth < nearest) {
+            nearest = depth;
+            chosen = texel;
+        }
+    }
+
+    vec2 screen = (vec2(chosen) + 0.5 - params.jitter) / vec2(size);
+    // The captured Zelda path has [-1, 1] clip depth and a negative viewport height.
+    vec4 clip = vec4(screen * vec2(2, -2) + vec2(-1, 1), nearest * 2 - 1, 1);
+    vec4 previous = params.clip_to_previous_clip * clip;
+    vec2 motion = vec2(0);
+    if (nearest >= 0 && nearest <= 1 && previous.w > 1e-6) {
+        vec2 displacement = (previous.xy / previous.w - clip.xy) * vec2(0.5, -0.5);
+        if (all(lessThanEqual(abs(displacement), vec2(16)))) {
+            motion = displacement; // UV to the previous frame
+        }
+    }
+    // 1 - depth keeps its precision in a half float: 0 at the far plane, larger when nearer.
+    float nearness = 1.0 - clamp(nearest, 0.0, 1.0);
+    imageStore(guide, pixel, vec4(motion, nearness, 1.0));
+}

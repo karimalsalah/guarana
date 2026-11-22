@@ -7,6 +7,10 @@
 #include <common/settings_input.h>
 #include <common/thread.h>
 #include <jni.h>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 #include "common/android/android_common.h"
 #include "common/android/id_cache.h"
 #include "input_common/drivers/android.h"

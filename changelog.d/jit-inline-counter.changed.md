@@ -1,0 +1,1 @@
+- Inline the A64 guest counter (CNTPCT) read on x64 when EDEN_NX2_JIT_INLINE_CNTPCT=1, porting Lichii #2315 (Frizti). Avoids the GetCNTPCT HLE round-trip for counter-poll-heavy titles such as Ocarina of Time; opt-in, default off.

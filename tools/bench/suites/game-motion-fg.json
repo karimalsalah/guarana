@@ -1,0 +1,29 @@
+{
+  "name": "game-motion-fg",
+  "description": "Step B1 of docs/design/game-reconstruction-and-motion.md: in-between frames warped from the game's motion (EDEN_NX2_FG_GAME_MOTION) against the optical-flow interpolation Ocarina of Time ships on an Intel iGPU at 120 Hz, fullscreen with the presenter's pacing counters. Every variant pins the 120 Hz set's frame generation switches (FLUID=2, CADENCE=3, FLUID_INTERP, FLUID_RT, SHOWN_RATE=120, BUDGET_CEILING, EXTRAPOLATE=0) and frame generation with the FSR3 chain, so the owner's own switch file cannot change them; the rest of the game's defaults apply to all. The third variant, extrapolation (EXTRAPOLATE=1 without FLUID_INTERP), is the latency reference: compare 'real frame age at display' in the Fluid presenter lines. Run on a 120 Hz display; run the suite twice in one session and compare the two baselines before reading any difference. Image checks 4 to 6 of the design's section 4 go with these rows.",
+  "scene": "../scenes/oot-hyrule-field.json",
+  "options": {},
+  "base": {
+    "fullscreen": true,
+    "pacing": true,
+    "env": {
+      "EDEN_NX2_COST_SAMPLING": "1",
+      "EDEN_NX2_FLUID": "2",
+      "EDEN_NX2_CADENCE": "3",
+      "EDEN_NX2_FLUID_RT": "1",
+      "EDEN_NX2_SHOWN_RATE": "120",
+      "EDEN_NX2_BUDGET_CEILING": "1"
+    },
+    "settings": {"Renderer": {"frame_gen": true, "frame_gen_type": 1}}
+  },
+  "baseline": "interp-flow",
+  "runs": [
+    {
+      "variants": [
+        {"name": "interp-flow", "env": {"EDEN_NX2_FLUID_INTERP": "1", "EDEN_NX2_EXTRAPOLATE": "0"}},
+        {"name": "interp-game-motion", "env": {"EDEN_NX2_FLUID_INTERP": "1", "EDEN_NX2_EXTRAPOLATE": "0", "EDEN_NX2_FG_GAME_MOTION": "1"}},
+        {"name": "extrapolate", "env": {"EDEN_NX2_FLUID_INTERP": "0", "EDEN_NX2_EXTRAPOLATE": "1"}}
+      ]
+    }
+  ]
+}

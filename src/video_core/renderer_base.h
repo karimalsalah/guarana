@@ -6,11 +6,14 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -19,6 +22,7 @@
 #include "common/settings_enums.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_costs.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Core::Frontend {
@@ -32,6 +36,7 @@ struct RendererDeviceInfo {
     std::string model;
     std::string driver;
     std::string api;
+    bool integrated{}; ///< An integrated GPU: it shares the package power budget with the CPU
     /// Vulkan only, for bug reports: the API version, device-local memory, the device's
     /// extensions and the features Lichii checks.
     std::string api_version;
@@ -57,12 +62,32 @@ struct FrameGenStatus {
     u64 generated_frames{};
 };
 
+/// The game-specific upscaler (Ocarina of Time's FSR or DLSS in place of the game's own), for the
+/// status bar
+struct UpscalerStatus {
+    u64 upscaled_frames{}; ///< Frames it upscaled so far (rises while it runs)
+    std::string name;      ///< "FSR 3.1", "FSR 4" or "DLSS"; empty before the first frame
+    u32 render_width{};
+    u32 render_height{};
+    u32 output_width{};
+    u32 output_height{};
+    std::string idle_tag;    ///< Not upscaling: a short reason for the bar
+    std::string idle_reason; ///< and the full one for its tooltip
+};
+
 struct DlssStatus {
     u64 evaluations{};
     /// The last evaluation's settings: the mode it ran in, and the mode and preset the user chose
     Settings::NvidiaDlssQuality mode{};
     Settings::NvidiaDlssQuality requested{};
     Settings::NvidiaDlssPreset preset{};
+};
+
+/// Host GPU memory this process uses and the driver's budget for it, in bytes
+struct VideoMemoryUsage {
+    u64 used{};
+    u64 budget{}; ///< 0 when the driver reports none
+    bool shared{}; ///< An integrated GPU: its device memory is system RAM
 };
 
 struct RendererSettings {
@@ -103,11 +128,118 @@ public:
         return {};
     }
 
+    /// Whether the game-specific upscaler runs, which one and at what sizes
+    [[nodiscard]] virtual UpscalerStatus GetUpscalerStatus() const {
+        return {};
+    }
+
     /// Asks for one host GPU time sample of an upcoming frame
     virtual void RequestGpuBusySample() {}
 
     /// Host GPU busy time of the last sampled frame, nullopt when it isn't measured
     [[nodiscard]] virtual std::optional<double> GetGpuBusyMs() const {
+        return std::nullopt;
+    }
+
+    /// Host GPU memory in use and the driver's budget, nullopt when the renderer cannot tell
+    [[nodiscard]] virtual std::optional<VideoMemoryUsage> GetVideoMemoryUsage() const {
+        return std::nullopt;
+    }
+
+    /// Turns per-draw host GPU cost sampling on or off; false when the renderer cannot sample
+    virtual bool RequestGpuCostSampling([[maybe_unused]] bool on) {
+        return false;
+    }
+
+    [[nodiscard]] virtual bool IsGpuCostSampling() const {
+        return false;
+    }
+
+    /// Host GPU time of the last sampled frame by shaders and by render target; frame 0 when
+    /// none was sampled
+    [[nodiscard]] virtual GpuCostSnapshot GetGpuCosts() const {
+        return {};
+    }
+
+    /// EDEN_NX2_GPU_PERF: one hardware performance counter of a gpu_perf sample,
+    /// normalized to percentages/MHz where the counter's unit allows it.
+    struct GpuPerfSample {
+        std::string name;
+        double value{};
+        std::string unit;
+    };
+    /// Whether the gpu_perf counter sampler can run on this renderer/device.
+    [[nodiscard]] virtual bool IsGpuPerfSupported() const {
+        return false;
+    }
+    /// Why gpu_perf cannot sample (unsupported renderer, extension, lock, ...).
+    [[nodiscard]] virtual std::string GpuPerfReason() const {
+        return "not the Vulkan renderer";
+    }
+    /// Samples the next `frames` submissions (0 stops); false when unsupported or the
+    /// profiling lock could not be acquired.
+    virtual bool RequestGpuPerfSampling([[maybe_unused]] u32 frames) {
+        return false;
+    }
+    [[nodiscard]] virtual bool IsGpuPerfSampling() const {
+        return false;
+    }
+    /// Counters averaged over the submissions collected so far; empty until then.
+    [[nodiscard]] virtual std::vector<GpuPerfSample> ReadGpuPerf() {
+        return {};
+    }
+    [[nodiscard]] virtual u64 GpuPerfFramesSampled() const {
+        return 0;
+    }
+    /// Diagnostic: Begin gate counters and state.
+    [[nodiscard]] virtual std::string GpuPerfDiag() const {
+        return {};
+    }
+
+    /// The Vulkan present thread's counters (present_stats); null on other renderers.
+    struct PresentStatsView {
+        bool fluid{};
+        bool fallback{};
+        bool shown_stats{};
+        u64 slot_count{};
+        u64 hits{};
+        u64 no_frame{};
+        u64 not_done{};
+        u64 uncovered{};
+        u64 rolled{};
+        u64 spare{};
+        u64 stale{};
+        u64 queued{};
+        u64 overslept{};
+        u64 in_order{};
+        u64 late{};
+        u64 dropped{};
+        u64 received{};
+        std::array<u64, 4> held{};
+        double age_ms{};
+        double latency_ms{};
+        u64 latency_samples{};
+        u64 presents{};
+        double acquire_ms{}, acquire_max_ms{};
+        u64 copy_waits{}, copy_wait_timeouts{};
+        double copy_wait_ms{}, copy_wait_max_ms{};
+        double lock_ms{}, lock_max_ms{};
+        double call_ms{}, call_max_ms{};
+        double margin_ms{}, margin_min_ms{};
+        u64 margin_samples{}, after_vblank{};
+        u64 copy_gpu_samples{};
+        double copy_gpu_ms{}, copy_gpu_max_ms{};
+        double refresh_hz{};
+        u64 vblank_index{};
+        u64 divisor{};
+        double lead_ms{};
+        double clock_latency_ms{};
+        std::size_t queued_frames{};
+        std::size_t free_frames{};
+        std::size_t frame_count{};
+        std::size_t swapchain_images{};
+    };
+    [[nodiscard]] virtual std::optional<PresentStatsView> GetPresentStats() const {
         return std::nullopt;
     }
 

@@ -8,10 +8,13 @@
 #include <new>
 
 #include "common/logging.h"
+#include "common/power_tuning.h"
 #include "common/memory_detect.h"
 #include "common/thread.h"
 #endif
 
+#include "common/logging.h"
+#include "common/memory_detect.h"
 #ifdef HAS_NCE
 #include "common/logging.h"
 #include "common/settings.h"
@@ -31,6 +34,9 @@ constexpr size_t VirtualReserveSize = 1ULL << 39;
 DeviceMemory::DeviceMemory()
     : buffer{Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize(),
              VirtualReserveSize} {
+    LOG_INFO(HW_Memory, "Low memory mode: {} ({}, {} MiB of RAM)",
+             Common::LowMemoryMode() ? "on" : "off", Common::LowMemoryModeReason(),
+             Common::GetMemInfo().TotalPhysicalMemory >> 20);
 #ifdef _WIN32
     zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
 #endif
@@ -63,6 +69,13 @@ u64 DeviceMemory::PrepareNativeExecution(bool has_39bit_address_space) {
 }
 #endif
 
+
+void DeviceMemory::StopZeroTrim() {
+#ifdef _WIN32
+    zero_trim_thread.request_stop();
+#endif
+}
+
 #ifdef _WIN32
 // Windows can't punch holes in the guest memory section, so pages holding only zeros (games clear
 // their heaps while booting: Ocarina leaves ~7 GB) stay resident until they leave the working set.
@@ -73,7 +86,12 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+    Common::SetCurrentThreadToBackgroundWork();
+    Common::PowerTuning::TagBackgroundThread();
     constexpr size_t Busy = size_t{64} << 20;
+    // Low memory mode looks again sooner: zero pages a quiet five minutes leaves resident are RAM the
+    // host is short of.
+    const std::chrono::seconds max_interval{Common::LowMemoryMode() ? 15 : 300};
     std::mutex mutex;
     std::condition_variable_any wake;
     std::chrono::seconds interval = 5s;
@@ -103,7 +121,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         const auto start = std::chrono::steady_clock::now();
         std::pair<size_t, size_t> result;
         try {
-            result = buffer.TrimZeroPages();
+            result = buffer.TrimZeroPages(stop);
         } catch (const std::bad_alloc&) {
             // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
             // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
@@ -116,12 +134,18 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                         usage.commit >> 20);
             continue;
         }
+        if (stop.stop_requested()) {
+            return;
+        }
         const auto [resident, trimmed] = result;
+        auto& counters = Common::g_memory_counters;
+        counters.guest_resident.store(resident - trimmed, std::memory_order_relaxed);
+        counters.guest_zero_trimmed.fetch_add(trimmed, std::memory_order_relaxed);
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
         if (trimmed < Busy) {
-            interval = (std::min)(interval * 2, std::chrono::seconds{300});
+            interval = (std::min)(interval * 2, max_interval);
             continue;
         }
         interval = 5s;

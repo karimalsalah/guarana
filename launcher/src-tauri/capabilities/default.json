@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The launcher window: Tauri's core events and window APIs. The launcher's own commands are app commands and need no permission entry; no plugin is exposed to the page.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

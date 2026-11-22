@@ -1,0 +1,21 @@
+{
+  "name": "presenter-and-locks",
+  "description": "The default-off switches of November 2026 that touch frame pacing, pipeline links, lock contention and thread placement, each against the baseline, fullscreen and with the presenter's pacing counters. The scene is Link's house in Kokiri Forest because a tester can make that save in ten minutes; pass --scene tools/bench/scenes/oot-hyrule-field.json to run it in the heavier scene. Everything given on the command line (base ini, mods, power policy) applies to every variant.",
+  "scene": "../scenes/oot-kokiri-forest.json",
+  "options": {},
+  "base": {"fullscreen": true, "pacing": true},
+  "baseline": "baseline",
+  "runs": [
+    {
+      "variants": [
+        {"name": "baseline"},
+        {"name": "present-spin", "env": {"EDEN_NX2_PRESENT_SPIN": "1"}},
+        {"name": "gpl-optimize-cached", "env": {"EDEN_NX2_GPL_OPTIMIZE_CACHED": "1"}},
+        {"name": "sched-pause", "env": {"EDEN_NX2_SCHED_PAUSE": "1"}},
+        {"name": "syncpoint-split", "env": {"EDEN_NX2_SYNCPOINT_SPLIT": "1"}},
+        {"name": "hybrid", "env": {"EDEN_NX2_HYBRID": "1"}},
+        {"name": "idle-spin-0", "env": {"EDEN_NX2_IDLE_SPIN_US": "0"}}
+      ]
+    }
+  ]
+}

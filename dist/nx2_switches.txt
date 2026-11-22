@@ -1,9 +1,12 @@
-# Switch NX2 - read when the Lichii GUI starts.
+# Switch NX2 - read when the Guarana GUI starts (guarana-cli does not read it).
 # One NAME=VALUE per line. Lines starting with # are ignored.
 # A variable already set in the environment wins over this file.
-# Between files, the user copy (%APPDATA%\lichii\nx2_switches.txt, or
-# $XDG_CONFIG_HOME/lichii/nx2_switches.txt) wins over this one, so editing this file is never
-# needed: copy the lines you want into your own and restart.
+# Between files, the user copy (%APPDATA%\guarana\nx2_switches.txt, or
+# $XDG_CONFIG_HOME/guarana/nx2_switches.txt; user\nx2_switches.txt in a portable install) wins
+# over this one, so editing this file is never needed: copy the lines you want into your own
+# and restart.
+# A game's own switch defaults (docs/switches.md, "Defaults for Ocarina of Time") win over this
+# file, but not over the environment or your own copy.
 # Beside-application files accept EDEN_NX2_* and the emulator's diagnostic switches only.
 # Host environment settings, including library paths such as EDEN_STREAMLINE_DIR, must be
 # set in the real environment or the user configuration file at an absolute config location.
@@ -29,6 +32,21 @@ EDEN_NX2_FENCE_BATCH=1
 # Ocarina of Time with =0 (or =2): 30.9 fps against 38.9 unset, same spot and settings.
 #EDEN_NX2_FRAMES_AHEAD=1
 
+# --- Guarana defaults (integrated GPUs) ---
+# Global-memory routing: work out buffer bases once per invocation and search only the buffers a
+# native load can come from (1+2), returning zero below them (8). Hyrule Field on an Arc 140T:
+# foliage draw 15.7 -> 5.8 ms, 14.8 -> 22.8 fps. On by default for Ocarina of Time only (the one
+# game it is verified in). Uncomment to use it in every game, or set 0 to turn it off for OoT.
+#EDEN_NX2_GM=11
+
+# Frame generation for Ocarina of Time predicts frames forward from the game's motion vectors
+# (no added latency) instead of interpolating. Needs Frame Generation on in Graphics settings.
+EDEN_NX2_EXTRAPOLATE=1
+
+# Optional, off by default: while a game runs, shift the laptop's power budget from CPU boost to the
+# integrated GPU (changes the active Windows power plan for the session and restores it at exit).
+#EDEN_NX2_POWER_POLICY=igpu
+
 # --- Workarounds / Debug ---
 # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
 #EDEN_NX2_RESETFIX=0
@@ -43,3 +61,16 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_SPLIT_SKIP=1
 #EDEN_NX2_AUTO_STUB=1
 #EDEN_NX2_KEEP_ASTC=1
+
+# Graphics pipelines linked from per-stage shader libraries (VK_EXT_graphics_pipeline_library),
+# like the Shader libraries setting. Needs a driver with fast linking.
+#EDEN_NX2_GPL=1
+# With libraries on: =1 links them fast on every driver, =0 links them with link time
+# optimization on every driver. Unset: fast, except on AMD's Windows driver.
+#EDEN_NX2_GPL_FAST_LINK=1
+# With libraries on and fast links: after the fast link, an optimized link is built in the
+# background and replaces it at a later draw. On unless =0.
+#EDEN_NX2_GPL_OPTIMIZE=0
+# Threads of those optimized links, at low priority (default 1). =0 runs them as background jobs
+# of the shader build workers instead.
+#EDEN_NX2_GPL_OPTIMIZE_THREADS=1

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>An emulator built for AI agents: AGENTS.md, MCP and free CI</title>
+<meta name="description" content="Rules in AGENTS.md, scoped agent-ready issues, a loopback MCP server that drives a running game, and a CI build for every pull request. How it all fits.">
+<link rel="canonical" href="https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<meta name="author" content="Guarana contributors">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site.css">
+<link rel="stylesheet" href="blog.css">
+<link rel="alternate" type="application/rss+xml" title="Guarana blog" href="https://karimalsalah.github.io/guarana/blog/feed.xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Guarana">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR">
+<meta property="og:description" content="Rules in AGENTS.md, scoped agent-ready issues, a loopback MCP server that drives a running game, and a CI build for every pull request. How it all fits.">
+<meta property="og:url" content="https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html">
+<meta property="og:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<meta property="article:published_time" content="2026-11-13">
+<meta property="article:modified_time" content="2026-11-13">
+<meta property="article:section" content="Contributing">
+<meta property="article:tag" content="AI agents">
+<meta property="article:tag" content="MCP">
+<meta property="article:tag" content="AGENTS.md">
+<meta property="article:tag" content="Continuous integration">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR">
+<meta name="twitter:description" content="Rules in AGENTS.md, scoped agent-ready issues, a loopback MCP server that drives a running game, and a CI build for every pull request. How it all fits.">
+<meta name="twitter:image" content="https://karimalsalah.github.io/guarana/assets/social-preview.png">
+<meta name="twitter:image:alt" content="Guarana: Switch 2 emulation tuned for integrated GPUs and handhelds">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html#article",
+      "headline": "An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR",
+      "description": "Rules in AGENTS.md, scoped agent-ready issues, a loopback MCP server that drives a running game, and a CI build for every pull request. How it all fits.",
+      "datePublished": "2026-11-13",
+      "dateModified": "2026-11-13",
+      "author": {
+        "@type": "Organization",
+        "name": "Guarana contributors",
+        "url": "https://github.com/karimalsalah/guarana/graphs/contributors"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://karimalsalah.github.io/guarana/assets/logo-mark.svg"
+        }
+      },
+      "image": {
+        "@type": "ImageObject",
+        "url": "https://karimalsalah.github.io/guarana/assets/social-preview.png",
+        "width": 1280,
+        "height": 640
+      },
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html"
+      },
+      "isPartOf": {
+        "@type": "Blog",
+        "@id": "https://karimalsalah.github.io/guarana/blog/#blog",
+        "name": "Guarana blog",
+        "url": "https://karimalsalah.github.io/guarana/blog/"
+      },
+      "inLanguage": "en",
+      "articleSection": "Contributing",
+      "keywords": "AI agents, AGENTS.md, MCP server, Model Context Protocol, coding agents, Claude Code, continuous integration, pull request builds, emulator development, open source",
+      "about": {
+        "@type": "SoftwareApplication",
+        "name": "Guarana",
+        "url": "https://karimalsalah.github.io/guarana/",
+        "applicationCategory": "GameApplication"
+      },
+      "wordCount": 1216
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://karimalsalah.github.io/guarana/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Blog",
+          "item": "https://karimalsalah.github.io/guarana/blog/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Built for AI agents",
+          "item": "https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="../">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="hm-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFC94A"/><stop offset="1" stop-color="#F2851A"/></linearGradient>
+          <mask id="hm-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.6" stroke-linecap="round"/></mask>
+        </defs>
+        <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#hm-fill)" mask="url(#hm-streaks)"/>
+        <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+        <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3.4" stroke-linecap="round"/>
+      </svg>
+      <span>Guarana</span>
+    </a>
+    <a class="btn btn-small header-cta" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="../wins.html">Open wins</a></li>
+        <li><a href="./" class="is-section">Blog</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+<article aria-labelledby="post-title">
+<div class="wrap page-head">
+  <nav class="breadcrumb" aria-label="Breadcrumb"><ol><li><a href="../">Home</a></li><li><a href="./">Blog</a></li><li><span aria-current="page">Built for AI agents</span></li></ol></nav>
+  <p class="post-kicker">Contributing &middot; AI agents &middot; CI</p>
+  <h1 id="post-title">An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR</h1>
+  <p class="post-meta"><span>By Guarana contributors</span><span><time datetime="2026-11-13">November 13, 2026</time></span><span>6 min read</span></p>
+  <p class="lede">Emulator work is a loop: change the code, build, boot, get to the scene, look, measure. Guarana is set up so a coding agent can run most of that loop, and so its claims get checked the same way a person's are.</p>
+</div>
+<div class="wrap">
+<div class="prose post-body">
+
+<aside class="in-short" aria-labelledby="in-short-title">
+  <h2 id="in-short-title">In short</h2>
+  <ul>
+    <li><strong>Rules:</strong> <a href="https://github.com/karimalsalah/guarana/blob/HEAD/AGENTS.md">AGENTS.md</a> tells agents how this tree works: measure before claiming, keep experiments behind switches, check upstream first, never commit game data.</li>
+    <li><strong>Scoped work:</strong> issues labelled <code>agent-ready</code> state the goal, the files, an acceptance test that runs without the game, and how to measure on a device.</li>
+    <li><strong>Eyes on the game:</strong> an opt-in, loopback-only debug server and an MCP adapter let an agent read frame times, take screenshots, read logs, A/B shaders and send controller input to a running game.</li>
+    <li><strong>Free CI:</strong> every pull request is built and tested on GitHub's runners, and the Windows build is linked on the pull request.</li>
+    <li><strong>People stay responsible:</strong> AI help is disclosed, a human owns every pull request, and performance claims need benchmark rows.</li>
+  </ul>
+</aside>
+
+<h2 id="why">Why design for agents at all</h2>
+<p>The scarce resource in this project is not ideas. It is time on real hardware and careful measurement. A coding agent can read a log, bisect a shader or write a unit test as well as anyone, but only if it can see the running game, and only if its claims are held to the same evidence as a person's. Everything below follows from those two conditions.</p>
+
+<h2 id="agents-md">AGENTS.md: the rules of the tree</h2>
+<p>AGENTS.md sits at the repository root and is the brief every agent reads first. The rules that matter most:</p>
+<ul>
+  <li><strong>Ship only a measured gain on a verified scene:</strong> a <code>tools/bench</code> row marked valid, with its scene check passed, from a paired A/B against a baseline in the same session.</li>
+  <li><strong>Experiments are switches:</strong> <code>EDEN_NX2_*</code> environment variables, off by default, each documented in <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/switches.md">docs/switches.md</a> in the same pull request.</li>
+  <li><strong>Correctness before speed:</strong> a change that can alter the image needs a scene check and a known-issues note.</li>
+  <li><strong>Never commit game data:</strong> no keys, firmware, game files, dumps, caches, or logs with personal details.</li>
+  <li><strong>Upstream first:</strong> search Lichii, then Eglantine, before writing a fix; port with credit instead of rewriting; send fixes that are not specific to integrated GPUs back upstream.</li>
+</ul>
+<p>It also carries the one-command build and test scripts for Windows and Linux, a map of the source tree, and how to verify a change with and without the game. Claude Code reads it through the repository's CLAUDE.md, and other agents that look for an AGENTS.md get the same brief.</p>
+
+<h2 id="agent-ready">Issues an agent can finish</h2>
+<p>An <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready+-label%3Aneeds-triage"><code>agent-ready</code> issue</a> is written so that nobody has to ask a follow-up question: the goal, the context with file paths, an acceptance test that runs anywhere, and how to measure the result on a device. Issue <a href="https://github.com/karimalsalah/guarana/issues/8">#8</a> builds the telemetry for the <a href="frame-pacing-frame-generation-120hz-oled.html">frame pacing work</a>, and <a href="https://github.com/karimalsalah/guarana/issues/11">#11</a> and <a href="https://github.com/karimalsalah/guarana/issues/12">#12</a> are <a href="switch-2-emulator-boot-time.html">boot time</a> work. A pull request that meets the acceptance test can be reviewed on its evidence, whoever typed it.</p>
+
+<h2 id="mcp">A debug server an agent can talk to</h2>
+<p>Start the emulator with <code>EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545</code> and it runs a small JSON-lines server inside the process. <code>tools/nx2/debug_mcp.py</code>, written in Python with only the standard library, turns that server into an MCP server over stdio. The tools an agent gets:</p>
+<ul>
+  <li><code>status</code>, <code>frame_times</code>, <code>screenshot</code>: what is on screen, and how evenly frames arrive.</li>
+  <li><code>log_tail</code>, <code>log_filter</code>: read new log lines, and change the log filter without a relaunch.</li>
+  <li><code>capture_frame</code>, <code>reject_shaders</code>: dump one frame's passes, or reject shaders live for a bisection.</li>
+  <li><code>gpu_costs</code>: GPU time by shader, to find the expensive draw.</li>
+  <li><code>input</code>, <code>input_sequence</code>: press buttons and replay timed inputs to reach a spot.</li>
+</ul>
+<p>Without it, bisecting a shader that draws wrong means a rebuild, a relaunch and a walk back to the spot for every step. With it, a step is one reject and one screenshot. Finding an expensive draw starts the same way: ask for GPU time by shader, then read the shader that tops the list, as in the <a href="hyrule-field-shader-fix-intel-arc.html">Hyrule Field shader fix</a>.</p>
+<p>Add it to Claude Code from the repository root:</p>
+<pre><code>claude mcp add guarana-debug -- python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545</code></pre>
+<p>Most other MCP clients accept an entry like this one:</p>
+<pre><code>{
+  "mcpServers": {
+    "guarana-debug": {
+      "command": "python",
+      "args": ["-I", "tools/nx2/debug_mcp.py", "--server", "127.0.0.1:6545"]
+    }
+  }
+}</code></pre>
+<p>The etiquette is short: one request at a time while someone is playing, and agents never start or stop the emulator. A person launches the game; the agent asks it questions.</p>
+<p>The safety rules are in <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/nx2/debug-mcp.md">docs/nx2/debug-mcp.md</a>. The server is off unless the variable is set, refuses every host but loopback, writes only under its own dump folder and names every file itself. It returns rendered pixels, log lines, frame-dump summaries and shader hashes, and it has no way to read game files, keys or firmware from disk.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 640 214" role="img" aria-labelledby="loop-title loop-desc">
+    <title id="loop-title">How an agent reaches a running game, and how its pull request gets built</title>
+    <desc id="loop-desc">An AI agent talks to the MCP adapter over stdio, the adapter talks to the debug server on loopback, and the server lives inside the running emulator. A pull request is built by CI on Windows and Linux, and the Windows test build is linked on the pull request for testers.</desc>
+    <rect class="d-box" x="0" y="20" width="132" height="52" rx="8"/>
+    <text class="d-strong" x="66" y="51" text-anchor="middle">AI agent</text>
+    <path class="d-accent-line" d="M136 46H164"/>
+    <rect class="d-box" x="168" y="20" width="140" height="52" rx="8"/>
+    <text class="d-mono" x="238" y="43" text-anchor="middle">debug_mcp.py</text>
+    <text class="d-small" x="238" y="61" text-anchor="middle">MCP over stdio</text>
+    <path class="d-accent-line" d="M312 46H340"/>
+    <rect class="d-box" x="344" y="20" width="140" height="52" rx="8"/>
+    <text class="d-text" x="414" y="43" text-anchor="middle">debug server</text>
+    <text class="d-small" x="414" y="61" text-anchor="middle">loopback only</text>
+    <path class="d-accent-line" d="M488 46H516"/>
+    <rect class="d-hit" x="520" y="20" width="120" height="52" rx="8"/>
+    <text class="d-strong" x="580" y="51" text-anchor="middle">running game</text>
+    <path class="d-grid" d="M0 104H640"/>
+    <rect class="d-box" x="0" y="136" width="132" height="52" rx="8"/>
+    <text class="d-strong" x="66" y="167" text-anchor="middle">pull request</text>
+    <path class="d-line" d="M136 162H164"/>
+    <rect class="d-box" x="168" y="136" width="200" height="52" rx="8"/>
+    <text class="d-text" x="268" y="159" text-anchor="middle">CI: Windows and Linux</text>
+    <text class="d-small" x="268" y="177" text-anchor="middle">warnings as errors, tests run</text>
+    <path class="d-line" d="M372 162H400"/>
+    <rect class="d-hit" x="404" y="136" width="236" height="52" rx="8"/>
+    <text class="d-text" x="522" y="159" text-anchor="middle">Windows test build</text>
+    <text class="d-small" x="522" y="177" text-anchor="middle">linked in a comment on the PR</text>
+  </svg>
+  <figcaption>The agent never launches the game. A person does; the agent asks it questions through the adapter.</figcaption>
+</figure>
+
+<h2 id="ci">Free CI builds for every pull request</h2>
+<p>Every pull request is built on GitHub's runners, on Windows with clang-cl and on Linux with GCC, with warnings treated as errors, and the tests run. The Windows build is uploaded as a test build, and a comment on the pull request links it. A tester with the game can try the change without compiling anything, and an agent's change gets built and tested even on a machine with no compiler installed. Pull requests that only touch documentation skip the build.</p>
+
+<h2 id="bench">Measuring the same way</h2>
+<p><a href="https://github.com/karimalsalah/guarana/blob/HEAD/tools/bench/README.md"><code>tools/bench</code></a> runs one scene the same way on any machine through the same debug server. It checks the scene against a reference screenshot and writes one JSON row per run, with personal details scrubbed. Only rows that are valid and passed the scene check count. Agents and people use the same harness, so a number from either compares with the other.</p>
+
+<h2 id="policy">The policy that keeps it honest</h2>
+<p>The <a href="https://github.com/karimalsalah/guarana/blob/HEAD/docs/AI_POLICY.md">AI policy</a> is five rules:</p>
+<ol>
+  <li>Disclose AI help with an <code>Assisted-by: &lt;tool&gt;</code> trailer.</li>
+  <li>A human owns every pull request and can explain every line of it.</li>
+  <li>Performance claims need measured benchmark rows, not reasoning.</li>
+  <li>Spam pull requests are closed without review.</li>
+  <li>No AI-generated game assets.</li>
+</ol>
+<p>Disclosure is not a mark against a contribution. Hiding it is.</p>
+
+<h2 id="try">Try it</h2>
+<p>Point your agent at an issue with a prompt like the one in the README:</p>
+<pre><code>Read AGENTS.md and docs/ARCHITECTURE.md. Take issue #&lt;number&gt; (label: agent-ready).
+Make the smallest change that meets its acceptance criteria, add or update tests under src/tests,
+and open a pull request with an "Assisted-by: &lt;tool&gt;" trailer and the evidence the issue asks for.</code></pre>
+
+<section class="qa" aria-labelledby="qa">
+  <h2 id="qa">Questions people ask</h2>
+  <h3>Can an agent read my game files or keys through the MCP server?</h3>
+  <p>No. The server returns rendered frames, log lines, frame-dump summaries and shader hashes. It has no way to read game files, keys or firmware from disk, and it listens on loopback only.</p>
+  <h3>Do I need a gaming PC to contribute?</h3>
+  <p>No. CI builds and tests every pull request, and testers who own the game try the linked build. A <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> needs no code at all.</p>
+  <h3>Which agents does it work with?</h3>
+  <p>Any MCP client. The README has the Claude Code command and a JSON entry most other clients accept, and AGENTS.md is plain Markdown any agent can read. The <a href="../faq.html#ai-agents">FAQ</a> has more.</p>
+</section>
+
+<div class="cta-box">
+  <h2>Bring your agent, or just your device</h2>
+  <p>Pick an <a href="https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aagent-ready+-label%3Aneeds-triage"><code>agent-ready</code> issue</a>, send a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a>, or read the <a href="../contribute.html#agents">agent quick start</a>. Every device except the Arc 140T is untested by the maintainers.</p>
+</div>
+
+<nav class="more-posts" aria-labelledby="more-title">
+  <h2 id="more-title">More from the blog</h2>
+  <ul>
+    <li><a href="hyrule-field-shader-fix-intel-arc.html">How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU</a></li>
+    <li><a href="frame-pacing-frame-generation-120hz-oled.html">Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</a></li>
+    <li><a href="switch-2-emulator-boot-time.html">Booting a Switch 2 emulator in half the time: what the boot marks found</a></li>
+  </ul>
+</nav>
+
+</div>
+</div>
+</article>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <h2>Guarana</h2>
+      <p>Open-source Nintendo Switch 2 emulation tuned for integrated GPUs: Intel Arc first, AMD Radeon handhelds next.</p>
+    </div>
+    <div>
+      <h2>Project</h2>
+      <ul>
+        <li><a href="https://github.com/karimalsalah/guarana/releases/latest">Latest release</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana">Source code</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues">Issues</a></li>
+        <li><a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">Device report form</a></li>
+        <li><a href="https://discord.gg/urz7vMdRM">Discord: discord.gg/urz7vMdRM</a></li>
+      </ul>
+    </div>
+    <nav aria-label="Footer">
+      <h2>Site</h2>
+      <ul>
+        <li><a href="../devices/">Devices</a></li>
+        <li><a href="../benchmarks.html">Benchmarks</a></li>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../contribute.html">Contribute</a></li>
+        <li><a href="../agents.html">Agents</a></li>
+        <li><a href="../wins.html">Open wins</a></li>
+        <li><a href="../legacy.html">Hall of fame</a></li>
+        <li><a href="./">Blog</a></li>
+        <li><a href="../legal.html">Legal</a></li>
+      </ul>
+    </nav>
+    <div>
+      <h2>For machines</h2>
+      <ul>
+        <li><a href="../llms.txt">llms.txt</a></li>
+        <li><a href="../llms-full.txt">llms-full.txt</a></li>
+        <li><a href="../sitemap.xml">sitemap.xml</a></li>
+        <li><a href="feed.xml">Blog RSS feed</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap footer-legal">
+    <p>Guarana is not affiliated with, endorsed or sponsored by Nintendo. Nintendo Switch 2 is a trademark of Nintendo. Other product names belong to their owners and are used only to say what the software runs on.</p>
+    <p>No keys, firmware or games included. Code licensed GPL-3.0-or-later. Built on Lichii, Eglantine, Eden and yuzu.</p>
+  </div>
+</footer>
+</body>
+</html>

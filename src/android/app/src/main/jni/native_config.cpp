@@ -5,6 +5,8 @@
 #include <utility>
 
 #include <jni.h>
+#include <memory>
+#include <vector>
 
 #include "android_config.h"
 #include "android_settings.h"

@@ -18,6 +18,7 @@ constexpr u64 OutputProgramKey = 0x14b4222bbe23abeeULL;
 constexpr u64 PrepassProgramKey = 0x4cbf6eff32525aecULL;
 // The prepass of other game versions, with the same output pass (#450): a shader dump of 1.0.0
 // has this one and not PrepassProgramKey.
+// Game version 1.1.1 changed the prepass and kept the output pass (#450).
 constexpr u64 PrepassProgramKeyV111 = 0x5e8d8dc58bed8ba4ULL;
 constexpr u64 StarFoxProgramId = 0x0400E88025B1A000ULL;
 constexpr u64 StarFoxPrepassProgramKey = 0xd686ca0b9fad9e6dULL;
@@ -79,6 +80,10 @@ public:
             return;
         }
         sample = JitterSample{color, width, height, offset};
+    }
+
+    bool Has() const {
+        return sample.has_value();
     }
 
     // Consume on every output attempt, even if its resources cannot be used.

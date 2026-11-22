@@ -1,0 +1,14 @@
+{
+  "name": "async-bounded",
+  "description": "Asynchronous shaders on and native draws Bounded: a draw waits up to 8 ms of the frame's budget, then is skipped (Lichii #465). Look at the screenshots: a skipped draw is missing.",
+  "cache_states": [
+    "cold"
+  ],
+  "env": {},
+  "settings": {
+    "Renderer": {
+      "use_asynchronous_shaders": true,
+      "native_async_draws": 1
+    }
+  }
+}

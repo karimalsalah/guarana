@@ -196,7 +196,7 @@ TEST_CASE("Star Fox cutscene prepass opens the existing spatial replacement chai
     REQUIRE_FALSE(FE::CapturedPasses(FE::ProgramId)->IsPrepass(0));
 }
 
-TEST_CASE("Fire Emblem alternate prepass opens the replacement chain",
+TEST_CASE("Fire Emblem game version 1.1.1 prepass opens the replacement chain",
           "[starfox_upscale]") {
     const auto passes = FE::CapturedPasses(FE::ProgramId);
     REQUIRE(passes);

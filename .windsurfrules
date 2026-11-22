@@ -1,0 +1,3 @@
+Read AGENTS.md at the repository root before changing anything. It is the source of truth for this
+repository (rules, repository map, build and test commands, never-commit list, commit style).
+The one-command start for every AI tool is in docs/AI-QUICKSTART.md.

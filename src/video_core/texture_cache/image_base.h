@@ -60,10 +60,13 @@ enum class ImageFlagBits : u32 {
     /// device memory when the guest memory under it can hold data (Image::BindTiles), and only
     /// the parts written are uploaded.
     SparseTiles = 1 << 23,
+    RenderTargetOrigin = 1 << 24, ///< Created for a render-target binding.
+    ContentsDefined = 1 << 25,    ///< Initialized by an upload, whole-image copy or zero clear.
+    PendingTransfer = 1 << 26,    ///< transfer_tick identifies the last recorded transfer.
     /// Its own address space mapped it to more than one device range when it was made (with
     /// Sparse only when the texture says so).
-    NonContiguous = 1 << 24,
-    GuestReplacedContents = 1 << 25,
+    NonContiguous = 1 << 27,
+    GuestReplacedContents = 1 << 28,
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
@@ -120,6 +123,7 @@ struct ImageBase {
     /// CpuModified. Empty while CpuModified means all of it that can hold data.
     std::vector<std::pair<u64, u64>> dirty_ranges;
     u64 scale_tick = 0;
+    u64 transfer_tick = 0;
     bool has_scaled = false;
 
     /// The channel and GPU address space whose page table RegisterImage put the image in.
@@ -142,12 +146,22 @@ struct ImageBase {
     /// after it are bytes it holds older copies of, unless it rendered over them itself (which the
     /// cache can't tell from a render elsewhere in it).
     u64 load_tick = 0;
-    /// frame_tick + 1 of the first frame a render pass other than a clear wrote it, or 0.
+    /// frame_tick + 1 of the first GPU write into the image that was not a clear (a render
+    /// target, a copy destination), 0 while there was none (Eglantine #874).
     u64 first_written_frame = 0;
     /// Levels whose every layer a shader last wrote through a storage view. Any other GPU write
     /// (render pass, clear, copy, alias copy) and an upload from guest memory clear them.
     u32 storage_written_levels = 0;
     size_t lru_index = SIZE_MAX;
+
+    /// Asynchronous shaders' skip rule (EDEN_NX2_ASYNC_DISCARD=2, ClassifyClearedTarget): the
+    /// frames of the image's last two full clears that had a write between them (~0 = none), and
+    /// whether anything but a clear wrote it since the last one. Two clears with no draw between
+    /// count as one, so a tick that falls between them cannot make a layer the game renders once
+    /// look like a per-frame target.
+    u64 last_clear_frame = ~u64{0};
+    u64 previous_clear_frame = ~u64{0};
+    bool drawn_since_clear = false;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
 

@@ -1,0 +1,25 @@
+{
+  "name": "oot-kokiri-forest",
+  "title_id": "0400486024DEC000",
+  "description": "The Legend of Zelda: Ocarina of Time, inside Link's house in Kokiri Forest, where a save made early in a new game loads. The game is expected to offer to load its newest save by itself, so that one press of A loads it (not yet confirmed in a run). Static camera, nothing pressed after loading.",
+  "notes": [
+    "The save: a save of a new game made in Kokiri Forest as young Link, before leaving the forest; such a save loads inside Link's house. A tester makes it in about ten minutes: start a new game, play the opening until you control Link in Kokiri Forest, and save with the game's own save. It must be the newest save, because the game's Load prompt offers the newest one: copy <user-dir>/nand/user/save right after saving and pass that copy as --save-backup, so that every variant loads exactly it.",
+    "The input script waits 25 s after the emulator first presents frames, for the Load prompt the game opens by itself about 20 s after boot (the prompt waits for an answer, so waiting longer is harmless), and presses A once. A press that comes before the prompt is lost: the run then ends on the title screen, the scene check fails and the row is invalid; run it again, or raise the first wait_s for a slow machine. Not yet confirmed in a run (issue #40). If the run ends on the title or file-select screen, use the input steps of oot-hyrule-field.json up to the file select and pick the entry that holds this save.",
+    "settle_s gives the load, the walk-in and the first shader compilations time to end before the screenshot, as in oot-hyrule-field.",
+    "reference is resolved next to this file and is not shipped: it is a screenshot of YOUR save in the scene. Record it once with `bench.py run ... --scene tools/bench/scenes/oot-kokiri-forest.json --record-reference`, open the image and check that it shows Link inside his house in gameplay (not the Load prompt, the title screen or a menu), then run again without the flag. Rows of the recording run are invalid by design.",
+    "The scene is indoors, so the time of day of the save does not change the picture much and references of different testers stay close. Equipment and hearts in the HUD can differ; say so in the PR if yours do.",
+    "The picture check refuses a run whose picture is black but for the HUD (black_picture), with or without a reference. The house is lit; if the check refuses your rows although the screenshot shows the room, report it in an issue with the screenshot rather than lowering the limits."
+  ],
+  "reference": "reference/oot-kokiri-forest.png",
+  "scene_threshold": 30,
+  "boot": {"min_presents": 30, "server_timeout_s": 120, "presents_timeout_s": 180},
+  "input": [
+    {"wait_s": 25, "buttons": ["A"], "frames": 6}
+  ],
+  "settle_s": 50,
+  "window_s": 15,
+  "refresh_hz": 60,
+  "screenshot_height": 540,
+  "saves": {"backup_dir": "", "user_dir": "", "save_subdir": "nand/user/save"},
+  "settings": {}
+}

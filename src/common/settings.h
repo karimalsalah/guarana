@@ -256,6 +256,9 @@ struct Values {
     SwitchableSetting<bool> sync_core_speed{linkage, false, "sync_core_speed", Category::Core,
                                             Specialization::Default};
 
+    // Per-GPU, per-game presets (core/game_presets.h) fill in the settings the user left alone.
+    Setting<bool> auto_presets{linkage, true, "auto_presets", Category::Core};
+
     // Cpu
     SwitchableSetting<CpuBackend, true> cpu_backend{linkage,
                                                     CpuBackend::Dynarmic,
@@ -707,11 +710,16 @@ struct Values {
                                                          true,
                                                          true};
 
+    // Graphics pipeline libraries (VK_EXT_graphics_pipeline_library): pipelines linked from
+    // per-stage shader libraries. EDEN_NX2_GPL=1 also turns it on.
+    SwitchableSetting<bool> use_graphics_pipeline_library{
+        linkage, false, "use_graphics_pipeline_library", Category::RendererAdvanced};
+
     SwitchableSetting<bool> skip_unbuilt_mesh_draws{linkage, false, "skip_unbuilt_mesh_draws",
                                                     Category::RendererAdvanced};
-
-    // Precache shaders before the game starts: the compute programs in the game files are built on
-    // the loading screen, so the driver's cache holds them before the game first uses them.
+    // Precache shaders before the game starts: the compute programs in the game files and the
+    // cached graphics pipelines the boot leaves for later are built on the loading screen, so the
+    // driver's cache holds them before the game first uses them.
     // Ask: the desktop app asks at launch while the game has no finished precache; where nothing
     // asks, as Off.
     SwitchableSetting<PrecacheShaders> precache_shaders{linkage,
@@ -954,6 +962,14 @@ struct Values {
 #endif
     };
     Setting<bool> controller_navigation{linkage, true, "controller_navigation", Category::Controls};
+    // Map player 1 (Pro Controller) to a connected gamepad automatically when it is unmapped,
+    // keyboard-mapped or mapped to a disconnected device.
+    Setting<bool> controller_auto_configure{linkage, true, "controller_auto_configure",
+                                            Category::Controls};
+    // true: Nintendo positional layout (A is the east button, like a Switch). false: Xbox/PlayStation
+    // label layout (A/B and X/Y swapped) for auto-configured pads.
+    Setting<bool> controller_positional_face_buttons{
+        linkage, true, "controller_positional_face_buttons", Category::Controls};
     Setting<bool> enable_joycon_driver{linkage, true, "enable_joycon_driver", Category::Controls};
     Setting<bool> enable_procon_driver{linkage, false, "enable_procon_driver", Category::Controls};
 
@@ -1185,6 +1201,9 @@ constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 
 [[nodiscard]] size_t FrameGenMaxGenerations();
 
+/// Effective target, including the optional session-only frame target hotkeys override.
+[[nodiscard]] u32 FrameGenTargetRate();
+
 bool GetDebugKnobAt(u8 i);
 
 void UpdateGPUAccuracy();
@@ -1217,6 +1236,13 @@ bool SkipCpuInnerInvalidation();
 // for the running program (the configuration is left as is). The core clears it on load.
 AstcRecompression GetAstcRecompression();
 void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression);
+
+// Per-game values a game preset gave settings for the running program (core/game_presets.h).
+// They are not the user's: config files leave them out. A value stops being held once it changes.
+void HoldPresetValue(BasicSetting& setting);
+bool IsPresetValue(const BasicSetting& setting);
+/// Returns the held settings to their global values.
+void ClearPresetValues();
 
 bool IsOpenGL();
 

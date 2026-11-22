@@ -1,0 +1,34 @@
+{
+  "name": "Guarana (Ubuntu 24.04)",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "16gb",
+    "storage": "32gb"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=ccache-${devcontainerId},target=/home/vscode/.cache/ccache,type=volume"
+  ],
+  "containerEnv": {
+    "CCACHE_MAXSIZE": "5G"
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-python.python",
+        "editorconfig.editorconfig",
+        "github.vscode-github-actions",
+        "timonwong.shellcheck",
+        "anthropic.claude-code"
+      ]
+    }
+  }
+}

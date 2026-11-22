@@ -5,20 +5,27 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
+#include "common/boot_timing.h"
 #include "common/common_types.h"
 #include "common/dynamic_library.h"
 #include "common/logging.h"
 #include <ranges>
 #include <vulkan/vulkan_core.h>
 #include "core/frontend/emu_window.h"
+#include "video_core/vulkan_common/early_slot.h"
 #include "video_core/vulkan_common/vulkan_address_map.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
+#include "video_core/vulkan_common/vulkan_library.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
 #include <algorithm>
@@ -137,6 +144,10 @@ namespace {
 }
 
 void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const char*>& layers) {
+    if (layers.empty()) {
+        // Listing the layers makes the loader read every layer manifest again.
+        return;
+    }
     const std::optional layer_properties = vk::EnumerateInstanceLayerProperties(dld);
     if (!layer_properties) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties, disabling layers");
@@ -154,11 +165,23 @@ void RemoveUnavailableLayers(const vk::InstanceDispatch& dld, std::vector<const 
         return false;
     });
 }
+
+[[nodiscard]] std::string JoinNames(std::span<const char* const> names) {
+    std::string text;
+    for (const char* name : names) {
+        if (!text.empty()) {
+            text += ", ";
+        }
+        text += name;
+    }
+    return text.empty() ? std::string{"none"} : text;
+}
 } // Anonymous namespace
 
-vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
-                            u32 required_version, Core::Frontend::WindowSystemType window_type,
-                            bool enable_validation) {
+namespace {
+vk::Instance CreateInstanceNow(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
+                               u32 required_version, Core::Frontend::WindowSystemType window_type,
+                               bool enable_validation) {
     if (!library.IsOpen()) {
         LOG_ERROR(Render_Vulkan, "Vulkan library not available");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
@@ -171,6 +194,8 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     }
+    // The loader finds its drivers and layers on the first enumeration.
+    const double listing_start = Common::BootTiming::Now();
     // Enumerate instance extensions exactly once. RequiredExtensions() used to enumerate a second
     // time internally; if the driver returned a different set between the two calls (a real TOCTOU
     // seen on some AMD iGPU drivers), an extension added to the list could be missing from the
@@ -195,10 +220,17 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
                   VK_VERSION_MAJOR(required_version), VK_VERSION_MINOR(required_version));
         throw vk::Exception(VK_ERROR_INCOMPATIBLE_DRIVER);
     }
+    Common::BootTiming::Mark("vulkan: instance extensions and layers listed", listing_start);
+    // All the emulator decides about the instance; the creation time below is the driver's.
+    LOG_INFO(Render_Vulkan, "Vulkan instance: loader {}.{}.{}, extensions: {}; layers: {}",
+             VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version),
+             VK_VERSION_PATCH(available_version), JoinNames(extensions), JoinNames(layers));
+    const double create_start = Common::BootTiming::Now();
     vk::Instance instance =
         std::async([&] {
             return vk::Instance::Create(available_version, layers, extensions, dld);
         }).get();
+    Common::BootTiming::Mark("vulkan: instance created", create_start);
     if (!vk::Load(*instance, dld)) {
         LOG_ERROR(Render_Vulkan, "Failed to load Vulkan instance function pointers");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
@@ -210,6 +242,147 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         dld.vkGetPhysicalDeviceSurfaceCapabilities2KHR = nullptr;
     }
     return instance;
+}
+
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+/// An instance made ahead of the renderer (EDEN_NX2_BOOT_ASYNC, EDEN_NX2_VULKAN_INSTANCE_ONCE): its
+/// library and dispatch table are its own, and live as long as the process once handed over, as
+/// the instance points at them.
+struct Precreated {
+    std::shared_ptr<Common::DynamicLibrary> library;
+    std::unique_ptr<vk::InstanceDispatch> dld;
+    vk::Instance instance; ///< Destroyed first
+    std::mutex use;        ///< Held while the instance is looked at or moved out
+
+    /// Whether the instance is still here (not taken by the renderer).
+    explicit operator bool() const noexcept {
+        return static_cast<bool>(instance);
+    }
+};
+
+/// What an instance is made for: what the renderer asks of CreateInstance.
+struct InstanceKey {
+    Core::Frontend::WindowSystemType window_type;
+    bool validation;
+    u32 version;
+
+    bool operator==(const InstanceKey&) const = default;
+};
+
+using EarlyInstanceSlot = EarlySlot<InstanceKey, Precreated>;
+
+/// Never destroyed: an instance nobody took (the frontend made it for its device list and no
+/// game started) must not be destroyed while the process exits, and the future of its creation
+/// must not make the exit wait.
+EarlyInstanceSlot& EarlyInstances() {
+    static EarlyInstanceSlot* const slot = new EarlyInstanceSlot;
+    return *slot;
+}
+
+std::mutex handed_over_mutex;
+std::vector<std::shared_ptr<Precreated>> handed_over;
+#endif
+} // Anonymous namespace
+
+bool InstanceOnceEnabled() {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_VULKAN_INSTANCE_ONCE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+void PrecreateInstance([[maybe_unused]] Core::Frontend::WindowSystemType window_type,
+                       [[maybe_unused]] bool enable_validation) {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    static const bool boot_async = [] {
+        const char* value = std::getenv("EDEN_NX2_BOOT_ASYNC");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (!boot_async && !InstanceOnceEnabled()) {
+        return;
+    }
+    const InstanceKey key{window_type, enable_validation, VK_API_VERSION_1_1};
+    const bool started = EarlyInstances().Reserve(key, [window_type, enable_validation] {
+        Common::BootTiming::Mark("vulkan: instance creation started ahead of the renderer");
+        return std::async(std::launch::async, [window_type, enable_validation] {
+                   auto made = std::make_shared<Precreated>();
+                   made->library = OpenLibrary(nullptr);
+                   made->dld = std::make_unique<vk::InstanceDispatch>();
+                   made->instance =
+                       CreateInstanceNow(*made->library, *made->dld, VK_API_VERSION_1_1,
+                                         window_type, enable_validation);
+                   return made;
+               })
+            .share();
+    });
+    static_cast<void>(started);
+#endif
+}
+
+bool UseEarlyInstance([[maybe_unused]] Core::Frontend::WindowSystemType window_type,
+                      [[maybe_unused]] bool enable_validation,
+                      [[maybe_unused]] const InstanceUse& use) {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    if (!InstanceOnceEnabled()) {
+        return false;
+    }
+    // After the renderer took (or dropped) the instance, a later listing, from a settings dialog
+    // while the game runs, makes its own as on main and leaves nothing behind.
+    if (EarlyInstances().WasTaken()) {
+        return false;
+    }
+    PrecreateInstance(window_type, enable_validation);
+    const double start = Common::BootTiming::Now();
+    const bool used = EarlyInstances().Borrow(
+        InstanceKey{window_type, enable_validation, VK_API_VERSION_1_1},
+        [&use](Precreated& made) { use(made.instance, *made.dld); });
+    if (used) {
+        Common::BootTiming::Mark("vulkan: instance shared with the frontend's device list", start);
+    }
+    return used;
+#else
+    return false;
+#endif
+}
+
+vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceDispatch& dld,
+                            u32 required_version, Core::Frontend::WindowSystemType window_type,
+                            bool enable_validation) {
+#if !defined(__ANDROID__) && !defined(EGLANTINE_STREAMLINE)
+    const double wait_start = Common::BootTiming::Now();
+    std::optional<vk::Instance> taken;
+    auto result = EarlyInstances().Take(
+        InstanceKey{window_type, enable_validation, required_version}, [&](Precreated& made) {
+            // The instance points at its own dispatch table; the renderer's holds the same
+            // functions.
+            dld = *made.dld;
+            taken.emplace(std::move(made.instance));
+        });
+    switch (result.outcome) {
+    case EarlyInstanceSlot::Outcome::Empty:
+        break;
+    case EarlyInstanceSlot::Outcome::Mismatch:
+        LOG_INFO(Render_Vulkan, "The instance made ahead does not fit; creating another");
+        break;
+    case EarlyInstanceSlot::Outcome::Failed:
+        LOG_WARNING(Render_Vulkan, "Creating the instance ahead failed ({}); creating it now",
+                    result.error);
+        break;
+    case EarlyInstanceSlot::Outcome::Taken:
+        Common::BootTiming::Mark("vulkan: instance taken from the early creation", wait_start);
+        {
+            std::scoped_lock lock{handed_over_mutex};
+            handed_over.push_back(std::move(result.made));
+        }
+        return std::move(*taken);
+    }
+#endif
+    return CreateInstanceNow(library, dld, required_version, window_type, enable_validation);
 }
 
 } // namespace Vulkan

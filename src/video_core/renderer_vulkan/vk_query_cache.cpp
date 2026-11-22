@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
@@ -21,12 +22,15 @@
 #include "common/logging.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_cache/query_cache.h"
+#include "video_core/query_cache/running_query_bound.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
+#include "video_core/renderer_vulkan/vk_query_copy.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -52,7 +56,7 @@ bool IsTilerQueryDriver(VkDriverId driver_id) {
 
 class SamplesQueryBank : public VideoCommon::BankBase {
 public:
-    static constexpr size_t BANK_SIZE = 256;
+    static constexpr size_t BANK_SIZE = VideoCommon::RunningSamplesQuery::BankSlots;
     static constexpr size_t QUERY_SIZE = 8;
     explicit SamplesQueryBank(const Device& device_, Scheduler& scheduler_, size_t index_)
         : BankBase(BANK_SIZE), device{device_}, scheduler{scheduler_}, index{index_} {
@@ -260,13 +264,15 @@ public:
         // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
         // Time's title screen and file select reached 16,384 slots over 64 banks, while gameplay
         // windows in Hyrule Field, Kakariko Village, and the Shooting Gallery reach up to 346
-        // slots across two banks. Past 4 banks (1,024 slots), drop the count as a reset would.
-        static constexpr size_t MaxRunningQuerySlots = 4 * SamplesQueryBank::BANK_SIZE;
-        if (current_query && current_query->size_slots > MaxRunningQuerySlots) {
+        // slots across two banks, but on an AMD iGPU (Lichii issue 1428) they went past 4 banks
+        // and occlusion-tested objects blinked. Past RunningSamplesQuery::MaxBanks (32 banks,
+        // 8,192 slots), drop the count as a reset would.
+        if (current_query &&
+            VideoCommon::RunningSamplesQuery::IsOverBound(current_query->size_slots)) {
             // It drops a real count. Logged on the 1st, 2nd, 4th, 8th... drop, so a window this
             // long during gameplay doesn't go unnoticed and a title screen doesn't flood the log.
             ++bank_bound_resets;
-            if ((bank_bound_resets & (bank_bound_resets - 1)) == 0) {
+            if (VideoCommon::RunningSamplesQuery::IsLoggedDrop(bank_bound_resets)) {
                 LOG_WARNING(Render_Vulkan,
                             "Samples query ran {} slots with no reset or report, dropped its "
                             "count (drop {})",
@@ -316,16 +322,29 @@ public:
         // AMD's drivers wait on each query of a WAIT_BIT copy separately (3.8 us per query, ~5 ms
         // a frame in Ocarina). Queries complete in order on the queue, so waiting for the newest
         // one is enough before copying the range without the wait.
+        // EDEN_NX2_QUERY_WAIT_LAST=1: the same on Intel's Windows driver (experiment).
+        static const bool intel_wait_on_last = [] {
+            const char* value = std::getenv("EDEN_NX2_QUERY_WAIT_LAST");
+            return value && *value == '1';
+        }();
         const bool wait_on_last =
-            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+            (intel_wait_on_last && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS);
 
+        // EDEN_NX2_GPUCOST_QUERY bit 1: QueryCacheRuntime::Barriers(true) follows these copies in
+        // NotifyWFI, and its barrier (every stage and write of earlier work to transfer reads and
+        // writes) orders the copies' writes before the reads of SyncWrites. The prefix scan pass
+        // has a barrier of its own before it reads them.
+        const bool own_barrier =
+            !VideoCommon::Nx2GpuCost::Query(VideoCommon::Nx2GpuCost::QueryNoCopyBarrier);
         ApplyBanksWideOp<true>(pending_sync, [&](SamplesQueryBank* bank, size_t start,
                                                  size_t amount) {
             size_t bank_id = bank->GetIndex();
             auto& resolve_buffer = buffers[resolve_buffer_index];
             VkQueryPool query_pool = bank->GetInnerPool();
             scheduler.RequestOutsideRenderPassOperationContext();
-            scheduler.Record([start, amount, base_offset, query_pool, wait_on_last,
+            scheduler.RecordEmu(TraceCategory::QueryCopy, {static_cast<u32>(amount), 0, 0},
+                [start, amount, base_offset, query_pool, wait_on_last, own_barrier,
                               buffer = *resolve_buffer](vk::CommandBuffer cmdbuf) {
                 const VkBufferMemoryBarrier copy_query_pool_barrier{
                     .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -370,8 +389,11 @@ public:
                         static_cast<u32>(base_offset), SamplesQueryBank::QUERY_SIZE,
                         VK_QUERY_RESULT_64_BIT);
                 }
-                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, copy_query_pool_barrier);
+                if (own_barrier) {
+                    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                           copy_query_pool_barrier);
+                }
             });
             offsets[bank_id] = {start, base_offset};
             base_offset += amount * SamplesQueryBank::QUERY_SIZE;
@@ -1556,6 +1578,9 @@ void QueryCacheRuntime::HostConditionalRenderingCompareValueImpl(VideoCommon::Lo
         const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
         const auto [buffer, offset] =
             impl->buffer_cache.ObtainCPUBuffer(object.address, 8, sync_info, post_op);
+        // Later passes and submissions begin conditional rendering on this buffer again
+        // (ResumeHostConditionalRendering) without telling its usage tracker.
+        buffer->DisableDirectUploads();
         impl->hcr_buffer = buffer->Handle();
         impl->hcr_offset = offset;
     }
@@ -1813,41 +1838,19 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     if (VideoCommon::GpuSplit::PlayingUnlent() && VideoCommon::GpuSplit::QuerySyncEnabled()) {
         // EDEN_NX2_RENDER_QUERY_SYNC_E: outside a lent call, into the buffers the back obtained
         // for this op (and outdated the read downloads of); the back's cache is not entered.
+    std::vector<Buffer*> query_write_buffers;
+    query_write_buffers.reserve(impl->little_cache.size());
+    std::scoped_lock lk(impl->buffer_cache.mutex);
+    impl->buffer_cache.BufferOperations([&] {
         impl->buffers_to_upload_to.clear();
-        for (const auto& [begin, end] : impl->little_cache) {
-            const QuerySyncTarget* target = nullptr;
-            if (t_query_sync_targets != nullptr) {
-                for (const QuerySyncTarget& candidate : *t_query_sync_targets) {
-                    if (candidate.begin <= begin && end <= candidate.begin + candidate.bytes) {
-                        target = &candidate;
-                        break;
-                    }
-                }
-            }
-            if (target == nullptr) [[unlikely]] {
-                VideoCommon::GpuSplit::Get().NoteQuerySyncMissing();
-                return;
-            }
-            impl->buffers_to_upload_to.emplace_back(target->buffer,
-                                                    target->offset + (begin - target->begin));
-        }
-    } else {
-        std::scoped_lock lk(impl->buffer_cache.mutex);
-        impl->buffer_cache.BufferOperations([&] {
-            impl->buffers_to_upload_to.clear();
-            for (auto& pair : impl->little_cache) {
-                static constexpr auto sync_info =
-                    VideoCommon::ObtainBufferSynchronize::FullSynchronize;
-                const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
-                const auto [buffer, offset] = impl->buffer_cache.ObtainCPUBuffer(
-                    pair.first, static_cast<u32>(pair.second - pair.first), sync_info, post_op);
-                impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
-            }
-        });
-        // The copies below are GPU writes the buffer cache doesn't record: reads taken before
-        // them must not keep the bytes they downloaded as the newest.
-        for (const auto& value : values) {
-            impl->buffer_cache.OutdateReadDownloads(value.address, value.size);
+        query_write_buffers.clear();
+        for (auto& pair : impl->little_cache) {
+            static constexpr auto sync_info = VideoCommon::ObtainBufferSynchronize::FullSynchronize;
+            const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
+            const auto [buffer, offset] = impl->buffer_cache.ObtainCPUBuffer(
+                pair.first, static_cast<u32>(pair.second - pair.first), sync_info, post_op);
+            impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
+            query_write_buffers.push_back(buffer);
         }
     }
 
@@ -1885,8 +1888,18 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
         src_buffer = base_src_buffer;
     }
 
+    for (auto& copies : impl->copies_setup) {
+        copies = NonOverlappingQueryCopies(copies);
+    }
+
     impl->scheduler.RequestOutsideRenderPassOperationContext();
-    impl->scheduler.Record([src_buffer, dst_buffers = std::move(impl->buffers_to_upload_to), vk_copies = std::move(impl->copies_setup)](vk::CommandBuffer cmdbuf) {
+    // The copies below go in the current submission: a mapped read waits for it.
+    const u64 write_tick = impl->scheduler.CurrentTick();
+    for (Buffer* written : query_write_buffers) {
+        written->SetGpuWriteTick(write_tick);
+    }
+    impl->scheduler.RecordEmu(TraceCategory::QueryCopy, {0, 0, 1},
+        [src_buffer, dst_buffers = std::move(impl->buffers_to_upload_to), vk_copies = std::move(impl->copies_setup)](vk::CommandBuffer cmdbuf) {
         size_t size = dst_buffers.size();
         for (size_t i = 0; i < size; i++) {
             cmdbuf.CopyBuffer(src_buffer, dst_buffers[i].first, vk_copies[i]);

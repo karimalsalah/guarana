@@ -121,9 +121,16 @@ namespace Core {
 
 /// Guest frames (Switch 1 game composites or Switch 2 vi2 presents); input replay is locked to it.
 extern std::atomic<u64> g_nx2_present_count;
-/// Steady-clock time of each guest present, by present count, for the debug server's frame_times
-/// tool and bug reports.
+/// Steady-clock time of each guest present, by present count; written only while someone reads
+/// them (g_nx2_present_time_services: the debug server's frame_times tool, the shading-rate and
+/// power governors).
 extern std::array<std::atomic<u64>, 4096> g_nx2_present_times_ns;
+extern std::atomic<u32> g_nx2_present_time_services;
+/// Median interval in ms of the guest presents of the last second, 0 with fewer than four or
+/// while nothing records present times. Host-generated frames are not guest presents.
+[[nodiscard]] double Nx2RecentFrameMs();
+
+/// Records one guest present (Switch 1 and Switch 2) with its steady-clock timestamp.
 void RecordGuestPresent();
 
 class CpuManager;
@@ -235,6 +242,16 @@ public:
     /// tears it down.
     [[nodiscard]] SystemResultStatus InitializeForGpuReplay(Frontend::EmuWindow& emu_window,
                                                             u64 program_id);
+
+    /**
+     * Creates the GPU and the renderer for `title_id` with no guest program, so that the renderer's
+     * disk caches can be loaded and built (eden-cli --warm-pipelines). The system is not powered
+     * on. End it with ShutdownMainProcess(), as after Load.
+     * @returns Success, or ErrorMemoryAllocation / ErrorVideoCore.
+     */
+    [[nodiscard]] SystemResultStatus SetupHeadlessVideo(Frontend::EmuWindow& emu_window,
+                                                        u64 title_id);
+
 
     /**
      * Indicates if the emulated system is powered on (all subsystems initialized and able to run an

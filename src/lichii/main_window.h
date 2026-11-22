@@ -27,6 +27,7 @@
 #include "common/nextendo.h"
 #include "common/nextendo_game_catalog.h"
 #include "common/settings_enums.h"
+#include "common/shutdown_progress.h"
 #include "core/file_sys/nup_writer.h"
 #include "frontend_common/content_manager.h"
 #include "input_common/drivers/tas_input.h"
@@ -71,6 +72,9 @@ class QSlider;
 class QHBoxLayout;
 class WaitTreeWidget;
 class PerformanceOverlay;
+namespace Guarana {
+class Toast;
+}
 #ifdef HAS_RESHADE
 class ConfigurePostProcessing;
 #endif
@@ -197,9 +201,29 @@ public:
         return frame_gen_fps;
     }
 
+    /// Shaders the compiler was building at the last status update, including ones that just finished.
+    [[nodiscard]] int ShadersBuilding() const {
+        return shaders_building;
+    }
+
     /// What NVIDIA DLSS ran as since the last status bar update, empty when it didn't run
     [[nodiscard]] const QString& DlssStatusText() const {
         return dlss_status_text;
+    }
+
+    /// The game-specific upscaler's status bar text while a game that has one runs (Ocarina of
+    /// Time's FSR or DLSS), else empty
+    [[nodiscard]] QString UpscaleStatusText() const;
+
+    /// Started with --launcher-session and a game: the window is never shown in its desktop form.
+    [[nodiscard]] bool IsLauncherSession() const {
+        return launcher_session;
+    }
+
+    /// The exit code a launcher session ended with, once its window has closed: 0 after a stop,
+    /// 1 when the game did not start.
+    [[nodiscard]] std::optional<int> LauncherSessionExitCode() const {
+        return launcher_session_exit;
     }
 
 signals:
@@ -370,6 +394,7 @@ private slots:
     void OnMenuReportCompatibility();
     void OnOpenModsPage();
     void OnOpenUserHandbook();
+    void OnReportProblem();
 
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path, u64 program_id);
@@ -477,7 +502,8 @@ private slots:
     void OnEmulationStopTimeExpired();
     void OnEmulationStopTimeout();
     /// True while the emulation thread's teardown still makes progress (Common::ShutdownProgress
-    /// moved since the last call), for at most MaxEmuThreadShutdownMs after it was asked to stop.
+    /// moved since the last call, or the thread was busy on the CPU meanwhile), for at most
+    /// MaxEmuThreadShutdownMs after it was asked to stop.
     bool EmulationShutdownProgressing();
 
 #ifdef ENABLE_UPDATE_CHECKER
@@ -513,7 +539,7 @@ private:
     void UpdateAAText();
     void UpdatePostShaderText();
     void UpdateFrameGenButton();
-
+    void UpdateUpscaleButton();
     void UpdateVolumeUI();
     void UpdateStatusBar();
     void UpdateGPUAccuracyButton();
@@ -522,9 +548,17 @@ private:
     void UpdateUISettings();
     void UpdateInputDrivers();
     void HideMouseCursor();
+    void ShowMenuHintToast();
+    /// Closes the window of a launcher session once its emulation has stopped and no restart or
+    /// sub-program boots again; closeEvent then ends the process.
+    void EndLauncherSession();
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
+    /// Lists the Vulkan devices for the settings dialogs, unless that was done (or Vulkan is
+    /// broken). A direct game launch leaves it to the first dialog: it needs an instance of its
+    /// own, which costs as much as the renderer's.
+    void ListVulkanDevices(bool for_dialog);
     void OpenPerGameConfiguration(u64 title_id, const std::string& file_name);
     bool OpenModStore(QWidget* parent, u64 initial_title_id, const std::string& file_name,
                       QSet<QString>& store_toggled);
@@ -566,6 +600,10 @@ private:
 
     MultiplayerState* multiplayer_state = nullptr;
     void RememberSpeedLimitBeforeHotkey();
+    /// The "Frame target N" and "Cycle frame target" hotkeys (EDEN_NX2_FRAME_TARGET_HOTKEYS):
+    /// overrides the session target with `target`, or the next preset when `target` is 0.
+    void SetFrameTargetFromHotkey(u32 target);
+    void ShowHotkeyMessage(const QString& text);
     void UndoSessionSpeedChanges();
     /// The speed limit before the session's first Toggle Framerate Limit / turbo / slow hotkey,
     /// and whether it was the global or the per-game value. Undone when the game stops, so the
@@ -582,7 +620,7 @@ private:
     QTimer shutdown_timer;
     QTimer emu_terminate_timer;
     QElapsedTimer emu_force_stop_clock;
-    u64 shutdown_progress_seen{};
+    Common::ShutdownWatch shutdown_watch;
     QTimer nextendo_session_timer;
     QFutureWatcher<Common::Nextendo::SignOutReason> nextendo_session_watcher;
     QFutureWatcher<std::optional<Common::Nextendo::OnlineStatus>> nextendo_status_watcher;
@@ -606,6 +644,7 @@ private:
     GameListPlaceholder* game_list_placeholder = nullptr;
 
     std::vector<VkDeviceInfo::Record> vk_device_records;
+    bool vk_device_records_listed = false;
 
     // Status bar elements
     QLabel* message_label = nullptr;
@@ -625,13 +664,22 @@ private:
     QPushButton* aa_status_button = nullptr;
     QPushButton* post_shader_status_button = nullptr;
     QPushButton* frame_gen_status_button = nullptr;
-
+    QPushButton* upscale_status_button = nullptr;
+    u64 upscale_frames = 0;
+    bool upscale_running = false;
+    bool upscale_game = false; ///< The running game has a game-specific upscaler
+    QString upscale_name;
+    QString upscale_sizes;       ///< "720p → 1080p"
+    QString upscale_size_detail; ///< "1280x720 to 1920x1080"
+    QString upscale_idle_tag;
+    QString upscale_idle_reason;
     VideoCore::FrameGenState frame_gen_state{};
     u64 frame_gen_frames = 0;
     u64 dlss_evaluations = 0;
     QString dlss_status_text;
     bool frame_gen_generating = false;
     double frame_gen_fps = 0.0;
+    int shaders_building = 0;
     QElapsedTimer frame_gen_fps_timer;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
@@ -656,12 +704,25 @@ private:
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
     bool user_flag_cmd_line = false;
 
+    // --launcher-session with a game: the window opens as the fullscreen loading screen and game,
+    // and the process exits when the emulation stops instead of showing the game list.
+    bool launcher_session = false;
+    // The launcher session's game did not start: the process exits with 1.
+    bool launcher_session_failed = false;
+    // The player uses separate windows; the launcher session plays in the main window and puts
+    // the setting back before it is saved.
+    bool launcher_session_separate_window = false;
+    // A restart or a sub-program is between ShutdownGame and BootGame: the session goes on.
+    bool launcher_session_rebooting = false;
+    std::optional<int> launcher_session_exit;
+
     bool auto_paused = false;
     bool auto_muted = false;
 #ifdef __APPLE__
     u32 sleep_assertion_id = 0;
 #endif
     QTimer mouse_hide_timer;
+    Guarana::Toast* guarana_toast = nullptr;
     QTimer update_input_timer;
 
     QString startup_icon_theme;

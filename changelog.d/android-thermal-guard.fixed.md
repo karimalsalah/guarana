@@ -1,0 +1,1 @@
+- Android: guard the ADPF thermal listener registration and removal against OEM RuntimeExceptions so a throwing PowerManager cannot crash the emulation session; the hint session keeps its default target when the listener is unavailable.

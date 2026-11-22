@@ -3,6 +3,9 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+
+#include <string>
+#include <vector>
 #include "common/android/android_common.h"
 #include "core/core.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -25,7 +28,7 @@ static RomMetadata CacheRomMetadata(const std::string& path) {
     auto& instance = EmulationSession::GetInstance();
     const auto file = Core::GetGameFileFromPath(instance.System().GetFilesystem(), path);
     if (auto loader = Loader::GetLoader(instance.System(), file, 0, 0); loader) {
-        RomMetadata entry;
+        RomMetadata entry{};
         loader->ReadTitle(entry.title);
         loader->ReadProgramId(entry.programId);
         loader->ReadIcon(entry.icon);
@@ -41,8 +44,14 @@ static RomMetadata CacheRomMetadata(const std::string& path) {
             entry.developer = control.first->GetDeveloperName();
             entry.version = control.first->GetVersionString();
         } else {
-            loader->ReadDeveloper(entry.developer);
-            entry.version = "1.0.0";
+            FileSys::NACP nacp{};
+            if (loader->ReadControlData(nacp) == Loader::ResultStatus::Success) {
+                entry.developer = nacp.GetDeveloperName();
+                entry.version = nacp.GetVersionString();
+            }
+            if (entry.version.empty()) {
+                entry.version = "1.0.0";
+            }
         }
         if (loader->GetFileType() == Loader::FileType::NRO) {
             auto loader_nro = reinterpret_cast<Loader::AppLoader_NRO*>(loader.get());
@@ -72,8 +81,7 @@ jboolean Java_io_github_zortos293_lichii_utils_GameMetadata_getIsValid(JNIEnv* e
             auto const file_type = loader->GetFileType();
             if (file_type == Loader::FileType::Unknown || file_type == Loader::FileType::Error)
                 return false;
-            if ((file_type == Loader::FileType::NSP || file_type == Loader::FileType::XCI ||
-                 file_type == Loader::FileType::NSZ || file_type == Loader::FileType::XCZ) &&
+            if (Loader::IsContainerType(file_type) &&
                 !Loader::IsBootableGameContainer(file, file_type))
                 return false;
             u64 program_id = 0;

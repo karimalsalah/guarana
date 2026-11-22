@@ -34,6 +34,9 @@ void SetCurrentThreadToPerformanceCores() {}
 void SetCurrentThreadToEfficiencyCores() {}
 void SetCurrentThreadToBackgroundWork() {}
 void SetCurrentThreadToAllCores() {}
+namespace PowerTuning {
+void TagBackgroundThread() {}
+} // namespace PowerTuning
 } // namespace Common
 
 namespace {

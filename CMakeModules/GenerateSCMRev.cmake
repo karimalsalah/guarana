@@ -41,10 +41,15 @@ set(BUILD_AUTO_UPDATE_STABLE_API "api.github.com")
 set(BUILD_AUTO_UPDATE_API_PATH "/repos/zortos293/Lichii/releases?per_page=100")
 set(BUILD_AUTO_UPDATE_WEBSITE "https://github.com")
 set(BUILD_AUTO_UPDATE_REPO "zortos293/Lichii")
+# The built-in console news shows this project's own releases. The update checker above keeps
+# upstream's repository: it stays off in our release builds (docs/LANES.md).
+set(BUILD_NEWS_API "api.github.com")
+set(BUILD_NEWS_REPO "karimalsalah/guarana")
+set(BUILD_NEWS_API_PATH "/repos/karimalsalah/guarana/releases?per_page=100")
 if (NIGHTLY_BUILD)
-    set(REPO_NAME "Lichii Nightly")
+    set(REPO_NAME "Guarana Nightly")
 else()
-    set(REPO_NAME "Lichii")
+    set(REPO_NAME "Guarana")
 endif()
 
 set(BUILD_ID ${GIT_REFSPEC})

@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
+#include <chrono>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -18,9 +20,13 @@
 #endif
 
 #include "common/display_hdr.h"
+#include "common/event_ring.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/renderer_vulkan/fluid_present_mode.h"
+#include "video_core/renderer_vulkan/present_telemetry.h"
+#include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
@@ -53,6 +59,64 @@ bool FrameGenLoaded() {
 #else
     return false;
 #endif
+}
+
+/// EDEN_NX2_FLUID_MAILBOX=<n>, n not 0: the FLUID presenter asks for MAILBOX when the surface
+/// lists it. Parsed as EDEN_NX2_FLUID is. Read once.
+[[nodiscard]] bool FluidMailboxRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_MAILBOX");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return requested;
+}
+
+/// EDEN_NX2_FLUID_IMMEDIATE=<n>, n not 0: the FLUID presenter asks for IMMEDIATE when the surface
+/// lists it (MAILBOX still wins when EDEN_NX2_FLUID_MAILBOX is on and listed). Parsed as
+/// EDEN_NX2_FLUID is. Read once.
+[[nodiscard]] bool FluidImmediateRequested() {
+    static const bool requested = [] {
+        const char* value = std::getenv("EDEN_NX2_FLUID_IMMEDIATE");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return requested;
+}
+
+/// EDEN_NX2_PRESENT_MODE=immediate|fifo|fifo_relaxed|mailbox (diagnostic): the present mode to
+/// ask for whatever the vsync setting, frame generation and EDEN_NX2_FLUID choose, for an A/B of
+/// present modes. Read once; another value is ignored with a warning.
+[[nodiscard]] std::optional<Settings::VSyncMode> PresentModeOverride() {
+    static const std::optional<Settings::VSyncMode> mode =
+        []() -> std::optional<Settings::VSyncMode> {
+        const char* value = std::getenv("EDEN_NX2_PRESENT_MODE");
+        if (value == nullptr || *value == '\0') {
+            return std::nullopt;
+        }
+        const auto parsed = ParsePresentModeOverride(value);
+        if (!parsed) {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_PRESENT_MODE={}: not immediate, fifo, fifo_relaxed or mailbox, "
+                        "ignored",
+                        value);
+        }
+        return parsed;
+    }();
+    return mode;
+}
+
+[[nodiscard]] VkPresentModeKHR ToPresentMode(Settings::VSyncMode mode) {
+    switch (mode) {
+    case Settings::VSyncMode::Immediate:
+        return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    case Settings::VSyncMode::Mailbox:
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    case Settings::VSyncMode::Fifo:
+        return VK_PRESENT_MODE_FIFO_KHR;
+    case Settings::VSyncMode::FifoRelaxed:
+        return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    default:
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
 }
 
 #ifdef EGLANTINE_STREAMLINE
@@ -115,11 +179,31 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
     if (FrameGenPresents(format) && (has_imm || has_mailbox)) {
         return has_imm ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     }
+    if (const auto forced = PresentModeOverride()) {
+        if (SurfaceOffers(*forced, has_imm, has_mailbox, has_fifo_relaxed)) {
+            return ToPresentMode(*forced);
+        }
+        // Called on every present-mode check: say it once.
+        static std::once_flag missing;
+        std::call_once(missing, [&forced] {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_PRESENT_MODE: the surface does not offer {}, choosing as "
+                        "without the switch",
+                        Settings::CanonicalizeEnum(*forced));
+        });
+    }
     // Mailbox doesn't lock the application like FIFO (vsync)
     // FIFO present mode locks the framerate to the monitor's refresh rate
     Settings::VSyncMode setting = [has_imm, has_mailbox]() {
         // Choose Mailbox or Immediate if unlocked and those modes are supported
         const auto mode = Settings::values.vsync_mode.GetValue();
+        if (FluidMode() != 0) {
+            // The FLUID presenter times each present to be shown at the next vblank: FIFO, or
+            // MAILBOX with EDEN_NX2_FLUID_MAILBOX, or IMMEDIATE with EDEN_NX2_FLUID_IMMEDIATE,
+            // when the surface lists it.
+            return ChooseFluidPresentMode(FluidMailboxRequested(), has_mailbox,
+                                          FluidImmediateRequested(), has_imm);
+        }
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
         }
@@ -147,18 +231,21 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
         (setting == Settings::VSyncMode::FifoRelaxed && !has_fifo_relaxed)) {
         setting = Settings::VSyncMode::Fifo;
     }
+    return ToPresentMode(setting);
+}
 
-    switch (setting) {
-    case Settings::VSyncMode::Immediate:
-        return VK_PRESENT_MODE_IMMEDIATE_KHR;
-    case Settings::VSyncMode::Mailbox:
-        return VK_PRESENT_MODE_MAILBOX_KHR;
-    case Settings::VSyncMode::Fifo:
-        return VK_PRESENT_MODE_FIFO_KHR;
-    case Settings::VSyncMode::FifoRelaxed:
-        return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+const char* PresentModeName(VkPresentModeKHR mode) {
+    switch (mode) {
+    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+        return "IMMEDIATE";
+    case VK_PRESENT_MODE_MAILBOX_KHR:
+        return "MAILBOX";
+    case VK_PRESENT_MODE_FIFO_KHR:
+        return "FIFO";
+    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+        return "FIFO_RELAXED";
     default:
-        return VK_PRESENT_MODE_FIFO_KHR;
+        return "other";
     }
 }
 
@@ -250,7 +337,8 @@ bool Swapchain::Create(
 
     const auto physical_device = device.GetPhysical();
     const auto capabilities{physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface))};
-    if (capabilities.maxImageExtent.width == 0 || capabilities.maxImageExtent.height == 0) {
+    if (!PresentPolicy::HasExtent(capabilities.maxImageExtent,
+                                  ChooseSwapExtent(capabilities, width, height))) {
         return false;
     }
 
@@ -268,7 +356,9 @@ bool Swapchain::Create(
         // The present wait thread may be waiting on the old swapchain (WaitForPresent).
         const auto use_lock = LockForUse();
         Destroy();
-        CreateSwapchain(capabilities);
+        if (!CreateSwapchain(capabilities)) {
+            return false;
+        }
     }
     CreateSemaphores();
     is_suboptimal = false;
@@ -288,32 +378,40 @@ std::unique_lock<std::mutex> Swapchain::LockForUse() {
     return lock;
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush, u32 game_frame_presents) {
-    const VkResult result = [this] {
+PresentPolicy::Acquire Swapchain::AcquireNextImage(bool may_flush, bool pace,
+                                                   u32 game_frame_presents, PresentTrace* trace) {
+    u32 acquired_index = 0;
+    const VkResult result = [this, &acquired_index] {
         const auto use_lock = LockForUse();
         return device.GetLogical().AcquireNextImageKHR(
             *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
-            VK_NULL_HANDLE, &image_index);
+            VK_NULL_HANDLE, &acquired_index);
     }();
-    switch (result) {
-    case VK_SUCCESS:
-        break;
-    case VK_SUBOPTIMAL_KHR:
-        is_suboptimal = true;
-        break;
-    case VK_ERROR_OUT_OF_DATE_KHR:
-        is_outdated = true;
-        break;
-    case VK_ERROR_SURFACE_LOST_KHR:
-        vk::Check(result);
-        break;
-    default:
-        LOG_ERROR(Render_Vulkan, "vkAcquireNextImageKHR returned {}", string_VkResult(result));
-        break;
+    const auto action = PresentPolicy::ClassifyAcquire(result);
+    if (trace != nullptr && result != VK_SUCCESS) {
+        trace->Record(1, {static_cast<u64>(static_cast<s64>(result)), StorageGeneration(),
+                          action == PresentPolicy::Acquire::Ready ? acquired_index : image_index,
+                          frame_index}, "acquire");
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            trace->Record(2, {StorageGeneration(), 0, 0, 0}, "surface-lost");
+        }
     }
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        // No image was acquired, so image_index is stale: the caller recreates and tries again.
-        return true;
+    switch (action) {
+    case PresentPolicy::Acquire::Ready:
+        image_index = acquired_index;
+        if (result == VK_SUBOPTIMAL_KHR) {
+            is_suboptimal = true;
+        }
+        break;
+    case PresentPolicy::Acquire::Recreate:
+        is_outdated = true;
+        return action;
+    case PresentPolicy::Acquire::Drop:
+        return action;
+    case PresentPolicy::Acquire::DeviceLost:
+        device.ReportLoss();
+    case PresentPolicy::Acquire::Error:
+        throw vk::Exception(result);
     }
 
     const auto wait_with_frame_pacing = [this, may_flush, game_frame_presents] {
@@ -336,21 +434,25 @@ bool Swapchain::AcquireNextImage(bool may_flush, u32 game_frame_presents) {
     }
     };
 
+    // The FLUID presenter keeps its own time, and the last copy to an image is done before it
+    // presents again.
+    if (pace) {
 #ifdef __ANDROID__
-    if (android_get_device_api_level() >= 30) {
-        scheduler.Wait(resource_ticks[image_index], 0.0, may_flush);
-    } else {
-        wait_with_frame_pacing();
-    }
+        if (android_get_device_api_level() >= 30) {
+            scheduler.Wait(resource_ticks[image_index], 0.0, may_flush);
+        } else {
+            wait_with_frame_pacing();
+        }
 #else
-    wait_with_frame_pacing();
+        wait_with_frame_pacing();
 #endif
+    }
 
     resource_ticks[image_index] = scheduler.CurrentTick();
 
     // A suboptimal acquire still acquired an image and signals its semaphore: present it, and let
     // NeedsRecreation() recreate at the next frame.
-    return false;
+    return PresentPolicy::Acquire::Ready;
 }
 
 bool Swapchain::Present(VkSemaphore render_semaphore, u64 present_id) {
@@ -382,10 +484,18 @@ bool Swapchain::Present(VkSemaphore render_semaphore, u64 present_id) {
         .pImageIndices = &image_index,
         .pResults = nullptr,
     };
+    const auto lock_start = std::chrono::steady_clock::now();
     const auto use_lock = LockForUse();
     std::scoped_lock lock{scheduler.submit_mutex};
+    const auto locked = std::chrono::steady_clock::now();
+    const VkResult present_result = present_queue.Present(present_info);
+    last_present_lock_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(locked - lock_start).count();
+    last_present_call_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - locked)
+                               .count();
     bool accepted = false;
-    switch (const VkResult result = present_queue.Present(present_info)) {
+    switch (const VkResult result = present_result) {
     case VK_SUCCESS:
         accepted = true;
         break;
@@ -394,11 +504,15 @@ bool Swapchain::Present(VkSemaphore render_semaphore, u64 present_id) {
         accepted = true;
         break;
     case VK_ERROR_OUT_OF_DATE_KHR:
+    case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT:
         is_outdated = true;
         break;
     case VK_ERROR_SURFACE_LOST_KHR:
         vk::Check(result);
         break;
+    case VK_ERROR_DEVICE_LOST:
+        device.ReportLoss();
+        throw vk::Exception(result);
     default:
         LOG_CRITICAL(Render_Vulkan, "Failed to present with error {}", string_VkResult(result));
         break;
@@ -436,7 +550,7 @@ VkResult Swapchain::WaitForPresent(u64 wanted_generation, u64 present_id, u64 ti
     return result;
 }
 
-void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
+bool Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const auto physical_device{device.GetPhysical()};
     const auto formats{physical_device.GetSurfaceFormatsKHR(VkSurfaceKHR(surface))};
     const auto present_modes = physical_device.GetSurfacePresentModesKHR(VkSurfaceKHR(surface));
@@ -486,6 +600,50 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     } else {
         requested_image_count = (std::max)(requested_image_count, 3U);
     }
+    // EDEN_NX2_FLUID showing more than 75 frames a second: five images. With three, the copy for
+    // a 120 Hz slot waited for a free image (Arc 140T: slots on time 790-801 of 1200 with three,
+    // 1134-1137 with five, copies done after their vblank about 500 per 10 s to 0).
+    // EDEN_NX2_FLUID_COPY_AHEAD keeps an image acquired across a slot: at least four.
+    const auto env_on = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    };
+    if (env_on("EDEN_NX2_FLUID")) {
+        const char* shown = std::getenv("EDEN_NX2_SHOWN_RATE");
+        const u32 rate = shown != nullptr ? static_cast<u32>(std::strtoul(shown, nullptr, 10))
+                                          : Settings::FrameGenTargetRate();
+        const u32 least = rate > 75 ? 5U : env_on("EDEN_NX2_FLUID_COPY_AHEAD") ? 4U : 0U;
+        const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
+        requested_image_count = (std::min)((std::max)(requested_image_count, least), most);
+    }
+    // EDEN_NX2_SWAPCHAIN_IMAGES=<n> (2 to 16): ask for n images, within what the surface allows.
+    if (const char* images = std::getenv("EDEN_NX2_SWAPCHAIN_IMAGES")) {
+        const u32 asked = std::clamp<u32>(static_cast<u32>(std::strtoul(images, nullptr, 10)), 2U, 16U);
+        const u32 most = capabilities.maxImageCount > 0 ? capabilities.maxImageCount : 16U;
+        requested_image_count = std::clamp(asked, capabilities.minImageCount, most);
+    }
+    // EDEN_NX2_FLUID_COMPOSE: the FLUID presenter's slot pass writes the images through storage
+    // views. Asked for only with a dedicated queue that can compute, a present thread, a surface
+    // that lists the usage and a format that can be stored to.
+    bool with_storage = FluidComposeMode() != 0 && FluidMode() != 0 &&
+                        device.FluidFamilyCanCompute() && !FrameGenLoaded() &&
+                        (Settings::values.async_presentation.GetValue() ||
+                         Settings::values.frame_gen.GetValue()) &&
+                        surface_format.format == VK_FORMAT_B8G8R8A8_UNORM &&
+                        surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    if (with_storage &&
+        ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0 ||
+         (physical_device.GetFormatProperties(surface_format.format).optimalTilingFeatures &
+          VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0)) {
+        static bool logged = false;
+        if (!std::exchange(logged, true)) {
+            LOG_INFO(Render_Vulkan,
+                     "EDEN_NX2_FLUID_COMPOSE: the surface offers no storage images in {}; frames "
+                     "are shown by the screen copy",
+                     string_VkFormat(surface_format.format));
+        }
+        with_storage = false;
+    }
     VkSwapchainCreateInfoKHR swapchain_ci{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = nullptr,
@@ -511,12 +669,25 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         .clipped = VK_FALSE,
         .oldSwapchain = VkSwapchainKHR{},
     };
+    if (with_storage) {
+        swapchain_ci.imageUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
     const u32 graphics_family{device.GetGraphicsFamily()};
     const u32 present_family{device.GetPresentFamily()};
-    const std::array<u32, 2> queue_indices{graphics_family, present_family};
-    if (graphics_family != present_family) {
+    // The families that touch the images: the renderer's, the presenting one and, with
+    // EDEN_NX2_FLUID_QUEUE, the one that copies to the screen.
+    std::array<u32, 3> queue_indices{graphics_family};
+    u32 queue_index_count = 1;
+    for (const u32 family : {present_family, device.HasFluidQueue() ? device.GetFluidFamily()
+                                                                    : graphics_family}) {
+        if (std::find(queue_indices.begin(), queue_indices.begin() + queue_index_count, family) ==
+            queue_indices.begin() + queue_index_count) {
+            queue_indices[queue_index_count++] = family;
+        }
+    }
+    if (queue_index_count > 1) {
         swapchain_ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        swapchain_ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+        swapchain_ci.queueFamilyIndexCount = queue_index_count;
         swapchain_ci.pQueueFamilyIndices = queue_indices.data();
     }
     // According to Vulkan spec, when using VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR,
@@ -540,6 +711,13 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
         surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         format_list.pNext = std::exchange(swapchain_ci.pNext, &format_list);
         swapchain_ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
+    }
+    // A storage image cannot be viewed as sRGB: with storage usage the list holds the UNORM formats.
+    const std::array<VkFormat, 2> storage_view_formats{swapchain_ci.imageFormat,
+                                                       VK_FORMAT_B8G8R8A8_UNORM};
+    if (with_storage) {
+        format_list.viewFormatCount = static_cast<u32>(storage_view_formats.size());
+        format_list.pViewFormats = storage_view_formats.data();
     }
     if (present_ids2) {
         swapchain_ci.flags |=
@@ -573,9 +751,33 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     // Request the size again to reduce the possibility of a TOCTOU race condition.
     const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(VkSurfaceKHR(surface));
     swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
+    if (!PresentPolicy::HasExtent(updated_capabilities.maxImageExtent, swapchain_ci.imageExtent)) {
+        return false;
+    }
     // Don't add code within this and the swapchain creation.
     try {
-        create();
+        try {
+            create();
+        } catch (const vk::Exception& storage_exception) {
+            // EDEN_NX2_FLUID_COMPOSE: a driver that refuses the storage usage still gets the
+            // swapchain main makes, and the frames are shown by the screen copy.
+            const VkResult storage_result = storage_exception.GetResult();
+            if (!with_storage || storage_result == VK_ERROR_SURFACE_LOST_KHR ||
+                storage_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR ||
+                storage_result == VK_ERROR_OUT_OF_DATE_KHR ||
+                storage_result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+                throw;
+            }
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: the swapchain cannot be made with storage usage "
+                        "({}); frames are shown by the screen copy",
+                        storage_exception.what());
+            with_storage = false;
+            swapchain_ci.imageUsage &= ~static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT);
+            format_list.viewFormatCount = static_cast<u32>(view_formats.size());
+            format_list.pViewFormats = view_formats.data();
+            create();
+        }
     } catch ([[maybe_unused]] const vk::Exception& exception) {
         // A lost surface or a window still in use is transient: the present loop retries those.
         const VkResult result = exception.GetResult();
@@ -599,6 +801,65 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
 
     images = swapchain.GetImages();
     image_count = static_cast<u32>(images.size());
+    if (with_storage) {
+        // One storage view of each image, in the format it has, for the slot pass.
+        try {
+            for (const VkImage image : images) {
+                storage_views.push_back(device.GetLogical().CreateImageView({
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .image = image,
+                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                    .format = surface_format.format,
+                    .components =
+                        {
+                            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                        },
+                    .subresourceRange =
+                        {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                }));
+                storage_view_handles.push_back(*storage_views.back());
+            }
+        } catch (const vk::Exception& exception) {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_FLUID_COMPOSE: no storage view of a swapchain image ({}); frames "
+                        "are shown by the screen copy",
+                        exception.what());
+            storage_view_handles.clear();
+            storage_views.clear();
+            with_storage = false;
+        }
+    }
+    storage_enabled.store(with_storage, std::memory_order_relaxed);
+    ++storage_generation;
+    if (present_mode != logged_present_mode || image_count != logged_image_count) {
+        logged_present_mode = present_mode;
+        logged_image_count = image_count;
+        LOG_INFO(Render_Vulkan,
+                 "Swapchain present mode {} with {} images (vsync setting {}, frame generation "
+                 "{}, EDEN_NX2_FLUID {})",
+                 PresentModeName(present_mode), image_count,
+                 Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
+                 Settings::values.frame_gen.GetValue() ? "on" : "off", FluidMode());
+    }
+    if (FluidMode() != 0 && FluidMailboxRequested()) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_MAILBOX: present mode {} (surface {} MAILBOX)",
+                 PresentModeName(present_mode), has_mailbox ? "offers" : "does not offer");
+    }
+    if (FluidMode() != 0 && FluidImmediateRequested()) {
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_FLUID_IMMEDIATE: present mode {} (surface {} IMMEDIATE)",
+                 PresentModeName(present_mode), has_imm ? "offers" : "does not offer");
+    }
 #ifdef __ANDROID__
     // Android is already ordered the same as Switch.
     image_view_format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -608,6 +869,27 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         image_view_format = surface_format.format;
     }
+
+    // Frame generation asks for FIFO (or FIFO relaxed) whatever the vsync setting, unless DLSS-G
+    // presents the frames itself.
+    std::string supported_modes;
+    for (const VkPresentModeKHR mode : present_modes) {
+        if (!supported_modes.empty()) {
+            supported_modes += ", ";
+        }
+        supported_modes += string_VkPresentModeKHR(mode);
+    }
+    LOG_INFO(Render_Vulkan,
+             "Swapchain: {}, {} images ({} asked, surface min {} max {}), {}x{} {} {}; surface "
+             "present modes: {}; vsync setting {}, frame generation {}{}",
+             string_VkPresentModeKHR(present_mode), image_count, requested_image_count,
+             capabilities.minImageCount, capabilities.maxImageCount, extent.width, extent.height,
+             string_VkFormat(surface_format.format),
+             string_VkColorSpaceKHR(surface_format.colorSpace), supported_modes,
+             Settings::CanonicalizeEnum(Settings::values.vsync_mode.GetValue()),
+             Settings::values.frame_gen.GetValue() ? "on" : "off",
+             FrameGenPresents(surface_format.format) ? ", DLSS-G presents" : "");
+    return true;
 }
 
 void Swapchain::CreateSemaphores() {
@@ -622,8 +904,13 @@ void Swapchain::CreateSemaphores() {
 void Swapchain::Destroy() {
     generation.fetch_add(1, std::memory_order_acq_rel);
     frame_index = 0;
+    image_index = 0;
     present_semaphores.clear();
     render_semaphores.clear();
+    // The views go before the images they view.
+    storage_enabled.store(false, std::memory_order_relaxed);
+    storage_view_handles.clear();
+    storage_views.clear();
     swapchain.reset();
 }
 

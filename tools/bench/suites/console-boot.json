@@ -1,0 +1,20 @@
+{
+  "name": "console-boot",
+  "description": "Launch to gameplay and first-visit hitches, docs/console-boot.md. Every variant against the baseline (what ships, the game's own switch defaults included) with a cold cache (none for the title; pass --driver-cache-dir to clear the GPU driver's too), a second cache (what the same variant's cold run left: the second play of a game) and a warm cache (a copy of your own cache as the suite found it), three times, alternating the order. Each variant file in variants/boot names the cache states it runs in. Every run boots the game, loads the Hyrule Field save, checks the scene and measures; the row has the boot phases since the process started, the held draws and builds from the first frame to the scene, and the stutter frames from the log.",
+  "scene": "../scenes/oot-hyrule-field.json",
+  "options": {},
+  "base": {
+    "env": {"EDEN_NX2_STUTTER_TRACE": "1"},
+    "settings": {"UI": {"confirmStop": 2}}
+  },
+  "baseline": "baseline",
+  "boot": {"cache_states": ["cold", "second", "warm"], "repeats": 3, "close_grace_s": 90},
+  "runs": [
+    {
+      "variants": [
+        {"name": "baseline", "description": "What ships: no switch beyond the shipped nx2_switches.txt and the game's switch defaults."}
+      ],
+      "variants_dir": "../variants/boot"
+    }
+  ]
+}

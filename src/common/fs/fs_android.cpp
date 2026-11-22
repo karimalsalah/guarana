@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+
+#include <string>
+#include <string_view>
 #include "common/android/android_common.h"
 #include "common/android/id_cache.h"
 #include "common/assert.h"

@@ -34,6 +34,7 @@
 #include "common/game_presets.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
+#include "common/power_tuning.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -46,6 +47,7 @@
 #include "core/perf_stats.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
+#include "video_core/frame_budget.h"
 #include "video_core/framebuffer_config.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_client_session.h"
@@ -1719,6 +1721,8 @@ private:
     std::jthread m_cold_hint_thread{[this](std::stop_token stop) {
         Common::SetCurrentThreadName("nx2:ColdHint");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        Common::SetCurrentThreadToBackgroundWork();
+        Common::PowerTuning::TagBackgroundThread();
         while (!stop.stop_requested()) {
             for (int i = 0; i < 30 && !stop.stop_requested(); ++i) {
                 std::this_thread::sleep_for(std::chrono::seconds{1});
@@ -2157,6 +2161,9 @@ private:
         const auto composited = std::chrono::steady_clock::now();
         PaceToVblank(w[12], ctx.GetThread().GetOwnerProcess());
         const auto paced = std::chrono::steady_clock::now();
+        // EDEN_NX2_TARGET_FPS: the frame time without the pacing wait steers the game's dynamic
+        // resolution. One atomic load without a target.
+        VideoCore::FrameBudget::OnGuestPresent(composited, paced);
         if (const u32 recorder = w[18] & 0xf; recorder != 0) {
             m_recorded_ticks[recorder - 1] = system.CoreTiming().GetClockTicks();
         }
@@ -2570,6 +2577,9 @@ private:
         const bool timer_paced = Nx2VsyncRateHz() != 60;
         const bool speed_limited = !timer_paced && Settings::values.use_speed_limit.GetValue() &&
                                    Settings::SpeedLimit() != 0;
+        // EDEN_NX2_TARGET_FPS: presents are held to the target's interval, as by an FPS limit,
+        // so a frame that is done early still takes the whole interval.
+        const std::chrono::nanoseconds budget_interval = VideoCore::FrameBudget::PresentInterval();
         const u32 unpaced_cap = UnpacedFpsCap(process != nullptr && process->IsFrameRateUnlocked(),
                                               speed_limited || timer_paced, fps_limit);
         if (unpaced_cap != 0 && !std::exchange(m_unpaced_cap_logged, true)) {
@@ -2578,7 +2588,7 @@ private:
                      "limit: presents are held to {} fps, the most its frame step patch is made for",
                      unpaced_cap);
         }
-        if (!speed_limited && fps_limit == 0 && unpaced_cap == 0) {
+        if (!speed_limited && fps_limit == 0 && budget_interval.count() == 0 && unpaced_cap == 0) {
             Tegra::g_nx2_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
             return;
         }
@@ -2592,9 +2602,17 @@ private:
                         : std::chrono::nanoseconds{100'000'000'000LL * swap_interval /
                                                    refresh_rate /
                                                    (speed_limited ? Settings::SpeedLimit() : 100)};
-        const auto interval = unpaced_cap != 0
-                                  ? std::chrono::nanoseconds{1'000'000'000LL / unpaced_cap}
-                                  : PacedInterval(vblank_interval, fps_limit);
+        // A frame budget alone does not bring back the vblank pacing a lifted speed limit took.
+        const std::chrono::nanoseconds limited_interval =
+            (speed_limited || fps_limit != 0) ? PacedInterval(vblank_interval, fps_limit)
+                                              : std::chrono::nanoseconds{0};
+        // The unpaced cap is a ceiling: an explicit frame budget slower than it still applies,
+        // a faster one is held to the cap. With no budget the cap paces presents alone.
+        const std::chrono::nanoseconds capped_interval =
+            unpaced_cap != 0 ? std::chrono::nanoseconds{1'000'000'000LL / unpaced_cap}
+                             : std::chrono::nanoseconds{0};
+        const auto interval =
+            (std::max)((std::max)(limited_interval, budget_interval), capped_interval);
         Tegra::g_nx2_guest_frame_interval_ns.store(
             unpaced_cap == 0 ? static_cast<u64>(interval.count()) : 0,
             std::memory_order_relaxed);
@@ -2602,6 +2620,14 @@ private:
             m_frame_trace.target_ms = std::chrono::duration<double, std::milli>(interval).count();
         }
         const auto now = std::chrono::steady_clock::now();
+        // EDEN_NX2_FLUID with EDEN_NX2_CADENCE: the renderer moves the deadlines a little at a
+        // time so that real frames are done just before their vblank slot.
+        if (const s64 shift =
+                Tegra::g_nx2_present_phase_shift_ns.exchange(0, std::memory_order_relaxed);
+            shift != 0 && budget_interval.count() != 0) {
+            m_present_pacer.Shift(
+                std::chrono::nanoseconds{std::clamp<s64>(shift, -2'000'000, 2'000'000)});
+        }
         const auto pacing = m_present_pacer.Advance(now, interval);
         if (trace) {
             m_frame_trace.deadline_reset = pacing.reset;
@@ -3255,7 +3281,7 @@ private:
                         vsync_state->trace_late_callbacks +=
                             VblankInterval.count() > 0 && late >= VblankInterval;
                         vsync_state->trace_max_late =
-                            (std::max)(vsync_state->trace_max_late, late.count());
+                            (std::max)(vsync_state->trace_max_late, static_cast<s64>(late.count()));
                         if (vsync_state->trace_last_callback) {
                             const s64 gap = observed - *vsync_state->trace_last_callback;
                             vsync_state->trace_min_gap = vsync_state->trace_min_gap

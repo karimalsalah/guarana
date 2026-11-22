@@ -8,6 +8,8 @@
 #include <string>
 
 #include <jni.h>
+#include <string_view>
+#include <vector>
 #include "common/common_types.h"
 
 namespace Common::Android {

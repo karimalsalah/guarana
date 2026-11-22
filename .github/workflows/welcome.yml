@@ -1,0 +1,132 @@
+name: welcome
+
+# One thank-you, with one next step, to a person's first contribution here (CONTRIBUTING.md).
+#
+# first-merge: when a pull request is merged and its author has no earlier merged pull request in
+#   this repository, a comment on it thanks them and names a good first issue, a device report and
+#   the call for testers.
+# first-report: when a device report is opened and its author has no earlier device report, a
+#   comment thanks them and names a second run, a good first issue and the call for testers. The
+#   row the report adds is ingest-reports.yml's own comment.
+#
+# pull_request_target runs this file from the default branch with a token that can comment, so
+# nothing here checks out or runs code from the pull request: the job reads the event payload and
+# calls the API, nothing else. It skips bots and the owner, and only runs in the main repository.
+# Text from the pull request or the issue never reaches the script through ${{ }}. Each thank-you
+# carries a hidden marker, and a re-run that finds it on the item posts nothing.
+on:
+  pull_request_target:
+    types: [closed]
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  first-merge:
+    name: Thank a first merged pull request
+    if: >-
+      github.event_name == 'pull_request_target' && github.event.pull_request.merged &&
+      github.event.pull_request.user.type == 'User' &&
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.repository_owner == 'karimalsalah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # A comment on a pull request needs pull-requests: write; issues: read lists the author's items.
+    permissions:
+      issues: read
+      pull-requests: write
+    steps:
+      - name: Thank the author if this is their first merged pull request
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const TESTERS = 55; // the pinned call for testers
+            const MARKER = "<!-- welcome-first-merge -->";
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const user = pr.user.login;
+            const site = "https://karimalsalah.github.io/guarana";
+            const base = `https://github.com/${owner}/${repo}`;
+
+            // Issues and pull requests the author opened; this one is left out by number.
+            const items = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, creator: user, state: "all", per_page: 100,
+            });
+            const earlier = items.filter((item) => item.number !== pr.number && item.pull_request?.merged_at);
+            if (earlier.length) {
+              core.info(`${user} has ${earlier.length} earlier merged pull request(s); nothing to do.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            if (comments.some((c) => c.user?.type === "Bot" && (c.body || "").includes(MARKER))) {
+              core.info("This pull request has its thank-you already; nothing to do.");
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr.number,
+              body: [
+                MARKER,
+                `Thank you, @${user}: this is your first merged pull request in Guarana. Your name goes on the [Hall of fame](${site}/legacy.html) and in CONTRIBUTORS.md with the next Hall of fame update.`,
+                "",
+                "One next step, if you want one:",
+                `- another [good first issue](${base}/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22%20-label%3Aclaimed%20no%3Aassignee): comment \`/claim\` on it before you start;`,
+                `- a [device report](${base}/issues/new?template=device-report.yml) from your laptop or handheld, about ten minutes and no code ([docs/TESTING.md](${base}/blob/HEAD/docs/TESTING.md)); #${TESTERS} lists the devices nobody has measured yet.`,
+              ].join("\n"),
+            });
+
+  first-report:
+    name: Thank a first device report
+    if: >-
+      github.event_name == 'issues' &&
+      contains(github.event.issue.labels.*.name, 'device-report') &&
+      github.event.issue.user.type == 'User' &&
+      github.event.issue.author_association != 'OWNER' &&
+      github.repository_owner == 'karimalsalah'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Thank the author if this is their first device report
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const TESTERS = 55; // the pinned call for testers
+            const MARKER = "<!-- welcome-first-report -->";
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const user = issue.user.login;
+            const base = `https://github.com/${owner}/${repo}`;
+
+            const items = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, creator: user, labels: "device-report", state: "all", per_page: 100,
+            });
+            const earlier = items.filter((item) => item.number !== issue.number && !item.pull_request);
+            if (earlier.length) {
+              core.info(`${user} has ${earlier.length} earlier device report(s); nothing to do.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: issue.number, per_page: 100,
+            });
+            if (comments.some((c) => c.user?.type === "Bot" && (c.body || "").includes(MARKER))) {
+              core.info("This report has its thank-you already; nothing to do.");
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: [
+                MARKER,
+                `Thank you, @${user}: this is your first device report here. Numbers from hardware the maintainers do not have, even "it does not run", are what this project needs most. The bot's other comment on this issue shows the row it adds to the benchmarks page, or what to fix.`,
+                "",
+                "One next step, if you want one:",
+                "- the same scene again in another power mode or on battery, as a new report;",
+                `- a [good first issue](${base}/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22%20-label%3Aclaimed%20no%3Aassignee): no compiler needed, CI builds every pull request ([CONTRIBUTING.md](${base}/blob/HEAD/CONTRIBUTING.md));`,
+                `- know someone with another device? #${TESTERS} lists the ones nobody has measured yet.`,
+              ].join("\n"),
+            });

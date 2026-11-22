@@ -212,6 +212,7 @@ private:
     void Loop(std::stop_token token) {
         Common::SetCurrentThreadName("GPUSnapshot");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+        Common::SetCurrentThreadToPerformanceCores();
         u64 done = 0;
         while (!token.stop_requested()) {
             u64 available = published.load(std::memory_order_acquire);
@@ -480,6 +481,19 @@ bool DmaPusher::Step() {
     }
 
     CommandList& command_list = dma_pushbuffer.front();
+
+    // A guest write that trapped while the caches were busy is left to the next gather
+    // (RasterizerVulkan::OnCPUWrite): apply those before a new list's work, which the game may have
+    // submitted to read them, and after a resumed acquire, which the game may have released once
+    // it wrote them.
+    const bool resumed = suspensions.load(std::memory_order_relaxed) != suspensions_before;
+    if ((dma_pushbuffer_subindex == 0 && command_resume_offset == 0) || resumed) {
+        if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+            split.Defer([r = rasterizer] { r->InvalidateGPUCache(); });
+        } else {
+            rasterizer->InvalidateGPUCache();
+        }
+    }
 
     const size_t prefetch_size = command_list.prefetch_command_list.size();
     const size_t command_list_size = command_list.command_lists.size();

@@ -4,7 +4,8 @@
 #include "common/nx2_sampler.h"
 #include "common/jit_symbols.h"
 
-#ifdef _WIN32
+// The stack walk reads x86-64 registers (Rip, Rsp); Windows on ARM64 gets the stub below.
+#if defined(_WIN32) && defined(_M_X64)
 
 #include <algorithm>
 #include <array>
@@ -499,7 +500,7 @@ void StartFromEnvironment() {
 namespace Nx2Sampler {
 void StartFromEnvironment() {}
 std::string Sample(const char*, double, const std::string&) {
-    return "the sampler is Windows only";
+    return "the sampler is Windows x86-64 only";
 }
 } // namespace Nx2Sampler
 

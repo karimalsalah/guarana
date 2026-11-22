@@ -1,0 +1,12 @@
+{
+  "name": "boot-async",
+  "description": "The guest starts before the cached graphics pipelines are built; they build in the background in first-use order.",
+  "cache_states": [
+    "cold",
+    "second",
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_BOOT_ASYNC": "1"
+  }
+}

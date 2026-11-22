@@ -909,10 +909,49 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
     joystick->EnableMotion();
     SetBattery(joystick->GetPadIdentifier(),
                joystick->GetBatteryLevel(battery_state, battery_percent));
+    NoteDeviceAdded(guid, joystick->GetPort());
     LOG_INFO(Input, "{} connected on port {} (instance {}, {})", joystick->GetControllerName(),
              joystick->GetPort(), joystick_id, joystick_path);
     LogJoystickDetails(sdl_joystick, sdl_gamecontroller, joystick->GetReversedAxes());
     joystick->StartSilenceCheck(std::move(joystick_path));
+}
+
+void SDLDriver::NoteDeviceAdded(const Common::UUID& guid, int port) {
+    // joystick_map_mutex is held by the caller
+    last_added_guid = guid;
+    last_added_port = port;
+    has_last_added = true;
+    device_added_counter.fetch_add(1, std::memory_order_release);
+}
+
+Common::ParamPackage SDLDriver::GetMostRecentDevice() const {
+    std::scoped_lock lock{joystick_map_mutex};
+    if (!has_last_added) {
+        return {};
+    }
+    const auto it = joystick_map.find(last_added_guid);
+    if (it == joystick_map.end()) {
+        return {};
+    }
+    for (const auto& joystick : it->second) {
+        if (joystick->GetPort() == last_added_port && joystick->GetSDLJoystick()) {
+            return Common::ParamPackage{
+                {"engine", GetEngineName()},
+                {"display", fmt::format("{} {}", joystick->GetControllerName(), joystick->GetPort())},
+                {"guid", joystick->GetGUID().RawString()},
+                {"port", std::to_string(joystick->GetPort())},
+            };
+        }
+    }
+    return {};
+}
+
+bool SDLDriver::DeviceHasMotion(const Common::ParamPackage& params) {
+    if (!params.Has("guid") || !params.Has("port")) {
+        return false;
+    }
+    const auto joystick = GetSDLJoystickByGUID(params.Get("guid", ""), params.Get("port", 0));
+    return joystick && joystick->HasMotion();
 }
 
 void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {

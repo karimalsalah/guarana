@@ -95,6 +95,16 @@ else()
             drivers/switch2_ble.h)
         target_link_libraries(input_common PRIVATE WindowsApp)
         target_compile_definitions(input_common PRIVATE HAVE_SWITCH2_BLE)
+        # Match the cppwinrt version Qt was built with (see externals/CMakeLists.txt);
+        # BEFORE so these headers win over the Windows SDK's newer copy.
+        if (cppwinrt_SOURCE_DIR)
+            target_include_directories(input_common BEFORE PRIVATE
+                "${cppwinrt_SOURCE_DIR}/include")
+            if (EXISTS "${cppwinrt_SOURCE_DIR}/build/native/lib/arm64/cppwinrt_fast_forwarder.lib")
+                target_link_libraries(input_common PRIVATE
+                    "${cppwinrt_SOURCE_DIR}/build/native/lib/arm64/cppwinrt_fast_forwarder.lib")
+            endif()
+        endif()
     endif()
 endif()
 

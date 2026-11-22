@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="mark-title">
+  <title id="mark-title">Guarana logo mark</title>
+  <!-- Original mark: a fast drop (the real frame) trailing three speed streaks,
+       a leaf on top, and one echo arc ahead of it (the predicted frame). -->
+  <defs>
+    <linearGradient id="mark-fill" x1="22" y1="19" x2="48" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC94A"/>
+      <stop offset="1" stop-color="#F2851A"/>
+    </linearGradient>
+    <mask id="mark-streaks" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M-4 29.2H29M-4 42.8H29" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <path d="M4 36L26.97 21.6A17 17 0 1 1 26.97 50.4Z" fill="url(#mark-fill)" mask="url(#mark-streaks)"/>
+  <path d="M37.5 20Q38.5 10.5 48 9Q47.5 18.5 37.5 20Z" fill="#2FBF71"/>
+  <path d="M53.93 22.98A17 17 0 0 1 53.93 49.02" fill="none" stroke="#F59E0B" stroke-opacity=".6" stroke-width="3" stroke-linecap="round"/>
+</svg>

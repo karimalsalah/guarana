@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd",
+    "ms-vscode.cpptools",
+    "ms-python.python",
+    "ms-vscode.powershell",
+    "editorconfig.editorconfig",
+    "github.vscode-github-actions",
+    "timonwong.shellcheck",
+    "ms-vscode-remote.remote-containers",
+    "anthropic.claude-code"
+  ]
+}

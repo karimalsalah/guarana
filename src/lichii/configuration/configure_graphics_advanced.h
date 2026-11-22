@@ -3,8 +3,10 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <QWidget>
+#include "common/common_types.h"
 #include "lichii/configuration/configuration_shared.h"
 
 namespace Core {
@@ -23,9 +25,11 @@ class ConfigureGraphicsAdvanced : public ConfigurationShared::Tab {
     Q_OBJECT
 
 public:
+    /// `program_id_` is the game whose properties the page belongs to, nullopt on the global page.
     explicit ConfigureGraphicsAdvanced(
         const Core::System& system_, std::shared_ptr<std::vector<ConfigurationShared::Tab*>> group,
-        const ConfigurationShared::Builder& builder, QWidget* parent = nullptr);
+        const ConfigurationShared::Builder& builder, QWidget* parent = nullptr,
+        std::optional<u64> program_id_ = std::nullopt);
     ~ConfigureGraphicsAdvanced() override;
 
     void ApplyConfiguration() override;
@@ -41,6 +45,7 @@ private:
     std::unique_ptr<Ui::ConfigureGraphicsAdvanced> ui;
 
     const Core::System& system;
+    const std::optional<u64> program_id;
 
     std::vector<std::function<void(bool)>> apply_funcs;
 

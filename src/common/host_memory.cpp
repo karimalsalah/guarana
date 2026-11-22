@@ -67,6 +67,7 @@
 #include "common/free_region_manager.h"
 #include "common/host_memory.h"
 #include "common/logging.h"
+#include "common/memory_detect.h"
 
 #if defined(__ANDROID__) && __ANDROID_API__ < 30
 #include <sys/syscall.h>
@@ -131,6 +132,50 @@ static void GetFuncAddress(Common::DynamicLibrary& dll, const char* name, T& pfn
     }
 }
 
+// EDEN_NX2_LAZY_GUEST_COMMIT=1 (experiment): the backing section is reserved instead of committed,
+// so the guest's memory is charged to the commit limit as the guest kernel hands it out
+// (HostMemory::MarkUsed) rather than all at boot. A commit made through the backing view shows in
+// every view of the section and cannot be undone. Memory nobody marked (kernel slabs and tables)
+// is committed by LazyCommitHandler when host code first touches it.
+namespace {
+constexpr size_t LazyCommitGranule = 0x10000;
+std::atomic<uintptr_t> g_lazy_backing_base{};
+std::atomic<size_t> g_lazy_backing_size{};
+
+bool CommitLazyBacking(void* address, size_t size) {
+    if (!VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE)) {
+        return false;
+    }
+    g_memory_counters.guest_lazy_commit.fetch_add(size, std::memory_order_relaxed);
+    return true;
+}
+
+LONG CALLBACK LazyCommitHandler(PEXCEPTION_POINTERS info) {
+    const EXCEPTION_RECORD& record = *info->ExceptionRecord;
+    if (record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record.NumberParameters < 2) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    const uintptr_t base = g_lazy_backing_base.load(std::memory_order_acquire);
+    const size_t size = g_lazy_backing_size.load(std::memory_order_acquire);
+    const uintptr_t address = record.ExceptionInformation[1];
+    if (base == 0 || address - base >= size) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    // Only a page still reserved is ours to fix: a fault on a committed one is a real one.
+    MEMORY_BASIC_INFORMATION page{};
+    if (!VirtualQuery(reinterpret_cast<void*>(address), &page, sizeof(page)) ||
+        page.State != MEM_RESERVE) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    const size_t offset = (address - base) & ~(LazyCommitGranule - 1);
+    const size_t length = (std::min)(LazyCommitGranule, size - offset);
+    if (!CommitLazyBacking(reinterpret_cast<void*>(base + offset), length)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+} // Anonymous namespace
+
 class HostMemory::Impl {
 public:
     explicit Impl(size_t backing_size_, size_t virtual_size_)
@@ -166,8 +211,12 @@ public:
         // ERROR_NO_SYSTEM_RESOURCES without growing a system-managed page file. The emulator then
         // runs the whole session without fastmem (Ocarina of Time: 20-25% fewer fps). A private
         // commit of the same size does grow the page file, so make one, release it and try again.
+        if (const char* value = std::getenv("EDEN_NX2_LAZY_GUEST_COMMIT")) {
+            lazy_commit = value[0] == '1' && !allocation_test_control;
+        }
+        const ULONG section_type = lazy_commit ? SEC_RESERVE : SEC_COMMIT;
         for (int attempt = 1; attempt <= BackingAttempts && !backing_handle; ++attempt) {
-            backing_handle = pfn_CreateFileMapping2(INVALID_HANDLE_VALUE, nullptr, FILE_MAP_WRITE | FILE_MAP_READ, PAGE_READWRITE, SEC_COMMIT, backing_size, nullptr, nullptr, 0);
+            backing_handle = pfn_CreateFileMapping2(INVALID_HANDLE_VALUE, nullptr, FILE_MAP_WRITE | FILE_MAP_READ, PAGE_READWRITE, section_type, backing_size, nullptr, nullptr, 0);
             if (backing_handle) {
                 if (attempt > 1) {
                     LOG_INFO(HW_Memory, "Allocated {} MiB of backing memory on attempt {}", backing_size >> 20, attempt);
@@ -211,6 +260,17 @@ public:
             Release();
             LOG_CRITICAL(HW_Memory, "Failed to reserve {} GiB of virtual memory", virtual_size >> 30);
             return false;
+        }
+        if (lazy_commit) {
+            static std::once_flag handler_flag;
+            std::call_once(handler_flag, [] { AddVectoredExceptionHandler(1, LazyCommitHandler); });
+            g_memory_counters.guest_lazy_commit.store(0, std::memory_order_relaxed);
+            g_lazy_backing_size.store(backing_size, std::memory_order_release);
+            g_lazy_backing_base.store(reinterpret_cast<uintptr_t>(backing_base),
+                                      std::memory_order_release);
+            LOG_INFO(HW_Memory, "EDEN_NX2_LAZY_GUEST_COMMIT: {} MiB of guest memory reserved, "
+                                "committed as the guest takes it",
+                     backing_size >> 20);
         }
         return true;
     }
@@ -317,10 +377,15 @@ public:
 
     u8* backing_base{};
     u8* virtual_base{};
+    bool lazy_commit{}; ///< The backing is reserved and committed on demand
 
 private:
     /// Release all resources in the object
     void Release() {
+        if (backing_base && g_lazy_backing_base.load(std::memory_order_acquire) ==
+                                reinterpret_cast<uintptr_t>(backing_base)) {
+            g_lazy_backing_base.store(0, std::memory_order_release);
+        }
         if (!placeholders.empty()) {
             for (const auto& placeholder : placeholders) {
                 if (!pfn_UnmapViewOfFile2(process, virtual_base + placeholder.lower(),
@@ -1058,6 +1123,9 @@ HostMemory::HostMemory(size_t backing_size_, size_t virtual_size_)
     if (impl->Init()) {
         backing_base = impl->backing_base;
         virtual_base = impl->virtual_base;
+#ifdef _WIN32
+        lazy_commit = impl->lazy_commit;
+#endif
         if (virtual_base) {
             // Ensure the virtual base is aligned to the L2 block size.
             virtual_base = reinterpret_cast<u8*>(Common::AlignUp(uintptr_t(virtual_base), HugePageSize));
@@ -1110,6 +1178,7 @@ void HostMemory::Swap(HostMemory& other) noexcept {
     std::swap(granules, other.granules);
     std::swap(num_granules, other.num_granules);
     std::swap(fallback_buffer, other.fallback_buffer);
+    std::swap(lazy_commit, other.lazy_commit);
 }
 
 namespace {
@@ -1231,11 +1300,13 @@ u64 HostMemory::MappedBytes() noexcept {
     return g_mapped_bytes.load(std::memory_order_relaxed);
 }
 
-std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+std::pair<size_t, size_t> HostMemory::TrimZeroPages(std::stop_token stop) const {
 #ifdef _WIN32
-    if (backing_base == nullptr) {
+    if (backing_base == nullptr || stop.stop_requested()) {
         return {0, 0};
     }
+    // Checked every few thousand pages: a pass reads every resident page of guest memory.
+    constexpr size_t StopCheckPages = 4096;
     std::vector<ULONG_PTR> entries(size_t{1} << 22);
     for (int attempt = 0;; ++attempt) {
         if (K32QueryWorkingSet(GetCurrentProcess(), entries.data(),
@@ -1267,7 +1338,11 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     // write that lands after the check costs a soft fault and nothing else.
     std::vector<uintptr_t> trim;
     size_t zero_bytes = 0;
+    size_t pages_read = 0;
     for (const uintptr_t page : backing_pages) {
+        if (++pages_read % StopCheckPages == 0 && stop.stop_requested()) {
+            return {0, 0};
+        }
         if (IsZeroPage(reinterpret_cast<const u8*>(page))) {
             trim.push_back(page);
             zero_bytes += PageAlignment;
@@ -1292,6 +1367,9 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
         i = j;
         for (const auto& run : runs) {
             for (size_t offset = 0; offset < run.length; offset += PageAlignment) {
+                if (++pages_read % StopCheckPages == 0 && stop.stop_requested()) {
+                    return {0, 0};
+                }
                 if (run.backing_offset + offset >= backing_size) {
                     break;
                 }
@@ -1308,6 +1386,9 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
                 }
             }
         }
+    }
+    if (stop.stop_requested()) {
+        return {0, 0};
     }
     std::sort(trim.begin(), trim.end());
     trim.erase(std::unique(trim.begin(), trim.end()), trim.end());
@@ -1333,6 +1414,7 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     }
     return {(backing_pages.size() + view_pages.size()) * PageAlignment, zero_bytes};
 #else
+    static_cast<void>(stop);
     return {0, 0};
 #endif
 }
@@ -1386,6 +1468,30 @@ void HostMemory::MarkUsed(size_t physical_offset, size_t length) {
         return;
     }
     const size_t last = (physical_offset + length - 1) >> GranuleShift;
+#ifdef _WIN32
+    if (lazy_commit) {
+        // Runs of granules not handed out before are committed first: once they read as used,
+        // their memory is taken as backed.
+        for (size_t index = physical_offset >> GranuleShift; index <= last;) {
+            if ((granules[index].load(std::memory_order_acquire) & GranuleUsed) != 0) {
+                ++index;
+                continue;
+            }
+            size_t end = index + 1;
+            while (end <= last &&
+                   (granules[end].load(std::memory_order_acquire) & GranuleUsed) == 0) {
+                ++end;
+            }
+            const size_t begin_offset = index << GranuleShift;
+            const size_t end_offset = (std::min)(end << GranuleShift, backing_size);
+            if (!CommitLazyBacking(backing_base + begin_offset, end_offset - begin_offset)) {
+                LOG_CRITICAL(HW_Memory, "Failed to commit {} MiB of guest memory, error {}",
+                             (end_offset - begin_offset) >> 20, GetLastError());
+            }
+            index = end;
+        }
+    }
+#endif
     for (size_t index = physical_offset >> GranuleShift; index <= last; ++index) {
         if ((granules[index].load(std::memory_order_relaxed) & GranuleUsed) == 0) {
             granules[index].fetch_or(GranuleUsed, std::memory_order_release);

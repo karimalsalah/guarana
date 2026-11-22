@@ -21,7 +21,7 @@
 EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsystem_,
                                      Core::System& system_, bool fullscreen)
     : EmuWindow_SDL3{input_subsystem_, system_} {
-    const std::string window_title = fmt::format("Eden {} | {}-{} (Vulkan)",
+    const std::string window_title = fmt::format("Guarana {} | {}-{} (Vulkan)",
                                                  Common::g_build_name,
                                                  Common::g_scm_branch,
                                                  Common::g_scm_desc);
@@ -92,7 +92,7 @@ EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsyste
     OnMinimalClientAreaChangeRequest(GetActiveConfig().min_client_area_size);
     SDL_PumpEvents();
     OnResize();
-    LOG_INFO(Frontend, "Eden Version: {} | {}-{} (Vulkan)", Common::g_build_name,
+    LOG_INFO(Frontend, "Guarana Version: {} | {}-{} (Vulkan)", Common::g_build_name,
              Common::g_scm_branch, Common::g_scm_desc);
 }
 

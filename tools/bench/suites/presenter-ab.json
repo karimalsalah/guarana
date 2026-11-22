@@ -1,0 +1,65 @@
+{
+  "name": "presenter-ab",
+  "description": "Issue #8, part B: the FLUID presenter with FIFO against IMMEDIATE (EDEN_NX2_PRESENT_MODE), frame generation off and on, fullscreen, with the presenter's pacing counters and EDEN_NX2_SHOWN_STATS's shown-interval lines in refreshes. Run one suite with Windows' hardware-accelerated GPU scheduling on and one with it off (a reboot between), and say which in the pull request: the log's 'Present setup' line names it. A surface without IMMEDIATE logs a warning and presents with FIFO, so its immediate rows equal fifo; say so. Look for tearing in the immediate runs. The settings keys follow the [Renderer] section of qt-config.ini: check them against your own after turning frame generation on once in the GUI.",
+  "scene": "../scenes/oot-kokiri-forest.json",
+  "options": {},
+  "base": {
+    "fullscreen": true,
+    "pacing": true,
+    "env": {
+      "EDEN_NX2_FLUID": "1",
+      "EDEN_NX2_SHOWN_STATS": "1"
+    }
+  },
+  "baseline": "fifo",
+  "runs": [
+    {
+      "variants": [
+        {
+          "name": "fifo",
+          "env": {
+            "EDEN_NX2_PRESENT_MODE": "fifo"
+          },
+          "settings": {
+            "Renderer": {
+              "frame_gen": false
+            }
+          }
+        },
+        {
+          "name": "immediate",
+          "env": {
+            "EDEN_NX2_PRESENT_MODE": "immediate"
+          },
+          "settings": {
+            "Renderer": {
+              "frame_gen": false
+            }
+          }
+        },
+        {
+          "name": "fifo-fg",
+          "env": {
+            "EDEN_NX2_PRESENT_MODE": "fifo"
+          },
+          "settings": {
+            "Renderer": {
+              "frame_gen": true
+            }
+          }
+        },
+        {
+          "name": "immediate-fg",
+          "env": {
+            "EDEN_NX2_PRESENT_MODE": "immediate"
+          },
+          "settings": {
+            "Renderer": {
+              "frame_gen": true
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

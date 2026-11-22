@@ -1,0 +1,10 @@
+{
+  "name": "cache-mmap",
+  "description": "The shader cache log is mapped, not copied, and its programs decoded in parallel: only a large cache shows it, so warm only.",
+  "cache_states": [
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_CACHE_MMAP": "1"
+  }
+}

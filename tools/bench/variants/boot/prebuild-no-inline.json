@@ -1,0 +1,15 @@
+{
+  "name": "prebuild-no-inline",
+  "description": "A draw whose cached pipeline is still queued in the background prebuild is skipped instead of built on the GPU thread (#103). Compare with async-shaders.",
+  "cache_states": [
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_PREBUILD_NO_INLINE": "1"
+  },
+  "settings": {
+    "Renderer": {
+      "use_asynchronous_shaders": true
+    }
+  }
+}

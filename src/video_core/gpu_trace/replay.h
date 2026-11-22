@@ -20,6 +20,9 @@ struct ReplayOptions {
     std::filesystem::path out;
     /// Stop after this many presents, 0 for all.
     u32 max_frames = 0;
+    /// Write frame-NNNN.png. Without them frames.json still has every frame's hash and times:
+    /// what a benchmark needs (tools/nx2/trace_replay.py bench).
+    bool images = true;
     /// Records a new trace of this replay from present record_from on, for record_presents
     /// presents (0: to the end). A replay of it must give the same frames.
     std::filesystem::path record;

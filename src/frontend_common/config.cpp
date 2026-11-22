@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -35,6 +36,20 @@
 namespace FS = Common::FS;
 
 namespace {
+
+#ifndef __ANDROID__
+/// EDEN_NX2_SEED_FILTER=1: a new global config is not given a scaling filter. Fsr3 (FSR1 EASU and
+/// RCAS at output size) costs 3.4 to 3.7 ms of GPU time per shown frame on the Arc 140T class,
+/// ScaleForce 1.7 ms; and a seed is written with `\default=false`, which counts as the player's
+/// choice and would keep a game preset (none sets a filter yet) from choosing one. Without a seed
+/// the setting keeps its own default (ScaleForce). Off: unset, empty, 0 or false.
+/// The device is not known when the config is created, so this is not limited to integrated GPUs.
+[[nodiscard]] bool SkipFilterSeed() {
+    const char* const value = std::getenv("EDEN_NX2_SEED_FILTER");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+}
+#endif
+
 
 std::string GameConfigPath(const std::string& config_file) {
     return FS::PathToUTF8String(FS::GetEdenPath(FS::EdenPath::ConfigDir) / "custom" /
@@ -306,10 +321,16 @@ void Config::SetUpIni() {
             WriteStringSetting(setting.GetLabel(), value);
             WriteBooleanSetting(setting.GetLabel() + "\\default", false);
         };
-        seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        if (SkipFilterSeed()) {
+            LOG_INFO(Config, "EDEN_NX2_SEED_FILTER: no scaling filter in the first-run seed");
+        } else {
+            seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        }
         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
         seed(Settings::values.async_presentation, ToString(true));
+        // use_asynchronous_shaders is intentionally not seeded: waiting for shaders off is now
+        // every config's default, so it is not an explicit non-default choice a preset must honor.
         EndGroup();
     }
 #endif
@@ -1110,6 +1131,10 @@ void Config::ReadSettingGeneric(Settings::BasicSetting* const setting) {
     bool use_global = true;
     if (setting->Switchable() && !global) {
         use_global = ReadBooleanSetting(std::string(key).append("\\use_global"), std::make_optional(true));
+        if (use_global && Settings::IsPresetValue(*setting)) {
+            // A game preset holds this value for the running game.
+            return;
+        }
         setting->SetGlobal(use_global);
     }
 
@@ -1132,7 +1157,13 @@ void Config::WriteSettingGeneric(const Settings::BasicSetting* const setting) {
     std::string key = AdjustKey(setting->GetLabel());
     if (setting->Switchable()) {
         if (!global) {
-            WriteBooleanSetting(std::string(key).append("\\use_global"), setting->UsingGlobal());
+            // A game preset's value is not the user's: the file keeps the global one.
+            const bool preset = Settings::IsPresetValue(*setting);
+            WriteBooleanSetting(std::string(key).append("\\use_global"),
+                                setting->UsingGlobal() || preset);
+            if (preset) {
+                return;
+            }
         }
         if (global || !setting->UsingGlobal()) {
             auto value = global ? setting->ToStringGlobal() : setting->ToString();

@@ -24,6 +24,7 @@
 #include "common/swap.h"
 #include "core/core.h"
 #include "core/arm/dynarmic/window_trace.h"
+#include "core/arm/nce/readiness.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/hle/kernel/code_set.h"
 #include "core/hle/kernel/k_page_table.h"
@@ -437,6 +438,16 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
             LOG_WARNING(Loader, "Hyrule Warriors frame interval not found ({} matches)", matches);
             frame_interval_offset = frame_interval_source_offset = 0;
         }
+    }
+
+    // EDEN_NX2_NCE_REPORT: what native code execution would patch in this module, and which
+    // system registers it would leave to the host, decoded on any host (docs/NCE.md).
+    if (load_into_process && Core::NCE::ReadinessReportEnabled()) {
+        const auto& text = nso_header.segments[0];
+        std::vector<u32> words(text.size / sizeof(u32));
+        std::memcpy(words.data(), codeset.memory.data() + module_start + text.location,
+                    words.size() * sizeof(u32));
+        LOG_INFO(Loader, "{}", Core::NCE::FormatReadiness(Core::NCE::ScanText(words), name));
     }
 
 #ifdef HAS_NCE

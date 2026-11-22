@@ -10,9 +10,12 @@
 #include "common/common_types.h"
 #include "common/settings_enums.h"
 #include "video_core/renderer_base.h"
+#include "video_core/renderer_vulkan/present/frame_extrapolation.h"
+#include "video_core/renderer_vulkan/present/game_motion_interpolation.h"
 #include "video_core/renderer_vulkan/present/frame_gen_pacer.h"
 #include "video_core/renderer_vulkan/present/lsfg_chain.h"
 #include "video_core/renderer_vulkan/present/lsfg_shaders.h"
+#include "video_core/renderer_vulkan/present/fsr3_frame_gen.h"
 #include "video_core/renderer_vulkan/present/optical_flow_frame_gen.h"
 #ifdef HAS_FLYHIGH
 #include "video_core/renderer_vulkan/present/flyhigh_frame_gen.h"
@@ -30,6 +33,16 @@ public:
     explicit FrameGen(MemoryAllocator& memory_allocator, Scheduler& scheduler);
     ~FrameGen();
 
+    /// Motion data of the frame Process is called with next and the rectangle of the frame the
+    /// scene covers. Once a frame had any, generated frames are predicted after the real frame
+    /// instead of interpolated before it (EDEN_NX2_EXTRAPOLATE).
+    void SetExtrapolationSource(const std::optional<ExtrapolationSource>& source, VkRect2D screen);
+
+    /// Generated frames follow the real frame: present it first.
+    [[nodiscard]] bool Extrapolating() const {
+        return extrapolating;
+    }
+
     void Process(const Device& device, Frame* frame, VkFormat format, VkExtent2D guest_extent);
 
     /// free_frames: the present frames free now (PresentManager::FreeFrames).
@@ -44,8 +57,47 @@ public:
         return pacer.SmoothedInterval();
     }
 
+    /// EDEN_NX2_CADENCE: the time each shown frame keeps the screen while real frames are held to
+    /// an even share of the target rate, zero while they are not.
+    [[nodiscard]] std::chrono::nanoseconds CadenceSpacing() const;
+
+    /// EDEN_NX2_FLUID: the time between real frames to predict against, in seconds: the interval
+    /// the guest is paced to while the measured one is within 10% of it, else the measured one;
+    /// 0 while unknown.
+    [[nodiscard]] f32 FluidInterval() const;
+
+    /// Whether the frame Process was given can be extrapolated (EDEN_NX2_FLUID).
+    [[nodiscard]] bool CanPredict() const;
+
+    /// EDEN_NX2_FLUID: records the frame `advance` frame intervals after the one Process was
+    /// given into destination. False when nothing was recorded.
+    bool GenerateAt(const Device& device, Frame* destination, f32 advance);
+
+    /// EDEN_NX2_FLUID: counts predicted frames for the status bar.
+    void NoteFluidGenerated(size_t count);
+
+    /// EDEN_NX2_CADENCE holds real frames to a share of the target rate.
+    [[nodiscard]] bool CadenceActive() const {
+        return cadence_divisor != 0;
+    }
+
+    /// EDEN_NX2_FLUID_INTERP: interpolated frames go to the FLUID presenter's vblank slots.
+    [[nodiscard]] static bool FluidInterpolation();
+
+    /// Generates nothing until Process runs again, and gives back a cadence's frame rate cap
+    /// (HDR output: extrapolation writes SDR only).
+    void Pause();
+
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
     void DrainFlyHighSubmissions();
+
+    /// EDEN_NX2_FLUID_INTERP: records the frame `blend` of the way from the last real frame to the
+    /// one Process was given into destination (FSR3 interpolation only). False when nothing was
+    /// recorded.
+    bool GenerateBlend(const Device& device, Frame* destination, f32 blend);
+
+    /// Whether the active chain can generate an arbitrary interpolation factor.
+    [[nodiscard]] bool CanBlend() const;
 
     [[nodiscard]] VideoCore::FrameGenStatus CurrentStatus() const {
         return {.state = state.load(std::memory_order_relaxed),
@@ -53,6 +105,10 @@ public:
     }
 
 private:
+    void ProcessExtrapolated(const Device& device, Frame* frame, VkFormat format);
+    void UpdateCadence();
+    /// Gives the frame budget back the target it had before the cadence held real frames.
+    void ReleaseCadence();
     void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale,
                  Settings::FrameGenType type);
     [[nodiscard]] bool HasFlyHigh() const;
@@ -64,6 +120,9 @@ private:
     /// Logs every 10 s how many frames were generated, when that changes.
     void LogActivity();
     void DumpDebugImages(u64 count);
+    /// EDEN_NX2_FG_GAME_MOTION: records the in-between frame `t` from the game's motion; false
+    /// when the guides or the chain's frames are missing, and the optical flow draws it instead.
+    bool GenerateFromGameMotion(const Device& device, Frame* destination, f32 t);
 
     MemoryAllocator& memory_allocator;
     Scheduler& scheduler;
@@ -76,6 +135,34 @@ private:
     bool flyhigh_failed{};
     bool built_protect_hud{};
 #endif
+    std::optional<Fsr3FrameGen> fsr3_chain;
+    std::optional<FrameExtrapolation> extrapolation;
+    /// EDEN_NX2_FG_GAME_MOTION: the guides of the last two real frames and the warp between them.
+    std::optional<GameMotionInterpolation> game_motion;
+    std::optional<ExtrapolationSource> game_motion_source; ///< for the frame Process is given next
+    bool game_motion_source_set{};
+    u64 game_motion_made{};      ///< in-between frames from the game's motion this period
+    u64 game_motion_fallbacks{}; ///< and from the optical flow for want of guides
+    std::optional<ExtrapolationSource> extrapolation_source;
+    VkRect2D extrapolation_screen{};
+    Frame* extrapolation_frame{}; ///< the real frame of this composite
+    u64 extrapolation_cuts{};
+    u64 extrapolation_missing{};
+    u64 extrapolation_hud{};     ///< frames this period with a HUD mask
+    u64 extrapolation_usable_frames{}; ///< frames this period that could be predicted
+    u64 extrapolation_frames{};
+    bool extrapolating{};
+    /// This frame has motion to extrapolate (no camera cut).
+    bool extrapolation_usable{};
+    /// EDEN_NX2_CADENCE: real frames are held to the target rate / cadence_divisor (0: off).
+    u32 cadence_divisor{};
+    /// EDEN_NX2_SHOWN_GOVERNOR: the governed shown rate cadence_divisor was set for, 0 when none.
+    u32 cadence_governed{};
+    u32 cadence_slow_checks{};
+    u32 cadence_fast_checks{};
+    std::chrono::steady_clock::time_point cadence_checked{};
+    double cadence_saved_target{}; ///< the frame budget's target before the cadence set one
+    u32 unusable_streak{}; ///< extrapolated frames in a row without motion data
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};

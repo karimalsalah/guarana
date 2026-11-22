@@ -1,0 +1,220 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 460 core
+
+// EDEN_NX2_FG_GAME_MOTION: the frame `t` of the way from the previous real frame (0) to the newest
+// (1), warped with the game's motion (the guides) instead of optical flow, with what one frame no
+// longer shows filled from the other by depth. The arithmetic is
+// video_core/renderer_vulkan/present/game_motion_warp.h, line for line; its test is
+// src/tests/video_core/game_motion_warp.cpp.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D newest_color;
+layout(binding = 1) uniform sampler2D previous_color;
+layout(binding = 2) uniform sampler2D newest_guide;   // xy: motion to the previous frame (UV), z: nearness
+layout(binding = 3) uniform sampler2D previous_guide; // the same for the previous real frame
+layout(binding = 4) uniform sampler2D hud_reference;  // the newest scene before the HUD
+layout(binding = 5) uniform sampler2D hud_composite;  // the same frame with the HUD
+// No format: the view has the frame's own, as in frame_extrapolation.comp.
+layout(binding = 6) uniform writeonly image2D out_frame;
+
+layout(push_constant) uniform Parameters {
+    vec2 screen_origin; // the scene's rectangle in the frame (pixels)
+    vec2 screen_size;
+    float t;
+    uint flags;
+} params;
+
+const uint FLAG_HUD = 1u;
+const uint FLAG_DEBUG = 2u;
+const uint FLAG_HUD_LINEAR = 4u; // hud_reference is linear, hud_composite sRGB-encoded
+const uint FLAG_HUD_EXACT = 8u;  // both are linear and equal wherever there is no HUD
+const uint FLAG_HUD_DILATE = 32u;
+const uint FLAG_HUD_FILL = 64u;    // a source under the HUD takes the scene there (EXTRAPOLATE_HUD_FILL)
+
+// What GuardHud did (GameMotionWarp::HudGuard).
+const uint GUARD_NONE = 0u;
+const uint GUARD_OTHER_FRAME = 1u;
+const uint GUARD_SCENE_UNDER_HUD = 2u;
+const uint GUARD_UNMOVED = 3u;
+
+const float CONVERGED_PIXELS = 2.0;
+const float SAME_SURFACE_RATIO = 1.1;
+const float SAME_SURFACE_BIAS = 1e-3;
+
+struct Solution {
+    vec2 position;
+    vec2 previous;
+    float nearness;
+    bool converged;
+};
+
+vec3 NewestGuide(vec2 uv) {
+    return textureLod(newest_guide, uv, 0.0).xyz;
+}
+
+vec3 PreviousGuide(vec2 uv) {
+    return textureLod(previous_guide, uv, 0.0).xyz;
+}
+
+// p = q + advance * motion(p) on one frame's guide, two fixed-point steps.
+Solution Solve(bool newest, vec2 target, float advance) {
+    vec3 sampled = newest ? NewestGuide(target) : PreviousGuide(target);
+    vec2 before = target;
+    vec2 after = target + advance * sampled.xy;
+    for (int i = 0; i < 2; ++i) {
+        before = after;
+        sampled = newest ? NewestGuide(before) : PreviousGuide(before);
+        after = target + advance * sampled.xy;
+    }
+    float moved = length((after - before) * params.screen_size);
+    return Solution(after, before, sampled.z, moved < CONVERGED_PIXELS);
+}
+
+bool SameSurface(float a, float b) {
+    return max(a, b) <= min(a, b) * SAME_SURFACE_RATIO + SAME_SURFACE_BIAS;
+}
+
+struct Pick {
+    vec2 newest;
+    vec2 previous;
+    float newest_weight;
+    uint kind; // 0 the newest frame (mixed or not), 1 the previous frame alone, 2 neither solved
+};
+
+Pick Interpolate(vec2 target, float t) {
+    Solution newest = Solve(true, target, -(1.0 - t));
+    Solution previous = Solve(false, target, t);
+    bool newest_wins = newest.converged &&
+                       (!previous.converged || SameSurface(newest.nearness, previous.nearness) ||
+                        newest.nearness > previous.nearness);
+    if (newest_wins) {
+        vec2 trail = newest.position + NewestGuide(newest.position).xy;
+        bool seen_before = SameSurface(PreviousGuide(trail).z, newest.nearness);
+        return Pick(newest.position, trail, seen_before ? t : 1.0, 0u);
+    }
+    if (previous.converged) {
+        return Pick(previous.position, previous.position, 0.0, 1u);
+    }
+    vec2 newest_behind = NewestGuide(newest.position).z < NewestGuide(newest.previous).z
+                             ? newest.position
+                             : newest.previous;
+    vec2 previous_behind = PreviousGuide(previous.position).z < PreviousGuide(previous.previous).z
+                               ? previous.position
+                               : previous.previous;
+    if (NewestGuide(newest_behind).z <= PreviousGuide(previous_behind).z) {
+        return Pick(newest_behind, newest_behind, 1.0, 2u);
+    }
+    return Pick(previous_behind, previous_behind, 0.0, 2u);
+}
+
+vec3 Encode(vec3 linear) {
+    linear = clamp(linear, 0.0, 1.0);
+    return mix(1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055, 12.92 * linear,
+               lessThan(linear, vec3(0.0031308)));
+}
+
+// The HUD test of frame_extrapolation.comp, on the newest frame.
+bool IsHudAt(vec2 uv) {
+    vec3 reference = textureLod(hud_reference, uv, 0.0).rgb;
+    vec3 composite = textureLod(hud_composite, uv, 0.0).rgb;
+    float limit = 0.07;
+    if ((params.flags & FLAG_HUD_EXACT) != 0u) {
+        reference = Encode(reference);
+        composite = Encode(composite);
+        limit = 0.02;
+    } else if ((params.flags & FLAG_HUD_LINEAR) != 0u) {
+        reference = Encode(reference);
+    }
+    vec3 overlay = abs(composite - reference);
+    return max(max(overlay.r, overlay.g), overlay.b) > limit;
+}
+
+bool IsHud(vec2 uv) {
+    if (IsHudAt(uv)) {
+        return true;
+    }
+    if ((params.flags & FLAG_HUD_DILATE) == 0u) {
+        return false;
+    }
+    vec2 texel = 1.0 / vec2(textureSize(hud_reference, 0));
+    return IsHudAt(uv + vec2(texel.x, 0.0)) || IsHudAt(uv - vec2(texel.x, 0.0)) ||
+           IsHudAt(uv + vec2(0.0, texel.y)) || IsHudAt(uv - vec2(0.0, texel.y));
+}
+
+// The newest frame's scene under the HUD at uv, as frame_extrapolation.comp's SceneUnderHud: the
+// presented frame plus the difference between the scene and the composite there.
+vec3 SceneUnderHud(vec2 uv, vec2 frame_uv) {
+    vec3 reference = textureLod(hud_reference, uv, 0.0).rgb;
+    vec3 composite = textureLod(hud_composite, uv, 0.0).rgb;
+    if ((params.flags & FLAG_HUD_EXACT) != 0u) {
+        reference = Encode(reference);
+        composite = Encode(composite);
+    } else if ((params.flags & FLAG_HUD_LINEAR) != 0u) {
+        reference = Encode(reference);
+    }
+    vec3 presented = textureLod(newest_color, frame_uv, 0.0).rgb;
+    return clamp(presented + reference - composite, 0.0, 1.0);
+}
+
+// Scene pixels must not drag the HUD along: GameMotionWarp::GuardHud, line for line. The newest
+// frame's mask stands for both frames.
+uint GuardHud(inout Pick pick, vec2 target) {
+    bool newest_used = pick.newest_weight > 0.0;
+    bool previous_used = pick.newest_weight < 1.0;
+    bool newest_on = newest_used && IsHud(pick.newest);
+    bool previous_on = previous_used && IsHud(pick.previous);
+    if (!newest_on && !previous_on) {
+        return GUARD_NONE;
+    }
+    if (newest_on && previous_used && !previous_on) {
+        pick = Pick(pick.previous, pick.previous, 0.0, pick.kind);
+        return GUARD_OTHER_FRAME;
+    }
+    if (previous_on && newest_used && !newest_on) {
+        pick = Pick(pick.newest, pick.newest, 1.0, pick.kind);
+        return GUARD_OTHER_FRAME;
+    }
+    if ((params.flags & FLAG_HUD_FILL) != 0u) {
+        vec2 source = newest_used ? pick.newest : pick.previous;
+        pick = Pick(source, source, 1.0, pick.kind);
+        return GUARD_SCENE_UNDER_HUD;
+    }
+    pick = Pick(target, target, 1.0, pick.kind);
+    return GUARD_UNMOVED;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(out_frame);
+    if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+    vec2 target = (vec2(pixel) + 0.5 - params.screen_origin) / params.screen_size;
+    bool outside = any(lessThan(target, vec2(0.0))) || any(greaterThan(target, vec2(1.0)));
+    if (outside || ((params.flags & FLAG_HUD) != 0u && IsHud(target))) {
+        // Outside the scene (bars) and the HUD: the newest frame, unmoved.
+        imageStore(out_frame, pixel, vec4(texelFetch(newest_color, pixel, 0).rgb, 1.0));
+        return;
+    }
+
+    Pick pick = Interpolate(target, params.t);
+    uint guard = (params.flags & FLAG_HUD) != 0u ? GuardHud(pick, target) : GUARD_NONE;
+    vec2 frame_size = vec2(textureSize(newest_color, 0));
+    vec2 newest_uv = (params.screen_origin + pick.newest * params.screen_size) / frame_size;
+    vec2 previous_uv = (params.screen_origin + pick.previous * params.screen_size) / frame_size;
+    vec3 color = guard == GUARD_SCENE_UNDER_HUD
+                     ? SceneUnderHud(pick.newest, newest_uv)
+                     : mix(textureLod(previous_color, previous_uv, 0.0).rgb,
+                           textureLod(newest_color, newest_uv, 0.0).rgb, pick.newest_weight);
+    if ((params.flags & FLAG_DEBUG) != 0u && (guard != GUARD_NONE || pick.kind != 0u)) {
+        // Yellow: a source on the HUD gave way or was replaced; magenta: filled from the previous
+        // frame alone (a disocclusion); red: neither solved.
+        vec3 tint = guard != GUARD_NONE ? vec3(1.0, 1.0, 0.0)
+                    : pick.kind == 1u   ? vec3(1.0, 0.0, 1.0)
+                                        : vec3(1.0, 0.0, 0.0);
+        color = mix(color, tint, 0.6);
+    }
+    imageStore(out_frame, pixel, vec4(color, 1.0));
+}

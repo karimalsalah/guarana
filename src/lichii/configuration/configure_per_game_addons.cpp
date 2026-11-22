@@ -5,23 +5,37 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
+#include <optional>
+#include <system_error>
 #include <utility>
 
 #include <fmt/format.h>
 
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QHeaderView>
+#include <QLocale>
 #include <QMenu>
 #include <QSignalBlocker>
+#include <QSet>
 #include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QString>
+#include <QStyle>
 #include <QTimer>
 #include <QTreeView>
+#include <QUrl>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include "common/common_types.h"
+#include "common/fs/fs.h"
+#include "common/fs/fs_util.h"
+#include "common/fs/path_util.h"
 #include "configuration/addon/mod_select_dialog.h"
 #include "core/core.h"
 #include "core/file_sys/patch_manager.h"
@@ -34,6 +48,129 @@
 #include "ui_configure_per_game_addons.h"
 #include "lichii/configuration/configure_input.h"
 #include "lichii/configuration/configure_per_game_addons.h"
+
+namespace {
+
+/// A built-in's name without the " (built-in)" that the Version column already says.
+QString BuiltinDisplayName(const std::string& name) {
+    QString text = QString::fromStdString(name);
+    const QString suffix = QStringLiteral(" (built-in)");
+    if (text.endsWith(suffix)) {
+        text.chop(suffix.size());
+    }
+    return text;
+}
+
+QString BuiltinVersionText(const FileSys::Patch& patch) {
+    switch (patch.level) {
+    case FileSys::BuiltinPatchLevel::Recommended:
+        return ConfigurePerGameAddons::tr("Built-in, recommended");
+    case FileSys::BuiltinPatchLevel::Experimental:
+        return ConfigurePerGameAddons::tr("Built-in, experimental");
+    case FileSys::BuiltinPatchLevel::Standard:
+        break;
+    }
+    return ConfigurePerGameAddons::tr("Built-in");
+}
+
+/// Whether a built-in cannot apply to the game as installed, or a checked one was left out when
+/// the game last started, for a reason the player can act on.
+bool BuiltinFailed(const FileSys::Patch& patch) {
+    using Build = FileSys::BuiltinPatchBuild;
+    using Result = FileSys::BuiltinPatchResult;
+    if (patch.build == Build::Other) {
+        return true;
+    }
+    // The build read now outdates a WrongBuild from an earlier start.
+    const bool wrong_build =
+        patch.build == Build::Unknown && patch.last_result == Result::WrongBuild;
+    return patch.enabled && (wrong_build || patch.last_result == Result::ModConflict ||
+                             patch.last_result == Result::UnexpectedCode);
+}
+
+/// Whether a built-in is made for the game as installed, and what became of a checked one when
+/// the game last started. The reasons are the ones PatchManager::PatchNSO logs.
+QString BuiltinStatusText(const FileSys::Patch& patch) {
+    using Build = FileSys::BuiltinPatchBuild;
+    using Result = FileSys::BuiltinPatchResult;
+    if (patch.build == Build::Other) {
+        return ConfigurePerGameAddons::tr(
+            "Cannot be applied: it is made for another version of the game.");
+    }
+    const bool this_build = patch.build == Build::Matches;
+    if (!patch.enabled) {
+        return this_build ? ConfigurePerGameAddons::tr("Made for this version of the game.")
+                          : QString{};
+    }
+    switch (patch.last_result) {
+    case Result::Applied:
+        return ConfigurePerGameAddons::tr("Applied when the game last started.");
+    case Result::WrongBuild:
+        if (this_build) {
+            // Another version of the game started last time: nothing is known of this one.
+            break;
+        }
+        return ConfigurePerGameAddons::tr(
+            "Not applied when the game last started: it is made for another version of the game.");
+    case Result::ModConflict:
+        return ConfigurePerGameAddons::tr(
+            "Not applied when the game last started: a mod changes the same part of the game. "
+            "Turn that mod off to use this patch.");
+    case Result::UnexpectedCode:
+        return ConfigurePerGameAddons::tr(
+            "Not applied when the game last started: the game's code is not what it expects.");
+    case Result::Replaced:
+        return ConfigurePerGameAddons::tr(
+            "Not used when the game last started: another built-in patch includes it.");
+    case Result::GroupTaken:
+        return ConfigurePerGameAddons::tr(
+            "Not used when the game last started: another option of the same kind was applied.");
+    case Result::NotLoaded:
+    case Result::Disabled:
+        break;
+    }
+    return this_build ? ConfigurePerGameAddons::tr("Made for this version of the game. Start the "
+                                                   "game once, then look here to see whether it "
+                                                   "was applied.")
+                      : ConfigurePerGameAddons::tr(
+                            "Start the game once, then look here to see whether it was applied.");
+}
+
+/// The text of the box under the list for a built-in: what it does, then what became of it.
+QString BuiltinInfoText(const FileSys::Patch& patch) {
+    QStringList lines{QString::fromStdString(patch.description)};
+    if (!patch.replaced_by.empty()) {
+        lines << ConfigurePerGameAddons::tr("%1 includes it: while that one applies, this one "
+                                            "is not used.")
+                     .arg(BuiltinDisplayName(patch.replaced_by));
+    }
+    if (const QString status = BuiltinStatusText(patch); !status.isEmpty()) {
+        lines << status;
+    }
+    return lines.join(QStringLiteral("\n"));
+}
+
+/// The text of the box under the list for a mod that has a mod.json: where it came from. Empty
+/// when there is nothing to say.
+QString ModInfoText(const std::string& location) {
+    const auto info =
+        FrontendCommon::ReadModInfo(std::filesystem::path{Common::FS::ToU8String(location)});
+    if (!info || info->source.empty()) {
+        return {};
+    }
+    const QString source = QString::fromStdString(info->source);
+    const QDateTime date = QDateTime::fromString(QString::fromStdString(info->date), Qt::ISODate);
+    if (!date.isValid()) {
+        return ConfigurePerGameAddons::tr("Imported from %1.").arg(source);
+    }
+    return ConfigurePerGameAddons::tr("Imported from %1 on %2.")
+        .arg(source, QLocale().toString(date.toLocalTime().date(), QLocale::ShortFormat));
+}
+
+/// How many colliding files the warning lists before it says "and N more".
+constexpr int MAX_CONFLICT_LINES = 5;
+
+} // Anonymous namespace
 
 ConfigurePerGameAddons::ConfigurePerGameAddons(Core::System& system_, QWidget* parent)
     : QWidget(parent), ui{std::make_unique<Ui::ConfigurePerGameAddons>()}, system{system_} {
@@ -82,9 +219,24 @@ ConfigurePerGameAddons::ConfigurePerGameAddons(Core::System& system_, QWidget* p
     connect(ui->zip, &QAbstractButton::clicked, this, &ConfigurePerGameAddons::InstallModZip);
     connect(ui->browse_mods, &QAbstractButton::clicked, this,
             &ConfigurePerGameAddons::BrowseModsRequested);
+    connect(ui->open_folder, &QAbstractButton::clicked, this,
+            &ConfigurePerGameAddons::OpenModsFolder);
+
+    connect(&conflict_watcher,
+            &QFutureWatcher<std::vector<FrontendCommon::ModFileConflict>>::finished, this, [this] {
+                mod_conflicts = conflict_watcher.result();
+                UpdateModConflicts();
+            });
+    connect(item_model, &QStandardItemModel::itemChanged, this,
+            &ConfigurePerGameAddons::UpdateModConflicts);
+    ui->conflicts->setVisible(false);
 
     connect(tree_view, &QTreeView::customContextMenuRequested, this,
             &ConfigurePerGameAddons::showContextMenu);
+
+    connect(tree_view->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
+            &ConfigurePerGameAddons::UpdateInfo);
+    ui->info->setVisible(false);
 }
 
 ConfigurePerGameAddons::~ConfigurePerGameAddons() = default;
@@ -118,12 +270,25 @@ void ConfigurePerGameAddons::ApplyConfiguration() {
     std::vector<std::string> disabled_addons;
 
     for (const auto& item : list_items) {
-        if (item.front()->checkState() == Qt::Unchecked) {
-            disabled_addons.push_back(AddonKey(*item.front()).toStdString());
+        const auto disabled = item.front()->checkState() == Qt::Unchecked;
+        if (disabled) {
+            if (const QVariant key = item.front()->data(PATCH_KEY); key.isValid()) {
+                disabled_addons.push_back(key.toString().toStdString());
+            } else {
+                disabled_addons.push_back(AddonKey(*item.front()).toStdString());
+            }
         }
     }
 
     disabled_addons = FileSys::StoredDisabledAddons(title_id, std::move(disabled_addons));
+
+    auto current = Settings::values.disabled_addons[title_id];
+    std::sort(disabled_addons.begin(), disabled_addons.end());
+    std::sort(current.begin(), current.end());
+    if (disabled_addons != current) {
+        Common::FS::RemoveFile(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
+                               "game_list" / fmt::format("{:016X}.pv.txt", title_id));
+    }
 
     std::sort(disabled_addons.begin(), disabled_addons.end());
     Settings::values.disabled_addons[title_id] = disabled_addons;
@@ -172,32 +337,75 @@ void ConfigurePerGameAddons::ReloadAfterModStore(const QSet<QString>& store_togg
 
 void ConfigurePerGameAddons::InstallMods(const QStringList& mods) {
     QStringList failed;
+    QStringList kept;
+    int installed = 0;
     for (const auto& mod : mods) {
-        if (FrontendCommon::InstallMod(mod.toStdString(), title_id, true) ==
-            FrontendCommon::Failed) {
-            failed << QFileInfo(mod).baseName();
+        const std::filesystem::path mod_path{mod.toStdU16String()};
+        FrontendCommon::ModInstallOptions options;
+        options.source = install_source.toStdString();
+        if (mods.size() == 1) {
+            options.name = install_name.toStdString();
+        }
+        const QString name =
+            QString::fromStdString(FrontendCommon::InstalledModName(mod_path, options));
+
+        // Installing replaces the whole mod of that name: only with the player's yes.
+        if (FrontendCommon::IsModInstalled(title_id, name.toStdString())) {
+            const auto choice = QtCommon::Frontend::Warning(
+                tr("Replace mod?"),
+                tr("A mod named \"%1\" is already installed for this game.\n\nReplace it? Its "
+                   "files are deleted and can NOT be recovered. Choose No to keep it as it is.")
+                    .arg(name),
+                QtCommon::Frontend::StandardButton::Yes | QtCommon::Frontend::StandardButton::No);
+            if (choice != QtCommon::Frontend::StandardButton::Yes) {
+                kept << name;
+                continue;
+            }
+            options.replace_existing = true;
+        }
+
+        switch (FrontendCommon::InstallMod(mod_path, title_id, options)) {
+        case FrontendCommon::Success:
+            ++installed;
+            break;
+        case FrontendCommon::Cancelled:
+            kept << name;
+            break;
+        case FrontendCommon::Failed:
+            failed << name;
+            break;
         }
     }
 
-    if (failed.empty()) {
-        QtCommon::Frontend::Information(tr("Mod Install Succeeded"),
-                                        tr("Successfully installed all mods."));
-
+    if (installed > 0) {
         item_model->removeRows(0, item_model->rowCount());
         list_items.clear();
         LoadConfiguration();
 
         UISettings::values.is_game_list_reload_pending.exchange(true);
-    } else {
+    }
+
+    if (!failed.empty()) {
         QtCommon::Frontend::Critical(
             tr("Mod Install Failed"),
             tr("Failed to install the following mods:\n\t%1\nCheck the log for details.")
                 .arg(failed.join(QStringLiteral("\n\t"))));
+    } else if (installed > 0 && kept.empty()) {
+        QtCommon::Frontend::Information(tr("Mod Install Succeeded"),
+                                        tr("Successfully installed all mods."));
+    } else if (installed > 0) {
+        QtCommon::Frontend::Information(
+            tr("Mod Install Succeeded"),
+            tr("Installed the other mods. Kept as they were:\n\t%1")
+                .arg(kept.join(QStringLiteral("\n\t"))));
     }
 }
 
-void ConfigurePerGameAddons::InstallModPath(const QString& path, const QString& fallbackName) {
-    const auto mods = QtCommon::Mod::GetModFolders(path, fallbackName);
+void ConfigurePerGameAddons::InstallModPath(const QString& path, const QString& fallbackName,
+                                            const QString& source) {
+    install_name.clear();
+    install_source = source.isEmpty() ? QDir(path).dirName() : source;
+    const auto mods = QtCommon::Mod::GetModFolders(path, fallbackName, install_name);
 
     if (mods.size() > 1) {
         ModSelectDialog* dialog = new ModSelectDialog(mods, this);
@@ -230,7 +438,19 @@ void ConfigurePerGameAddons::InstallModZip() {
 
     const QString extracted = QtCommon::Mod::ExtractMod(path);
     if (!extracted.isEmpty())
-        InstallModPath(extracted, QFileInfo(path).baseName());
+        InstallModPath(extracted, QFileInfo(path).baseName(), QFileInfo(path).fileName());
+}
+
+void ConfigurePerGameAddons::OpenModsFolder() {
+    // Made if the game has no mods yet, so the button always opens a folder to put one in.
+    const std::filesystem::path dir = FrontendCommon::GetModsDir(title_id);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const QString path = QString::fromStdString(Common::FS::PathToUTF8String(dir));
+    if (ec || !QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        QtCommon::Frontend::Critical(tr("Error Opening Mods Folder"),
+                                     tr("Could not open the folder:\n%1").arg(path));
+    }
 }
 
 void ConfigurePerGameAddons::AddonDeleteRequested(QList<QModelIndex> selected) {
@@ -340,15 +560,33 @@ void ConfigurePerGameAddons::LoadConfiguration() {
     FileSys::VirtualFile update_raw;
     loader->ReadUpdateRaw(update_raw);
 
+    // Whether each built-in is made for the game's build, from the header of the main module that
+    // would load (with the enabled update and mods, as saved). Not while a game runs: the read can
+    // register content in the frontend's provider, which the game reads, and that game's start has
+    // already said what became of each built-in.
+    std::optional<FileSys::PatchManager::BuildID> main_build_id;
+    u64 program_id{};
+    if (!system.IsPoweredOn() && FileSys::HasListedBuiltinPatches(title_id) &&
+        loader->ReadProgramId(program_id) == Loader::ResultStatus::Success &&
+        program_id == title_id) {
+        FileSys::PatchManager::BuildID build_id{};
+        if (loader->ReadMainBuildId(system, build_id) == Loader::ResultStatus::Success) {
+            main_build_id = build_id;
+        }
+    }
+
     const auto& disabled = Settings::values.disabled_addons[title_id];
 
     update_items.clear();
     list_items.clear();
     item_model->removeRows(0, item_model->rowCount());
 
-    std::vector<FileSys::Patch> patches = pm.GetPatches(update_raw);
+    std::vector<FileSys::Patch> patches = pm.GetPatches(update_raw, main_build_id);
 
     bool has_enabled_update = false;
+    bool has_builtin = false;
+    bool has_info = false;
+    QStringList problems;
 
     if (loader->GetFileType() == Loader::FileType::NUP) {
         const auto& nup = static_cast<const Loader::AppLoader_NUP&>(*loader);
@@ -363,7 +601,7 @@ void ConfigurePerGameAddons::LoadConfiguration() {
         const auto name = QString::fromStdString(patch.name);
 
         auto* const first_item = new QStandardItem;
-        first_item->setText(name);
+        first_item->setText(patch.builtin ? BuiltinDisplayName(patch.name) : name);
         first_item->setCheckable(true);
         if (!patch.description.empty()) {
             first_item->setToolTip(QString::fromStdString(patch.description));
@@ -410,10 +648,112 @@ void ConfigurePerGameAddons::LoadConfiguration() {
         first_item->setCheckState(check_state);
         first_item->setData(static_cast<int>(check_state), LOADED_CHECK_STATE);
 
-        list_items.push_back(QList<QStandardItem*>{
-            first_item, new QStandardItem{QString::fromStdString(patch.version)}});
+        auto* const version_item = new QStandardItem{
+            patch.builtin ? BuiltinVersionText(patch) : QString::fromStdString(patch.version)};
+        if (is_mod && !patch.builtin && !patch.location.empty()) {
+            if (const QString info = ModInfoText(patch.location); !info.isEmpty()) {
+                has_info = true;
+                first_item->setData(info, PATCH_INFO);
+                first_item->setToolTip(info);
+            }
+        }
+        if (patch.builtin) {
+            has_builtin = true;
+            // The settings store the full name; the row shows it without " (built-in)".
+            first_item->setData(name, PATCH_KEY);
+            const QString info = BuiltinInfoText(patch);
+            first_item->setData(info, PATCH_INFO);
+            // Rich text, so that the tooltip wraps.
+            const QString tooltip =
+                QStringLiteral("<p>%1</p>")
+                    .arg(info.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>")));
+            first_item->setToolTip(tooltip);
+            version_item->setToolTip(tooltip);
+            if (BuiltinFailed(patch)) {
+                // Also on an unchecked one made for another version: checking it would not help.
+                first_item->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+                if (patch.enabled) {
+                    problems << QStringLiteral("%1: %2").arg(first_item->text(),
+                                                             BuiltinStatusText(patch));
+                }
+            }
+        }
+
+        list_items.push_back(QList<QStandardItem*>{first_item, version_item});
         item_model->appendRow(list_items.back());
     }
 
     tree_view->resizeColumnToContents(1);
+
+    builtin_problems = problems.join(QStringLiteral("\n"));
+    info_hint = has_builtin
+                    ? tr("Select a built-in patch to see what it does and whether it was applied.")
+                    : tr("Select a mod to see where it was imported from.");
+    ui->info->setVisible(has_builtin || has_info);
+    UpdateInfo();
+    ScanModConflicts();
+}
+
+void ConfigurePerGameAddons::ScanModConflicts() {
+    // Every file of every mod is listed, which can take a while: not on the interface's thread.
+    conflict_watcher.setFuture(QtConcurrent::run([dir = FrontendCommon::GetModsDir(title_id)] {
+        return FrontendCommon::FindModFileConflicts(dir);
+    }));
+}
+
+void ConfigurePerGameAddons::UpdateModConflicts() {
+    // What is ticked in the list now, saved or not.
+    QSet<QString> unticked;
+    for (const auto& item : list_items) {
+        if (item.front()->checkState() == Qt::Unchecked &&
+            !item.front()->data(PATCH_LOCATION).toString().isEmpty()) {
+            unticked.insert(item.front()->text());
+        }
+    }
+
+    int count = 0;
+    QStringList lines;
+    for (const auto& conflict : mod_conflicts) {
+        QStringList mods;
+        for (const auto& mod : conflict.mods) {
+            if (const QString name = QString::fromStdString(mod); !unticked.contains(name)) {
+                mods << name;
+            }
+        }
+        if (mods.size() < 2) {
+            continue;
+        }
+        ++count;
+        if (lines.size() < MAX_CONFLICT_LINES) {
+            lines << tr("%1: taken from %2, also in %3")
+                         .arg(QString::fromStdString(conflict.path), mods.front(),
+                              mods.mid(1).join(QStringLiteral(", ")));
+        }
+    }
+
+    if (count == 0) {
+        ui->conflicts->setVisible(false);
+        return;
+    }
+    QString text = tr("%n game file(s) are replaced by more than one ticked mod. Mods are applied "
+                      "in the order of their names, so the first one's file is the one the game "
+                      "gets:",
+                      "", count);
+    text += QStringLiteral("\n") + lines.join(QStringLiteral("\n"));
+    if (const int more = count - static_cast<int>(lines.size()); more > 0) {
+        text += QStringLiteral("\n") + tr("and %n more", "", more);
+    }
+    ui->conflicts->setText(text);
+    ui->conflicts->setVisible(true);
+}
+
+void ConfigurePerGameAddons::UpdateInfo() {
+    QString text;
+    if (const QModelIndex current = tree_view->currentIndex(); current.isValid()) {
+        text = current.siblingAtColumn(0).data(PATCH_INFO).toString();
+    }
+    if (text.isEmpty()) {
+        text = builtin_problems.isEmpty() ? info_hint : builtin_problems;
+    }
+    ui->info->setText(text);
 }

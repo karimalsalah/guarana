@@ -8,7 +8,6 @@ package io.github.zortos293.lichii.model
 import android.content.Intent
 import android.net.Uri
 import android.os.Parcelable
-import java.util.HashSet
 import kotlinx.parcelize.Parcelize
 import kotlinx.serialization.Serializable
 import io.github.zortos293.lichii.NativeLibrary
@@ -95,11 +94,5 @@ class Game(
         result = 31 * result + version.hashCode()
         result = 31 * result + isHomebrew.hashCode()
         return result
-    }
-
-    companion object {
-        val extensions: Set<String> = HashSet(
-            listOf("xci", "nsp", "nca", "nro", "nsz", "xcz")
-        )
     }
 }

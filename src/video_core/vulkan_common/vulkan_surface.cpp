@@ -35,7 +35,7 @@ vk::SurfaceKHR CreateSurface(
             .sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,
             .pNext = nullptr,
             .flags = 0,
-            .pLayer = static_cast<const CAMetalLayer*>(window_info.render_surface),
+            .pLayer = static_cast<CAMetalLayer*>(window_info.render_surface),
         };
         const auto vkCreateMetalSurfaceEXT = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(dld.vkGetInstanceProcAddr(*instance, "vkCreateMetalSurfaceEXT"));
         if (!vkCreateMetalSurfaceEXT ||

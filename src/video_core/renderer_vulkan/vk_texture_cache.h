@@ -5,10 +5,13 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstring>
 #include <chrono>
 #include <deque>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <span>
 
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -102,7 +105,9 @@ public:
                                  DescriptorPool& descriptor_pool,
                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
 
-    void Finish();
+    /// Submits and waits for the host GPU; the location names the caller in the Finish trace
+    /// (EDEN_NX2_HITCH_FINISH_TRACE).
+    void Finish(std::source_location location = std::source_location::current());
 
     StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
 
@@ -154,6 +159,12 @@ public:
     /// EDEN_NX2_MEM_TRACE: staging buffers, then the process, DXGI and VMA (LogMemoryTrace).
     void LogMemoryTrace();
 
+    /// Whether the GPU's memory is the host's RAM.
+    bool IsIntegratedGpu() const;
+
+    /// Bytes of the cached staging buffers of every kind.
+    u64 StagingBytes();
+
     /// True when ASTC is re-compressed to BC3 and opaque images may use BC1 instead.
     bool UseOpaqueAstcFormat() const;
 
@@ -204,10 +215,6 @@ public:
 
     void ConvertImage(Framebuffer* dst, ImageView& dst_view, ImageView& src_view);
 
-    bool CanAccelerateImageUpload(Image&) const noexcept {
-        return false;
-    }
-
     bool CanUploadMSAA() const noexcept {
         return true;
     }
@@ -224,6 +231,8 @@ public:
     void InsertUploadMemoryBarrier() {}
 
     void TransitionImageLayout(Image& image);
+
+    bool ClearImage(Image& image);
 
     bool HasBrokenTextureViewFormats() const noexcept {
         // No known Vulkan driver has broken image views
@@ -267,9 +276,6 @@ public:
 
     VkImageView ResolveColorFeedback(const ImageView& sampled, const ImageView& attachment);
 
-    bool IsFormatDitherable(VideoCore::Surface::PixelFormat format);
-    bool IsFormatScalable(VideoCore::Surface::PixelFormat format);
-
     VkFormat GetSupportedFormat(VkFormat requested_format, VkFormatFeatureFlags required_features) const;
 
     const Device& device;
@@ -298,6 +304,10 @@ public:
     std::optional<f32> ocarina_fsr_lod_bias;
     /// Set when the Ocarina upscaler fails during the session: samplers drop the bias again.
     bool ocarina_fsr_failed{};
+    /// EDEN_NX2_OOT_FSR_ANY: the bias of the scale FSR last upscaled at, in quarter LODs below
+    /// zero (VideoCommon::OcarinaFsrLodBiasQuarters), in place of the session's bias and in
+    /// either console mode. 0 until FSR replaces a frame.
+    u8 ocarina_fsr_lod_quarters{};
     SamplerBinding fallback_sampler{};
     /// The game DLSS network's health check (ProbeGameDlssOutput), created on first use.
     std::unique_ptr<DlssNetworkProbe> dlss_network_probe;
@@ -775,8 +785,6 @@ public:
 
     [[nodiscard]] VkImageView StencilView();
 
-    [[nodiscard]] VkImageView ColorView();
-
     [[nodiscard]] VkImageView StorageView(Shader::TextureType texture_type,
                                           Shader::ImageFormat image_format, bool is_byte_addressed);
 
@@ -847,7 +855,6 @@ private:
     vk::ImageView typeless_storage_view;
     vk::ImageView depth_view;
     vk::ImageView stencil_view;
-    vk::ImageView color_view;
     vk::Image null_image;
     VkImage image_handle = VK_NULL_HANDLE;
     VkImageView render_target = VK_NULL_HANDLE;
@@ -895,6 +902,12 @@ public:
 
     [[nodiscard]] VkSampler HandleFor(const ImageView& image_view, bool is_depth);
 
+    /// HandleFor can pick another variant for the same view later: the Ocarina FSR LOD bias
+    /// follows the image's GPU writes and the console mode.
+    [[nodiscard]] bool HasChangingVariants() const noexcept {
+        return added_lod_bias != 0.0f;
+    }
+
     /// The guest descriptor and the host state built from it, for EDEN_NX2_FRAME_DUMP_SAMPLED.
     [[nodiscard]] const Tegra::Texture::TSCEntry& Descriptor() const noexcept {
         return descriptor;
@@ -913,6 +926,8 @@ private:
         bool srgb_border;
         bool drop_compare;
         bool drop_lod_bias; ///< the image was written by the GPU: no Ocarina FSR LOD bias
+        /// TextureCacheRuntime::ocarina_fsr_lod_quarters in place of the session's bias, when set
+        u8 lod_bias_quarters;
         std::array<VkComponentSwizzle, 4> swizzle;
 
         bool operator==(const VariantKey&) const noexcept = default;
@@ -939,6 +954,7 @@ private:
 
     const Device* device_ptr{nullptr};
     const bool* ocarina_fsr_failed{}; ///< TextureCacheRuntime::ocarina_fsr_failed
+    const u8* ocarina_fsr_lod_quarters{}; ///< TextureCacheRuntime::ocarina_fsr_lod_quarters
     Tegra::Texture::TSCEntry descriptor{};
     VkSamplerCreateInfo base_ci{};
     VkSamplerReductionModeEXT reduction_mode{VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT};

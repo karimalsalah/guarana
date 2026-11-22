@@ -1,0 +1,6 @@
+{
+  "name": "mesh-fallback",
+  "description": "Example of an environment switch: forces the compute fallback for mesh draws. Switches exist only in builds that carry them; an unknown one changes nothing.",
+  "settings": {},
+  "env": {"EDEN_NX2_FORCE_MESH_FALLBACK": "1"}
+}

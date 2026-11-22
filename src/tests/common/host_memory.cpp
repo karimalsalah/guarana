@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <optional>
+#include <utility>
 #include <thread>
 #include <vector>
 
@@ -34,6 +36,9 @@ using namespace Common::Literals;
 
 static constexpr size_t VIRTUAL_SIZE = 1ULL << 39;
 static constexpr size_t BACKING_SIZE = 4_GiB;
+// The move tests hold two buffers at once; Windows commits each backing buffer in full.
+static constexpr size_t MOVE_VIRTUAL_SIZE = 1_GiB;
+static constexpr size_t MOVE_BACKING_SIZE = 64_MiB;
 static constexpr auto PERMS = Common::MemoryPermission::ReadWrite;
 static constexpr auto HEAP = false;
 
@@ -391,6 +396,30 @@ TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common]") {
     REQUIRE(all(backing + 0x400000, 0));
 }
 
+TEST_CASE("HostMemory: A stopped zero-page pass leaves the pages as they are", "[common]") {
+    // At a stop the pass ends at once: the guest memory it reads is about to be released.
+    constexpr size_t Page = 0x1000;
+    HostMemory mem(BACKING_SIZE, VIRTUAL_SIZE);
+    REQUIRE(mem.BackingBasePointer() != nullptr);
+    mem.Map(0x10000, 0x100000, Page, PERMS, HEAP);
+    u8* const view = mem.VirtualBasePointer() + 0x10000;
+    std::memset(view, 0, Page);
+    const auto resident = [](const void* address) {
+        PSAPI_WORKING_SET_EX_INFORMATION info{};
+        info.VirtualAddress = const_cast<void*>(address);
+        REQUIRE(QueryWorkingSetEx(GetCurrentProcess(), &info, sizeof(info)));
+        return info.VirtualAttributes.Valid != 0;
+    };
+    REQUIRE(resident(view));
+
+    std::stop_source stop;
+    stop.request_stop();
+    const auto [looked_at, trimmed] = mem.TrimZeroPages(stop.get_token());
+    REQUIRE(looked_at == 0);
+    REQUIRE(trimmed == 0);
+    REQUIRE(resident(view));
+}
+
 // Latency of protect calls that take the placeholder lock (across two views) while a zero-page
 // pass runs at the ZeroTrim thread's low priority and every core is busy, as on a loaded PC.
 // tests "[.zero_trim_lock_benchmark]" runs it.
@@ -498,3 +527,58 @@ TEST_CASE("HostMemory: Protect within a view, across views and over a gap", "[co
     REQUIRE(mem.BackingBasePointer()[0x200000] == 7);
 }
 #endif
+TEST_CASE("HostMemory: Move construction transfers the buffer and its mappings", "[common][host_memory_move]") {
+    HostMemory source(MOVE_BACKING_SIZE, MOVE_VIRTUAL_SIZE);
+    u8* const backing = source.BackingBasePointer();
+    u8* const view = source.VirtualBasePointer();
+    REQUIRE(backing != nullptr);
+    backing[0x1234] = 0x5a;
+
+    HostMemory moved(std::move(source));
+    CHECK(moved.BackingBasePointer() == backing);
+    CHECK(moved.VirtualBasePointer() == view);
+    CHECK(moved.VirtualSize() == MOVE_VIRTUAL_SIZE);
+    CHECK(moved.BackingBasePointer()[0x1234] == 0x5a);
+    // The moved-from object owns nothing, so destroying both releases the buffer once.
+    CHECK(source.BackingBasePointer() == nullptr);
+    CHECK(source.VirtualBasePointer() == nullptr);
+    CHECK(source.VirtualSize() == 0);
+    if (view != nullptr) {
+        moved.Map(0x40000, 0x80000, 0x10000, PERMS, HEAP);
+        moved.VirtualBasePointer()[0x40000] = 7;
+        CHECK(moved.BackingBasePointer()[0x80000] == 7);
+    }
+}
+
+TEST_CASE("HostMemory: Move assignment releases the old buffer and keeps the new one", "[common][host_memory_move]") {
+    HostMemory target(MOVE_BACKING_SIZE, MOVE_VIRTUAL_SIZE);
+    HostMemory source(MOVE_BACKING_SIZE, MOVE_VIRTUAL_SIZE);
+    u8* const backing = source.BackingBasePointer();
+    REQUIRE(backing != nullptr);
+    REQUIRE(target.BackingBasePointer() != backing);
+    backing[0] = 0x11;
+
+    target = std::move(source);
+    CHECK(target.BackingBasePointer() == backing);
+    CHECK(target.BackingBasePointer()[0] == 0x11);
+    CHECK(source.BackingBasePointer() == nullptr);
+
+    // Assigning to itself keeps the buffer.
+    HostMemory& alias = target;
+    target = std::move(alias);
+    CHECK(target.BackingBasePointer() == backing);
+    CHECK(target.BackingBasePointer()[0] == 0x11);
+}
+
+TEST_CASE("HostMemory: Repeated create and destroy cycles succeed", "[common][host_memory_move]") {
+    // ShutdownMainProcess destroys the guest RAM after every Switch 2 game and the next Load
+    // creates it again; each cycle must give the buffer back.
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        std::optional<HostMemory> memory;
+        memory.emplace(BACKING_SIZE, VIRTUAL_SIZE);
+        REQUIRE(memory->BackingBasePointer() != nullptr);
+        memory->BackingBasePointer()[BACKING_SIZE - 1] = static_cast<u8>(cycle);
+        CHECK(memory->BackingBasePointer()[BACKING_SIZE - 1] == static_cast<u8>(cycle));
+        memory.reset();
+    }
+}

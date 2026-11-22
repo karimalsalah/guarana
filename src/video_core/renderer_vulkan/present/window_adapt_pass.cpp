@@ -6,6 +6,7 @@
 #include "core/frontend/framebuffer_layout.h"
 #include "video_core/framebuffer_config.h"
 #include "video_core/host_shaders/vulkan_present_vert_spv.h"
+#include "video_core/nx2_gpucost.h"
 #include "video_core/renderer_vulkan/present/layer.h"
 #include "video_core/renderer_vulkan/present/present_push_constants.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -67,6 +68,13 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         layer_it++;
     }
 
+    // EDEN_NX2_GPUCOST_PRESENT bit 1: one opaque layer whose quad covers the whole frame writes
+    // every pixel, so the clear before it is never seen.
+    const bool covers_frame =
+        layer_count == 1 && configs[0].blending == Tegra::BlendMode::Opaque &&
+        layout.screen.left == 0 && layout.screen.top == 0 &&
+        layout.screen.right >= extent.width && layout.screen.bottom >= extent.height;
+    const bool skip_clear = VideoCommon::Nx2GpuCost::PresentSkipsClear() && covers_frame;
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         const f32 bg_red = Settings::values.bg_red.GetValue() / 255.0f;
         const f32 bg_green = Settings::values.bg_green.GetValue() / 255.0f;
@@ -90,7 +98,9 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         };
 
         BeginRenderPass(cmdbuf, renderpass, host_framebuffer, render_area);
-        cmdbuf.ClearAttachments({clear_attachment}, {clear_rect});
+        if (!skip_clear) {
+            cmdbuf.ClearAttachments({clear_attachment}, {clear_rect});
+        }
 
         for (size_t i = 0; i < layer_count; i++) {
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipelines[i]);

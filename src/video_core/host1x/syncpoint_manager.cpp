@@ -14,14 +14,14 @@ namespace Host1x {
 
 SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
     std::atomic<u32>& syncpoint, std::list<RegisteredAction>& action_storage, u32 expected_value,
-    std::function<void()>&& action) {
+    std::function<void()>&& action, std::mutex& bank_guard) {
     if (syncpoint.load(std::memory_order_acquire) >= expected_value) {
         action();
         return {};
     }
 
     {
-        std::scoped_lock lk(guard);
+        std::scoped_lock lk(bank_guard);
         if (syncpoint.load(std::memory_order_relaxed) < expected_value) {
             auto it = action_storage.begin();
             while (it != action_storage.end()) {
@@ -30,32 +30,36 @@ SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
                 }
                 ++it;
             }
-            return action_storage.emplace(it, expected_value, ++last_action_id, std::move(action))
+            return action_storage
+                .emplace(it, expected_value,
+                         last_action_id.fetch_add(1, std::memory_order_relaxed) + 1,
+                         std::move(action))
                 ->id;
         }
     }
-    // Reached while this waited for the guard: run it without the guard, as Increment does.
+    // Reached while this waited for the lock: run it without the lock, as Increment does.
     action();
     return {};
 }
 
 void SyncpointManager::DeregisterAction(std::list<RegisteredAction>& action_storage,
-                                        const ActionHandle& handle) {
+                                        const ActionHandle& handle, std::mutex& bank_guard) {
     if (handle == 0) {
         return;
     }
     const auto matches = [&handle](const RegisteredAction& action) { return action.id == handle; };
-    std::unique_lock lk(guard);
+    std::unique_lock lk(bank_guard);
     if (const auto it = std::ranges::find_if(action_storage, matches); it != action_storage.end()) {
         action_storage.erase(it);
         return;
     }
     // An Increment may have taken it out as due. If it has not started it is dropped; if it is
     // running, the cancel returns once it is done, so a cancelled action never acts after its
-    // cancel, as when actions ran under the guard. Its own thread can't wait for it.
+    // cancel, as when actions ran under the lock. Its own thread can't wait for it.
+    auto& due_batches = DueActionsFor(bank_guard);
     while (true) {
         const DueActions* running_in{};
-        for (DueActions* due : due_actions) {
+        for (DueActions* due : due_batches) {
             if (const auto it = std::ranges::find_if(due->pending, matches);
                 it != due->pending.end()) {
                 due->pending.erase(it);
@@ -73,11 +77,11 @@ void SyncpointManager::DeregisterAction(std::list<RegisteredAction>& action_stor
 }
 
 void SyncpointManager::DeregisterGuestAction(u32 syncpoint_id, const ActionHandle& handle) {
-    DeregisterAction(guest_action_storage[syncpoint_id], handle);
+    DeregisterAction(guest_action_storage[syncpoint_id], handle, guard);
 }
 
 void SyncpointManager::DeregisterHostAction(u32 syncpoint_id, const ActionHandle& handle) {
-    DeregisterAction(host_action_storage[syncpoint_id], handle);
+    DeregisterAction(host_action_storage[syncpoint_id], handle, HostMutex());
 }
 
 void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
@@ -86,7 +90,7 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
         return;
     }
     Increment(syncpoints_guest[syncpoint_id], wait_guest_cv, guest_action_storage[syncpoint_id],
-              syncpoint_id);
+              guard, syncpoint_id);
 }
 
 void SyncpointManager::SetGuestMirror(GuestMirror mirror) {
@@ -98,21 +102,22 @@ void SyncpointManager::IncrementHost(u32 syncpoint_id) {
     if (syncpoint_id >= NUM_MAX_SYNCPOINTS) {
         return;
     }
-    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id]);
+    Increment(syncpoints_host[syncpoint_id], wait_host_cv, host_action_storage[syncpoint_id],
+              HostMutex());
 }
 
 void SyncpointManager::WaitGuest(u32 syncpoint_id, u32 expected_value) {
-    Wait(syncpoints_guest[syncpoint_id], wait_guest_cv, expected_value);
+    Wait(syncpoints_guest[syncpoint_id], wait_guest_cv, expected_value, guard);
 }
 
 void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
-    Wait(syncpoints_host[syncpoint_id], wait_host_cv, expected_value);
+    Wait(syncpoints_host[syncpoint_id], wait_host_cv, expected_value, HostMutex());
 }
 
 void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
                                  std::list<RegisteredAction>& action_storage,
-                                 std::optional<u32> mirrored_id) {
-    std::unique_lock lk(guard);
+                                 std::mutex& bank_guard, std::optional<u32> mirrored_id) {
+    std::unique_lock lk(bank_guard);
     if (mirrored_id && guest_mirror) {
         // Before the value is published: the lock-free ready checks in RegisterAction and Wait
         // must not see it ahead of the page.
@@ -127,13 +132,14 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
     if (end == action_storage.begin()) {
         return;
     }
-    // The due actions run in value order after the guard is released: the composite action can
+    // The due actions run in value order after the bank lock is released: the composite action can
     // block on the display (AcquireNextImage), and the fencing thread's Increment and the guest's
-    // RegisterAction (nx2:syncpt RequestSlotEvent) waited on the guard behind it, freezing Donkey
+    // RegisterAction (nx2:syncpt RequestSlotEvent) waited on the lock behind it, freezing Donkey
     // Kong Bananza with presents stopped.
     DueActions due;
     due.pending.splice(due.pending.end(), action_storage, action_storage.begin(), end);
-    due_actions.push_back(&due);
+    auto& due_batches = DueActionsFor(bank_guard);
+    due_batches.push_back(&due);
     while (!due.pending.empty()) {
         std::function<void()> action{std::move(due.pending.front().action)};
         due.running = due.pending.front().id;
@@ -145,17 +151,17 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
         due.running = 0;
         action_done_cv.notify_all();
     }
-    std::erase(due_actions, &due);
+    std::erase(due_batches, &due);
 }
 
 void SyncpointManager::Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
-                            u32 expected_value) {
+                            u32 expected_value, std::mutex& bank_guard) {
     const auto pred = [&]() { return syncpoint.load(std::memory_order_acquire) >= expected_value; };
     if (pred()) {
         return;
     }
 
-    std::unique_lock lk(guard);
+    std::unique_lock lk(bank_guard);
     wait_cv.wait(lk, pred);
 }
 

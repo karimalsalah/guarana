@@ -5,10 +5,12 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "common/common_types.h"
 #include "video_core/ocarina_upscale.h"
+#include "video_core/renderer_vulkan/present/extrapolation_source.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -41,6 +43,8 @@ public:
     ~OcarinaUpscaler();
 
     [[nodiscard]] bool EvaluationFailed() const;
+    /// What drew the last recorded frame: "DLSS", "FSR 4" or "FSR 3.1" (a string literal).
+    [[nodiscard]] const char* LastUpscalerName() const;
     /// Save the 1440p temporal scene copy before the game adds its HUD.
     void SaveSceneReference(VkImageView color);
     /// Composite the HUD from the guest image over the matching 4K scene.
@@ -53,14 +57,41 @@ public:
     void MarkEffects(VkImageView scene, u64 frame);
     VkImage CompositedImage() const;
     VkImageView CompositedView() const;
+    /// The scene SaveSceneReference kept, null before the first one.
+    VkImageView SceneReferenceView() const;
+    /// Motion and depth of `frame` for frame extrapolation, when Record made them.
+    std::optional<ExtrapolationSource> Extrapolation(u64 frame) const;
 
     /// Queue motion, temporal evaluation and guest writeback for one frame. A false return leaves
     /// the guest dispatch in charge. The scheduler checks EvaluationFailed before skipping it.
+    /// `extent` is what the game drew, at the top left of `color` and `depth`. With a
+    /// `largest_extent` (EDEN_NX2_OOT_FSR_ANY) the extent may change from frame to frame: FSR 3.1
+    /// keeps images of the largest one and its history across the change.
     bool Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                 VkExtent2D output_extent, VkExtent2D target_extent, const std::array<f32, 16>& current,
                 const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh,
                 VkImage depth_image, u64 frame, std::array<f32, 2> jitter = {},
-                VkExtent2D depth_extent = {});
+                VkExtent2D largest_extent = {}, VkExtent2D depth_extent = {});
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
+/// Motion and depth for frame extrapolation on frames no temporal upscaler replaces (the
+/// anti-aliasing network bypass): the half-size guide alone, straight from the scene depth.
+class OcarinaMotionGuide {
+public:
+    OcarinaMotionGuide(const Device& device, Scheduler& scheduler, DescriptorPool& pool,
+                       ComputePassDescriptorQueue& queue, MemoryAllocator& allocator);
+    ~OcarinaMotionGuide();
+
+    /// Queue the guide of one frame. False when the cameras give no motion.
+    bool Record(VkImageView depth, VkExtent2D extent, const std::array<f32, 16>& current,
+                const std::array<f32, 16>& previous, const OcarinaActorMesh& mesh, u64 frame,
+                std::array<f32, 2> jitter = {});
+    /// Motion and depth of `frame`, when Record made them.
+    std::optional<ExtrapolationSource> Extrapolation(u64 frame) const;
 
 private:
     struct Impl;

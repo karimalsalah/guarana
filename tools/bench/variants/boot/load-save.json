@@ -1,0 +1,10 @@
+{
+  "name": "load-save",
+  "description": "Intel Windows: the boot load saves the driver pipeline cache before the background prebuild starts (EDEN_NX2_LOAD_SAVE, Lichii #1838). This suite shows its cost only, the save mark's time in a warm run: its benefit needs a killed session followed by a boot (the plan in its docs/switches.md row).",
+  "cache_states": [
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_LOAD_SAVE": "1"
+  }
+}

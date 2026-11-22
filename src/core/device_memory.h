@@ -27,6 +27,10 @@ public:
     explicit DeviceMemory();
     ~DeviceMemory();
 
+    /// Ends the zero-page trim (Windows) for good: at a stop that releases the guest memory, its
+    /// passes read memory that is about to go. Destroying it joins the trim thread.
+    void StopZeroTrim();
+
     DeviceMemory& operator=(const DeviceMemory&) = delete;
     DeviceMemory(const DeviceMemory&) = delete;
 

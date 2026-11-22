@@ -24,6 +24,7 @@
 #include <openssl/evp.h>
 #include "common/common_types.h"
 #include "common/fs/file.h"
+#include "common/fs/data_dir_migration.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -62,7 +63,7 @@ static void PrintHelp(const char* argv0) {
              "-i, --preferred-game-id The preferred game-id for this room\n"
              "-u, --username          The username used for announce\n"
              "-t, --token             The token used for announce\n"
-             "-a, --web-api-url       lichii Web API url\n"
+             "-a, --web-api-url       Guarana Web API url\n"
              "-b, --ban-list-file     The file for storing the room ban list\n"
              "-l, --log-file          The file for storing the room log\n"
              "-h, --help              Display this help and exit\n"
@@ -217,6 +218,7 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);
     Common::Log::Start();
+    Common::FS::DataDirMigration::LogPendingReport();
 
     while (optind < argc) {
         int arg = getopt_long(argc, argv, "n:d:s:p:m:w:g:u:t:a:i:l:hv", long_options, &option_index);

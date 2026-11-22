@@ -3,12 +3,14 @@
 
 #pragma once
 
+#include <atomic>
 #include <optional>
 
 #include <QThread>
 #include "common/common_types.h"
 #include "common/logging.h"
 #include "common/thread.h"
+#include "common/thread_cpu_clock.h"
 
 namespace Core {
 class System;
@@ -66,6 +68,15 @@ public:
         m_stop_source.request_stop();
     }
 
+    /// CPU time the emulation thread has used so far, where the host can read it: the stop
+    /// watchdog takes a teardown busy on the CPU for one that still moves.
+    std::optional<u64> CpuTimeNs() const {
+        if (!m_cpu_clock_ready.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        return m_cpu_clock->Read();
+    }
+
     /**
      * Requests that the disk shader cache be reloaded for a different title.
      */
@@ -87,6 +98,9 @@ private:
     Common::Event m_stopped;
     bool m_should_run{true};
     std::optional<u64> m_pending_shader_cache_title;
+    /// Made by run() on the emulation thread, read from the frontend's
+    std::optional<Common::ThreadCpuClock> m_cpu_clock;
+    std::atomic<bool> m_cpu_clock_ready{false};
 
 signals:
     /**

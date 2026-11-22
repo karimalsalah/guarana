@@ -55,6 +55,8 @@ struct RecorderStatus {
     std::string path;
     std::string last_trace;
     std::string last_error;
+    /// The presents `last_trace` holds
+    u32 last_presents{};
 };
 [[nodiscard]] RecorderStatus GetRecorderStatus();
 

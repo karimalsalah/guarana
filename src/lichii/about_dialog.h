@@ -17,5 +17,7 @@ public:
     ~AboutDialog() override;
 
 private:
+    void AddGuaranaContributors();
+
     std::unique_ptr<Ui::AboutDialog> ui;
 };

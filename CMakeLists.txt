@@ -4,6 +4,28 @@
 cmake_minimum_required(VERSION 3.31)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "macOS deployment target")
+# On Windows with clang-cl, CMake's Platform/Windows-Clang picks llvm-rc for
+# CMAKE_RC_COMPILER_INIT when it is on PATH and then routes every .rc through
+# "cmake -E cmake_llvm_rc" (clang preprocess, then the SDK rc.exe). That
+# wrapper's line-marker conversion misses clang's SDK-header markers, so
+# rc.exe floods RC2019 errors, fills the wrapper's output pipe and both
+# processes deadlock, hanging the build (CMake issue #20198). Our .rc files
+# are plain icon/manifest/version resources, so compile them with the SDK
+# rc.exe directly and skip the wrapper. Must run before project().
+if(WIN32 AND CMAKE_HOST_WIN32)
+    file(GLOB _guarana_sdk_rc_dirs
+        "C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64"
+        "C:/Program Files/Windows Kits/10/bin/10.*/x64")
+    list(SORT _guarana_sdk_rc_dirs ORDER DESCENDING)
+    find_program(GUARANA_RC_COMPILER NAMES rc.exe
+        HINTS "$ENV{WindowsSdkVerBinPath}x64" ${_guarana_sdk_rc_dirs})
+    if(GUARANA_RC_COMPILER)
+        set(CMAKE_RC_COMPILER "${GUARANA_RC_COMPILER}" CACHE FILEPATH
+            "Windows resource compiler" FORCE)
+        set(CMAKE_RC_COMPILER_INIT "${GUARANA_RC_COMPILER}")
+    endif()
+    unset(_guarana_sdk_rc_dirs)
+endif()
 project(lichii)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules")
@@ -230,8 +252,10 @@ endif()
 # Set runtime library to MD/MDd for all configurations
 if(MSVC)
     if (LICHII_USE_BUNDLED_QT AND ARCHITECTURE_arm64)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        set(libflag MT)
+        # The bundled Windows ARM64 Qt package is built against the dynamic CRT (/MD); the tree
+        # must match it or linking fails /failifmismatch on the Qt style/platform plugins.
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set(libflag MD)
     else()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         set(libflag MD)
@@ -454,7 +478,22 @@ set(ENABLE_TESTING OFF)
 # boost
 set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers process filesystem crc variant)
 
+# Windows on ARM64 with clang-cl: Boost.Context picks its armasm sources there, which armasm64
+# rejects (it cannot expand their BOOST_CONTEXT_EXPORT). Its GNU-syntax PE sources, the ones MinGW
+# builds use, assemble with clang and give common/fiber.cpp the same fcontext functions.
+if (CXX_CLANG_CL AND ARCHITECTURE_arm64)
+    set(BOOST_CONTEXT_ASSEMBLER armclang CACHE STRING "Boost.Context assembler")
+endif()
+
 AddJsonPackage(boost)
+
+# CMake knows no debug information format flag for clang-cl's assembler, so a global
+# CMAKE_MSVC_DEBUG_INFORMATION_FORMAT (the release builds' Embedded) stops it from generating the
+# build of those sources. The property takes no per-language expression; empty means no flag, so
+# Boost.Context alone is built without debug information.
+if (CXX_CLANG_CL AND ARCHITECTURE_arm64 AND TARGET boost_context)
+    set_property(TARGET boost_context PROPERTY MSVC_DEBUG_INFORMATION_FORMAT "")
+endif()
 
 # really annoying thing where boost::headers doesn't work with cpm
 # TODO(crueter) investigate
@@ -733,6 +772,14 @@ if (MSVC AND CMAKE_GENERATOR STREQUAL "Ninja")
     )
 endif()
 
+# The MSVC STL on Windows ARM64 runners (14.52) takes its vectorized std::find for any trivially
+# comparable element and then rejects sizes other than 1, 2, 4 and 8 with a static_assert
+# ("unexpected size", from shader_recompiler's 12-byte StorageBufferAddr). Its documented switch
+# turns those algorithms off for the ARM64 build only.
+if (MSVC AND ARCHITECTURE_arm64)
+    add_compile_definitions(_USE_STD_VECTOR_ALGORITHMS=0)
+endif()
+
 # Adjustments for clang-cl
 if (MSVC AND CXX_CLANG)
     if (ARCHITECTURE_x86_64)
@@ -780,15 +827,15 @@ endif()
 
 # TODO: Icon/install handling n such should be put into dist/CMakeLists.txt
 if(ENABLE_QT AND UNIX AND NOT APPLE)
-    install(FILES "dist/io.github.zortos293.lichii.desktop"
+    install(FILES "dist/io.github.karimalsalah.guarana.desktop"
         DESTINATION "share/applications")
     install(FILES "dist/lichii.png"
         DESTINATION "share/icons/hicolor/256x256/apps"
-        RENAME "io.github.zortos293.lichii.png")
+        RENAME "io.github.karimalsalah.guarana.png")
 
-    install(FILES "dist/io.github.zortos293.lichii.xml"
+    install(FILES "dist/io.github.karimalsalah.guarana.xml"
         DESTINATION "share/mime/packages")
-    install(FILES "dist/io.github.zortos293.lichii.metainfo.xml"
+    install(FILES "dist/io.github.karimalsalah.guarana.metainfo.xml"
         DESTINATION "share/metainfo")
 endif()
 

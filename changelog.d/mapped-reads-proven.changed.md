@@ -1,0 +1,1 @@
+- MAPPED_READS is now proven on Arc 140T: position-balanced vision-gated A/B on Ocarina of Time (Switch 2 native) Lon Lon gameplay measured 42.66 -> 32.91 ms/frame (-9.76 ms, ~23.4 -> ~30.4 real fps) with HOT_PAGES=1 READ_FAST=1; the switches.md row carries the per-position numbers. Still off unless set.

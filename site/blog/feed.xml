@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Guarana blog</title>
+    <link>https://karimalsalah.github.io/guarana/blog/</link>
+    <atom:link href="https://karimalsalah.github.io/guarana/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>Engineering notes from Guarana, an open-source Switch 2 emulator fork for integrated GPUs: what we measured, how, and what is still in progress.</description>
+    <language>en</language>
+    <lastBuildDate>Fri, 13 Nov 2026 12:00:00 +0000</lastBuildDate>
+    <image>
+      <url>https://karimalsalah.github.io/guarana/assets/social-preview.png</url>
+      <title>Guarana blog</title>
+      <link>https://karimalsalah.github.io/guarana/blog/</link>
+    </image>
+    <item>
+      <title>How a shader fix took Hyrule Field from 14.8 to 22.8 fps on an Intel Arc iGPU</title>
+      <link>https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html</link>
+      <guid isPermaLink="true">https://karimalsalah.github.io/guarana/blog/hyrule-field-shader-fix-intel-arc.html</guid>
+      <pubDate>Fri, 13 Nov 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Guarana contributors</dc:creator>
+      <category>Shaders</category>
+      <description>How EDEN_NX2_GM=11 cut a foliage draw from 15.7 to 5.8 ms and took Hyrule Field from 14.8 to 22.8 game fps on an Arc 140T iGPU, and where the proof stops.</description>
+    </item>
+    <item>
+      <title>Why 16.67 ms is hard: frame pacing and frame generation on a 120 Hz OLED</title>
+      <link>https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html</link>
+      <guid isPermaLink="true">https://karimalsalah.github.io/guarana/blog/frame-pacing-frame-generation-120hz-oled.html</guid>
+      <pubDate>Fri, 13 Nov 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Guarana contributors</dc:creator>
+      <category>Frame pacing</category>
+      <description>Why motion stuttered with frame generation on: forced FIFO, a present thread not locked to vblank, fixed-fraction prediction, and the vblank-locked presenter that shipped in v20.1.</description>
+    </item>
+    <item>
+      <title>Booting a Switch 2 emulator in half the time: what the boot marks found</title>
+      <link>https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html</link>
+      <guid isPermaLink="true">https://karimalsalah.github.io/guarana/blog/switch-2-emulator-boot-time.html</guid>
+      <pubDate>Fri, 13 Nov 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Guarana contributors</dc:creator>
+      <category>Boot time</category>
+      <description>Boot timing marks show about 11 s of a 24.7 s boot is Vulkan instance creation. What the marks log, what is being cut next, and how to measure your own.</description>
+    </item>
+    <item>
+      <title>An emulator built for AI agents: AGENTS.md, an MCP server that drives the game, and free CI builds per PR</title>
+      <link>https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html</link>
+      <guid isPermaLink="true">https://karimalsalah.github.io/guarana/blog/emulator-built-for-ai-agents.html</guid>
+      <pubDate>Fri, 13 Nov 2026 12:00:00 +0000</pubDate>
+      <dc:creator>Guarana contributors</dc:creator>
+      <category>Contributing</category>
+      <description>Rules in AGENTS.md, scoped agent-ready issues, a loopback MCP server that drives a running game, and a CI build for every pull request. How it all fits.</description>
+    </item>
+  </channel>
+</rss>

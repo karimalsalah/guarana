@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "common/boot_timing.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
@@ -273,6 +274,7 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
 }
 
 ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
+    const double start = Common::BootTiming::Now();
     const auto base_index = nup->FindBasePackage();
     const auto base_romfs = base_index ? nup->GetRomFSDir(*base_index) : FileSys::VirtualDir{};
     const auto update_index = nup->FindBestUpdatePackage();
@@ -308,6 +310,7 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     if (out_file == nullptr) {
         return ResultStatus::ErrorNoRomFS;
     }
+    Common::BootTiming::Mark("nup: game RomFS tree built and packed", start);
     return ResultStatus::Success;
 }
 

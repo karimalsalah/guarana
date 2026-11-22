@@ -24,6 +24,9 @@
 #define BUILD_AUTO_UPDATE_REPO "@BUILD_AUTO_UPDATE_REPO@"
 #define BUILD_AUTO_UPDATE_STABLE_API "@BUILD_AUTO_UPDATE_STABLE_API@"
 #define BUILD_AUTO_UPDATE_STABLE_REPO "@BUILD_AUTO_UPDATE_STABLE_REPO@"
+#define BUILD_NEWS_API "@BUILD_NEWS_API@"
+#define BUILD_NEWS_REPO "@BUILD_NEWS_REPO@"
+#define BUILD_NEWS_API_PATH "@BUILD_NEWS_API_PATH@"
 #define IS_NIGHTLY_BUILD @IS_NIGHTLY_BUILD@
 
 namespace Common {
@@ -50,5 +53,9 @@ constexpr const char g_build_auto_update_api_path[] = BUILD_AUTO_UPDATE_API_PATH
 constexpr const char g_build_auto_update_repo[] = BUILD_AUTO_UPDATE_REPO;
 constexpr const char g_build_auto_update_stable_api[] = BUILD_AUTO_UPDATE_STABLE_API;
 constexpr const char g_build_auto_update_stable_repo[] = BUILD_AUTO_UPDATE_STABLE_REPO;
+
+constexpr const char g_build_news_api[] = BUILD_NEWS_API;
+constexpr const char g_build_news_repo[] = BUILD_NEWS_REPO;
+constexpr const char g_build_news_api_path[] = BUILD_NEWS_API_PATH;
 
 } // namespace Common

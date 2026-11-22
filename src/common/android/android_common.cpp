@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include <jni.h>
+#include <vector>
 
 #include "common/android/id_cache.h"
 #include "common/string_util.h"

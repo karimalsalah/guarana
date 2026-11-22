@@ -122,6 +122,26 @@ class BenchTest(unittest.TestCase):
         self.assertEqual(during, self.original)
         self.assertEqual(left["vulkan_pipelines.fork-v54.bin"], len(b"rewritten"))
 
+    def test_a_folder_other_programs_write_is_moved_but_not_compared(self):
+        driver = self.root / "driver" / "ShaderCache"
+        write(driver / "blob.bin", b"driver")
+        directory = cache_bench.CacheDir("driver-0", driver, self.session / "backup", [driver.parent], strict=False)
+        directory.back_up()
+        write(driver / "other.bin", b"another program's")
+        directory.back_up()
+        directory.check()
+        directory.prepare("cold")
+        self.assertFalse(driver.exists())
+        write(driver / "run.bin", b"the run's")
+        directory.restore(self.session / "runs" / "x" / "after")
+        self.assertEqual(tree(driver), {"blob.bin": b"driver", "other.bin": b"another program's"})
+        self.assertEqual(tree(self.session / "runs" / "x" / "after" / "driver-0"), {"run.bin": b"the run's"})
+        strict = cache_bench.CacheDir("driver-1", driver, self.session / "backup", [driver.parent])
+        strict.back_up()
+        write(driver / "later.bin", b"x")
+        with self.assertRaises(cache_bench.BenchError):
+            strict.check()
+
     def test_absent_cache_stays_absent(self):
         directory = cache_bench.cache_dirs(self.config, {"game": "mkw"}, self.session / "backup")[0]
         directory.back_up()

@@ -1,0 +1,2 @@
+# Aider reads this file from the repository root. AGENTS.md is the rulebook (see CONVENTIONS.md).
+read: [AGENTS.md]

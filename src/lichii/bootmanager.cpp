@@ -47,6 +47,7 @@
 #include <QOpenGLContext>
 #endif
 
+#include "common/boot_timing.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/settings_input.h"
@@ -63,6 +64,7 @@
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 #include "lichii/bootmanager.h"
+#include "lichii/guarana_ui.h"
 #include "lichii/main_window.h"
 
 #include "qt_common/render/context.h"
@@ -126,10 +128,12 @@ struct NullRenderWidget : public RenderWidget {
 GRenderWindow::GRenderWindow(MainWindow* parent,
                              std::shared_ptr<InputCommon::InputSubsystem> input_subsystem_)
     : QWidget(parent), input_subsystem{std::move(input_subsystem_)} {
-    setWindowTitle(QStringLiteral("Lichii %1 | %2-%3")
-                       .arg(QString::fromUtf8(Common::g_build_name),
-                            QString::fromUtf8(Common::g_scm_branch),
-                            QString::fromUtf8(Common::g_scm_desc)));
+    setWindowTitle(Guarana::UseCleanTitle()
+                       ? Guarana::CleanWindowTitle({})
+                       : QStringLiteral("Guarana %1 | %2-%3")
+                             .arg(QString::fromUtf8(Common::g_build_name),
+                                  QString::fromUtf8(Common::g_scm_branch),
+                                  QString::fromUtf8(Common::g_scm_desc)));
     setAttribute(Qt::WA_AcceptTouchEvents);
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -173,6 +177,7 @@ void GRenderWindow::OnFrameDisplayed() {
     if (!first_frame) {
         last_tas_state = new_tas_state;
         first_frame = true;
+        Common::BootTiming::Mark("frontend: first guest frame presented");
         emit FirstFrameDisplayed();
     }
 
@@ -871,7 +876,7 @@ bool GRenderWindow::InitializeOpenGL() {
     return true;
 #else
     QMessageBox::warning(this, tr("OpenGL not available!"),
-                         tr("Lichii has not been compiled with OpenGL support."));
+                         tr("Guarana has not been compiled with OpenGL support."));
     return false;
 #endif
 }

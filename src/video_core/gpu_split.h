@@ -18,6 +18,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
@@ -56,7 +57,7 @@ enum class DrainSite : u32 {
     GpSyncFence,    ///< A GP entry's sync bit (sync_memory_operations)
     Map,            ///< GPU memory maps before later command reads
     FrontStart,     ///< The front takes an engine's macros over
-    FrontVerify,    ///< EDEN_NX2_FRONT_VERIFY
+    FrontVerify,    ///< EDEN_NX2_SPLIT_VERIFY
     RingFull,       ///< The ring is full: the front waits for the back to make room
     BackRegister,   ///< A register a macro the back ran may have written (Maxwell3D)
     BackCode,       ///< The macro code changes under the macros the back has yet to run
@@ -660,6 +661,34 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
+    /// Called on the back between entries, and at once when it waits for work, after
+    /// RequestReadLane: runs the reads' sync operations ahead of the queued work (GPU::OnCPURead,
+    /// EDEN_NX2_READ_FAST).
+    void SetReadLaneHook(void (*hook)(void*), void* argument) {
+        read_lane_hook = hook;
+        read_lane_argument = argument;
+    }
+    /// Any thread: asks the back to call the read lane hook before its next entry. Returns false
+    /// (and does nothing) when the back is not running or has no hook: the caller uses the
+    /// ordinary queue then. A true return can still go unserved if the back stops meanwhile.
+    [[nodiscard]] bool RequestReadLane() {
+        if (!back_running.load(std::memory_order_acquire) || read_lane_hook == nullptr) {
+            return false;
+        }
+        read_lane_requested.store(true, std::memory_order_seq_cst);
+        wake.fetch_add(1, std::memory_order_seq_cst);
+        wake.notify_one();
+        return true;
+    }
+    /// Any thread: the ring position the front has published so far (the entries a read lane
+    /// request skips are those the back has not run past it).
+    [[nodiscard]] u64 PublishedPosition() const {
+        return published.load(std::memory_order_acquire);
+    }
+    /// Back thread, from the read lane hook: a read was served at `served_ns` (AsyncReadback::Now)
+    /// ahead of the entries up to `target` (PublishedPosition when it was requested). Counts the
+    /// time the back then takes to run past `target` as saved.
+    void NoteReadServed(u64 target, u64 served_ns);
     /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);
@@ -1260,7 +1289,7 @@ private:
     bool WaitFor(u64 target, DrainSite site);
 
     /// One step of a front wait for the back to consume `target`.
-    void Backoff(u32 spins, u64 target, bool on_engine = false);
+    void Backoff(u32 spins, u32 spin_limit, u64 target, bool on_engine = false);
     void SleepForBack(u64 target, bool wait_for_idle = false, bool on_engine = false);
     /// EDEN_NX2_RENDER_WAITS_E (Fritchii 347d15c12): whether a wait at `site` reads the back's
     /// position. Game memory, the buffer cache and the lists are the back's, and what GPURender
@@ -1292,6 +1321,10 @@ private:
     void RaisePlayed();
 
     void BackLoop(std::stop_token stop_token);
+    /// Back thread: runs the read lane's requests (RequestReadLane), `position` entries in.
+    void ServeReadLane(u64 position);
+    /// Back thread: counts the reads served ahead of entries that the back has now run (position).
+    void SettleReadShadows(u64 position);
     void RenderLoop();
     [[nodiscard]] bool RenderPending() const {
         return render_follower && render_follower->Pending();
@@ -1358,6 +1391,14 @@ private:
 
     // Back side, in its own block.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};
+    /// Reads served ahead of the ring (NoteReadServed) until the back runs past their target.
+    struct ReadShadow {
+        u64 target;
+        u64 served_ns;
+    };
+    std::vector<ReadShadow> read_shadows;
+    /// The back's position while it serves the read lane.
+    u64 read_lane_position{};
     u64 back_entry_start{}; ///< Where the entry the back runs starts (TrackFencedWrite)
 
     /// An entry's position as fenced writes name it, with this start of the split in the high
@@ -1566,6 +1607,9 @@ private:
     void* (*lend_enter)(void*){};
     void (*lend_leave)(void*, void*){};
     void* lend_argument{};
+    void (*read_lane_hook)(void*){};
+    void* read_lane_argument{};
+    alignas(64) std::atomic<bool> read_lane_requested{};
     alignas(64) std::atomic<bool> hook_requested{};
     std::atomic<bool> back_running{};
     std::atomic<bool> back_quiet{true};

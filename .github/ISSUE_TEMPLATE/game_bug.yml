@@ -1,0 +1,167 @@
+name: Gameplay Bug
+description: The game doesnt works properly
+title: "[GBug] "
+labels: ["game-bug"]
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and found no duplicate
+          required: true
+        - label: I'm using the latest build
+          required: true
+        - label: My game is legally dumped from my own console
+          required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: Emulator build
+      description: Version or commit hash (shown in Help > About)
+      placeholder: "e.g. build 107 or a1b2c3d"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: regression
+    attributes:
+      label: Regression
+      options:
+        - label: This is a regression (it worked in an older build)
+
+  - type: input
+    id: last_good
+    attributes:
+      label: Last known working build
+      description: Only fill this if it's a regression
+
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - Ocarina of Time
+        - Mario Kart World
+        - Donkey Kong Bananza
+        - Fire Emblem
+        - Splatoon Raiders
+        - Pokopia
+        - Hyrule Warriors
+        - Welcome Tour
+        - Other / not listed
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: Graphics card
+      options:
+        - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc 130T / 130V (Arrow Lake H, Lunar Lake)
+        - Intel Arc (Meteor Lake)
+        - Intel Arc (Panther Lake)
+        - Other Intel integrated (Iris Xe, UHD)
+        - AMD Radeon 780M / 760M
+        - AMD Radeon 880M / 890M
+        - AMD Radeon 8060S (integrated)
+        - AMD Ryzen Z1 / Z2 (handheld)
+        - Steam Deck (AMD, handheld)
+        - Other AMD integrated
+        - Qualcomm Adreno X1 / X2 (Snapdragon X laptops)
+        - Qualcomm Adreno 8xx (Snapdragon 8 Elite and newer)
+        - Qualcomm Adreno 7xx (Snapdragon 8 Gen 1 to 8 Gen 3)
+        - Qualcomm Adreno 6xx or older (Snapdragon 865, 888, 8cx)
+        - Other Android GPU (Mali, Xclipse, PowerVR)
+        - Intel Arc discrete (A or B series)
+        - NVIDIA RTX 50 series
+        - NVIDIA RTX 40 series
+        - NVIDIA RTX 30 series or older
+        - AMD RX 9000 series
+        - AMD RX 7000 series
+        - AMD RX 6000 series or older
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: GPU driver
+      description: "The full version. Intel on Windows: Intel Graphics Software, or Device Manager > Display adapters > the GPU > Driver tab. AMD on Windows: AMD Software: Adrenalin Edition > System > Software & Driver. Linux: the driverInfo line of vulkaninfo --summary. Snapdragon X on Windows: Device Manager > Display adapters > Qualcomm Adreno > Driver tab. Android: the GPU driver in use (the system's own, or a custom one such as Turnip) and its version."
+      placeholder: "e.g. Intel 32.0.101.xxxx, AMD Adrenalin 25.x.x, Mesa 25.x, Adreno driver or Turnip 25.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 11 on ARM (Snapdragon)
+        - Windows 10
+        - Linux
+        - macOS
+        - Android
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Maker and model
+      placeholder: "e.g. ASUS Zenbook S 14 (UX5406), ASUS ROG Ally X, a desktop"
+
+  - type: input
+    id: power_mode
+    attributes:
+      label: Power mode
+      description: The Windows power mode, the maker's performance mode, and the power limit (TDP) if you set one
+      placeholder: "e.g. Best performance, Turbo, 28 W"
+
+  - type: input
+    id: display_refresh
+    attributes:
+      label: Display refresh rate and variable refresh on/off
+      description: The refresh rate the display was running at, and whether variable refresh (G-Sync, FreeSync, the panel's VRR) was on
+      placeholder: "e.g. 120 Hz panel running at 60 Hz, VRR off; 144 Hz external with FreeSync on"
+
+  - type: dropdown
+    id: frame_generation
+    attributes:
+      label: Frame generation
+      description: Emulation > Configure... > Graphics > Enable Frame Generation, and the Frame Generation Type you chose
+      options:
+        - "Off"
+        - "On - Optical Flow Interpolation (built-in)"
+        - "On - Lossless Scaling (LSFG)"
+        - "On - NVIDIA DLSS Frame Generation"
+        - "On - other type or not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: switches
+    attributes:
+      label: Switches set
+      description: Every EDEN_NX2_* variable you set, or the contents of your nx2_switches.txt, or "none"
+      placeholder: "e.g. EDEN_NX2_GM=11, EDEN_NX2_POWER_POLICY=igpu"
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Boot the game\n2. ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log / crash dump
+      render: shell

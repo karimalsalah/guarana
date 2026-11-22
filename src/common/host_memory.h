@@ -8,6 +8,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <utility>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -69,8 +70,10 @@ public:
     void HintCold(size_t physical_offset, size_t length,
                   std::optional<size_t> virtual_offset) const;
     /// Windows: resident pages of guest memory (backing and its views) that hold only zeros leave
-    /// the working set, like HintCold. Returns {resident bytes looked at, bytes trimmed}.
-    std::pair<size_t, size_t> TrimZeroPages() const;
+    /// the working set, like HintCold. Returns {resident bytes looked at, bytes trimmed}. A stop
+    /// request ends the pass early with {0, 0}, its pages left as they are: at a stop, the guest
+    /// memory it reads is released, and the teardown waited for a whole pass.
+    std::pair<size_t, size_t> TrimZeroPages(std::stop_token stop = {}) const;
 
     /// Bytes ClearBackingRegion has filled with zeros (memset) since start.
     static u64 ZeroFilledBytes() noexcept;
@@ -151,6 +154,8 @@ private:
     size_t num_granules{};
     // Windows requires it for kernels whom lack proper support for some functions!
     bool fallback_buffer{false};
+    /// Windows, EDEN_NX2_LAZY_GUEST_COMMIT: the backing is committed as MarkUsed hands it out.
+    bool lazy_commit{false};
 };
 
 } // namespace Common

@@ -1,0 +1,79 @@
+{
+  "document_type": "guarana_patch_pack",
+  "schema_version": 1,
+  "game": "The Legend of Zelda: Ocarina of Time",
+  "title_id": "0400486024DEC000",
+  "module": "main",
+  "build_id": "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+  "offset_basis": "module",
+  "comment": [
+    "Text speed: a port of NotRexed/Hookshot#402 by way of zortos293/Lichii#1422.",
+    "main+0xAFE140 steps a text pane's letter animation. At 0xAFE1B4, the start of the letters' block, s0 holds the frame time that moves the letters' clock (+0x60 += rate * time) and counts down pauses (+0x58 -= time); the auto-advance timer before it keeps the game's time. The site branches to a cave that scales s0 (s16 is unused in the function), redoes the displaced ldrh and branches back.",
+    "All three are one group: with more than one checked, the first in this list (the fastest) applies."
+  ],
+  "patches": [
+    {
+      "name": "Text Speed Instant (built-in)",
+      "description": "Dialogue, the fairy's hints and signs appear at once. Text that closes by itself in cutscenes keeps its timing. With more than one Text Speed checked, the fastest is used.",
+      "level": "experimental",
+      "group": "Text Speed",
+      "off_by_default": true,
+      "records": [
+        {
+          "offset": "0xAFE1B4",
+          "bytes": "5323C514",
+          "original_sha256": "6B699EB58B07460F4CC4C59EDB1AE2E9E418AE130BFF703F732D9A600E98C9F3",
+          "comment": "b main+0x3C46F00, over the ldrh the cave redoes"
+        },
+        {
+          "offset": "0x3C46F00",
+          "bytes": "9000001C 0008301E 69DE4079 ABDC3A17 00247449",
+          "cave": true,
+          "comment": "ldr s16, scale ; fmul s0, s0, s16 ; ldrh w9, [x19, #0x6e] ; b main+0xAFE1B8 ; scale: 1e6 (a page at once, a frame per pause, like the game's own skip on A)"
+        }
+      ]
+    },
+    {
+      "name": "Text Speed 4x (built-in)",
+      "description": "Dialogue, the fairy's hints and signs appear 4 times faster. Text that closes by itself in cutscenes keeps its timing. With more than one Text Speed checked, the fastest is used.",
+      "level": "experimental",
+      "group": "Text Speed",
+      "off_by_default": true,
+      "records": [
+        {
+          "offset": "0xAFE1B4",
+          "bytes": "5323C514",
+          "original_sha256": "6B699EB58B07460F4CC4C59EDB1AE2E9E418AE130BFF703F732D9A600E98C9F3",
+          "comment": "b main+0x3C46F00, over the ldrh the cave redoes"
+        },
+        {
+          "offset": "0x3C46F00",
+          "bytes": "9000001C 0008301E 69DE4079 ABDC3A17 00008040",
+          "cave": true,
+          "comment": "ldr s16, scale ; fmul s0, s0, s16 ; ldrh w9, [x19, #0x6e] ; b main+0xAFE1B8 ; scale: 4.0"
+        }
+      ]
+    },
+    {
+      "name": "Text Speed 2x (built-in)",
+      "description": "Dialogue, the fairy's hints and signs appear 2 times faster. Text that closes by itself in cutscenes keeps its timing. With more than one Text Speed checked, the fastest is used.",
+      "level": "experimental",
+      "group": "Text Speed",
+      "off_by_default": true,
+      "records": [
+        {
+          "offset": "0xAFE1B4",
+          "bytes": "5323C514",
+          "original_sha256": "6B699EB58B07460F4CC4C59EDB1AE2E9E418AE130BFF703F732D9A600E98C9F3",
+          "comment": "b main+0x3C46F00, over the ldrh the cave redoes"
+        },
+        {
+          "offset": "0x3C46F00",
+          "bytes": "9000001C 0008301E 69DE4079 ABDC3A17 00000040",
+          "cave": true,
+          "comment": "ldr s16, scale ; fmul s0, s0, s16 ; ldrh w9, [x19, #0x6e] ; b main+0xAFE1B8 ; scale: 2.0"
+        }
+      ]
+    }
+  ]
+}

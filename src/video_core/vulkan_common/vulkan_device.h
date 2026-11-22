@@ -7,10 +7,13 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include "common/container/unordered_map.h"
@@ -22,6 +25,7 @@
 #include "video_core/fsr4_support.h"
 #include "video_core/vulkan_common/descriptor_limits.h"
 #include "video_core/vulkan_common/device_buffer_pool.h"
+#include "video_core/vulkan_common/driver_pipeline_cache_gate.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 #include <vulkan/vulkan_beta.h>
@@ -80,11 +84,13 @@ VK_DEFINE_HANDLE(VmaPool)
             primitive_topology_list_restart)                                                       \
     FEATURE(EXT, ProvokingVertex, PROVOKING_VERTEX, provoking_vertex)                              \
     FEATURE(EXT, Robustness2, ROBUSTNESS_2, robustness2)                                           \
+    FEATURE(EXT, ShaderAtomicFloat, SHADER_ATOMIC_FLOAT, shader_atomic_float)                      \
     FEATURE(EXT, TexelBufferAlignment, TEXEL_BUFFER_ALIGNMENT, texel_buffer_alignment)             \
     FEATURE(EXT, ShaderFloat8, SHADER_FLOAT8, shader_float8)                                       \
     FEATURE(EXT, TransformFeedback, TRANSFORM_FEEDBACK, transform_feedback)                        \
     FEATURE(EXT, VertexInputDynamicState, VERTEX_INPUT_DYNAMIC_STATE, vertex_input_dynamic_state)  \
     FEATURE(KHR, CooperativeMatrix, COOPERATIVE_MATRIX, cooperative_matrix)                        \
+    FEATURE(KHR, FragmentShadingRate, FRAGMENT_SHADING_RATE, fragment_shading_rate)                \
     FEATURE(NV, CooperativeMatrix2, COOPERATIVE_MATRIX_2, cooperative_matrix2)                     \
     FEATURE(KHR, Maintenance5, MAINTENANCE_5, maintenance5)                                        \
     FEATURE(KHR, Maintenance6, MAINTENANCE_6, maintenance6)                                        \
@@ -246,8 +252,11 @@ enum class NvidiaArchitecture {
 /// Handles data specific to a physical device.
 class Device {
 public:
+    /// on_capabilities runs once the device's capabilities are known, before any setting that
+    /// sizes the device (vram_usage_mode) is read.
     explicit Device(VkInstance instance, vk::PhysicalDevice physical, VkSurfaceKHR surface,
-                    const vk::InstanceDispatch& dld);
+                    const vk::InstanceDispatch& dld,
+                    const std::function<void(const Device&)>& on_capabilities = {});
     ~Device();
 
     /**
@@ -333,7 +342,37 @@ public:
 
     /// Returns the main present queue.
     vk::Queue GetPresentQueue() const {
-        return present_queue;
+        return fluid_queue_presents && IsFluidQueueActive() ? fluid_queue : present_queue;
+    }
+
+    /// EDEN_NX2_FLUID_QUEUE: whether the FLUID presenter's copy has a queue of its own.
+    bool HasFluidQueue() const {
+        return has_fluid_queue;
+    }
+
+    /// Whether the dedicated queue is in use: it exists and the presenter has not given it up.
+    bool IsFluidQueueActive() const {
+        return has_fluid_queue && fluid_queue_enabled.load(std::memory_order_relaxed);
+    }
+
+    /// The presenter's watchdog: copies and presents go back to the graphics queue (the images stay
+    /// shared between the families).
+    void DisableFluidQueue() const {
+        fluid_queue_enabled.store(false, std::memory_order_relaxed);
+    }
+
+    vk::Queue GetFluidQueue() const {
+        return fluid_queue;
+    }
+
+    u32 GetFluidFamily() const {
+        return fluid_family;
+    }
+
+    /// EDEN_NX2_FLUID_QUEUE: whether the dedicated queue's family can dispatch compute work, which
+    /// EDEN_NX2_FLUID_COMPOSE's slot pass needs.
+    bool FluidFamilyCanCompute() const {
+        return has_fluid_queue && fluid_family_compute;
     }
 
     /// Returns main graphics queue family index.
@@ -416,6 +455,59 @@ public:
     /// Windows driver crashes in vkGetPipelineCacheData when a build is running.
     bool CanReadPipelineCacheDuringBuilds() const {
         return GetDriverID() != VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
+    }
+
+    /// Where it can't (IGCIT #1614), reads of a pipeline cache wait for the builds into it, and
+    /// hold back new ones, so that the cache can be saved before the prebuild and periodically
+    /// during play as well. Opt-in until its boot deadlock is fixed (not reproduced or fixed by
+    /// this change), EDEN_NX2_CACHE_SAFE=1: without it such a driver's cache is read only when
+    /// nothing is expected to build, as before.
+    bool SerializesPipelineCacheReads() const {
+        static const bool requested =
+            PipelineCacheSafeRequested(std::getenv("EDEN_NX2_CACHE_SAFE"));
+        return ShouldSerializeDriverPipelineCacheReads(CanReadPipelineCacheDuringBuilds(),
+                                                       requested);
+    }
+
+    const DriverPipelineCacheGate& PipelineCacheGate() const noexcept {
+        return pipeline_cache_gate;
+    }
+
+    /// Held by each pipeline build into a VkPipelineCache: shared where reads are serialized
+    /// (SerializesPipelineCacheReads), nothing elsewhere. Never taken twice by one thread.
+    [[nodiscard]] std::shared_lock<std::shared_timed_mutex> LockPipelineCacheForBuild() const {
+        return pipeline_cache_gate.LockForBuild(SerializesPipelineCacheReads());
+    }
+
+    /// Held by each read of a VkPipelineCache (vkGetPipelineCacheData): exclusive where reads are
+    /// serialized, nothing elsewhere. New builds wait while it waits for the running ones; with
+    /// `max_wait` it gives up after that long, owning nothing.
+    [[nodiscard]] std::unique_lock<std::shared_timed_mutex> LockPipelineCacheForRead(
+        std::optional<std::chrono::milliseconds> max_wait = std::nullopt) const {
+        return pipeline_cache_gate.LockForRead(SerializesPipelineCacheReads(), max_wait);
+    }
+
+    /// Pipeline builds into a VkPipelineCache so far (LockPipelineCacheForBuild). Read under
+    /// LockPipelineCacheForRead where reads are serialized, it counts exactly the builds that
+    /// ended before the read.
+    u64 PipelineCacheBuilds() const {
+        return pipeline_cache_gate.Builds();
+    }
+
+    /// Whether pipelines linked from graphics pipeline libraries without link time optimization
+    /// draw correctly. On AMD's Windows driver such links draw white fringes around alpha blended
+    /// effects (clouds, particles and glows in a test title, RX 7800 XT), while optimized links
+    /// and monolithic pipelines from the same SPIR-V do not, so libraries are linked optimized
+    /// there. EDEN_NX2_GPL_FAST_LINK=1 allows fast links on any driver, =0 on none.
+    bool CanFastLinkGraphicsLibraries() const {
+        static const char forced = [] {
+            const char* value = std::getenv("EDEN_NX2_GPL_FAST_LINK");
+            return value == nullptr ? '\0' : value[0];
+        }();
+        if (forced == '0' || forced == '1') {
+            return forced == '1';
+        }
+        return GetDriverID() != VK_DRIVER_ID_AMD_PROPRIETARY;
     }
 
     /// Returns true for tile-based deferred renderers.
@@ -604,6 +696,45 @@ FN_MAX_LIMIT_LIST
                control.minSubgroupSize <= GuestWarpSize && GuestWarpSize <= control.maxSubgroupSize;
     }
 
+    /// The subgroup size to require for compute shaders without warp-width operations, 0 for the
+    /// driver's choice. Intel (Xe2) compiles large compute shaders SIMD32 with register spills
+    /// (5.7 KB of scratch for Ocarina of Time's global memory shaders) after also compiling them
+    /// SIMD16: 16 lanes build ~2.6x faster without spills, but run slower (Hyrule Field on a
+    /// B580: ~35 instead of ~39.5 fps; f84d5909908cc5ea 0.14 instead of 0.07 ms a dispatch), so
+    /// it is off unless asked for. EDEN_NX2_INTEL_COMPUTE_SIMD16: 0 (default) off, 1 shaders with
+    /// global memory accesses, 2 every shader without warp operations (Fritchii-Intel-Fixes 0011).
+    u32 NarrowComputeSubgroupSize(bool uses_global_memory) const {
+        constexpr u32 narrow = 16;
+        static const int mode = [] {
+            const char* value = std::getenv("EDEN_NX2_INTEL_COMPUTE_SIMD16");
+            return value != nullptr && value[0] >= '0' && value[0] <= '2' ? value[0] - '0' : 0;
+        }();
+        const auto& control = properties.subgroup_size_control;
+        const bool applies = mode == 2 || (mode == 1 && uses_global_memory);
+        return applies && properties.properties.vendorID == 0x8086 &&
+                       extensions.subgroup_size_control &&
+                       IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT) &&
+                       control.minSubgroupSize <= narrow && narrow <= control.maxSubgroupSize
+                   ? narrow
+                   : 0;
+    }
+
+    /// Returns true if compute pipelines can require full subgroups.
+    bool IsComputeFullSubgroupsSupported() const {
+        return extensions.subgroup_size_control &&
+               features.subgroup_size_control.computeFullSubgroups;
+    }
+
+    /// Returns true if a stage may run in subgroups narrower than the guest's warp (Intel runs
+    /// fragment and vertex shaders SIMD8 or SIMD16, and those cannot be given a size).
+    bool IsWarpSizePotentiallySmallerThanGuest() const {
+        const u32 min_size = extensions.subgroup_size_control
+                                 ? properties.subgroup_size_control.minSubgroupSize
+                                 : properties.subgroup_properties.subgroupSize;
+        return min_size != 0 && min_size < GuestWarpSize;
+    }
+
+
     /// Returns true if the device supports the provided subgroup feature.
     bool IsSubgroupFeatureSupported(VkSubgroupFeatureFlagBits feature) const {
         return properties.subgroup_properties.supportedOperations & feature;
@@ -780,6 +911,18 @@ FN_MAX_LIMIT_LIST
         return cooperative_hmma_16x16x16;
     }
 
+    /// Returns true if the guest's HMMA can run through shared memory on 8x16x16 cooperative
+    /// matrices of 16-bit floats, with compute subgroups forced to the guest's 32 lanes. Only on an
+    /// Intel device whose driver lists that shape, with EDEN_NX2_INTEL_COOP_MATRIX=1.
+    bool IsCooperativeHmma8x16x16Supported() const {
+        return cooperative_hmma_8x16x16;
+    }
+
+    /// EDEN_NX2_INTEL_COOP_MATRIX_8X8: HMMA runs as 8x8x16 products with fp32 accumulators.
+    bool IsCooperativeHmma8x8x16Supported() const {
+        return cooperative_hmma_8x8x16;
+    }
+
     /// Returns true if the device supports VK_KHR_shader_quad_control.
     bool IsKhrShaderQuadControlSupported() const {
         return extensions.shader_quad_control && features.shader_quad_control.shaderQuadControl;
@@ -795,10 +938,33 @@ FN_MAX_LIMIT_LIST
         return properties.properties.limits.maxTessellationPatchSize;
     }
 
+    /// Graphics pipelines are linked from per-stage libraries: the use_graphics_pipeline_library
+    /// setting (or EDEN_NX2_GPL=1) is on and the device has VK_EXT_graphics_pipeline_library
+    /// with fast linking.
+    bool IsExtGraphicsPipelineLibrarySupported() const {
+        return graphics_pipeline_library_enabled;
+    }
+
     /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
     bool IsExtMeshShaderSupported() const {
         return extensions.mesh_shader && features.mesh_shader.taskShader &&
                features.mesh_shader.meshShader;
+    }
+
+    /// Returns true if per-draw shading rates are in use (VK_KHR_fragment_shading_rate with
+    /// EDEN_NX2_VRS set): every guest graphics pipeline then takes the rate of its fragment
+    /// shader when it is built.
+    bool IsKhrFragmentShadingRateSupported() const {
+        return extensions.fragment_shading_rate &&
+               features.fragment_shading_rate.pipelineFragmentShadingRate;
+    }
+
+    /// Returns the largest supported fragment size that fits in the wanted one.
+    VkExtent2D ClampFragmentShadingRate(VkExtent2D wanted) const;
+
+    /// Returns true if VK_KHR_performance_query is enabled (EDEN_NX2_GPU_PERF=1).
+    bool IsKhrPerformanceQueryEnabled() const {
+        return performance_query_enabled;
     }
 
     /// Returns true if the device supports VK_KHR_image_format_list.
@@ -1093,6 +1259,12 @@ FN_MAX_LIMIT_LIST
     bool IsSharedInt64AtomicsSupported() const {
         return extensions.shader_atomic_int64 &&
                features.shader_atomic_int64.shaderSharedInt64Atomics;
+    }
+
+    /// Returns true if storage buffer float32 atomic add runs in hardware (VK_EXT_shader_atomic_float).
+    bool IsFloat32AtomicAddSupported() const {
+        return extensions.shader_atomic_float &&
+               features.shader_atomic_float.shaderBufferFloat32AtomicAdd;
     }
 
     bool IsExtConditionalRendering() const {
@@ -1423,11 +1595,18 @@ private:
     VmaAllocator allocator{};    ///< VMA allocator.
     mutable std::mutex separate_pools_mutex;
     mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
+    DriverPipelineCacheGate pipeline_cache_gate; ///< LockPipelineCacheForBuild/ForRead & count
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
+    vk::Queue fluid_queue;       ///< EDEN_NX2_FLUID_QUEUE: the FLUID presenter's copy queue.
+    u32 fluid_family{};
+    bool has_fluid_queue{};
+    bool fluid_family_compute{}; ///< the dedicated queue's family has VK_QUEUE_COMPUTE_BIT
+    bool fluid_queue_presents{}; ///< presents come from the fluid queue too
+    mutable std::atomic<bool> fluid_queue_enabled{true};
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.
@@ -1479,10 +1658,12 @@ private:
         VkPhysicalDeviceTexelBufferAlignmentProperties texel_buffer_alignment{};
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback{};
         VkPhysicalDeviceMaintenance5PropertiesKHR maintenance5{};
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT graphics_pipeline_library{};
         VkPhysicalDevicePipelineBinaryPropertiesKHR pipeline_binary{};
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
         VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix{};
+        VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragment_shading_rate{};
         VkPhysicalDeviceShaderIntegerDotProductProperties integer_dot_product{};
 
         VkPhysicalDeviceProperties properties{};
@@ -1491,6 +1672,18 @@ private:
     Extensions extensions{};
     Features features{};
     Properties properties{};
+
+    /// EDEN_NX2_GPL: kept out of the extension tables so a run without the switch creates the
+    /// device exactly as before.
+    bool graphics_pipeline_library_requested{};
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT graphics_pipeline_library_features{};
+    bool graphics_pipeline_library_enabled{};
+
+    /// EDEN_NX2_GPU_PERF: kept out of the extension tables so a run without the switch
+    /// creates the device exactly as before.
+    bool performance_query_requested{};
+    VkPhysicalDevicePerformanceQueryFeaturesKHR performance_query_features{};
+    bool performance_query_enabled{};
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};
@@ -1503,6 +1696,7 @@ private:
     /// Enabled as the driver reports them (VK_KHR_portability_subset devices only).
     VkPhysicalDevicePortabilitySubsetFeaturesKHR portability_subset_features{};
     VkPhysicalDeviceProperties2 properties2{};
+    std::vector<VkExtent2D> fragment_shading_rates; ///< Supported fragment sizes (EDEN_NX2_VRS).
 
     // Misc features
     bool is_optimal_astc_supported{};          ///< Support for all guest ASTC formats.
@@ -1512,6 +1706,8 @@ private:
     bool float16_math{};                       ///< Shaders may do float16 arithmetic.
     bool cooperative_hmma_16x8x16{};           ///< HMMA runs on the guest's matrix shape.
     bool cooperative_hmma_16x16x16{};          ///< HMMA runs on 16x16x16 matrices.
+    bool cooperative_hmma_8x16x16{};           ///< HMMA runs on 8x16x16 matrices (Intel, opt-in).
+    bool cooperative_hmma_8x8x16{}; ///< HMMA runs on 8x8x16 fp32-accumulator matrices (Intel, opt-in).
     bool fp8_matrix_shapes{}; ///< 16x16x16 FP16 and FP8 matrices with FP32 results (fsr4-vk).
     bool is_integrated{};                      ///< Is GPU an iGPU.
     bool is_virtual{};                         ///< Is GPU a virtual GPU.

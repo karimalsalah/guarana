@@ -47,7 +47,7 @@ The recommended way is to create a `.bat` file alongside the emulator `.exe`; co
 ```bat
 set "__GL_THREADED_OPTIMIZATIONS=1"
 set "SOME_OTHER_VAR=1"
-eden.exe
+guarana.exe
 ```
 
 Android doesn't have a convenient way to set environment variables.

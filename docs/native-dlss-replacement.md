@@ -101,7 +101,7 @@ matched by shader hash, and stop matching when the lowering of their program cha
   the game's own bias.
 - FSR 4 (Windows, AMD's driver, off by default): with "Use AMD FSR 4 in place of FSR 3.1" on,
   the same inputs, jitter and RCAS setting go to AMD's FSR 4 through AMD's FidelityFX runtime
-  (FidelityFX SDK 2.4.0, FSR Upscaling 4.1.2). Nothing of AMD's ships with Lichii: the setting's
+  (FidelityFX SDK 2.4.0, FSR Upscaling 4.1.2). Nothing of AMD's ships with Guarana: the setting's
   panel downloads `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from
   the SDK's GitHub repository at the release commit into the user folder's `fidelityfx` folder,
   after showing AMD's licence. Each file must match its pinned size and SHA-256
@@ -127,7 +127,7 @@ matched by shader hash, and stop matching when the lowering of their program cha
   subgroups, 8/16-bit arithmetic with integer dot products, linear compute derivatives) and picks
   the network: FP8 with FP16/FP8 cooperative matrices, `shaderFloat8` and the matrix conversions
   of `VK_NV_cooperative_matrix2` (RADV exposes it only with its `radv_cooperative_matrix2_nv`
-  option), INT8 otherwise. Lichii asks fsr4-vk for that model by version. The extra device
+  option), INT8 otherwise. Guarana asks fsr4-vk for that model by version. The extra device
   features are enabled only while the setting is on with RADV. Anything missing, a missing
   library or a failed context or dispatch leaves FSR 3.1 running, and the log names the active
   upscaler and why. Ported from #915's loader; untested on AMD hardware so far.
@@ -144,6 +144,63 @@ matched by shader hash, and stop matching when the lowering of their program cha
   `Ocarina temporal: the game's upscale draws frame N (reason)`.
   `EDEN_NX2_DLSS_CONTRACT_TRACE=1` logs every FSR evaluation and scheduler writeback;
   otherwise periodic evaluation/writeback messages avoid a per-frame logging cost.
+
+### Every resolution step: `EDEN_NX2_OOT_FSR_ANY=1` (experiment, not compiled or run yet)
+
+Without the Max Resolution add-on the scene follows the game's GPU-time controller: 1440x810,
+1280x720, 1024x576 and 854x480 (drawn into 864x480 images) for the 1920x1080 output, each step
+with its own upscale program. The replacement above takes only the 3/4-scale program, so at the
+lower steps the game's network runs again. With `EDEN_NX2_OOT_FSR_ANY=1` and FSR as the upscaler
+(`ocarina_fsr`, or `EDEN_NX2_DLSS_REPLACEMENT=fsr`; not DLSS):
+
+- The output pass is known as `EDEN_NX2_OOT_BYPASS_ANY` knows it
+  (`KeplerCompute::IsOotOutputPass`): the shader hashes of `oot_network.h`
+  (`OotNetwork::IsOutputShader`), `EDEN_NX2_OOT_BYPASS_OUTPUT=<hex,...>`, and otherwise any
+  native program that reads one E5B9G9R9 image and stores one B10G11R11 image no smaller. The
+  log names a program found by its shape once (`output pass known by its shape`).
+- Any scale is taken when the output is not smaller, at most 4x, and of the scene's shape to
+  within a render pixel (`OcarinaUpscaleFits`). The scene is the render area of the scene's
+  draws (the surface clip), not their images: 854x480 of 864x480.
+- FSR 3.1 keeps its render-size images at the largest step (3/4 of the output, more if a larger
+  scene comes) and runs smaller steps in their top-left part, as its SDK does for dynamic
+  resolution (`Fsr3Upscaler::Inputs::max_render_size`). A step neither reallocates them nor
+  resets the history; the history resets on a camera cut, a frame the game upscaled, or a frame
+  over 250 ms, as before. The motion and colour copies, the effects mask and the extrapolation
+  guide are remade at the new size (the last two wait for the GPU once per step).
+- Jitter: the Halton length is 8 x (output / render width)^2 of the last replaced frame (14 at
+  810p, 40 at 480p). The draws offset are those into a depth of the last replaced frame's scene
+  size, so the first frame of another step is drawn without an offset, all of it.
+- Texture LOD bias: log2(render / output) - 1 of the last replaced frame, in quarter LODs
+  (-1.5 at 810p and 720p, -2 at 576p, -2.25 at 480p), in either console mode.
+- A second depth reader (`3456eac1b79ed5b8`, same handle at +0x128) gives the scene depth in
+  frames the first leaves without one.
+- Frame extrapolation (`EDEN_NX2_EXTRAPOLATE`) gets its guide at every step, and the game's
+  output image as the scene before the HUD.
+- The log has `Ocarina temporal: FSR replaces pass ... WxH of WxH -> WxH` at Info for each new
+  pair of sizes, and `Ocarina temporal: the game's upscale draws frame N (reason): pass ...`
+  as a warning when it declines (when the reason changes and every 120th repeat). The reason
+  `no dispatch known as the game's upscale` is a step whose program is neither listed nor of
+  the shape above; its shader hash (the frame's slowest `s6:` entry of `DKB gpu_work`) goes in
+  `EDEN_NX2_OOT_BYPASS_OUTPUT`.
+
+`EDEN_NX2_GPU_TIME_SCALE=<float>` (experiment) multiplies the GPU time a Switch 2 title measures
+with report timestamps, on top of GPU Clocks: the time since the last present is divided by the
+clock's 1, 4 or 16 and then multiplied (`AmpereTimeSincePresent` in `gpu_timestamp.h`). It never
+exceeds the real time, so with GPU Clocks at Normal the useful range is 0 to 1. Ocarina sizes
+its dynamic resolution from that time: a larger value gives a lower step. Which value gives
+which step is not known. The scale is a runtime value (`VideoCore::FrameBudget::GpuTimeScale`),
+latched with each present into the anchor `GPU::Impl::GetTicks` reads, so it changes between
+frames only; the variable is its starting value.
+
+`EDEN_NX2_TARGET_FPS=<fps>` (experiment, not compiled or run yet) lets a controller move that
+scale to hold a frame rate: guest presents are held to the target's interval, and the scale
+goes up when frames take longer than that and slowly down when they have headroom, so the game
+settles on the highest step that fits. The time "since the last present" is the time since the
+renderer composed the previous guest frame, not since a host vsync: at 30 fps it runs over the
+whole 33 ms frame, the wait for the pacer included, and GPU work measured between two reports
+of one frame is scaled as a whole. The Max Resolution add-on must be off (with it the game does
+not follow GPU time), and one of the two frame-rate add-ons on so the game keeps its speed
+below 60 fps. See `frame_budget` in `docs/nx2/debug-mcp.md`.
 
 Shader hashes, buffer offsets and Link's mesh shape are taken from the game's current build.
 A game update that changes them disables the replacement and leaves the game's pass in place.

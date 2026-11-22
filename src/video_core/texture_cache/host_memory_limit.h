@@ -17,6 +17,12 @@ constexpr u64 HostCommitReserve = u64{2} << 30;
 /// it the collector only deletes and decodes the same textures again.
 constexpr u64 MinHostCriticalMemory = u64{3} << 30;
 
+/// Low memory mode (Common::LowMemoryMode) on an integrated GPU, whose device memory is the
+/// host's RAM: the cache collects in earnest from the least a scene needs, and starts 768 MiB
+/// under it like the other caps.
+constexpr u64 LowMemoryCriticalMemory = MinHostCriticalMemory;
+constexpr u64 LowMemoryExpectedMemory = LowMemoryCriticalMemory - (u64{768} << 20);
+
 /// The most device memory the texture cache may hold before it collects in earnest, as host
 /// memory allows it. Windows charges device memory to the system's commit limit (RAM plus the
 /// page files) like any other memory, since each allocation has a backing store there. A 16 GB

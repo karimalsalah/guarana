@@ -37,6 +37,7 @@
 #ifdef LICHII_NX_TOOLS
 #include "lichii/nx_tools.h"
 #endif
+#include "lichii/guarana_ui.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "qt_common/config/uisettings.h"
@@ -853,7 +854,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     lookup_artwork->setEnabled(!UISettings::values.steamgriddb_api_key.GetValue().empty());
     QAction* properties = context_menu.addAction(tr("Configure Game"));
     if (program_id != 0 && program_id == reportable_program_id) {
-        auto* report = context_menu.addAction(tr("Submit compatibility report…"));
+        auto* report = context_menu.addAction(tr("Report a problem with this game…"));
         connect(report, &QAction::triggered, this,
                 [this, program_id] { emit ReportCompatibilityRequested(program_id); });
     }
@@ -1189,38 +1190,21 @@ bool GameList::eventFilter(QObject* obj, QEvent* event) {
 }
 
 GameListPlaceholder::GameListPlaceholder(MainWindow* parent) : QWidget{parent} {
-    layout = new QVBoxLayout;
-    image = new QLabel;
-    text = new QLabel;
+    auto* panel = new Guarana::EmptyLibraryPanel(this);
+    connect(panel, &Guarana::EmptyLibraryPanel::AddFolder, this, &GameListPlaceholder::AddDirectory);
+    connect(panel, &Guarana::EmptyLibraryPanel::InstallKeys, this,
+            &GameListPlaceholder::InstallKeys);
+    connect(panel, &Guarana::EmptyLibraryPanel::InstallFirmware, this,
+            &GameListPlaceholder::InstallFirmware);
+
+    auto* layout = new QVBoxLayout(this);
     layout->setAlignment(Qt::AlignCenter);
-    image->setPixmap(QIcon::fromTheme(QStringLiteral("plus_folder")).pixmap(200));
-
-    RetranslateUI();
-    QFont font = text->font();
-    font.setPointSize(20);
-    text->setFont(font);
-    text->setAlignment(Qt::AlignHCenter);
-    image->setAlignment(Qt::AlignHCenter);
-
-    layout->addWidget(image);
-    layout->addWidget(text);
-    setLayout(layout);
+    layout->addWidget(panel, 0, Qt::AlignCenter);
+    setFocusProxy(panel);
 }
 
 GameListPlaceholder::~GameListPlaceholder() = default;
 
 void GameListPlaceholder::mouseDoubleClickEvent(QMouseEvent* event) {
     emit GameListPlaceholder::AddDirectory();
-}
-
-void GameListPlaceholder::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::LanguageChange) {
-        RetranslateUI();
-    }
-
-    QWidget::changeEvent(event);
-}
-
-void GameListPlaceholder::RetranslateUI() {
-    text->setText(tr("Double-click to add a new folder to the game list"));
 }

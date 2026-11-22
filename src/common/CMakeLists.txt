@@ -30,6 +30,10 @@ add_library(
     atomic_ops.h
     bit_field.h
     bit_util.h
+    boot_split.cpp
+    boot_split.h
+    boot_timing.cpp
+    boot_timing.h
     bounded_threadsafe_queue.h
     cityhash.cpp
     cityhash.h
@@ -43,6 +47,8 @@ add_library(
     demangle.h
     device_power_state.cpp
     device_power_state.h
+    device_profile.cpp
+    device_profile.h
     display_hdr.cpp
     display_hdr.h
     div_ceil.h
@@ -52,11 +58,13 @@ add_library(
     jit_symbols.h
     nx2_sampler.cpp
     nx2_sampler.h
+    nx2_switch_file.h
     dynamic_library.cpp
     dynamic_library.h
     elf.h
     error.cpp
     error.h
+    event_ring.h
     event_wait.h
     fiber.cpp
     fiber.h
@@ -72,10 +80,16 @@ add_library(
     fs/fs_types.h
     fs/fs_util.cpp
     fs/fs_util.h
+    fs/data_dir_migration.cpp
+    fs/data_dir_migration.h
+    fs/mapped_file.cpp
+    fs/mapped_file.h
     fs/path_util.cpp
     fs/path_util.h
     fs/profile_migration.cpp
     fs/profile_migration.h
+    guarana_modes.cpp
+    guarana_modes.h
     hash.h
     heap_tracker.cpp
     heap_tracker.h
@@ -83,6 +97,7 @@ add_library(
     hex_util.h
     host_memory.cpp
     host_memory.h
+    ini_peek.h
     input.h
     intrusive_red_black_tree.h
     literals.h
@@ -101,6 +116,7 @@ add_library(
     param_package.cpp
     param_package.h
     parent_of_member.h
+    period_worker.h
     point.h
     range_map.h
     range_mutex.h
@@ -112,6 +128,7 @@ add_library(
     ${CMAKE_CURRENT_BINARY_DIR}/scm_rev.cpp
     scm_rev.h
     scope_exit.h
+    shutdown_progress.cpp
     shutdown_progress.h
     spin_recursive_mutex.h
     scratch_buffer.h
@@ -136,6 +153,16 @@ add_library(
     string_util.cpp
     string_util.h
     swap.h
+    switch_origin.cpp
+    switch_origin.h
+    power_governor.cpp
+    power_governor.h
+    power_meter.cpp
+    power_meter.h
+    power_policy.cpp
+    power_policy.h
+    power_tuning.cpp
+    power_tuning.h
     thread.cpp
     thread.h
     thread_cpu_clock.cpp
@@ -156,6 +183,8 @@ add_library(
     random.h
     uuid.cpp
     uuid.h
+    vblank_clock.cpp
+    vblank_clock.h
     vector_math.h
     zbic_compression.cpp
     zbic_compression.h
@@ -191,7 +220,7 @@ if(WIN32)
         windows/crash_handler.h
         windows/timer_resolution.cpp
         windows/timer_resolution.h)
-    target_link_libraries(common PRIVATE dxgi ntdll)
+    target_link_libraries(common PRIVATE cfgmgr32 dwmapi dxgi ntdll powrprof)
 endif()
 
 if(NOT WIN32)

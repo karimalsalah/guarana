@@ -11,6 +11,7 @@
 #include "common/common_types.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/vulkan_common/vulkan.h"
 
 namespace Tegra {
 namespace Control {
@@ -85,6 +86,7 @@ public:
     void InvalidateCommandBufferState() {
         (*flags) |= invalidation_flags;
         current_topology = INVALID_TOPOLOGY;
+        current_host_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
         stencil_reset = true;
     }
 
@@ -96,17 +98,18 @@ public:
             (*flags)[index] = true;
         }
         current_topology = INVALID_TOPOLOGY;
-    }
-
-    void InvalidateViewports() {
-        (*flags)[Dirty::Viewports] = true;
-    }
-
-    void InvalidateScissors() {
-        (*flags)[Dirty::Scissors] = true;
+        current_host_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     }
 
     void InvalidateStateEnableFlag() {
+        (*flags)[Dirty::StateEnable] = true;
+    }
+
+    /// A recorded draw set its own depth compare op and write enable (alpha-test prepass split):
+    /// the next draw sets the guest's again.
+    void InvalidatePrepassDepthState() {
+        (*flags)[Dirty::DepthCompareOp] = true;
+        (*flags)[Dirty::DepthWriteEnable] = true;
         (*flags)[Dirty::StateEnable] = true;
     }
 
@@ -229,7 +232,6 @@ public:
 
     bool TouchLineStippleEnable() { return Exchange(Dirty::LineStippleEnable, false); }
 
-    bool TouchLineStipple() { return Exchange(Dirty::LineStippleParams, false); }
 
     bool TouchDepthBiasEnable() { return Exchange(Dirty::DepthBiasEnable, false); }
 
@@ -295,6 +297,14 @@ public:
         return has_changed;
     }
 
+    /// The topology last given to vkCmdSetPrimitiveTopologyEXT, which also follows the bound
+    /// pipeline's tessellation stages.
+    bool ChangeHostPrimitiveTopology(VkPrimitiveTopology new_topology) {
+        const bool has_changed = current_host_topology != new_topology;
+        current_host_topology = new_topology;
+        return has_changed;
+    }
+
     void SetupTables(Tegra::Control::ChannelState& channel_state);
 
     void ChangeChannel(Tegra::Control::ChannelState& channel_state);
@@ -332,6 +342,7 @@ private:
     Tegra::Engines::Maxwell3D::DirtyState::Flags default_flags;
     Tegra::Engines::Maxwell3D::DirtyState::Flags invalidation_flags;
     Maxwell::PrimitiveTopology current_topology = INVALID_TOPOLOGY;
+    VkPrimitiveTopology current_host_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     bool two_sided_stencil = false;
     StencilProperties front{};
     StencilProperties back{};

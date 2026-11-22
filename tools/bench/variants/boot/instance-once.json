@@ -1,0 +1,11 @@
+{
+  "name": "instance-once",
+  "description": "One vkCreateInstance per boot (issue #46). The bench starts the game directly, so this measures the early instance on another thread, not the list launch's second instance: read instances_created in the rows.",
+  "cache_states": [
+    "cold",
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_VULKAN_INSTANCE_ONCE": "1"
+  }
+}

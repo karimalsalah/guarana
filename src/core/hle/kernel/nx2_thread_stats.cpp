@@ -14,6 +14,7 @@
 #include "core/hardware_properties.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
+#include "core/hle/kernel/nx2_svc_fastpath.h"
 #include "core/hle/kernel/nx2_thread_stats.h"
 
 namespace Kernel::Nx2ThreadStats {
@@ -253,6 +254,16 @@ void Report(u64 now) {
         LOG_INFO(Kernel, "Guest core {} x64 fastmem over {:.1f} s: {} handled faults, {} invalidation requests",
                  core, seconds, d[FastmemFaults], d[FastmemRecompiles]);
 #endif
+        static std::array<u64, Core::Hardware::NUM_CPU_CORES> last_svc_continues{};
+        const u64 now_svc_continues =
+            Nx2SvcFastpath::g_continues[core].load(std::memory_order_relaxed);
+        const u64 d_svc_continues = now_svc_continues - last_svc_continues[core];
+        last_svc_continues[core] = now_svc_continues;
+        if (d_svc_continues > 0) {
+            LOG_INFO(Kernel,
+                     "Guest core {} svc fastpath over {:.1f} s: {} in-place continues/s ({:.0f}/frame)",
+                     core, seconds, per_second(d_svc_continues), per_frame(d_svc_continues));
+        }
     }
 }
 
@@ -369,6 +380,46 @@ void AddHold(KThread* client, s64 ns) {
         AddShared(c->totals[HeldNs], static_cast<u64>(ns));
         AddShared(c->totals[Holds], 1);
     }
+}
+
+std::vector<ThreadSnapshot> Snapshot() {
+    std::vector<ThreadSnapshot> rows;
+    if (!g_enabled) {
+        return rows;
+    }
+    {
+        std::scoped_lock lk{g_registry_mutex};
+        rows.reserve(g_registry.size());
+        for (const Entry& entry : g_registry) {
+            const Counters& c = *entry.counters;
+            ThreadSnapshot row{
+                .thread_id = c.thread_id,
+                .process = c.process,
+                .priority = c.priority.load(std::memory_order_relaxed),
+                .affinity = c.affinity,
+                .on_core_ticks = c.totals[OnCore].load(std::memory_order_relaxed),
+                .jit_ticks = c.totals[Jit].load(std::memory_order_relaxed),
+                .poll_ticks = c.totals[Poll].load(std::memory_order_relaxed),
+                .hint_spin_ticks = c.totals[HintSpin].load(std::memory_order_relaxed),
+                .memory_ticks = c.totals[Memory].load(std::memory_order_relaxed),
+                .read_back_ticks = c.totals[ReadBack].load(std::memory_order_relaxed),
+                .ready_ticks = c.totals[Ready].load(std::memory_order_relaxed),
+                .held_ns = c.totals[HeldNs].load(std::memory_order_relaxed),
+                .presents = c.totals[Presents].load(std::memory_order_relaxed),
+            };
+            for (size_t kind = 0; kind < Waits; ++kind) {
+                row.wait_ticks[kind] =
+                    c.totals[WaitTicks + kind].load(std::memory_order_relaxed);
+                row.wait_counts[kind] =
+                    c.totals[WaitCounts + kind].load(std::memory_order_relaxed);
+            }
+            rows.push_back(std::move(row));
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const ThreadSnapshot& a, const ThreadSnapshot& b) {
+        return a.on_core_ticks > b.on_core_ticks;
+    });
+    return rows;
 }
 
 } // namespace Kernel::Nx2ThreadStats

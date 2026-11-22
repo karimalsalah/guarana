@@ -57,7 +57,6 @@ struct FixedPipelineState {
     static Maxwell::PolygonMode UnpackPolygonMode(u32 packed) noexcept;
 
     static u32 PackLogicOp(Maxwell::LogicOp::Op op) noexcept;
-    static Maxwell::LogicOp::Op UnpackLogicOp(u32 packed) noexcept;
 
     static u32 PackBlendEquation(Maxwell::Blend::Equation equation) noexcept;
     static Maxwell::Blend::Equation UnpackBlendEquation(u32 packed) noexcept;

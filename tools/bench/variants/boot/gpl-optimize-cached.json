@@ -1,0 +1,11 @@
+{
+  "name": "gpl-optimize-cached",
+  "description": "Pipelines loaded from the cache get the optimized link at their first draw (#103): fps in the scene, not boot time.",
+  "cache_states": [
+    "warm"
+  ],
+  "env": {
+    "EDEN_NX2_GPL": "1",
+    "EDEN_NX2_GPL_OPTIMIZE_CACHED": "1"
+  }
+}

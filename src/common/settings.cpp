@@ -9,18 +9,24 @@
 #include <exception>
 #include <stdexcept>
 #endif
+#include <algorithm>
 #include <atomic>
 #include <compare>
 #include <cstddef>
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <mutex>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 #include <fmt/core.h>
 
 #include "common/settings_enums.h"
 #include "common/assert.h"
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -289,6 +295,37 @@ void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression
     astc_recompression_override = recompression;
 }
 
+// Written while a game boots, read by the frontend saving a config.
+static std::mutex preset_values_mutex;
+static std::vector<std::pair<BasicSetting*, std::string>> preset_values;
+
+static bool IsHeld(const BasicSetting& setting) {
+    return !setting.UsingGlobal() &&
+           std::ranges::any_of(preset_values, [&setting](const auto& held) {
+               return held.first == &setting && held.second == setting.ToString();
+           });
+}
+
+void HoldPresetValue(BasicSetting& setting) {
+    std::scoped_lock lock{preset_values_mutex};
+    preset_values.emplace_back(&setting, setting.ToString());
+}
+
+bool IsPresetValue(const BasicSetting& setting) {
+    std::scoped_lock lock{preset_values_mutex};
+    return IsHeld(setting);
+}
+
+void ClearPresetValues() {
+    std::scoped_lock lock{preset_values_mutex};
+    for (const auto& held : preset_values) {
+        if (IsHeld(*held.first)) {
+            held.first->SetGlobal(true);
+        }
+    }
+    preset_values.clear();
+}
+
 bool IsDockedMode() {
     return values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
 }
@@ -451,11 +488,16 @@ size_t FrameGenGenerations() {
     return FrameGenMultiplier() - 1;
 }
 
+u32 FrameGenTargetRate() {
+    return Common::FrameTargetHotkeys::SessionTarget.Resolve(
+        Common::FrameTargetHotkeys::Enabled(), [] { return values.frame_gen_target_rate.GetValue(); });
+}
+
 size_t FrameGenMaxGenerations() {
     if (!values.frame_gen.GetValue()) {
         return 0;
     }
-    if (values.frame_gen_target_rate.GetValue() != 0) {
+    if (FrameGenTargetRate() != 0) {
         return MAX_FRAME_GEN_MULTIPLIER - 1;
     }
     return FrameGenMultiplier() - 1;

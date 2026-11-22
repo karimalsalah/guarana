@@ -26,6 +26,7 @@ class ConfigureDebugTab;
 class ConfigureFilesystem;
 class ConfigureGeneral;
 class ConfigureGraphics;
+class ConfigureGuarana;
 class ConfigureGraphicsAdvanced;
 class ConfigureGraphicsExtensions;
 class ConfigureHotkeys;
@@ -67,6 +68,7 @@ private slots:
 signals:
     void LanguageChanged(const QString& locale);
     void ExternalContentDirsChanged();
+    void ReportProblemRequested();
 
 private:
     void changeEvent(QEvent* event) override;
@@ -100,6 +102,7 @@ private:
     std::unique_ptr<ConfigureGraphicsExtensions> graphics_extensions_tab;
     std::unique_ptr<ConfigureUi> ui_tab;
     std::unique_ptr<ConfigureGraphics> graphics_tab;
+    std::unique_ptr<ConfigureGuarana> guarana_tab;
     std::unique_ptr<ConfigureHotkeys> hotkeys_tab;
     std::unique_ptr<ConfigureInput> input_tab;
     std::unique_ptr<ConfigureNetwork> network_tab;

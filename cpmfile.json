@@ -21,14 +21,14 @@
         "version": "boost-1.91.0"
     },
     "catch2": {
-        "hash": "7eea385d79d88a5690cde131fe7ccda97d5c54ea09d6f515000d7bf07c828809d61c1ac99912c1ee507cf933f61c1c47ecdcc45df7850ffa82714034b0fccf35",
+        "hash": "a6b0f1d1bd9178382f06de9773b31e3efdcdfb20fc3b65b23d9675e0838da6f64c417a75e062bda918dd28781e5d11a78e7130cef2394e676c7bc2da9e49106b",
         "min_version": "3.0.1",
         "package": "Catch2",
         "patches": [
             "0001-solaris-isnan-fix.patch"
         ],
         "repo": "catchorg/Catch2",
-        "version": "v3.13.0"
+        "version": "v3.16.1"
     },
     "cpp-jwt": {
         "find_args": "CONFIG",
@@ -123,7 +123,7 @@
     },
     "httplib": {
         "find_args": "MODULE GLOBAL",
-        "hash": "159ed94965018f2a371d45a3bfc1961e5fb1549e501ded70a6b4532d7fe99d0579c18b5195aff6e35f96f399b426cea2650ec9fb75ef80d4c9edeccb51f2e6c9",
+        "hash": "e131018fed8bd9bd857bc3037cf800ba47253ea05412dd53a97415d66e7e3fa846ebb91525b1ea8b6e97a5ef16e999122a47a9a7ade404501df5d79bff47a902",
         "options": [
             "HTTPLIB_REQUIRE_OPENSSL ON",
             "HTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES ON"
@@ -132,7 +132,7 @@
             "0001-mingw.patch"
         ],
         "repo": "yhirose/cpp-httplib",
-        "version": "v0.46.0"
+        "version": "v0.66.0"
     },
     "lagoon": {
         "hash": "b9380f99c6effaeccc6d8f81d4942e852c11ad28613df637e155451556ae5826f93765bee57a5c87a9740d2bd1db463ad0f55a947772fe9d57eeabae3efa373e",
@@ -170,11 +170,11 @@
         "version": "20250828"
     },
     "lz4": {
-        "hash": "35c21a5d9cfb5bbf314a5321d02b36819491d2ee3cf8007030ca09d13ca4dae672247b7aeab553e973093604fc48221cb03dc92197c6efe8fc3746891363fdab",
+        "hash": "1b9ecf6b5d0b53be6a7e28f85c63daeecfbf55dee2759dab5eb4647675975ccfe426152e382c30b8a8adb4038d40b312cceac4c56f348fb0977919869aa24669",
         "name": "lz4",
         "repo": "lz4/lz4",
         "source_subdir": "build/cmake",
-        "version": "ebb370ca83"
+        "version": "v1.11.1"
     },
     "moltenvk": {
         "artifact": "MoltenVK-macOS.tar",
@@ -245,7 +245,7 @@
         "version": "a3f0ec02b3"
     },
     "quazip": {
-        "hash": "609c240c7f029ac26a37d8fbab51bc16284e05e128b78b9b9c0e95d083538c36047a67d682759ac990e4adb0eeb90f04f1ea7fe2253bbda7e7e3bcce32e53dd8",
+        "hash": "423e38def8f93c4c3e7d261227ce0d38f9048d84e2aca029e21b5d0b71915a7ab14d3836a7ed3081cf9f6d3369aaf4eec44ffe2d652cc1a011c211bb940b7e91",
         "min_version": "1.3",
         "options": [
             "QUAZIP_QT_MAJOR_VERSION 6",
@@ -255,7 +255,7 @@
         ],
         "package": "QuaZip-Qt6",
         "repo": "stachenov/quazip",
-        "version": "2e95c9001b"
+        "version": "v1.7.2"
     },
     "reshade": {
         "hash": "6fc9b39821ca6e2d91160f05846b3a42159fec759f5d6fba91d1a57801a1bdaf6047740578c136f0b1a60a9c29ad160d87dbfe0dbfbcdf6ea879a8a078377b8c",
@@ -331,11 +331,11 @@
         "version": "230326"
     },
     "vulkan-headers": {
-        "hash": "d2846ea228415772645eea4b52a9efd33e6a563043dd3de059e798be6391a8f0ca089f455ae420ff22574939ed0f48ed7c6ff3d5a9987d5231dbf3b3f89b484b",
+        "hash": "ba55ed9e77560e8f4180731b973482fb077abdf91e9b91147b52727c754702042d6d236331f78dd16b71e5624b1090b1e41c2fc5ad4c6d7b2734b0046fc6250a",
         "min_version": "1.4.317",
         "package": "VulkanHeaders",
         "repo": "KhronosGroup/Vulkan-Headers",
-        "version": "v1.4.345"
+        "version": "v1.4.368"
     },
     "vulkan-memory-allocator": {
         "find_args": "CONFIG",
@@ -348,10 +348,10 @@
         "version": "v3.3.0"
     },
     "vulkan-utility-libraries": {
-        "hash": "114f6b237a6dcba923ccc576befb5dea3f1c9b3a30de7dc741f234a831d1c2d52d8a224afb37dd57dffca67ac0df461eaaab6a5ab5e503b393f91c166680c3e1",
+        "hash": "a51815d46d07b671b2693ca5fe9d9012b6b7b015380a0a0492347e902659a026a174be873b87040a4a5fd5d22e2ed5f33094d7aceabd226d250aaf5d7b85ae23",
         "package": "VulkanUtilityLibraries",
         "repo": "KhronosGroup/Vulkan-Utility-Libraries",
-        "version": "v1.4.345"
+        "version": "v1.4.368"
     },
     "vulkan-validation-layers": {
         "artifact": "android-binaries-%NUMERIC_VERSION%.zip",
@@ -367,9 +367,9 @@
         "version": "v7.40.1"
     },
     "xxhash": {
-        "hash": "8b5c8b9aad4e869f28310b12cc314037feda81d92f26c23eaecdb35dc65042ca2e65f2e9606033e62a31bcc737a9a950500ffcbdb8677d6ab20e820ea14f2b79",
+        "hash": "1585ae3f3feded2492e43f4dd5dd43183329c57ffe92afa907f71eb26deaf34beab4434458a2d87e8795a4226339c5b0b493bd8a9186bb6f0c752fa1fdef10e3",
         "repo": "Cyan4973/xxHash",
-        "version": "v0.8.3"
+        "version": "v0.8.4"
     },
     "zbic": {
         "hash": "fbe2f37986377d7f0d96ae3224c80b5971df6e8b6961f68061f1975ebb2e8cb78f07b90f014b007be4023dbf5513581504e7f7d61a5237cb2a8a7a61ae11e482",
@@ -377,7 +377,7 @@
         "version": "11b08f2712264bbed731545085cbd9702096ceb7"
     },
     "zlib": {
-        "hash": "16fea4df307a68cf0035858abe2fd550250618a97590e202037acd18a666f57afc10f8836cbbd472d54a0e76539d0e558cb26f059d53de52ff90634bbf4f47d4",
+        "hash": "67f3ce120210a69aa05cece6f76d5f45b50d947c095169f0d699732d0182d7d04aec1af56a3fc6bbcc2af91a57e099cd73980b17f7d96ad90aeabbeaafbf1cbc",
         "min_version": "1.2",
         "options": [
             "ZLIB_BUILD_SHARED OFF",
@@ -386,7 +386,7 @@
         ],
         "package": "ZLIB",
         "repo": "madler/zlib",
-        "version": "v1.3.2"
+        "version": "v1.4"
     },
     "zstd": {
         "find_args": "MODULE",

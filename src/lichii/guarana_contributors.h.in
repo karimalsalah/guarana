@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Generated at configure time from CONTRIBUTORS.md by CMakeModules/GuaranaContributors.cmake.
+
+#pragma once
+
+namespace GuaranaCredits {
+
+// Names only, UTF-8, plain text (not HTML), ended by nullptr.
+inline constexpr const char* const kContributors[] = {
+@GUARANA_CONTRIBUTOR_LITERALS@    nullptr,
+};
+
+} // namespace GuaranaCredits

@@ -14,7 +14,6 @@ class Scheduler;
 
 class SGSR {
 public:
-    static constexpr size_t SGSR_STAGE_COUNT = 1;
     explicit SGSR(const Device& device, MemoryAllocator& memory_allocator, size_t image_count, VkExtent2D extent, bool edge_dir);
     VkImageView Draw(const Device& device, Scheduler& scheduler, size_t image_index, VkImage source_image, VkImageView source_image_view, VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect);
 private:

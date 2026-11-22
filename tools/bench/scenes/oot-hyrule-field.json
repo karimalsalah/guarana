@@ -1,0 +1,28 @@
+{
+  "name": "oot-hyrule-field",
+  "title_id": "0400486024DEC000",
+  "description": "The Legend of Zelda: Ocarina of Time, standing in Hyrule Field right after loading the third entry of the file select screen. Static camera, nothing pressed after loading.",
+  "notes": [
+    "The input script walks boot screen -> title -> file select, moves two entries down and loads that save. It only reaches Hyrule Field when the save in the third entry was made there; --save-backup puts such a save in place before every variant.",
+    "reference is resolved next to this file and is not shipped: it is a screenshot of YOUR save in the scene. Record it once with `bench.py run ... --record-reference`, open the image and check that it shows Hyrule Field in gameplay (not a menu or a cutscene), then run again without the flag. Rows of the recording run are invalid by design.",
+    "If your save stands elsewhere, at another time of day or with other equipment, your reference differs from other contributors'. That is fine for comparing variants on one machine; say so in the PR, because cross-machine numbers then compare slightly different views.",
+    "Timed menu inputs occasionally land in the wrong save. The scene check (mean absolute difference of 32x18 downscales, limit scene_threshold of 255) catches that and the row is invalid: just run it again."
+  ],
+  "reference": "reference/oot-hyrule-field.png",
+  "scene_threshold": 30,
+  "boot": {"min_presents": 30, "server_timeout_s": 120, "presents_timeout_s": 180},
+  "input": [
+    {"wait_s": 10, "buttons": ["A"], "frames": 6},
+    {"wait_s": 6, "buttons": ["A"], "frames": 6},
+    {"wait_s": 6, "buttons": ["Down"], "frames": 6},
+    {"wait_s": 1.5, "buttons": ["Down"], "frames": 6},
+    {"wait_s": 1.5, "buttons": ["A"], "frames": 6},
+    {"wait_s": 4, "buttons": ["A"], "frames": 6}
+  ],
+  "settle_s": 50,
+  "window_s": 15,
+  "refresh_hz": 60,
+  "screenshot_height": 540,
+  "saves": {"backup_dir": "", "user_dir": "", "save_subdir": "nand/user/save"},
+  "settings": {}
+}

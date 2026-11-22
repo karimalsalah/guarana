@@ -180,6 +180,7 @@ struct InstanceDispatch {
     PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR
         vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR{};
     PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2{};
+    PFN_vkGetPhysicalDeviceFragmentShadingRatesKHR vkGetPhysicalDeviceFragmentShadingRatesKHR{};
     PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties{};
     PFN_vkGetPhysicalDeviceFormatProperties2 vkGetPhysicalDeviceFormatProperties2{};
     PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties{};
@@ -188,6 +189,7 @@ struct InstanceDispatch {
     PFN_vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceProperties2{};
     PFN_vkGetPhysicalDeviceToolProperties vkGetPhysicalDeviceToolProperties{};
     PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties{};
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties2 vkGetPhysicalDeviceQueueFamilyProperties2{};
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR{};
     PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR vkGetPhysicalDeviceSurfaceCapabilities2KHR{};
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR{};
@@ -220,6 +222,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdBlitImage vkCmdBlitImage{};
     PFN_vkCmdClearAttachments vkCmdClearAttachments{};
     PFN_vkCmdClearColorImage vkCmdClearColorImage{};
+    PFN_vkCmdClearDepthStencilImage vkCmdClearDepthStencilImage{};
     PFN_vkCmdCopyBuffer vkCmdCopyBuffer{};
     PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage{};
     PFN_vkCmdCopyImage vkCmdCopyImage{};
@@ -353,6 +356,8 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetPipelineBinaryDataKHR vkGetPipelineBinaryDataKHR{};
     PFN_vkReleaseCapturedPipelineDataKHR vkReleaseCapturedPipelineDataKHR{};
     PFN_vkGetPipelineExecutableStatisticsKHR vkGetPipelineExecutableStatisticsKHR{};
+    PFN_vkGetPipelineExecutableInternalRepresentationsKHR
+        vkGetPipelineExecutableInternalRepresentationsKHR{};
     PFN_vkGetQueryPoolResults vkGetQueryPoolResults{};
     PFN_vkGetSemaphoreCounterValue vkGetSemaphoreCounterValue{};
     PFN_vkMapMemory vkMapMemory{};
@@ -1143,6 +1148,12 @@ public:
     std::vector<VkPipelineExecutableStatisticKHR> GetPipelineExecutableStatisticsKHR(
         VkPipeline pipeline, u32 executable_index) const;
 
+    /// The internal representations of an executable of a pipeline created with
+    /// VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR. Each pData points into storage.
+    std::vector<VkPipelineExecutableInternalRepresentationKHR>
+    GetPipelineExecutableInternalRepresentationsKHR(VkPipeline pipeline, u32 executable_index,
+                                                    std::vector<std::vector<char>>& storage) const;
+
     void UpdateDescriptorSets(Span<VkWriteDescriptorSet> writes,
                               Span<VkCopyDescriptorSet> copies) const noexcept;
 
@@ -1257,10 +1268,17 @@ public:
 
     std::vector<VkQueueFamilyProperties> GetQueueFamilyProperties() const;
 
+    /// The global priorities a queue family allows (VK_KHR_global_priority); empty when the
+    /// driver cannot say.
+    std::vector<VkQueueGlobalPriorityKHR> GetQueueFamilyGlobalPriorities(u32 family) const;
+
     std::vector<VkPhysicalDeviceToolProperties> GetPhysicalDeviceToolProperties() const;
 
     /// Matrix shapes and types of VK_KHR_cooperative_matrix; empty when the driver lacks it.
     std::vector<VkCooperativeMatrixPropertiesKHR> GetCooperativeMatrixPropertiesKHR() const;
+
+    /// Fragment sizes of VK_KHR_fragment_shading_rate; empty when the driver lacks it.
+    std::vector<VkPhysicalDeviceFragmentShadingRateKHR> GetFragmentShadingRatesKHR() const;
 
     bool GetSurfaceSupportKHR(u32 queue_family_index, VkSurfaceKHR) const;
 
@@ -1415,6 +1433,12 @@ public:
     void ClearColorImage(VkImage image, VkImageLayout layout, VkClearColorValue color,
                          Span<VkImageSubresourceRange> ranges) {
         dld->vkCmdClearColorImage(handle, image, layout, &color, ranges.size(), ranges.data());
+    }
+
+    void ClearDepthStencilImage(VkImage image, VkImageLayout layout, VkClearDepthStencilValue value,
+                                Span<VkImageSubresourceRange> ranges) {
+        dld->vkCmdClearDepthStencilImage(handle, image, layout, &value, ranges.size(),
+                                         ranges.data());
     }
 
     void BlitImage(VkImage src_image, VkImageLayout src_layout, VkImage dst_image,

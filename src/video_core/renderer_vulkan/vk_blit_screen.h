@@ -66,6 +66,11 @@ public:
 
     void PrepareFrame(const Device& device, Frame* frame, const Layout::FramebufferLayout& layout);
 
+    /// EDEN_NX2_FLUID_COMPOSE: the frames drawn from the next DrawToFrame on are the game's size,
+    /// for the slot pass to scale into the output: the layers are composited with a plain bilinear
+    /// pass at that size instead of the configured scaling filter, which would upscale to it.
+    void SetComposeInternal(bool internal);
+
     [[nodiscard]] vk::Framebuffer CreateFramebuffer(const Device& device, const Layout::FramebufferLayout& layout,
                                                     VkImageView image_view,
                                                     VkFormat current_view_format);
@@ -87,6 +92,11 @@ private:
     PresentManager& present_manager;
     Scheduler& scheduler;
     const PresentFilters& filters;
+    /// The filters of the frames the slot pass scales: bilinear, the configured anti-aliasing.
+    std::unique_ptr<PresentFilters> compose_filters;
+    bool compose_internal{};
+    bool compose_internal_built{}; ///< whether window_adapt and the layers were made for it
+    [[nodiscard]] const PresentFilters& ActiveFilters() const;
     std::size_t image_count{};
     std::size_t image_index{};
     VkFormat swapchain_view_format{};

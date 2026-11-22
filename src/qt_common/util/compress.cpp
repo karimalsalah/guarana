@@ -50,6 +50,37 @@ bool compressDir(QString fileCompressed, QString dir, const Options& options,
     return true;
 }
 
+bool compressBuffers(const QString& fileCompressed,
+                     const QList<QPair<QString, QByteArray>>& files, const Options& options) {
+    QDir().mkpath(QFileInfo(fileCompressed).absolutePath());
+    QuaZip zip(fileCompressed);
+    if (!zip.open(QuaZip::mdCreate)) {
+        QFile::remove(fileCompressed);
+        return false;
+    }
+    for (const auto& [name, data] : files) {
+        QuaZipFile outFile(&zip);
+        const bool opened =
+            outFile.open(QIODevice::WriteOnly, QuaZipNewInfo(name), nullptr, 0,
+                         options.getCompressionMethod(), options.getCompressionLevel());
+        const bool written = opened && outFile.write(data) == data.size();
+        if (opened) {
+            outFile.close();
+        }
+        if (!written || outFile.getZipError() != UNZ_OK) {
+            zip.close();
+            QFile::remove(fileCompressed);
+            return false;
+        }
+    }
+    zip.close();
+    if (zip.getZipError() != 0) {
+        QFile::remove(fileCompressed);
+        return false;
+    }
+    return true;
+}
+
 bool compressSubDir(QuaZip* zip, QString dir, QString origDir, const Options& options,
                     std::size_t total, std::size_t& progress, QtProgressCallback callback) {
     // zip: object where to add the file

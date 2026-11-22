@@ -29,6 +29,16 @@ constexpr size_t KeptPipelinesForMemory(u64 total_memory) {
     return static_cast<size_t>(total_memory / 4 / PipelineBytes);
 }
 
+/// Low memory mode (Common::LowMemoryMode) keeps at most 1 GiB of built pipelines (3,495).
+inline constexpr size_t LowMemoryKeptPipelines =
+    static_cast<size_t>((u64{1} << 30) / PipelineBytes);
+
+/// Low memory mode's budget for the compressed SPIR-V kept of evicted pipelines (~3,800 of them).
+inline constexpr u64 LowMemoryKeptSpirvBytes = u64{96} << 20;
+
+/// Low memory mode's budget of prebuilt pipelines no draw has used, where only those are kept.
+inline constexpr size_t LowMemoryUnusedPrebuiltPipelines = 500;
+
 /// Without a kept limit (`kept` 0, Android), prebuilt pipelines no draw has used stay up to this
 /// budget (~0.9 GB of driver memory): evicting them throws the prebuild away (OoT: 1174 of 1346
 /// evicted on the title screen, 684 rebuilt in 10 s on entering the field).
@@ -42,6 +52,25 @@ constexpr size_t PrebuildLimit(size_t kept, size_t boot_built) {
         return MaxUnusedPrebuiltPipelines;
     }
     return kept - std::min(kept, boot_built);
+}
+
+/// Whether a boot load saves the driver pipeline cache once its boot builds have ended. Never
+/// while async boot builds still run. Where reading the cache during a build crashes (Intel's
+/// Windows driver), only when no build can run during the save: reads wait for builds
+/// (EDEN_NX2_CACHE_SAFE), or the background prebuild starts after it (`load_save`,
+/// EDEN_NX2_LOAD_SAVE, Lichii #1838).
+constexpr bool SaveDriverCacheAtLoadEnd(bool async_boot, bool can_read_during_builds,
+                                        bool serializes_reads, bool load_save) {
+    return !async_boot && (can_read_during_builds || serializes_reads || load_save);
+}
+
+/// Whether a boot load starts the background prebuild only after its driver cache save (and the
+/// precache): with a precache, as its jobs would queue ahead of the precache's; where reads of the
+/// cache wait for the builds into it; and with `load_save` where such reads crash, so that the
+/// save runs with no build in flight. Otherwise the prebuild runs beside the boot builds.
+constexpr bool PrebuildAfterLoadSave(bool async_boot, bool precache, bool can_read_during_builds,
+                                     bool serializes_reads, bool load_save) {
+    return !async_boot && (precache || serializes_reads || (load_save && !can_read_during_builds));
 }
 
 /// Whether a boot load starts the background prebuild before waiting for its boot builds, so the

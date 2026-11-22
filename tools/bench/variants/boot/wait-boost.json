@@ -1,0 +1,10 @@
+{
+  "name": "wait-boost",
+  "description": "A build a draw waits for runs at normal priority.",
+  "cache_states": [
+    "cold"
+  ],
+  "env": {
+    "EDEN_NX2_WAIT_BOOST": "1"
+  }
+}

@@ -465,6 +465,41 @@ TEST_CASE("Debug input steps follow the present count exactly", "[core][nx2_debu
     REQUIRE_FALSE(Core::Nx2Debug::InputAt(steps, 10, 14));
 }
 
+TEST_CASE("Debug input latency finds the first picture that moved", "[core][nx2_debug_server]") {
+    using Core::Nx2Debug::FindPictureOnset;
+    constexpr u32 width = 2;
+    constexpr u32 height = 2;
+    constexpr size_t picture_bytes = size_t{width} * height * 4;
+    // Four BGRA pictures: the reference, one byte off by 3 (noise), every colour byte off by 60
+    // (the camera turned), and the reference again with only its alpha changed.
+    std::vector<u8> pixels(4 * picture_bytes, 100);
+    pixels[picture_bytes] = 103;
+    for (size_t byte = 0; byte < picture_bytes; ++byte) {
+        if (byte % 4 != 3) {
+            pixels[2 * picture_bytes + byte] = 160;
+        }
+    }
+    pixels[3 * picture_bytes + 3] = 0;
+    // Frame 2 has no picture.
+    const std::vector<s32> pictures{0, 1, -1, 2, 3};
+    const Core::Nx2Debug::PictureOnset onset = FindPictureOnset(pictures, pixels, width, height, 2.0);
+    REQUIRE(onset.differences.size() == 5);
+    REQUIRE(onset.differences[0] == 0.0);
+    REQUIRE(onset.differences[1] == 0.25); // 3 over 4 texels x 3 colour bytes
+    REQUIRE(onset.differences[2] < 0.0);
+    REQUIRE(onset.differences[3] == 60.0);
+    REQUIRE(onset.differences[4] == 0.0); // alpha is not compared
+    REQUIRE(onset.onset == 3);
+    // Below the threshold nothing moved; a picture index past the pixels counts as none.
+    const std::vector<s32> still{0, 1, 9};
+    const Core::Nx2Debug::PictureOnset none = FindPictureOnset(still, pixels, width, height, 2.0);
+    REQUIRE_FALSE(none.onset);
+    REQUIRE(none.differences[2] < 0.0);
+    // The first frame with a picture is the reference, even when earlier frames have none.
+    const std::vector<s32> late{-1, 2, 0};
+    REQUIRE(FindPictureOnset(late, pixels, width, height, 2.0).onset == 2);
+}
+
 TEST_CASE("Injected input merges buttons and replaces sticks while installed", "[core][nx2_debug_server]") {
     Core::HID::EmulatedController controller{Core::HID::NpadIdType::Player1};
     REQUIRE(controller.GetNpadButtons().raw == Core::HID::NpadButton::None);

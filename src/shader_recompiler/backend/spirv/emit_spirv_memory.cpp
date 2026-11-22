@@ -8,6 +8,7 @@
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/frontend/ir/modifiers.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -95,7 +96,12 @@ void EmitLoadGlobalS16(EmitContext&) {
 
 Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[1], ctx.GlobalMemoryFunctionsOf(*inst).load_u32, address);
+        const Id narrow{ctx.NarrowGlobalLoad(2, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
+        return ctx.OpFunctionCall(
+            ctx.U32[1],
+            Sirit::ValidId(narrow) ? narrow : ctx.GlobalMemoryFunctionsOf(*inst).load_u32,
+            address);
     }
     LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
     return ctx.Const(0u);
@@ -103,8 +109,12 @@ Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
 
 Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[2], ctx.GlobalMemoryFunctionsOf(*inst).load_u32x2,
-                                  address);
+        const Id narrow{ctx.NarrowGlobalLoad(3, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
+        return ctx.OpFunctionCall(
+            ctx.U32[2],
+            Sirit::ValidId(narrow) ? narrow : ctx.GlobalMemoryFunctionsOf(*inst).load_u32x2,
+            address);
     }
     LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
     return ctx.Const(0u, 0u);
@@ -112,8 +122,12 @@ Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
 
 Id EmitLoadGlobal128(EmitContext& ctx, IR::Inst* inst, Id address) {
     if (ctx.profile.support_int64) {
-        return ctx.OpFunctionCall(ctx.U32[4], ctx.GlobalMemoryFunctionsOf(*inst).load_u32x4,
-                                  address);
+        const Id narrow{ctx.NarrowGlobalLoad(4, IR::GlobalLoadFlags::NarrowList(
+            inst->Flags<u32>()))};
+        return ctx.OpFunctionCall(
+            ctx.U32[4],
+            Sirit::ValidId(narrow) ? narrow : ctx.GlobalMemoryFunctionsOf(*inst).load_u32x4,
+            address);
     }
     LOG_WARNING(Shader_SPIRV, "Int64 not supported, ignoring memory operation");
     return ctx.Const(0u, 0u, 0u, 0u);

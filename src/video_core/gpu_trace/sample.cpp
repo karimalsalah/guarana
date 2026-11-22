@@ -129,6 +129,29 @@ void Submit(Writer& writer, u64 offset, const Commands& commands) {
 
 /// The config, one address space mapping the whole sample memory and one channel.
 void WriteSampleSnapshot(Writer& writer) {
+Commands BindTarget() {
+    Commands commands;
+    const u64 address = GpuBase + TargetOffset;
+    commands.Method(MAXWELL3D_REG_INDEX(rt),
+                    {static_cast<u32>(address >> 32), static_cast<u32>(address), Width, Height,
+                     static_cast<u32>(Tegra::RenderTargetFormat::A8B8G8R8_UNORM),
+                     BlockHeightLog2 << 4, 1, 0, 0});
+    commands.Method(MAXWELL3D_REG_INDEX(rt_control), {1});
+    commands.Method(MAXWELL3D_REG_INDEX(surface_clip), {Width << 16, Height << 16});
+    return commands;
+}
+} // Anonymous namespace
+
+bool WriteSampleTrace(const std::filesystem::path& path, bool presents) {
+    Writer writer{path};
+    if (!writer.IsOpen()) {
+        return false;
+    }
+    const auto present = [&writer, presents](u64 offset, u64 time_ns) {
+        if (presents) {
+            Present(writer, offset, time_ns);
+        }
+    };
     const nlohmann::json config{
         {"program_id", "0400000000000001"}, {"switch2", true},  {"synthetic", true},
         {"memory_layout", 0},               {"width", Width},   {"height", Height},
@@ -374,37 +397,6 @@ Commands DrawFrame(u32 frame) {
 }
 } // Anonymous namespace
 
-bool WriteSampleTrace(const std::filesystem::path& path) {
-    Writer writer{path};
-    if (!writer.IsOpen()) {
-        return false;
-    }
-    WriteSampleSnapshot(writer);
-
-    constexpr u64 Frame = 16'666'667;
-    writer.WriteMemory(PhysicalBase + ImageOffset, AsBytes(Image(0)));
-    Present(writer, ImageOffset, Frame);
-
-    Commands first = BindTarget();
-    const Rect square{64, 36, 192, 108};
-    first.Clear({1.0f, 0.0f, 0.0f, 1.0f}, nullptr);
-    first.Clear({0.0f, 1.0f, 0.0f, 1.0f}, &square);
-    Submit(writer, PushOffset, first);
-    Present(writer, TargetOffset, Frame * 2);
-
-    writer.WriteMemory(PhysicalBase + ImageOffset, AsBytes(Image(1)));
-    Present(writer, ImageOffset, Frame * 3);
-
-    Commands second;
-    const Rect left{16, 16, 96, 128};
-    const Rect right{160, 16, 240, 128};
-    second.Clear({0.0f, 0.0f, 1.0f, 1.0f}, nullptr);
-    second.Clear({1.0f, 1.0f, 0.0f, 1.0f}, &left);
-    second.Clear({1.0f, 0.0f, 1.0f, 1.0f}, &right);
-    Submit(writer, PushOffset + 0x8000, second);
-    Present(writer, TargetOffset, Frame * 4);
-    return writer.Finish();
-}
 
 bool WriteDrawSampleTrace(const std::filesystem::path& path) {
     Writer writer{path};

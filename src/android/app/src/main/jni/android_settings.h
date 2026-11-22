@@ -6,6 +6,9 @@
 #pragma once
 
 #include <common/settings_common.h>
+#include <string>
+#include <utility>
+#include <vector>
 #include "common/common_types.h"
 #include "common/settings_setting.h"
 #include "common/settings_enums.h"

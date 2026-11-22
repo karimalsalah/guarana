@@ -1,0 +1,8 @@
+{
+  "name": "example-settings",
+  "description": "Example of settings overrides: {section: {key: value}} of qt-config.ini. A value is written as key=value with key\\default=false; null hands the key back to its default. Copy this file, rename it and put the keys you want to compare.",
+  "settings": {
+    "Renderer": {"fullscreen_mode": 0}
+  },
+  "env": {}
+}

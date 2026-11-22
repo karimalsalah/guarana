@@ -1,0 +1,6 @@
+# Project config for the OpenAI Codex CLI. Codex reads it only after you trust this folder.
+# AGENTS.md is longer than Codex's default 32 KiB instruction budget, so without this the tail
+# of the rulebook is cut. Untrusted, or on an older Codex, start it with
+#   codex -c project_doc_max_bytes=65536 "..."
+# Keep this file to settings every contributor needs; personal settings go in ~/.codex/config.toml.
+project_doc_max_bytes = 65536

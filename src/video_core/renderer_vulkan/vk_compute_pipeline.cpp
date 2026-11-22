@@ -33,6 +33,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
+#include "common/boot_split.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/exception.h"
@@ -298,7 +299,24 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                    info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
                                    info.uses_subgroup_shuffles || info.uses_subgroup_mask ||
                                    info.uses_quad_shuffles || info.uses_fswzadd ||
-                                   info.uses_cooperative_matrix;
+                                   info.uses_cooperative_matrix ||
+                                   info.uses_subgroup_shared_scratch;
+        // Shaders without them may be given a narrower size where the driver's choice spills
+        // (Intel, Device::NarrowComputeSubgroupSize; Fritchii-Intel-Fixes 0011).
+        const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT narrow_subgroup_size_ci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
+            .pNext = nullptr,
+            .requiredSubgroupSize = uses_warp_ops
+                                        ? 0
+                                        : device.NarrowComputeSubgroupSize(info.uses_global_memory),
+        };
+        const void* const stage_next =
+            device.IsExtSubgroupSizeControlSupported() && uses_warp_ops &&
+                    device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT)
+                ? static_cast<const void*>(&subgroup_size_ci)
+            : narrow_subgroup_size_ci.requiredSubgroupSize != 0
+                ? static_cast<const void*>(&narrow_subgroup_size_ci)
+                : nullptr;
         VkPipelineCreateFlags flags{};
         if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
             flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
@@ -309,17 +327,17 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         if (BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
             flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
         }
+        // EDEN_NX2_PIPELINE_STATS: the driver keeps what its compiler reports for this build.
+        const VkPipelineCreateFlags capture_flags{PipelineExecutableDump::CaptureFlags(device)};
+        flags |= capture_flags;
         const VkComputePipelineCreateInfo compute_ci{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .pNext = nullptr,
             .flags = flags,
             .stage{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .pNext = device.IsExtSubgroupSizeControlSupported() && uses_warp_ops &&
-                                 device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT)
-                             ? &subgroup_size_ci
-                             : nullptr,
-                .flags = info.uses_cooperative_matrix
+                .pNext = stage_next,
+                .flags = info.uses_cooperative_matrix || info.uses_subgroup_shared_scratch
                              ? VkPipelineShaderStageCreateFlags{
                                    VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT}
                              : VkPipelineShaderStageCreateFlags{},
@@ -337,14 +355,29 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
             const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
             const auto trace_begin = std::chrono::steady_clock::now();
             TracePipelineBuild("BEGIN", "compute", shader_hash, traced, unoptimized);
-            pipeline = binaries ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache,
-                                                                  binary_key)
-                                : device.GetLogical().CreateComputePipeline(compute_ci,
-                                                                            *pipeline_cache);
+            // A capturing build takes no driver pipeline cache, so that its statistics come
+            // from a compile (the binary store is not opened then: PipelineCache).
+            const VkPipelineCache driver_cache{
+                capture_flags != 0 ? VkPipelineCache{VK_NULL_HANDLE} : *pipeline_cache};
+            {
+                // Not while the driver pipeline cache is read (Device::LockPipelineCacheForBuild)
+                const auto cache_lock = device.LockPipelineCacheForBuild();
+                pipeline = binaries ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache,
+                                                                      binary_key)
+                                    : device.GetLogical().CreateComputePipeline(compute_ci,
+                                                                                driver_cache);
+            }
             TracePipelineBuild("END", "compute", shader_hash, traced, unoptimized,
                                std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - trace_begin)
                                    .count());
+            if (Common::BootSplit::Enabled()) {
+                Common::BootSplit::NoteBuild(
+                    Common::BootSplit::BuildKind::Compute,
+                    static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - trace_begin)
+                                         .count()));
+            }
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Driver rejected compute shader {:016X}: {}", shader_hash,
                          exception.what());
@@ -367,6 +400,18 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
 
         if (pipeline_statistics) {
             pipeline_statistics->Collect(device, *pipeline);
+        }
+        if (capture_flags != 0 && pipeline) {
+            const std::array<u64, 1> stage_hashes{shader_hash};
+            PipelineExecutableDump::Record(device, *pipeline,
+                                           {
+                                               .kind = "compute",
+                                               .key_hash = binary_key,
+                                               .stage_hashes = stage_hashes,
+                                               .shader_hash = shader_hash,
+                                               .is_mesh = false,
+                                               .flags = flags,
+                                           });
         }
         // Nothing reads the module once the pipeline exists; the driver keeps its SPIR-V while it
         // lives.
@@ -630,8 +675,8 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
             if (shadow_index || !kepler_compute.IsNativeMode() ||
                 kepler_compute.GetIndirectComputeAddress() || desc.count != 1 ||
                 desc.is_read || !desc.is_written || desc.type != Shader::TextureType::Color2D ||
-                desc.format != Shader::ImageFormat::R32_UINT || info.uses_global_memory) {
-                throw Shader::RuntimeError("Unsupported packed R16 surface dispatch or unbounded global access");
+                desc.format != Shader::ImageFormat::R32_UINT || info.stores_global_memory) {
+                throw Shader::RuntimeError("Unsupported packed R16 surface dispatch or unbounded global write");
             }
             shadow_index = image_index;
         }
@@ -940,6 +985,8 @@ ComputePipeline::ConfigureResult ComputePipeline::FinishConfigure(
             }
             // Every GPU channel waits with the dispatch, so long waits are freezes.
             const auto waited = std::chrono::steady_clock::now() - begin;
+            Common::BootSplit::NoteHeldDispatch(static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(waited).count()));
             if (waited > std::chrono::milliseconds{50}) {
                 LOG_INFO(Render_Vulkan, "Compute dispatch waited {:.1f} ms for pipeline {:016x}",
                          std::chrono::duration<double, std::milli>(waited).count(), shader_hash);

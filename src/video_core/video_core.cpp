@@ -11,6 +11,7 @@
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/game_presets.h"
 #include "core/gpu_dirty_memory_manager.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
@@ -26,12 +27,16 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/nx2_gpucost.h"
+#include "video_core/nx2_mapped_reads.h"
+#include "video_core/nx2_uma.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
 #ifdef HAS_OPENGL
 #include "video_core/renderer_opengl/renderer_opengl.h"
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/video_core.h"
 
 namespace {
@@ -58,6 +63,13 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
 
 namespace VideoCore {
 
+void PrepareRenderer(Core::Frontend::EmuWindow& emu_window) {
+    if (Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan) {
+        Vulkan::PrecreateInstance(emu_window.GetWindowInfo().type,
+                                  Settings::values.renderer_debug.GetValue());
+    }
+}
+
 /// @brief Creates an emulated GPU instance using the given system context.
 void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_window, Core::System& system) {
     Settings::UpdateRescalingInfo();
@@ -69,6 +81,9 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     VideoCommon::MmeCapture::StartSession();
     VideoCore::AsyncReadback::ReadSwitch();
     VideoCommon::Nx2Perf::ReadSwitch();
+    VideoCommon::Nx2Uma::ReadSwitch();
+    VideoCommon::Nx2MappedReads::ReadSwitch();
+    VideoCommon::Nx2GpuCost::ReadSwitch();
     VideoCommon::BackX::ReadSwitch();
     VideoCommon::Nx2DrainCheck::ReadSwitch();
     Core::GPUDirtyMemoryManager::count_collects = VideoCommon::BackX::g_verify;
@@ -88,6 +103,18 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
         LOG_ERROR(HW_GPU, "Failed to initialize GPU: {}", exception.what());
         gpu.reset();
     }
+}
+
+std::string ApplyGameSwitchDefaults(u64 title_id, const Core::GamePresets::GpuInfo& gpu,
+                                    const Core::GamePresets::DisplayInfo& display) {
+    std::string line = Core::GamePresets::ApplySwitchDefaults(title_id, gpu, display);
+    // CreateGPU read these before the defaults were in the environment.
+    AsyncReadback::ReadSwitch();
+    LOG_INFO(HW_GPU,
+             "Read-back switches in effect: EARLY_SUBMIT={}, EARLY_PAGES={}, EARLY_AFTER={}",
+             AsyncReadback::EarlySubmit(), AsyncReadback::EarlyPages(),
+             AsyncReadback::EarlyAfter());
+    return line;
 }
 
 } // namespace VideoCore

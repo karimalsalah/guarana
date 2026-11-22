@@ -5,7 +5,7 @@ package, wait for the owner to launch the game, press a hotkey and send the log 
 dumps. Every new question costs a relaunch, and most cost a rebuild, because every
 `EDEN_NX2_*` switch is read once at startup.
 
-This document designs an opt-in debug server inside Lichii and an MCP adapter that agents run on
+This document designs an opt-in debug server inside Guarana and an MCP adapter that agents run on
 the PC, so an agent can ask a running game questions directly. Phase 1 is implemented on the
 `feat/debug-mcp` branch; the later phases are proposals with the hook points they need.
 
@@ -24,7 +24,7 @@ Line numbers refer to `feat/debug-mcp` at the time of writing.
 ## Architecture
 
 ```
-agent ──stdio MCP──> tools/nx2/debug_mcp.py ──TCP 127.0.0.1, JSON lines──> Lichii
+agent ──stdio MCP──> tools/nx2/debug_mcp.py ──TCP 127.0.0.1, JSON lines──> Guarana
   (on the PC)          (Python, stdlib only)                               ├─ "DebugServer" thread
                                                                            │    tools: status, screenshot, log_*, ...
                                                                            └─ rasterizer thread
@@ -45,7 +45,7 @@ service once a game has loaded (`src/core/core.cpp:476`), and `ShutdownMainProce
 before anything else (`src/core/core.cpp:481`). The member is declared last
 (`src/core/core.cpp:610`), so it is also destroyed first. The tools therefore never see a
 half-built or half-destroyed system, and the server works the same under the Qt frontend and
-`eden-cli`.
+`guarana-cli`.
 
 Why not reuse the GDB stub? It speaks the GDB remote protocol and parks emulation on every stop
 (`src/core/debugger/debugger.cpp:82`). It is the right tool for guest breakpoints and stays as it
@@ -57,7 +57,7 @@ server copies its threading model, not its protocol.
 - MCP's own transports are stdio, which needs the agent to launch the process (it cannot launch
   the emulator, which the owner starts), and Streamable HTTP, which needs sessions and
   server-sent events. Neither fits inside the emulator cheaply.
-- A JSON-lines socket is about 200 lines of C++ with libraries Lichii already links (Boost.Asio,
+- A JSON-lines socket is about 200 lines of C++ with libraries Guarana already links (Boost.Asio,
   nlohmann::json, both already used by `core`). Anything can drive it: the adapter, a test,
   or `python -c`.
 - The adapter owns everything that is MCP: tool descriptions, input schemas, image content, error
@@ -112,6 +112,9 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
   debug build. Release packages are unchanged unless someone sets it.
 - **Writes only under the dump directory.** `EDEN_NX2_DEBUG_DIR`, by default
   `<log dir>/debug-server`. Clients never send paths. The server names every file itself:
+  `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`, `shown-<session>-<n>.png`.
+- **Nothing the server returns comes from game files, keys or firmware.** It returns rendered
+  pixels, log lines, frame-dump manifests and shader hashes, which the owner already sends today.
   `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`.
 - **Captures and memory reads can contain game data.** Frame captures, bug bundles and memory
   reads can expose game code, shaders, textures, buffers and personal information. Do not publish
@@ -132,9 +135,10 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 
 | Tool | Today | With the server | Phase |
 |---|---|---|---|
-| `status` | Ask the owner what is on screen, read the log header | One call: title, program id, build, paused, presents, fps, renderer, rejected hashes | 1 |
+| `status` | Ask the owner what is on screen, read the log header | One call: title, program id, build, paused, presents, fps, renderer, rejected hashes, the boot resolution | 1 |
 | `frame_times` | Frame trace and manual interval analysis | Guest-present interval statistics and VSync histogram over a timed window | 1 |
 | `screenshot` | Owner takes and sends a screenshot | PNG of the next presented frame, as MCP image content | 1 |
+| `shown_frames` | Nobody sees generated frames; the owner describes the motion | The next frames the presenter shows, generated ones included: kind, slot, the vblank it was due at and when the present call returned, and one contact sheet (done) | 3 |
 | `log_tail`, `log_filter` | Relaunch with a new filter, owner sends the log | Read new lines since the last call, change the filter live | 1 |
 | `capture_frame` | Relaunch with `EDEN_NX2_FRAME_DUMP`, owner touches `capture.now`, agent copies the dump | Capture the next frame now, sampled textures and bound buffers optional, get the manifest summary back; `capture_image` returns any pass PNG | 1 |
 | `capture_bundle` | Owner zips logs, settings and screenshots by hand | The Report a Bug bundle: logs, settings, screenshot, frame times and a frame capture with shaders, in one zip | 1 |
@@ -144,6 +148,7 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 | `shaders` (inventory) | Shader dump and offline sweep | List loaded programs: key, hash, stage, address, lowered or rejected with the error | 2 |
 | `switches` (live `EDEN_NX2_*`) | Relaunch per switch | Toggle the observer switches live (classification below) | 2 |
 | `read_memory`, `search_memory`, `read_gpu_memory` | GDB stub session or log prints plus a rebuild | Read a range by address, find known values in the heap (done) | 3 |
+| `trace_record` `{seconds?, presents?, path?}`, `trace_stop`, `trace_status` | Relaunch with `EDEN_NX2_GPU_TRACE`, owner touches `record.now` | GPU traces, see [gpu-trace.md](gpu-trace.md) (done) | 3 |
 | `dump_texture`, `dump_buffer` | Frame dump of the whole frame | One resource by GPU address, as PNG plus raw | 3 |
 | `gpu_timings` | `EDEN_NX2_GPU_PROFILE` relaunch, zones only | Per-pass GPU time of one frame | 3 |
 | Capture options (pass range, shader filter) | Not possible | Smaller captures, for example only passes 40 to 60 | 3 |
@@ -155,6 +160,28 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 `Common::g_build_fullname` and `g_scm_rev`, and `System::IsPaused`. It measures fps from
 `Core::g_nx2_present_count` (`src/core/core.cpp:78`) over a short window. It does not call
 `GetAndResetPerfStats`, which would reset the Qt status bar's counters.
+
+`status.resolution` is what the game's settings, add-ons and switches were resolved to at boot
+(`Core::GamePresets::Resolve`, `src/core/game_presets.cpp`; the same as the `Resolution:` line of
+the log), or `{"resolved": false}` before the boot resolved anything. Its fields: `resolved`,
+`title_id`, `presets_enabled` (false: nothing was applied, and the `decision` of each entry is what
+it would have been), `preset` (the settings preset's reason, empty without one), `pacing_set`
+(`none`, `60hz`, `120hz` or `144hz`) and `pacing_why`, and the lists `settings`, `addons` and
+`switches`. Each entry has its value (`label` and `value` for a setting, with `available` false
+where there is no per-game setting by that label and `current` the player's value where they set
+one; `name` and `value` for a switch; `name` and `disabled` for an add-on), the `decision` about
+what the player chose (settings: `apply`, `already_set`, `user_per_game`, `user_global`; switches:
+`set`, `replace_shipped`, `keep_players`, with the player's value in `player_value` and the shipped
+file's in `shipped`), its `reason`, and its `evidence`: `measured` and `where`, which names the
+`docs/switches.md` row that holds the numbers or says that nothing was measured. A setting and a
+switch also have `community`: the community's paired `tools/bench` measurement of that value on the
+GPU family and game, as in the log line (`site/data/community-evidence.json`, the copy the build
+carries; `Core::CommunityEvidence`), or an empty string; it changes no value. `inputs` holds what
+the resolver was given: `vendor`, `integrated`, `software_tensor_math`, `device_class`,
+`gpu_family`, `refresh_hz`, `display`, and the output size against the GPU's size: `output_width`
+and `output_height` (the pixels of the display the window is on), `gpu_cores` and `gpu_cores_unit`
+(compute units or SMs where the driver reports them, else 0; Intel's Windows driver does not) and
+`pixels_per_core`. Those two are recorded only: nothing decides by them yet.
 
 **`frame_times`** `{seconds?, refresh_hz?}` waits for `seconds` (default 5, > 0, at most 60),
 interruptible on shutdown like `status`. It measures intervals between guest presents inside
@@ -217,8 +244,8 @@ the host functions above `(jit)` while the JIT calls out.
 
 **`speed_limit`** `{on?}`. Lifts (`false`) or restores (`true`) the speed limit live and returns
 the `previous` and current `on` state, so a test script can boot through the logos and menus
-unlimited. Without `on` it only reports the state. Use it through `--call`; the MCP adapter does
-not list it.
+unlimited. Without `on` it only reports the state. The MCP adapter offers it, and `--call` reaches
+it, as every other method.
 
 **`host_timing`** `{stats?}`. Turns the per-second `HostTiming wait` log line
 (`EDEN_NX2_HOSTTIMING_STATS`) on or off and returns the `previous` and current `stats` state.
@@ -229,6 +256,199 @@ Read the lines with `log_tail` (`contains: "HostTiming wait"`).
 records every draw itself while it is off. Returns the `previous` and current `on` state, and
 fails when the follower isn't running.
 
+**`power`** `{window_ms?}`. Host power from the Windows Energy Meter Interface, averaged over
+`window_ms` (default 1000; 0 means since the previous call): `package_w`, `cpu_w` (cores, the
+`PP0` channel) and `gpu_w` (integrated GPU, `PP1`), with `valid` false when nothing was measured
+and `available` false when the host has no such meter. Also `process_cpu_cores` (the emulator's
+CPU time per wall time), `gpu_busy_ms` of the last sampled frame (null when not measured) and
+the switches below. `policy` and `governor` report the session power policy.
+
+`EDEN_NX2_POWER_POLICY=igpu` (Windows, integrated GPUs only, off by default) trades CPU power
+for GPU clock on a shared package power limit. At game boot it saves the active power scheme's
+processor performance boost mode and minimum processor state (both core classes, AC and DC),
+writes boost off and a 5% minimum, and writes the saved values back at game stop or exit. The
+saved values sit in `nx2_power_restore.txt` in the config directory meanwhile, so the next start
+restores them after a crash. `policy` has `active`, the `scheme`, each setting's `saved_*` and
+`applied_*` values and a `message` (why it is not active: a host that refuses the calls is left
+alone). While it runs, a governor samples once a second and steps `spin_scale` down
+(1 -> 0.5 -> 0.25 -> 0) when the GPU is busy over 90% of a frame that is slower than the target
+and the cores take over half the package power, and back up when the GPU is busy under 70%.
+`governor` has its `state` (`gpu_bound`, `cpu_bound`, `balanced`, `no_data`), inputs and
+`last_change`. The target is `EDEN_NX2_POWER_POLICY_FPS`, else the `EDEN_NX2_TARGET_FPS` target,
+else the `EDEN_NX2_VRS_AUTO` target, else 30.
+
+**`power_set`** `{spin_scale?, eco_background?, idle_spin_us?}`. Sets the power switches live
+and returns all three. `spin_scale` (0 to 1, `EDEN_NX2_SPIN_SCALE`) scales the busy-wait bounds
+of the GPU front and back threads; 0 blocks at once. `eco_background`
+(`EDEN_NX2_ECO_BACKGROUND=1`) puts the background workers (shader jobs, pipeline serialization,
+texture decoder, ZeroTrim, ColdHint) on EcoQoS on Windows; it only reaches threads that start
+afterwards, so set the variable to cover a whole session. `idle_spin_us`
+(`EDEN_NX2_IDLE_SPIN_US`) is how long an idle guest core polls before blocking, -1 for the
+per-title default.
+
+**`frame_budget`** `{target_fps?, scale?}`. The frame budget controller
+(`EDEN_NX2_TARGET_FPS=<fps>` at launch, off without it; not compiled or run yet). It holds a
+Switch 2 title that sizes its own dynamic resolution from GPU time (Ocarina of Time without the
+Max Resolution add-on) at a frame rate, in two parts:
+
+- Cadence. The nx2:vi2 present pacer (`PaceToVblank`, the one behind the FPS limit) holds every
+  guest present until the last deadline plus `1 / target`, so a frame that is done early still
+  takes the whole interval. A frame that is late is not held, and the pacer starts over from a
+  present more than one interval late.
+- Resolution. Every half second of presents is one tick. Its input is `work_ms`: the time from
+  one present's return to the next present's pacing wait, the frame without that wait, as four
+  frames in five of the tick stay under (the 80th percentile: a median would pass a tick with
+  two late frames in five; `frame_ms` is the median present interval). Above `target * 1.04`
+  the GPU time scale (`EDEN_NX2_GPU_TIME_SCALE`, `AmpereTimeSincePresent`) is multiplied by
+  1.25, at every such tick: the game measures more GPU time and renders lower. Below
+  `target * 0.90` for four ticks in a row it is multiplied by 0.92: the game renders higher.
+  Between the two nothing moves.
+
+A game that starts its frames on the nx2:vi2 vsync event waits for the next event after a held
+present returns, and that wait counts as frame time: with the event at 60 Hz up to 16.7 ms of
+headroom can stay hidden (`work_ms` near `frame_ms` although the GPU idles), and the scale is
+then lowered later than it could be. A faster event (`nx2_frame_rate_limit` 120 or 240, for a
+game that keeps its speed there) shortens the wait.
+
+The scale stays between 0.05 and the smaller of 4 and the GPU Clocks divisor (Normal 1, Boost
+4, Overclock 16): the time a title sees never exceeds the real time, so a larger scale changes
+nothing. The scale is latched with each present (`AmpereAnchor`), so a change never moves a
+timestamp back within a frame. `state` is what the last tick found:
+
+| `state` | Meaning |
+|---|---|
+| `off` | No target, or no tick yet |
+| `frozen` | Fewer than three presents in the tick, or frames over four targets long (a loading screen): nothing moves |
+| `on_target` | Inside the band |
+| `slow` | A miss: the scale was raised |
+| `saturated` | A miss with the scale at its upper limit: the game has no resolution left to give |
+| `fast` | Headroom: counting towards a lower, just lowered, or at the lowest scale |
+| `cooldown` | Headroom, but the next lower scale is below the one that last missed |
+| `no_effect` | Headroom, but eight lowers in a row left the frame time alone (the game is at its highest resolution, or does not follow the scale); they go on once frames are 8% slower |
+| `waiting` | Headroom, but the shading-rate governor gives its coarse rates back first |
+| `unanswered` | With `EDEN_NX2_BUDGET_UNANSWERED=1`: a miss, but nine missed ticks in a row (about 4.5 s; raises, or holds at the upper limit after one) left `work_ms` no 12% faster, three ticks in a row, than the fastest of the run's first three: the game does not follow the scale (a patch fixes its resolution, or the frame is not bound by it), so the scale is held. `unanswered_from` is the scale at the start of the run, or at its last answer. A tick without a miss, while the shading-rate governor holds no coarse rates and not under `EDEN_NX2_BUDGET_HOLD_RES`, lets the scale be tried again; under `EDEN_NX2_BUDGET_HOLD_RES` the scale stays held until the target changes |
+
+The scale at which a run of misses began is `miss_scale`: for `cooldown_ticks` more ticks
+(30, doubled up to 240 each time a lower made since brings a miss back) a lower stays one step
+above it, so the scale does not go back and forth over a resolution step. It is forgotten after
+two cool-downs without a miss.
+
+With `EDEN_NX2_VRS_AUTO` on, the shading-rate governor takes the same target and its frame time
+without the pacing wait. It may coarsen only once the scale has nothing left to give, from a
+miss at the scale's upper limit until the scale leaves that limit or from `unanswered` until the
+scale may be tried again (`shading_rate_allowed`; `set_shading_rate` shows `auto.allowed` and the
+hold reason), and while it holds coarse rates the scale is not lowered.
+
+`target_fps` sets the target live (1 to 1000; 0 turns the controller off and puts the scale back
+to `manual_scale`). `scale` sets the scale by hand; with a target the controller goes on from
+it. The reply also has `target_ms`, `samples` (presents of the last tick), `scale`,
+`latched_scale` (the scale as the anchor keeps it, within 0.8%), `min_scale`, `max_scale`,
+`ticks`, `raises`, `lowers`, `fast_streak`, `blind_lowers`, `last_change` and `unanswered_from`
+(0 outside state `unanswered`). A change of the
+scale by more than 10% logs one `Frame budget:` line, at most one a second.
+
+**`autopilot`**. The autopilot (`EDEN_NX2_AUTOPILOT=1`, [../autopilot.md](../autopilot.md)), answered at once from its last 2 s window, also under `status.autopilot`: `running`, `windows`, `changes`, `real_fps`, `shown_p50_ms`, `shown_p95_ms`, `shown_even_percent`, `refresh_hz` and its `refresh_source`, `gpu_busy` (negative when not measured), `power` (`ac`, `battery`, `unknown`), `frame_gen_on`, `frame_gen_target`, `frame_gen_multiplier`, `gpu_time_scale` and its base, `resolution_available` (false while the frame budget has a target), `power_policy_available`, `power_policy_applied` and `last_change`. Without the switch `running` is false.
+
+**`gpu_costs`** `{top?, enable?}`. Host GPU time of the last sampled frame (one a second, the
+`DKB gpu_work` and `DKB gpu_pass` data without the log lines): `work` per vertex+fragment or
+compute shader hash and `passes` per render target, slowest first, `top` of each (default 32).
+`enable` turns the sampling on or off (`EDEN_NX2_COST_SAMPLING=1` starts with it on); `frame` is
+0 until a frame was sampled, `age_ms` says how old the sample is. Each `work` entry also counts
+its `small_draws` (direct draws of at most 6 vertices and one instance) and `side_draws` (draws
+into another target than the main scene target: the one with depth and colour whose draws took
+the most time, `has_main_target`).
+`emu` holds the emulator's own GPU work by row (`category`, `count`, `total_ms`, `max_ms`,
+slowest first; `emu_sum_ms` is that work's total with each item counted once, so a per-site
+`buffer_copy.<site>` row is not added again with `buffer_copy`). `present` is the blit of the
+game's image into the presented frame, scaling filter included. Frame generation has three rows,
+one entry per call: `frame_gen_process` (once per interpolated real frame: the history copies and
+the optical flow, or Lossless Scaling's shared passes), `frame_gen_interpolate` (one in-between
+frame) and `frame_gen_extrapolate` (one frame predicted from the game's motion vectors,
+`EDEN_NX2_EXTRAPOLATE`). With `EDEN_NX2_FLUID_INTERP` a sampled frame has one
+`frame_gen_process` and one `frame_gen_interpolate` per in-between frame made: five on the 144 Hz
+set while real frames keep to their six slots, more when a real frame comes late, fewer when no
+swapchain frame is free.
+What the driver's compiler made of those shaders is a launch option, not a tool:
+`EDEN_NX2_PIPELINE_STATS=<dir>` enables VK_KHR_pipeline_executable_properties, builds every guest
+graphics and compute pipeline with `VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR` and appends one
+JSON line per build to `<dir>/pipeline_stats.jsonl`: `kind` (`graphics` or `compute`), `pipeline`
+(the key's hash), `hashes` (the six stage hashes, or the compute hash), `shader` (fragment or
+compute hash), `mesh`, `flags` (the create flags) and `executables`, each with `index`, `name`,
+`description`, `stages` (a `VkShaderStageFlags` mask), `subgroup_size` and `statistics` (`name`,
+`description`, `format`, `value`). `EDEN_NX2_PIPELINE_STATS_IR=1` adds the capture of internal
+representations: each executable gets `representations` (`name`, `description`, `text`, `bytes`,
+`file`) and the text ones are written as `<dir>/<shader>_<index>_<name>.txt`, once per file name.
+Such a session leaves the driver blob store closed, passes no driver pipeline cache to its builds
+and marks nothing as precached, so it compiles everything again and its frame times mean nothing;
+the shader cache's own records are used and written as usual. Save a `gpu_costs` reply from a
+normal session, then `python3 -I tools/nx2/pipeline_stats.py <dir> --costs <reply.json>` (or a log
+with `DKB gpu_work` lines) prints the executables of the costliest shaders, with the statistics
+named after spills, fills, scratch space, SIMD or dispatch width, instructions, sends, cycles and
+loops marked.
+**`gpu_perf`** `{enable?, frames?}`. Hardware GPU counters through VK_KHR_performance_query
+(`EDEN_NX2_GPU_PERF=1` at launch enables the extension; without it the reply is
+`{supported: false, reason}`). `enable` samples the next `frames` submissions (default 30,
+1 to 600) or stops (`false`); the exclusive profiling lock is acquired for the window only
+and released once its last result is read, so another profiler can use the GPU between
+windows. The reply has `supported`, `sampling`, `frames_sampled`, `counters`
+(`[{name, value, unit}]`, averaged over the submissions collected so far; units `pct`, `mhz`,
+`cycles`, `ns`, `raw`, ...) and the shortcuts `gpu_busy_pct` (GpuBusy), `stall_pct` (XveStall),
+`occupancy_pct` (XveThreadOccupancy) and `freq_mhz` (AvgGpuCoreFrequencyMHz), each null until
+a result was read. The whitelist also carries RenderBusy and ComputeEngine0Busy; counters the
+driver does not expose are skipped. Call again without `enable` to poll a running window.
+This turns "unaccounted frame time" into a named GPU stall: a frame whose GPU time is mostly
+`stall_pct` waits on memory or the sampler, not on shader work.
+
+**`set_shading_rate`** `{hashes?, rate?, all?}`. With `EDEN_NX2_VRS` set at launch, every guest
+graphics pipeline takes its fragment shading rate (VK_KHR_fragment_shading_rate) as dynamic
+state. This sets the fragment size (`1x1`, `2x1`, `1x2`, `2x2`, `4x2`, `2x4`, `4x4`; `2x2` when
+omitted) for the draws of the listed fragment shader hashes, from the next draw on, or with
+`all: true` for every shader not listed. `1x1` restores. Without hashes it returns the table.
+`EDEN_NX2_VRS_HASHES=<hash>:<rate>,...` and `EDEN_NX2_VRS_DEFAULT=<rate>` set the same table at
+boot. Rates are clamped to the device's.
+
+`auto: <fps>` starts the automatic governor and `auto: 0` stops it (`EDEN_NX2_VRS_AUTO=<fps>` at
+launch, with `EDEN_NX2_VRS`). It turns cost sampling on and, on each sampled frame, compares the
+median guest present interval of the last second (frames the host generates are not counted)
+with the target: after two slow samples the costliest fragment shader goes one level coarser
+(`2x1`, `2x2`; `EDEN_NX2_VRS_AUTO_MAX=3` allows `4x4`), after four fast ones the last raise is
+taken back. Its table is a layer under the manual one: a hash in `rates` or a non-`1x1` default
+always wins, and the governor never touches them. It leaves alone fragment shaders that write
+depth, that only draw small direct draws (full-screen and UI quads), that only draw into side
+targets, and the hashes of `auto_deny` (`EDEN_NX2_VRS_AUTO_DENY=<hash>,...`; `auto_allow`
+removes them). The reply's `auto` has the target, the measured `frame_ms`, the layer (`rates`,
+`levels`), the `denied` lists, `last_action` and `hold_reason`. A raise or lower logs one
+`VRS auto:` line.
+**`set_prepass`** `{hashes?, on?}`. Experiment (`EDEN_NX2_PREPASS_HASHES=<hash>,...` at boot):
+the draws of the listed fragment shader hashes are drawn twice, first with a depth-only form of
+the fragment shader that keeps only what decides its discards, then with the fragment shader
+itself, early fragment tests on, depth compared for equality and not written. The shader then
+runs once for each visible pixel instead of once for each layer of alpha-tested geometry. A
+pipeline takes the split when its fragment shader discards (or the alpha test is on), writes no
+depth, sample mask or storage, no earlier stage writes storage, and there is a depth buffer, no
+forced early depth test, transform feedback, alpha to coverage or alpha to one. A draw is split
+when depth test and write are on with a less, less-equal, greater or greater-equal compare, and
+stencil test, blending of every bound colour target, logic op, transform feedback and the
+samples-passed counter are off. `Prepass split:` log lines name the pipelines refused and why,
+and the state of the first draws refused. `EDEN_NX2_PREPASS_FORCE=1` at launch takes the split
+with an earlier stage that writes storage (it then writes twice) and with the counter on (it
+counts the visible fragments once more). `on: false` takes the hashes off the list, from the
+next draw on; listing some drops their built pipelines at the next frame end, to be made again
+with the split when next drawn (pipelines still building then, or prebuilt and not yet drawn,
+keep drawing in one pass: take the hash off and list it again). Without hashes it returns the
+list. The reply counts
+the `pipelines` built with the split and their `split_draws` and `plain_draws` (state refused).
+Both passes use the same shader modules before the fragment stage; should their depths still
+differ (holes in the geometry), `EDEN_NX2_PREPASS_INVARIANT=1` at launch decorates Position as
+invariant in those pipelines.
+**`memory`**. Host memory in bytes. `process`: working set, private working set, commit and their
+peaks. `system`: commit against its limit, RAM and free RAM. `guest`: the guest memory's size,
+what stayed resident after the last zero-page trim, zero pages trimmed and zero-filled so far, and
+bytes committed on demand (`EDEN_NX2_LAZY_GUEST_COMMIT=1`). `renderer`: device memory in use
+against the texture cache thresholds, buffer cache, staging buffers, mesh arenas, graphics
+pipelines (entries, built, kept limit) and kept SPIR-V; pipeline figures refresh every 600 frames.
+`low_memory_mode` says whether `EDEN_NX2_LOW_MEMORY` or the host's RAM (20 GiB or less) turned
+the smaller cache limits on.
 **`capture_bundle`** `{description?, size_limit_mib?, timeout_s?}` (`index?` in the adapter). It
 writes the bug-report bundle that Help → Report a Bug writes ([bug-bundle.md](bug-bundle.md)):
 logs, system and settings, screenshot, the last 10 s of frame times, and the next frame captured
@@ -328,6 +548,24 @@ How the reads are safe:
 
 **`input`** `{buttons?, left_stick?, right_stick?, frames, timeout_s?}` holds the buttons and
 sticks for `frames` presented frames and then releases them. It returns when they are done.
+**`input_latency`** `{right_stick?, frames?, count?, height?, threshold?, timeout_s?}` times input
+to picture ([design](../design/game-reconstruction-and-motion.md), 3.5). It holds a right-stick
+step (default `[1, 0]`, full right) on player 1 (or the handheld controller) from the next present
+on, for at most `frames` presented frames (default 60), while it captures the next `count` shown
+frames (4 to 32, default 32) with pictures `height` lines tall (default 144), and releases the
+stick when it returns. The clock starts when the game first reads the step (the controller's
+injector is called by the npad update), not when the request arrives. Per frame (`frames`): `kind`,
+`since_input_ms` (the present call's return less that first read; negative for frames shown before
+it) and `difference`, the picture's mean absolute difference from the first picture over its blue,
+green and red bytes (0 to 255; null without a picture). `onset_ms` and `onset_kind` are the first
+frame whose difference is over `threshold` (default 2): with frame generation that can be a
+predicted or interpolated frame; `real_onset_ms` is the first real frame over it. `input_read` is
+false and the times null when the game never read the step while the frames were shown (paused,
+a menu). Stand still where the camera can turn and nothing else moves much: animation counts as
+difference too, so compare `difference` before the onset with the threshold. Times are when the
+present call returned, not the scanout (as `shown_frames`), so the display's own lag comes on top.
+Uses the shown-frames capture: it fails while a `shown_frames` call runs.
+
 **`input_sequence`** `{steps: [{buttons?, left_stick?, right_stick?, frames}, ...], timeout_s?}`
 runs the steps back to back, at most 1000 steps and 36000 frames per call. A step with no
 buttons and no sticks injects nothing, so it works as a pause between moves.
@@ -367,6 +605,167 @@ emulator's default timeout, so it does not drop a long sequence early.
 Use it when the owner has put the controller down: injected buttons add to whatever the owner
 presses. For an A/B test, run the same `input_sequence` from the same spot under each variant
 (for example with a `reject_shaders` change in between), then compare screenshots or captures.
+
+### Shown frames (implemented)
+
+`screenshot` returns the guest's frame, drawn again from the framebuffers, never a frame that
+frame generation made. **`shown_frames`** `{count?, height?, pictures?, each?, save?, timeout_s?}`
+returns what reached the screen: the next `count` (1 to 32, default 12) frames as the presenter
+sends them to the swapchain, after frame generation, with the timing the presenter knew.
+
+Per frame (`frames`): `kind` (`real`, `predicted` for EDEN_NX2_EXTRAPOLATE, `interpolated` for
+Lossless Scaling or EDEN_NX2_FLUID_INTERP), `presenter` (`fluid` for the EDEN_NX2_FLUID vblank
+clock, `present_thread` or `renderer_thread` for arrival order), `slot` (the vblank it was shown
+for; null in arrival order), `batch` (the real frame it is or derives from), and in microseconds,
+rounded, relative to the first frame's present: `scheduled_us` (when the slot's vblank was due),
+`presented_us` (taken just after the present call returned on the CPU: not the scanout, which
+the presenter does not observe), `late_us` (presented less scheduled; negative is early),
+`interval_us` (since the previous frame) and `age_us` (presented less when the real frame it
+derives from was recorded). `deferred_present` marks a frame that EDEN_NX2_FLUID_COPY_AHEAD
+presents at the next slot's wake, so its `presented_us` is the copy's submission (about a refresh
+early, also in the intervals next to it) and its `late_us` and `age_us` are null. Scheduled times,
+late and age exist only on the FLUID clock; the answer's `notes` say so otherwise. FLUID frames
+shown in arrival order (interpolated ones, or before the clock starts) also have a null `slot`
+and `scheduled_us`. The answer also counts `kinds`, counts the frames with a picture in
+`pictures` (a number, unlike the request's boolean), and gives `span_us`.
+
+Pictures: each shown frame is blitted (linear filter) to `height` lines (144 to 540, default 270)
+at the frame's aspect ratio, and the answer has one contact sheet, `sheet_png_base64`, with every
+frame in order, left to right and then down (rows of four, a near-square grid past 16 frames). A
+strip above each tile gives its kind: green real, orange predicted, blue interpolated; a grey tile
+had no picture. Each frame's `tile` is its rectangle in the sheet. `each: true` (socket only) also
+returns every frame as its own PNG, `save: true` writes the sheet to
+`shown-<session>-<n>.png` in the dump directory. The adapter returns the sheet as image content
+and `--call ... --out sheet.png` saves it. HDR output gives the encoded values cut to 8 bits, not
+tone-mapped (`hdr: true`).
+
+Where it hooks in (`src/video_core/nx2_shown_frames.h`, `renderer_vulkan/vk_shown_capture.cpp`):
+
+- The request goes through its own small mutex-guarded block with two relaxed flags, like
+  `nx2_debug_control.h`. The thread that presents takes it at the next present: the present
+  thread (`FluidShow`, or `PresentThread` in arrival order) or the renderer thread without one
+  (`PresentManager::Present`). It answers after `count` frames.
+- `Frame::shown_kind` is set where frames are generated (`RecordFluidFrames`,
+  `RecordFluidInterpolated` and the arrival-order generation loop in `renderer_vulkan.cpp`) and
+  reset to `real` with the frame.
+- The picture is recorded into the screen copy's own command buffer on the graphics queue
+  (`CopyToSwapchainImpl`), where the frame's image is already in `TRANSFER_SRC_OPTIMAL`: a blit
+  into one small image, a copy into that frame's part of a host-visible buffer, a barrier to host
+  reads. After the last frame the present thread waits for that frame's copy fence (at most
+  500 ms; every capture copy was submitted to the same queue before it) and reads the buffer
+  back. The frame is not given back for reuse before then, so the fence is still its own. A
+  presenter destroyed mid-capture (the game stops) answers with the frames it has, without
+  pictures, so the flags drop and the next capture is taken.
+- The dedicated copy queue (`EDEN_NX2_FLUID_QUEUE`) is a compute or transfer family that cannot
+  blit. While a capture with pictures waits or runs, every screen copy takes the graphics-queue
+  path, which that switch already uses for frames whose size or format differ from the
+  swapchain's. `pictures: false` leaves the copy where it is and gives the timing exactly as
+  played.
+
+Cost:
+
+- Idle: per shown frame, two relaxed loads of the two flags (one before the screen copy, one
+  after the present); no lock, no call.
+- Capturing with pictures: per frame one blit of the frame (for example 2880x1800 to 432x270)
+  and a copy of the small picture (466 KB at 432x270) on the graphics queue, not measured yet;
+  a mutex and a vector push on the presenting thread. Memory: one small image and a buffer of
+  `count * width * height * 4` bytes (5.6 MB at the defaults on a 16:10 screen, 60 MB at 32
+  frames of 540 lines), allocated at the first captured frame and freed after the answer. The
+  last frame's fence wait blocks the presenting thread (and `WaitPresent`, which takes the same
+  lock) until that frame's copy is done. With the dedicated queue the copies run behind the
+  game's rendering for the capture's duration, so slots can be missed that would not be missed
+  otherwise. The contact sheet at 32 frames of 540 lines is about 5200x3300 pixels on a 16:10 screen: ask for
+  fewer or smaller frames when the image goes to an agent.
+- Capturing without pictures: the mutex and the vector push only.
+
+A capture that does not see `count` frames within `timeout_s` (default 10, at most 60) fails and
+is withdrawn; frames still shown later finish it and the answer is dropped. One capture runs at a
+time.
+### Telemetry (implemented)
+
+Four tools expose internals the log lines already measure, as JSON an agent can compare across
+an A/B run without parsing logs.
+
+**`thread_stats`** `{top?}`. Guest threads' CPU time and waits, from the
+`EDEN_NX2_GUEST_THREAD_STATS` counters (`src/core/hle/kernel/nx2_thread_stats.cpp`,
+`Kernel::Nx2ThreadStats::Snapshot`). Per thread, busiest first: `on_core_ms` split into
+`jit_ms` (and within it `game_code_ms`, `counter_poll_ms`, `hint_spin_ms`, `cached_memory_ms`,
+`read_back_ms`) and `outside_jit_ms` (SVCs and kernel), `ready_ms` (runnable without a core),
+`held_replies_ms` (HLE replies held back), `presents`, and `waits` by kind (`ipc`,
+`sync_objects`, `address_arbiter`, `condvar`, `lock`, `sleep`, `other`) each with `ms` and
+`count`. Times are totals since the thread first ran, converted from guest counter ticks with
+`cntfrq_hz`. `enabled` is false without the switch, and the rows are then empty. `top` (default
+16, at most 128) limits the rows; `threads_total` counts them all.
+
+**`present_stats`** `{}`. The present thread's counters
+(`PresentManager::GetPresentStats`, `src/video_core/renderer_vulkan/vk_present_manager.cpp`):
+the FLUID presenter's `slots`, `hits`, `missed` (= `no_frame` + `queued` + `overslept`),
+`not_done`, `uncovered`, `rolled`, `spare`, `stale`, `in_order`, `late`, `dropped`, `received`,
+`held` (frames shown for 1/2/3/4+ refreshes), `age_ms` (real frame's age at display) and
+`latency_ms` (record to GPU work done), and under `present_thread` the acquire, copy-wait,
+submit-lock and present-call times (mean and max) and the slot margin before the vblank. The
+counters fill with `EDEN_NX2_SHOWN_STATS` at launch (`shown_stats` says whether it is set);
+the `vblank` clock (`refresh_hz`, `index`, `divisor`, `lead_ms`, `latency_ms`),
+`swapchain_images`, `present_frames`, `queued_frames` and `free_frames` are live regardless.
+Vulkan only. The show-path counters are read under the swapchain lock; the arrival counters
+are a best-effort snapshot of monotonic values, fine for a debug read.
+
+**`cache_stats`** `{}`. Texture and buffer cache hit/miss/eviction counters since boot
+(`VideoCommon::Nx2CacheStats::g_counters`, `src/video_core/nx2_cache_stats.h`, counted in
+`TextureCache::FindOrInsertImage`/`DeleteImage`/the collector and
+`BufferCache::FindBuffer`/`CreateBuffer`/`DeleteBuffer`/the collector). Per cache: `hits`,
+`misses`, `hit_rate`, `created`, `deleted`, `evicted` (the collector's), and for textures
+`evicted_downloaded` (those that waited for a GPU download first) with `device_usage` against
+`expected_threshold` and `critical_threshold`; for buffers `bytes`. Also `staging_bytes`,
+`graphics_pipelines` and `built_pipelines` from `Common::g_memory_counters`. Always counted
+(a few relaxed atomic adds per lookup); no switch needed.
+
+**`readbacks`** `{}`. Async read-back counters since boot
+(`VideoCore::AsyncReadback::g_counters`, `src/video_core/nx2_async_readback.h`, counted in
+`GPU::Impl::OnCPURead`, `BufferCache::FinishReadDownloads` and the split's DMA reads):
+`reads_async` (guest CPU reads of GPU-written memory that forced a flush) and `reads_inflight`
+(an earlier read's download covered them, only the wait was left), `read_ns_total` (request to
+bytes in guest memory, both kinds), `flush_us` (the GPU thread's time in the reads' flushes),
+`reader_waits`/`reader_wait_us`/`reader_max_wait_us` (reading threads that waited for the host
+GPU), `gpu_side_waits`/`gpu_side_wait_us` (GPU-side writes that waited for a read download),
+`dma_reads`/`dma_waited`/`dma_drained`/`dma_wait_us` (macro DMA reads on the split's front),
+`clear_landings`/`clear_waits` (`ClearDownload` landings before GPU-side writes),
+`sync_ops`/`sync_us`/`sync_max_us` (request to sync operation on the GPU thread) and
+`early_recorded`/`early_bytes`/`early_flushes`/`early_refused` (early downloads). Always counted
+(relaxed atomics beside the locks the read path already takes); `EDEN_NX2_GPU_PROFILE` also
+logs the same counters per second.
+
+**`boot_timing`** `{mark?}`. The boot phases `Common::BootTiming` recorded
+(`src/common/boot_timing.cpp`, `RecordedPhases`): every `Mark` and `Span` since the process
+started, oldest first, each with `phase`, `at_ms` (since process start) and `took_ms`, plus
+`now_ms`. The last 256 phases are kept. The same boundaries the `Boot timing:` log lines show,
+without parsing the log; boot phases logged before the server starts are included.
+
+`split` says what the time went on between boot and gameplay (`Common::BootSplit`,
+`src/common/boot_split.cpp`). Every total is cumulative since the process started:
+
+- `held_draws`, `held_draw_ms`: draws that waited on the GPU worker for their graphics pipeline
+  to be built, and for how long; `held_dispatches`, `held_dispatch_ms`: the same for compute.
+- `builds`: pipelines built and the driver time they took, summed over every thread, by kind:
+  `graphics_monolithic` (a whole pipeline), `graphics_library_pre_rasterization` and
+  `graphics_library_fragment` (`EDEN_NX2_GPL` shader parts), `graphics_fast_link` and
+  `graphics_optimized_link` (`EDEN_NX2_GPL` links), `compute`. Each is `{count, ms}`. A build the
+  driver rejects is not counted. Time on workers can add up to more than wall time.
+- `file_reads`, `file_read_bytes`, `file_read_ms`: guest storage and file reads, the bytes they
+  asked for, and the time in the backend read.
+
+`split.first_frame` is a sample (`label`, `at_ms`, `presents`, `totals`) taken when the first guest
+frame was presented (null before it; the process's first, a later game in the same process
+does not replace it). `{"mark": "gameplay"}` takes
+another sample now: reach the scene, call it, and `split.marks` (the last 16, oldest first) holds
+it with `since_first_frame`, the totals added since the first frame (absent on a mark taken before
+it), next to its `totals`.
+`split.current` is the totals now. A `mark` that is not 1 to 64 characters is refused.
+
+The counting exists only when the process started with `EDEN_NX2_DEBUG_SERVER` set (the server
+itself is the only reader): without it the counters, the clock reads around the timed work and the
+read timing are skipped, and it is not a switch of its own. Guest reads are timed as well when
+`EDEN_NX2_FS_READ_TRACE` is set, as before; with only the server set they add no log lines.
 
 ### Phase 2: control and input (about 4 to 5 days)
 
@@ -415,7 +814,7 @@ The core cannot save state. There is no serialisation of the kernel, services, t
 NCE CPU state, or the GPU caches, and Eden and yuzu never had it. The `saveState` in
 `src/lichii/main_window.cpp` is Qt window geometry. Adding save states is a project of its own,
 not a tool. The practical substitute is a reproduction script: phase 2 input sequences, recorded
-once (`EDEN_NX2_KEY_RECORD` already records keys in `eden-cli`) and replayed after boot.
+once (`EDEN_NX2_KEY_RECORD` already records keys in `guarana-cli`) and replayed after boot.
 
 ## Running it on the PC
 

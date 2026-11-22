@@ -7,8 +7,10 @@
 
 #include <array>
 #include <bit>
+#include <map>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <sirit/sirit.h>
@@ -170,6 +172,12 @@ struct CooperativeHmmaTypes {
     Id matrix_a{};
     Id matrix_b{};
     Id matrix_c{};
+    /// The accumulator's component type: fp16, or fp32 on the 8x8x16 path
+    Id accumulator{};
+    /// A zero accumulator matrix, made by the first HMMA that starts from zero
+    /// (Profile::cooperative_hmma_zero_c)
+    Id zero_accumulator{};
+    u32 rows{16}; ///< Rows of A and of the accumulator
 };
 
 class EmitContext final : public Sirit::Module {
@@ -307,6 +315,9 @@ public:
     Id sample_id{};
     Id is_helper_invocation{};
     Id subgroup_local_invocation_id{};
+    /// SubgroupSize, when the host subgroup may be narrower than the guest warp and the program
+    /// shuffles (Profile::warp_size_potentially_smaller_than_guest).
+    Id subgroup_size{};
     Id subgroup_mask_eq{};
     Id subgroup_mask_lt{};
     Id subgroup_mask_le{};
@@ -343,6 +354,7 @@ public:
     u32 rescaling_downfactor_member_index{};
     u32 texture_rescaling_index{};
     u32 image_rescaling_index{};
+    u32 descriptor_set{}; ///< Set of every resource of the stage (Bindings::descriptor_set)
 
     Id render_area_push_constant{};
     u32 render_are_member_index{};
@@ -397,6 +409,16 @@ public:
     std::vector<GlobalMemoryFunctions> global_memory_functions;
     std::unordered_map<const IR::Inst*, u32> global_memory_route;
     [[nodiscard]] const GlobalMemoryFunctions& GlobalMemoryFunctionsOf(const IR::Inst& inst) const;
+    /// GM_HOIST: per storage buffer descriptor, the private variable holding its base address
+    /// (stored by EmitGlobalMemoryPrologue); empty when the program is not hoisted.
+    std::vector<Id> global_bases;
+    const Info* global_bases_info{};
+    void EmitGlobalMemoryPrologue();
+    /// GM_NARROW: the load function for a word shift (2, 3, 4) and a LoadGlobal's narrowed buffer
+    /// list (IR::GlobalLoadFlags::NarrowList, without the coherent bit), or an invalid id when
+    /// the load searches every buffer.
+    [[nodiscard]] Id NarrowGlobalLoad(u32 shift, u32 list) const;
+    std::map<std::pair<u32, u32>, Id> narrow_load_funcs;
 
     bool need_input_position_indirect{};
     Id input_position{};
@@ -421,12 +443,17 @@ public:
     /// Set when HMMA runs on 16x16x16 matrices: each 32-lane subgroup owns 384 words of shared
     /// memory from this word (A, B and C/D tiles of 16x16 fp16, 128 words each).
     std::optional<u32> tensor_scratch_word;
+    /// Set when the software HMMA helpers gather from shared memory: each 32-lane subgroup owns
+    /// 192 words from this word (128 of A, then 64 of B).
+    std::optional<u32> software_matrix_scratch_word;
     Id tensor_subgroup_id{};
     /// The software matrix functions round to fp16 with a native conversion, which needs the
     /// entry point's fp16 round-to-nearest-even and denorm preserve modes.
     bool native_half_rounding{};
     std::vector<Id> interfaces;
     std::vector<std::pair<u32, spv::Op>> opcode_rewrites;
+    /// Storage float32 atomic adds use OpAtomicFAddEXT (Profile::support_float32_atomic_add).
+    bool native_f32_atomic_add{};
 
     // Task and mesh programs. Their stage buffer: the task's output region is the task payload
     // (the mesh stage's input region); the mesh output regions live in workgroup memory until
@@ -514,7 +541,12 @@ private:
     void DefineImages(const Info& info, u32& binding, u32& scaling_index);
     void DefineAttributeMemAccess(const Info& info);
     void DefineWriteStorageCasLoopFunction(const Info& info);
+    /// Defines the helpers global memory accesses call: each finds the storage buffer holding
+    /// the address and loads, writes or atomically updates it there.
     void DefineGlobalMemoryFunctions(const IR::Program& program);
+    using GlobalBaseWords = std::map<std::pair<u32, u32>, Id>;
+    /// The base address (u64) of a storage buffer descriptor, read from its pointer.
+    Id GlobalBufferBase(const Info& info, size_t index, GlobalBaseWords* cbuf_words);
     void DefineRescalingInput(const Info& info);
     void DefineRescalingInputPushConstant();
     void DefineRescalingInputUniformConstant();

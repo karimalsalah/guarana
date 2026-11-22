@@ -30,11 +30,11 @@ X.Y.Z-rcN
 
 Examples: `0.1.0-rc1`, `0.1.0`, `0.1.1-rc1`. Numeric components cannot have leading zeroes. The bundle starts with `0.1.0-rc1` as a **suggested starting point**, not as an existing Eglantine version convention. The current public releases use `build-<run number>`; confirm the first semantic version with maintainers before merging this value. The included `[0.1.0]` changelog section is intentionally empty and must receive the real initial release notes before the first versioned release can publish.
 
-Add changes to the top `## [Unreleased]` section in `CHANGELOG.md`. When a new candidate is prepared, the bump script moves those entries beneath `## [X.Y.Z]` and leaves an empty `## [Unreleased]` section ready for the next cycle. The RC and stable release notes come from that version section; an absent or empty section fails before the build is published.
+Add each change as a fragment file `changelog.d/<slug>.<section>.md` (see `changelog.d/README.md`); a line under the top `## [Unreleased]` section in `CHANGELOG.md` is still accepted. When a new candidate is prepared, the bump script folds the fragments into `## [Unreleased]`, deletes them and moves those entries beneath `## [X.Y.Z]` and leaves an empty `## [Unreleased]` section ready for the next cycle. The RC and stable release notes come from that version section; an absent or empty section fails before the build is published.
 
 ### Creating a release
 
-1. For the initial `0.1.0-rc1`, add the real candidate notes under `## [0.1.0]`; after the first stable release, add new notes under `## [Unreleased]` and commit them to `nx2`.
+1. For the initial `0.1.0-rc1`, add the real candidate notes under `## [0.1.0]`; after the first stable release, add new notes as `changelog.d/` fragments (or under `## [Unreleased]`) and commit them to `nx2`.
 2. Open Actions → `bump-version` → Run workflow. Choose one of:
    - `patch`: `0.1.0` → `0.1.1-rc1`.
    - `minor`: `0.1.0` → `0.2.0-rc1`.
@@ -83,7 +83,7 @@ Both the scheme-preparation job and the publishing job check out CI helper scrip
 | Windows x86_64      | clang-cl + ThinLTO `.zip`    | clang-cl + ThinLTO + PGO `.zip` |
 | macOS Apple Silicon | App bundle `.zip` and `.dmg` | Not built              |
 
-The existing build steps use the repository's current CMake targets (`lichii` and `lichii-cmd`) and package the produced `eglantine` and `eden-cli` binaries. Linux AppImages require glibc 2.39 or newer. Linux tarballs hold the same files as the AppImage, unpacked, with `lichii` and `eden-cli` links at the top. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies. macOS artifacts are ad-hoc signed, not notarized; Gatekeeper may require the user to approve the app on first launch.
+The existing build steps use the repository's current CMake targets (`lichii` and `lichii-cmd`) and package the produced `guarana` and `guarana-cli` programs (`guarana.exe` and `guarana-cli.exe` on Windows; `lichii` and `eden-cli` in a build from before the rename). Linux AppImages require glibc 2.39 or newer. Linux tarballs hold the same files as the AppImage, unpacked, with `guarana` and `guarana-cli` links at the top. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies. macOS artifacts are ad-hoc signed, not notarized; Gatekeeper may require the user to approve the app on first launch.
 
 Build artifacts are retained for seven days. Published GitHub Release assets remain available until a release is deleted. Daily releases are pruned to approximately the seven most recent; branch releases are rolling and are cleaned up when no longer needed.
 
@@ -104,7 +104,7 @@ A profile older than the source only produces warnings. Functions whose code cha
 To retrain:
 
 1. Configure a Release build as the `windows-x86_64` job does, adding `-fprofile-generate=<dir> -fprofile-update=atomic` to `CMAKE_C_FLAGS` and `CMAKE_CXX_FLAGS`, and build `lichii`.
-2. Run `lichii.exe` with `LLVM_PROFILE_FILE=<dir>/lichii-%m-%p.profraw`, play the scenes the profile should cover, and exit normally. Counters are written only at exit.
+2. Run `guarana.exe` with `LLVM_PROFILE_FILE=<dir>/lichii-%m-%p.profraw`, play the scenes the profile should cover, and exit normally. Counters are written only at exit.
 3. Merge with that LLVM: `llvm-profdata merge -o lichii-windows.profdata <dir>/*.profraw`.
 4. Check that `llvm-profdata show --all-functions lichii-windows.profdata` lists names starting with `?`, then replace the file in the repository root.
 

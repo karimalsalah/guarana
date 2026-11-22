@@ -12,6 +12,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <thread>
 #include "common/common_types.h"
@@ -132,11 +133,44 @@ enum class ThreadPlacement : u32 {
 };
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
+
+/// Names a thread so that another thread can change its priority. 0 is no thread.
+using ThreadPriorityToken = std::uintptr_t;
+
+/// Windows: a handle to the calling thread that may set its priority. Linux: its thread id. 0 on
+/// other hosts, where another thread's priority cannot be set. Close it with
+/// CloseThreadPriorityToken once the thread no longer needs it.
+ThreadPriorityToken OpenCurrentThreadPriorityToken();
+void CloseThreadPriorityToken(ThreadPriorityToken token);
+/// SetCurrentThreadPriority for the thread `token` names. On Linux, lowering a thread's nice value
+/// needs CAP_SYS_NICE or a RLIMIT_NICE that allows it.
+/// @return True when the priority was set; false for token 0, or when the host refused.
+bool SetThreadPriorityOf(ThreadPriorityToken token, ThreadPriority priority);
 void SetCurrentThreadName(const char* name);
+/// Guest cores and latency threads (present, fencing, timing, vsync, snapshot). With
+/// EDEN_NX2_HYBRID on a four-P CPU this is the performance and efficiency cores; see
+/// SetCurrentThreadToRenderCores.
 void SetCurrentThreadToPerformanceCores();
+/// For the GPU front, GPU back and Vulkan worker. With EDEN_NX2_HYBRID on a four-P CPU, the
+/// performance cores alone while the other latency threads may also use the efficiency cores;
+/// everywhere else the same as SetCurrentThreadToPerformanceCores.
+void SetCurrentThreadToRenderCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
+/// EDEN_NX2_HYBRID (Windows): the performance and efficiency cores, high QoS; for threads that
+/// answer the guest or a deadline (service threads, audio) but are not worth a performance core of
+/// their own. No-op otherwise.
+void SetCurrentThreadToResponsiveCores();
+/// EDEN_NX2_HYBRID=1 on a hybrid Windows CPU the plan applies to (see HybridPlan).
+bool HybridPlacementActive();
+/// With the plan active, how many efficiency processors background pools share; else 0.
+size_t HybridBackgroundProcessors();
+/// With EDEN_NX2_HYBRID set, one Info line: the topology found and where each kind of thread goes.
+void LogHybridPlacement();
+/// Windows: EcoQoS (efficient frequencies, efficiency cores preferred) for this thread, or back
+/// to HighQoS. No-op on other hosts.
+void SetCurrentThreadEcoQoS(bool enable);
 
 enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
 

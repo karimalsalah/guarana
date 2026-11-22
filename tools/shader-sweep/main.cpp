@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -605,6 +606,15 @@ Shader::RuntimeInfo Runtime(std::span<const u8> key, Stage stage, Json& assumpti
     return info;
 }
 
+/// EDEN_NX2_GM=<bits>, the global memory routing experiment, as the Vulkan pipeline cache reads it
+u32 OfflineGlobalMemoryBits() {
+    using namespace Shader::Backend::SPIRV;
+    const char* const bits{std::getenv("EDEN_NX2_GM")};
+    return bits != nullptr ? static_cast<u32>(std::strtoul(bits, nullptr, 0)) &
+                                 (GM_HOIST | GM_NARROW | GM_REBASE | GM_NARROW_NO_FALLBACK)
+                           : 0U;
+}
+
 // --device-profile: the HostTranslateInfo ("host") and Profile ("profile") fields that
 // PipelineCache's constructor takes from a device, in place of the offline defaults.
 Json device_profile = Json::object();
@@ -626,6 +636,7 @@ void ApplyDeviceFields(std::string_view section, Struct& target, auto&& fields) 
 }
 
 Shader::HostTranslateInfo OfflineHost() {
+    using namespace Shader::Backend::SPIRV;
     using H = Shader::HostTranslateInfo;
     Shader::HostTranslateInfo host{};
     host.support_float64 = true;
@@ -635,6 +646,10 @@ Shader::HostTranslateInfo OfflineHost() {
     host.support_viewport_index_layer = true;
     host.support_geometry_shader_passthrough = true;
     host.support_handle_table_arrays = true;
+    const u32 global_memory{OfflineGlobalMemoryBits()};
+    constexpr u32 rebase_bits{GM_NARROW | GM_REBASE | GM_NARROW_NO_FALLBACK};
+    host.narrow_global_candidates = (global_memory & GM_NARROW) != 0;
+    host.rebase_loaded_pointers = (global_memory & rebase_bits) == rebase_bits;
     ApplyDeviceFields("host", host, [](auto field) {
         field("min_ssbo_alignment", &H::min_ssbo_alignment);
         field("max_per_stage_descriptor_sampled_images",
@@ -673,6 +688,7 @@ Shader::HostTranslateInfo OfflineHost() {
 Shader::Profile OfflineProfile(const Shader::HostTranslateInfo& host) {
     using P = Shader::Profile;
     Shader::Profile profile{};
+    profile.global_memory_opt = OfflineGlobalMemoryBits();
     profile.supported_spirv = 0x00010400;
     profile.unified_descriptor_binding = true;
     profile.min_ssbo_alignment = host.min_ssbo_alignment;

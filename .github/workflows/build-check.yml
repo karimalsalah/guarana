@@ -2,15 +2,22 @@ name: build-check
 
 on:
   pull_request:
-    branches: [nx2, 'capy/nce-*']
+  # GitHub's merge queue, once it is turned on, runs these checks on the queued merge commit
+  # (docs/LANES.md, "Merging"). The jobs below need no change for it: with no pull request
+  # number every build runs, as for a push.
+  merge_group:
   push:
-    branches: [nx2]
+    branches:
+      - main
+      - "release/**"
+      - "hotfix/**"
+      - "exp/**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push cancels a pull request's run; nx2 runs finish so each merge saves its compiler cache.
+# A newer push cancels a pull request's run; branch runs finish so each merge saves its compiler cache.
 concurrency:
   group: build-check-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -25,6 +32,7 @@ jobs:
     outputs:
       build: ${{ steps.files.outputs.build }}
     steps:
+      # Documentation, the website, issue forms, the label list and benchmark rows change no binary.
       - name: Skip builds for documentation-only pull requests
         id: files
         env:
@@ -34,11 +42,30 @@ jobs:
           build=true
           if [ -n "$PR" ]; then
             files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-            if ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
+            if ! printf '%s\n' "$files" |
+              grep -qvE '^(docs/.*|site/.*|.*\.md|\.github/ISSUE_TEMPLATE/.*|\.github/labels\.yml|tools/bench/results/.*)$'; then
               build=false
             fi
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  # Code needs a changelog entry: a file in changelog.d/ (changelog.d/README.md) or a line under
+  # [Unreleased]. Documentation-only pull requests and the bots' branches need none
+  # (tools/ci/changelog_fragments.py). HEAD^1 of the merge commit is the tip of the base branch.
+  changelog:
+    name: Check the changelog entry
+    if: github.event_name == 'pull_request' && github.head_ref != 'upstream' && !startsWith(github.head_ref, 'bot/') && !startsWith(github.head_ref, 'merge/upstream')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the merge commit and its base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Check for a changelog entry
+        run: python3 -I tools/ci/changelog_fragments.py check --base HEAD^1
 
   linux-gcc:
     name: Linux GCC 13 production build and tests
@@ -55,7 +82,7 @@ jobs:
       CCACHE_COMPILERCHECK: content
     steps:
       - name: Check out source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -86,10 +113,10 @@ jobs:
           modules: qtcharts qtimageformats
           cache: true
 
-      # Objects are keyed by content, so nx2's newest cache always helps;
+      # Objects are keyed by content, so the newest cache of this branch or main always helps;
       # keying it on cpmfile.json threw the whole cache away whenever a dependency changed.
       - name: Restore dependencies and compiler objects
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .cache/cpm
@@ -139,8 +166,13 @@ jobs:
       - name: Replay GPU traces on lavapipe
         run: |
           python3 tools/nx2/test_trace_replay.py
-          python3 -I tools/nx2/trace_replay.py check --cli build/bin/eden-cli \
+          # guarana-cli; a build from before the rename has eden-cli.
+          cli=build/bin/guarana-cli; [ -x "$cli" ] || cli=build/bin/eden-cli
+          python3 -I tools/nx2/trace_replay.py check --cli "$cli" \
             --corpus tests/gpu_traces/corpus.json
+      # bench-rows.yml also runs it, and checks contributed result rows, on changes under tools/bench/.
+      - name: Test benchmark tool
+        run: python3 -I tools/bench/test_bench.py
 
       - name: Test cache metrics and bench
         run: |
@@ -159,11 +191,12 @@ jobs:
       - name: Test Linux switch discovery
         run: CXX=g++-13 python3 tools/nx2/test_switches.py
 
-      # Only nx2 saves: pull requests restore nx2's cache, and their own entries (one per push)
-      # filled the repository's 10 GB cache budget and evicted the release builds' caches.
+      # Only pushes save: a pull request's cache could serve only that pull request, and a day of
+      # them filled the 10 GB the repository has, which evicted main's and made its next Windows
+      # build cold (65 minutes instead of 9). Pull requests restore main's newest instead.
       - name: Save dependencies and compiler objects
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: always() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .cache/cpm
@@ -315,12 +348,14 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 1G
+      # The test build's artifact is named <APP>-<pr number or branch>-<commit>-windows-x86_64.
+      APP: "guarana"
     defaults:
       run:
         shell: bash
     steps:
       - name: Check out source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -346,12 +381,12 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'ccache.zip'
-          Invoke-WebRequest -OutFile $zip https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-windows-x86_64.zip
-          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne '6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84') {
+          Invoke-WebRequest -OutFile $zip https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-windows-x86_64.zip
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne 'c845c3d65be81954c75659145a522a793a27586bf940c5dcfe18af33fa1a67dd') {
               throw 'ccache checksum mismatch'
           }
           Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
-          Join-Path $env:RUNNER_TEMP 'ccache-4.14.2-windows-x86_64' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          Join-Path $env:RUNNER_TEMP 'ccache-4.14.3-windows-x86_64' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -359,7 +394,7 @@ jobs:
 
       # Restore and save separately so a test failure still keeps the compiled objects.
       - name: Restore dependencies and compiler objects
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .cache/cpm
@@ -404,22 +439,29 @@ jobs:
           ccache --show-stats -v
           ccache --evict-older-than "$(( $(date +%s) - start + 60 ))s"
 
-      # nxformat is linked statically: lichii.exe must not need an nxformat.dll, which Windows
+      # nxformat is linked statically: guarana.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
-      - name: Check lichii.exe does not import nxformat.dll
+      # A build from before the rename still produces lichii.exe, so that name is checked too.
+      - name: Check guarana.exe does not import nxformat.dll
         run: |
-          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/lichii.exe |
+          exe=build/bin/guarana.exe
+          [ -f "$exe" ] || exe=build/bin/lichii.exe
+          [ -f "$exe" ] || { echo "::error::neither build/bin/guarana.exe nor build/bin/lichii.exe was produced"; exit 1; }
+          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports "$exe" |
             awk '/^(Import|DelayImport) {/ { kind = $1 } /^  Name:/ { print kind, $2 }')
           echo "$imports"
           if grep -qi ' nxformat.dll$' <<< "$imports"; then
-            echo "::error::lichii.exe imports nxformat.dll; nxformat must be linked statically"
+            echo "::error::$(basename "$exe") imports nxformat.dll; nxformat must be linked statically"
             exit 1
           fi
 
       # Antivirus heuristics count an unsigned program without file metadata against it.
       - name: Check the shipped programs carry a version resource
         run: |
-          for exe in lichii eden-cli lichii-updater; do
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          gui=guarana; [ -f "build/bin/$gui.exe" ] || gui=lichii
+          cli=guarana-cli; [ -f "build/bin/$cli.exe" ] || cli=eden-cli
+          for exe in "$gui" "$cli" lichii-updater; do
             if ! grep -q 'Type: VERSIONINFO' <<< "$("$LLVM_ROOT/bin/llvm-readobj" --coff-resources "build/bin/$exe.exe")"; then
               echo "::error::$exe.exe has no version resource"
               exit 1
@@ -429,9 +471,71 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
 
+      # The build a pull request hands to testers: the programs without the unit tests, with the
+      # Qt runtime next to them as in the release zips. It is a Release build of this commit (for a
+      # pull request, merged into its base) without the release builds' ThinLTO and PGO.
+      - name: Name the Windows test build
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$PR" ]; then
+            label="pr$PR"
+          else
+            label=$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')
+          fi
+          echo "TEST_BUILD=$APP-$label-${HEAD_SHA::7}-windows-x86_64" >> "$GITHUB_ENV"
+
+      - name: Package the Windows test build
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'test-build'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # guarana.exe and guarana-cli.exe; a build from before the rename has lichii.exe and eden-cli.exe.
+          $gui = 'guarana.exe'
+          if (-not (Test-Path "build/bin/$gui")) { $gui = 'lichii.exe' }
+          $cli = 'guarana-cli.exe'
+          if (-not (Test-Path "build/bin/$cli")) { $cli = 'eden-cli.exe' }
+          foreach ($exe in $gui, $cli) {
+              if (-not (Test-Path "build/bin/$exe")) {
+                  throw "build/bin/$exe was not produced"
+              }
+          }
+          # Everything the release zip has, without the test programs and linker by-products.
+          Get-ChildItem build/bin -File |
+              Where-Object { $_.Name -notmatch '(^|_)tests?\.exe$|_probe\.exe$|fuzzer|\.(pdb|ilk|lib|exp)$' } |
+              Copy-Item -Destination $out
+          Get-ChildItem build/bin -Directory | Copy-Item -Destination $out -Recurse
+          # The patch packs ship next to the programs (FileSys::ShippedPatchPackDirectory).
+          if ((Test-Path dist/patch-packs) -and
+              -not (Get-ChildItem (Join-Path $out 'patch-packs') -Filter *.json -ErrorAction SilentlyContinue)) {
+            throw 'The test build holds no patch pack'
+          }
+          windeployqt --release --no-translations (Join-Path $out $gui)
+
+      # The folder itself: GitHub zips an artifact on download, and uploading a zip gave a zip
+      # inside a zip. pr-build-comment.yml links it on the pull request.
+      - name: Upload the Windows test build
+        id: test-build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TEST_BUILD }}
+          path: ${{ runner.temp }}/test-build/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link the Windows test build
+        env:
+          URL: ${{ steps.test-build.outputs.artifact-url }}
+        run: |
+          echo "Windows test build: [$TEST_BUILD]($URL). Sign in to GitHub to download it; it is kept for 14 days." >> "$GITHUB_STEP_SUMMARY"
+
+      # Only pushes save: a pull request's cache could serve only that pull request, and a day of
+      # them filled the 10 GB the repository has, which evicted main's and made its next Windows
+      # build cold (65 minutes instead of 9). Pull requests restore main's newest instead.
       - name: Save dependencies and compiler objects
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: always() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .cache/cpm

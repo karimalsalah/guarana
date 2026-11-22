@@ -8,6 +8,13 @@
 #include <common/settings.h>
 #include <hid_core/hid_types.h>
 #include <jni.h>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "android_config.h"
 #include "common/android/android_common.h"

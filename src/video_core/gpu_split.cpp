@@ -26,6 +26,7 @@
 #include "common/assert.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/logging.h"
+#include "common/power_tuning.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -34,6 +35,7 @@
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_list_indirect.h"
@@ -500,6 +502,8 @@ void GpuSplit::Stop() {
     back_idle_at.store(~u64{0}, std::memory_order_relaxed);
     back_waiting.store(false, std::memory_order_relaxed);
     front_waiting.store(false, std::memory_order_relaxed);
+    read_lane_requested.store(false, std::memory_order_relaxed);
+    read_shadows.clear();
 }
 
 u64* GpuSplit::ReserveSlow(size_t words) {
@@ -525,13 +529,14 @@ void GpuSplit::WaitForSpace(size_t words) {
     const CountedWait counted{DrainSite::RingFull};
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
     const u64 target = write_position + words - RingWords;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(4096U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = FrontPosition(std::memory_order_acquire);
         if (consumed_cache >= target) {
             Nx2Profile::AddDrain(DrainSite::RingFull, start);
             return;
         }
-        if (spins < 4096) {
+        if (spins < spin_limit) {
             Pause();
         } else {
             SleepForBack(target);
@@ -568,6 +573,7 @@ void GpuSplit::Drain(DrainSite site) {
     // Everything consumed is not enough: the back submits deferred work (Scheduler::DeferFlush)
     // from its idle hook afterwards, and the caller may use the scheduler once this returns.
     bool hook_asked = false;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(16384U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = FrontPosition(std::memory_order_acquire);
         if (Reached(write_position, on_engine, std::memory_order_acquire)) {
@@ -583,14 +589,15 @@ void GpuSplit::Drain(DrainSite site) {
                 RequestIdleHook();
                 hook_asked = true;
             }
-            if (spins < 16384) {
+            // Backoff sleeps only while entries are unconsumed: spin until the hook is done.
+            if (spins < spin_limit) {
                 Pause();
             } else {
                 SleepForBack(write_position, true, on_engine);
             }
             continue;
         }
-        Backoff(spins, write_position, on_engine);
+        Backoff(spins, spin_limit, write_position, on_engine);
     }
 }
 
@@ -946,11 +953,12 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
     wait_target.store(past_release ? release : target, std::memory_order_seq_cst);
     Publish();
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
+    const u32 spin_limit = Common::PowerTuning::ScaleSpin(16384U);
     for (u32 spins = 0;; ++spins) {
         consumed_cache = FrontPosition(std::memory_order_acquire);
         if (past_release && !release_ran) {
             if (!Reached(release, on_engine, std::memory_order_acquire)) {
-                Backoff(spins, release, on_engine);
+                Backoff(spins, spin_limit, release, on_engine);
                 continue;
             }
             release_ran = Clock::now();
@@ -977,7 +985,7 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
             }
             return true;
         }
-        Backoff(spins, target, on_engine);
+        Backoff(spins, spin_limit, target, on_engine);
     }
 }
 
@@ -1016,8 +1024,8 @@ bool GpuSplit::Reached(u64 target, bool on_engine, std::memory_order order) cons
     return played.load(order) >= target;
 }
 
-void GpuSplit::Backoff(u32 spins, u64 target, bool on_engine) {
-    if (spins < 16384) {
+void GpuSplit::Backoff(u32 spins, u32 spin_limit, u64 target, bool on_engine) {
+    if (spins < spin_limit) {
         Pause();
         return;
     }
@@ -1692,7 +1700,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     on_back_thread = true;
     back_running.store(true, std::memory_order_release);
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
-    Common::SetCurrentThreadToPerformanceCores();
+    Common::SetCurrentThreadToRenderCores();
     if (Settings::values.pin_gpu_threads.GetValue()) {
         Common::PinCurrentThread(Common::PinnedRole::GpuBack);
     }
@@ -1702,8 +1710,14 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     u64 idle_since = 0;
     while (!stop_token.stop_requested()) {
         Nx2Profile::Report("GPU back thread", true);
+        if (read_lane_requested.load(std::memory_order_relaxed)) [[unlikely]] {
+            ServeReadLane(read_position);
+        }
         u64 available = published.load(std::memory_order_acquire);
         if (available == read_position) {
+            if (!read_shadows.empty()) {
+                SettleReadShadows(read_position);
+            }
             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
             if (idle_trace && idle_since == 0) {
                 idle_since = BackIdleTrace::Now();
@@ -1713,8 +1727,10 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             const auto spin_start = g_acquire_counting ? std::chrono::steady_clock::now()
                                                        : std::chrono::steady_clock::time_point{};
             // The front usually sends more within microseconds: spin briefly before sleeping.
-            for (u32 spins = 0; spins < 8192 && available == read_position &&
-                                !hook_requested.load(std::memory_order_relaxed);
+            const u32 spin_limit = Common::PowerTuning::ScaleSpin(8192U);
+            for (u32 spins = 0; spins < spin_limit && available == read_position &&
+                                !hook_requested.load(std::memory_order_relaxed) &&
+                                !read_lane_requested.load(std::memory_order_relaxed);
                  ++spins) {
                 Pause();
                 available = published.load(std::memory_order_acquire);
@@ -1725,6 +1741,9 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                       static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                            std::chrono::steady_clock::now() - spin_start)
                                            .count()));
+            }
+            if (available == read_position && read_lane_requested.load(std::memory_order_seq_cst)) {
+                continue; // Served at the top of the loop
             }
             if (available == read_position) {
                 hook_requested.store(false, std::memory_order_seq_cst);
@@ -1750,7 +1769,8 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 available = published.load(std::memory_order_seq_cst);
                 // A request made after the hook ran (RequestIdleHook) runs it before sleeping.
                 if (available == read_position && !stop_token.stop_requested() &&
-                    !hook_requested.load(std::memory_order_seq_cst)) {
+                    !hook_requested.load(std::memory_order_seq_cst) &&
+                    !read_lane_requested.load(std::memory_order_seq_cst)) {
                     Count(g_acquire_stats.back_sleeps);
                     wake.wait(seen, std::memory_order_seq_cst);
                 }
@@ -1775,6 +1795,13 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             const size_t size =
                 Execute(&ring[index], std::min<u64>(available - read_position, RingWords - index));
             read_position += size != 0 ? size : RingWords - index;
+            if (read_lane_requested.load(std::memory_order_relaxed)) [[unlikely]] {
+                // Between two entries, ahead of the ones still queued.
+                ServeReadLane(read_position);
+            }
+            if (!read_shadows.empty()) [[unlikely]] {
+                SettleReadShadows(read_position);
+            }
             if (hook_requested.load(std::memory_order_relaxed) &&
                 idle_hook != nullptr) [[unlikely]] {
                 if (!Posts(PostedOp::IdleHook)) {
@@ -1813,6 +1840,45 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
     back_running.store(false, std::memory_order_seq_cst);
     front_wake.fetch_add(1, std::memory_order_seq_cst);
     front_wake.notify_all();
+}
+
+void GpuSplit::ServeReadLane(u64 position) {
+    if (!read_lane_requested.exchange(false, std::memory_order_seq_cst)) {
+        return;
+    }
+    // Like the entries: the front must not take the scheduler as quiet while this records.
+    back_quiet.store(false, std::memory_order_seq_cst);
+    read_lane_position = position;
+    if (read_lane_hook != nullptr) {
+        read_lane_hook(read_lane_argument);
+    }
+}
+
+void GpuSplit::NoteReadServed(u64 target, u64 served_ns) {
+    namespace AsyncReadback = VideoCore::AsyncReadback;
+    AsyncReadback::Add(AsyncReadback::g_counters.fast_hits, 1);
+    if (read_lane_position >= target) {
+        AsyncReadback::Add(AsyncReadback::g_counters.fast_no_backlog, 1);
+        return;
+    }
+    if (read_shadows.size() >= 256) {
+        read_shadows.erase(read_shadows.begin());
+    }
+    read_shadows.push_back({target, served_ns});
+}
+
+void GpuSplit::SettleReadShadows(u64 position) {
+    const u64 now = VideoCore::AsyncReadback::Now();
+    size_t kept = 0;
+    for (const ReadShadow& shadow : read_shadows) {
+        if (position >= shadow.target) {
+            VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.fast_saved_ns,
+                                          now - shadow.served_ns);
+        } else {
+            read_shadows[kept++] = shadow;
+        }
+    }
+    read_shadows.resize(kept);
 }
 
 void GpuSplit::ReportAcquire() {

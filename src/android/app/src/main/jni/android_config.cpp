@@ -5,6 +5,9 @@
 #include <common/logging.h>
 #include <common/settings.h>
 #include <input_common/main.h>
+#include <optional>
+#include <string>
+#include <vector>
 #include "android_config.h"
 #include "android_settings.h"
 #include "common/settings_setting.h"

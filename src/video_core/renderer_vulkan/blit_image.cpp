@@ -561,6 +561,14 @@ void TransitionImageLayout(vk::CommandBuffer& cmdbuf, VkImage image, VkImageLayo
                            0, barrier);
 }
 
+/// A blit's or clear's destination size and a tag, for the cost tracer.
+std::array<u32, 3> TraceRegionSize(const Region2D& region, u32 tag) {
+    const s32 width = region.end.x - region.start.x;
+    const s32 height = region.end.y - region.start.y;
+    return {static_cast<u32>(width < 0 ? -width : width),
+            static_cast<u32>(height < 0 ? -height : height), tag};
+}
+
 void RecordShaderReadBarrier(Scheduler& scheduler, const ImageView& image_view) {
     const VkImage image = image_view.ImageHandle();
     const VkImageSubresourceRange subresource_range = SubresourceRangeFromView(image_view);
@@ -794,7 +802,8 @@ void BlitImageHelper::BlitColor(const Framebuffer* dst_framebuffer, VkImageView 
     const VkFramebuffer framebuffer = dst_framebuffer->Handle();
     const VkExtent2D render_area = dst_framebuffer->RenderArea();
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, render_pass, framebuffer, render_area, src_image_view, src_image,
+    scheduler.RecordEmu(TraceCategory::ImageBlit, {render_area.width, render_area.height, 0},
+        [this, render_pass, framebuffer, render_area, src_image_view, src_image,
                       src_sampler, dst_region, src_region, src_size, pipeline,
                       layout](vk::CommandBuffer cmdbuf) {
         TransitionImageLayout(cmdbuf, src_image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -843,7 +852,8 @@ void BlitImageHelper::TemporalUpscale(const Framebuffer* dst_framebuffer,
     RecordShaderReadBarrier(scheduler, input_color);
     RecordShaderReadBarrier(scheduler, motion_vectors);
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([this, dst_region, pipeline, layout, sampler, views,
+    scheduler.RecordEmu(TraceCategory::ImageBlit, {render_size[0], render_size[1], 1},
+        [this, dst_region, pipeline, layout, sampler, views,
                       push_constants](vk::CommandBuffer cmdbuf) {
         const VkDescriptorSet descriptor_set = temporal_upscale_descriptor_allocator.Commit();
         UpdateTemporalUpscaleDescriptorSet(device, descriptor_set, sampler, views);
@@ -869,7 +879,8 @@ void BlitImageHelper::TemporalSharpen(const Framebuffer* dst_framebuffer, VkImag
     };
     FSR::FsrRcasCon(push_constants.rcas.data(), sharpness);
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([this, dst_region, pipeline, layout, sampler, source,
+    scheduler.RecordEmu(TraceCategory::ImageBlit, TraceRegionSize(dst_region, 2),
+        [this, dst_region, pipeline, layout, sampler, source,
                       push_constants](vk::CommandBuffer cmdbuf) {
         const VkDescriptorSet descriptor_set = one_texture_descriptor_allocator.Commit();
         UpdateOneTextureDescriptorSet(device, descriptor_set, sampler, source);
@@ -896,7 +907,8 @@ void BlitImageHelper::BlitImpl(const Framebuffer* dst_framebuffer,
 
     RecordShaderReadBarrier(scheduler, src_image_view);
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([this, dst_region, src_region, pipeline, layout, sampler, src_view,
+    scheduler.RecordEmu(TraceCategory::ImageBlit, TraceRegionSize(dst_region, 0),
+        [this, dst_region, src_region, pipeline, layout, sampler, src_view,
                       src_stencil_view, blit_stencil](vk::CommandBuffer cmdbuf) {
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         if (blit_stencil) {
@@ -1080,7 +1092,7 @@ void BlitImageHelper::ClearColor(const Framebuffer* dst_framebuffer, u8 color_ma
     const VkPipeline pipeline = FindOrEmplaceClearColorPipeline(key);
     const VkPipelineLayout layout = *clear_color_pipeline_layout;
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record(
+    scheduler.RecordEmu(TraceCategory::ClearInPass, TraceRegionSize(dst_region, 0),
         [pipeline, layout, color_mask, clear_color, dst_region](vk::CommandBuffer cmdbuf) {
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             const std::array blend_color = {
@@ -1107,7 +1119,8 @@ void BlitImageHelper::ClearDepthStencil(const Framebuffer* dst_framebuffer, bool
     const VkPipeline pipeline = FindOrEmplaceClearStencilPipeline(key);
     const VkPipelineLayout layout = *clear_color_pipeline_layout;
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([pipeline, layout, clear_depth, dst_region](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordEmu(TraceCategory::ClearInPass, TraceRegionSize(dst_region, 1),
+        [pipeline, layout, clear_depth, dst_region](vk::CommandBuffer cmdbuf) {
         constexpr std::array blend_constants{0.0f, 0.0f, 0.0f, 0.0f};
         cmdbuf.SetBlendConstants(blend_constants.data());
         cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -1175,7 +1188,9 @@ void BlitImageHelper::CopyMSAAImpl(VkRenderPass renderpass, VkPipeline pipeline,
                 src_stencil_handle = *src_stencil_view;
             }
             scheduler.RequestOutsideRenderPassOperationContext();
-            scheduler.Record([this, pipeline, layout, sampler, renderpass,
+            scheduler.RecordEmu(TraceCategory::ImageCopyMsaa,
+                {render_area.extent.width, render_area.extent.height, 0},
+                [this, pipeline, layout, sampler, renderpass,
                               framebuffer_handle = *framebuffer, src_view_handle = *src_view,
                               src_stencil_handle, src = src_image, dst = dst_image, render_area,
                               aspect_info, push_constants](vk::CommandBuffer cmdbuf) {
@@ -1345,7 +1360,8 @@ void BlitImageHelper::Convert(VkPipeline pipeline, const Framebuffer* dst_frameb
 
     RecordShaderReadBarrier(scheduler, src_image_view);
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([pipeline, layout, sampler, src_view, extent, this](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordEmu(TraceCategory::ImageConvert, {extent.width, extent.height, 0},
+        [pipeline, layout, sampler, src_view, extent, this](vk::CommandBuffer cmdbuf) {
         const VkOffset2D offset{
             .x = 0,
             .y = 0,
@@ -1390,7 +1406,8 @@ void BlitImageHelper::ConvertDepthStencil(VkPipeline pipeline, const Framebuffer
 
     RecordShaderReadBarrier(scheduler, src_image_view);
     scheduler.RequestRenderpass(dst_framebuffer);
-    scheduler.Record([pipeline, layout, sampler, src_depth_view, src_stencil_view, extent,
+    scheduler.RecordEmu(TraceCategory::ImageConvert, {extent.width, extent.height, 1},
+        [pipeline, layout, sampler, src_depth_view, src_stencil_view, extent,
                       this](vk::CommandBuffer cmdbuf) {
         const VkOffset2D offset{
             .x = 0,

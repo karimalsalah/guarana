@@ -504,10 +504,6 @@ u32 FixedPipelineState::PackLogicOp(Maxwell::LogicOp::Op op) noexcept {
     return static_cast<u32>(op) - 0x1500;
 }
 
-Maxwell::LogicOp::Op FixedPipelineState::UnpackLogicOp(u32 packed) noexcept {
-    return static_cast<Maxwell::LogicOp::Op>(packed + 0x1500);
-}
-
 u32 FixedPipelineState::PackBlendEquation(Maxwell::Blend::Equation equation) noexcept {
     switch (equation) {
     case Maxwell::Blend::Equation::Add_D3D:

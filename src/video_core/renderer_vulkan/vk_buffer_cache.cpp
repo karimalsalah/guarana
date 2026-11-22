@@ -5,15 +5,20 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <atomic>
 #include <cstring>
 #include <cstdlib>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "video_core/buffer_cache/buffer_cache_base.h"
+#include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_mapped_reads.h"
+#include "video_core/nx2_uma.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vertex_repack.h"
 
@@ -34,6 +39,28 @@ namespace {
 // Zero-filled space after each buffer on MoltenVK. Shaders declare every constant buffer at its
 // full 64 KiB and Metal validates that length from the binding offset.
 constexpr VkDeviceSize MOLTENVK_BUFFER_TAIL = 65536;
+
+/// The emu rows of a copy recorded on its own and of an upload batch, by call site: the
+/// BufferCopy* and BufferUploadBatch* categories are in BufferCopySite order.
+constexpr TraceCategory CopyCategory(VideoCommon::BufferCopySite site) {
+    return static_cast<TraceCategory>(static_cast<u32>(TraceCategory::BufferCopyOther) +
+                                      static_cast<u32>(site));
+}
+
+constexpr TraceCategory UploadBatchCategory(VideoCommon::BufferCopySite site) {
+    return static_cast<TraceCategory>(static_cast<u32>(TraceCategory::BufferUploadBatchOther) +
+                                      static_cast<u32>(site));
+}
+
+static_assert(CopyCategory(VideoCommon::BufferCopySite::ListPage) ==
+              TraceCategory::BufferCopyListPage);
+static_assert(CopyCategory(VideoCommon::BufferCopySite::Gather) == TraceCategory::BufferCopyGather);
+static_assert(CopyCategory(VideoCommon::BufferCopySite::Count) ==
+              TraceCategory::BufferUploadBatchOther);
+static_assert(UploadBatchCategory(VideoCommon::BufferCopySite::ListPage) ==
+              TraceCategory::BufferUploadBatchListPage);
+static_assert(UploadBatchCategory(VideoCommon::BufferCopySite::Count) ==
+              TraceCategory::BufferUploadBatchMixed);
 
 VkBufferCopy MakeBufferCopy(const VideoCommon::BufferCopy& copy) {
     return VkBufferCopy{
@@ -68,7 +95,8 @@ size_t BytesPerIndex(VkIndexType index_type) {
 }
 
 vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allocator,
-                        StagingBufferPool& staging_pool, u64 size, VkDeviceSize sparse_alignment) {
+                        StagingBufferPool& staging_pool, u64 size, VkDeviceSize sparse_alignment,
+                        bool host_mapped) {
     VkBufferUsageFlags flags =
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
         VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
@@ -102,8 +130,15 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
                 return memory_allocator.CreateBuffer(buffer_ci, MemoryUsage::DeviceLocal,
                                                      sparse_alignment);
             }
-            return memory_allocator.CreateBuffer(
-                buffer_ci, device.IsMoltenVK() ? MemoryUsage::Stream : MemoryUsage::DeviceLocal);
+            // host_mapped (EDEN_NX2_UMA bit 2): on an integrated GPU every memory type is system
+            // memory, so a mapped one costs the GPU nothing and takes uploads without a staging
+            // copy. EDEN_NX2_MAPPED_READS uses the same mapping so a download can read it in place.
+            const bool mapped_reads =
+                VideoCommon::Nx2MappedReads::Active(device.IsIntegrated(), device.IsMoltenVK());
+            const MemoryUsage usage = device.IsMoltenVK() || host_mapped || mapped_reads
+                                           ? MemoryUsage::Stream
+                                           : MemoryUsage::DeviceLocal;
+            return memory_allocator.CreateBuffer(buffer_ci, usage);
         },
         [&] {
             static u32 logged{};
@@ -115,10 +150,15 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
             staging_pool.ReleaseMemory();
         });
 }
+
+/// Buffers larger than this are cleared on the GPU even when mapped: zeroing them here would
+/// stall the GPU thread.
+constexpr u64 MAX_DIRECT_CLEAR_BYTES = 32ULL << 20;
 } // Anonymous namespace
 
 Buffer::Buffer(BufferCacheRuntime& runtime, VideoCommon::NullBufferParams null_params)
-    : VideoCommon::BufferBase(null_params), arena{&runtime.arena}, tracker{4096} {
+    : VideoCommon::BufferBase(null_params), arena{&runtime.arena}, tracker{4096},
+      old_tracker{4096} {
     if (runtime.device.HasNullDescriptor()) {
         return;
     }
@@ -135,12 +175,22 @@ Buffer::Buffer(BufferCacheRuntime& runtime, DAddr cpu_addr_, u64 size_bytes_,
     : VideoCommon::BufferBase(cpu_addr_, size_bytes_), device{&runtime.device},
       arena{&runtime.arena},
       buffer{CreateBuffer(*device, runtime.memory_allocator, runtime.staging_pool, SizeBytes(),
-                          runtime.SparseAlignmentFor(sparse_compatible_))},
-      tracker{SizeBytes()} {
+                          runtime.SparseAlignmentFor(sparse_compatible_),
+                          runtime.uma_direct && cpu_addr_ != 0)},
+      tracker{SizeBytes()}, old_tracker{runtime.uma_generations ? SizeBytes() : 0} {
     sparse_compatible = sparse_compatible_;
     if (device->IsMoltenVK()) {
         runtime.arena.OutsideRenderPass();
         runtime.arena.Fill(*buffer, SizeBytes(), MOLTENVK_BUFFER_TAIL, VK_ACCESS_UNIFORM_READ_BIT);
+    }
+    // Not the inline index buffer (address 0): it is freed at once when it grows, while recorded
+    // draws still read it, and a mapped successor zeroed here could take its memory.
+    if (runtime.uma_direct && cpu_addr_ != 0 &&
+        runtime.SparseAlignmentFor(sparse_compatible_) <= 1) {
+        mapped_for_uploads = true;
+        if (buffer.IsHostCoherent()) {
+            direct_upload_span = buffer.Mapped();
+        }
     }
     if (runtime.device.NamesObjects()) {
         buffer.SetObjectNameEXT(fmt::format("Buffer {:#x}", CpuAddr()).c_str());
@@ -153,6 +203,27 @@ Buffer::Buffer(BufferCacheRuntime& runtime, DAddr cpu_addr_, u64 size_bytes_,
 void Buffer::MarkUsage(u64 offset, u64 size) noexcept {
     tracker.Track(offset, size);
     last_usage_tick = arena->Now();
+    new_usage = true;
+    if (offset + size > SizeBytes()) [[unlikely]] {
+        // The tracker drops a range that ends past the buffer: nothing vouches for its bytes.
+        direct_upload_span = {};
+    }
+}
+
+void Buffer::AgeUsageTracking() noexcept {
+    // One tick past the last use: its command is recorded after the mark, and a submission in
+    // between would move it to the next tick.
+    if (old_usage && arena->IsFree(old_usage_tick + 1)) {
+        old_tracker.Reset();
+        old_usage = false;
+    }
+    if (!old_usage && new_usage) {
+        // old_tracker is empty here: it becomes the tracker of the uses to come.
+        std::swap(tracker, old_tracker);
+        old_usage_tick = last_usage_tick;
+        old_usage = true;
+        new_usage = false;
+    }
 }
 
 VkBufferView Buffer::View(VkDeviceSize offset, VkDeviceSize size, VkFormat format) {
@@ -382,6 +453,34 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
       quad_index_pass(device, scheduler, descriptor_pool, staging_pool,
                       compute_pass_descriptor_queue),
       multi_range_buffers(device_) {
+    namespace Uma = VideoCommon::Nx2Uma;
+    uma_coalesce = Uma::Has(Uma::Coalesce);
+    // MoltenVK's buffers are mapped already and downloaded through their mapping.
+    uma_direct = Uma::Has(Uma::DirectUploads) && device.IsIntegrated() && !device.IsMoltenVK();
+    uma_generations = Uma::Has(Uma::UsageGenerations);
+    uma_list_runs = Uma::Has(Uma::ListPageRuns);
+    uma_batch_copies = Uma::Has(Uma::BatchCopies);
+    if (Uma::g_flags != 0) {
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_UMA={:#x}: copy coalescing {}, direct uploads {}{}, usage generations "
+                 "{}, adaptive submissions {}, list page runs {}, batched copies {}",
+                 Uma::g_flags, uma_coalesce ? "on" : "off", uma_direct ? "on" : "off",
+                 Uma::Has(Uma::DirectUploads) && !uma_direct ? " (not an integrated GPU)" : "",
+                 uma_generations ? "on" : "off", Uma::Has(Uma::AdaptiveSubmit) ? "on" : "off",
+                 uma_list_runs ? "on" : "off", uma_batch_copies ? "on" : "off");
+        if (Uma::Has(Uma::HostImageCopy)) {
+            LOG_WARNING(Render_Vulkan,
+                        "EDEN_NX2_UMA bit 4 (host image copy) is not implemented");
+        }
+    }
+    if (VideoCommon::Nx2MappedReads::Enabled()) {
+        const bool active =
+            VideoCommon::Nx2MappedReads::Active(device.IsIntegrated(), device.IsMoltenVK());
+        LOG_INFO(Render_Vulkan,
+                 "EDEN_NX2_MAPPED_READS: host-visible buffer cache {} (integrated {}, MoltenVK {})",
+                 active ? "on" : "off", device.IsIntegrated() ? "yes" : "no",
+                 device.IsMoltenVK() ? "yes" : "no");
+    }
     const VkDriverIdKHR driver_id = device.GetDriverID();
     const bool enable_vertex_repack = VertexRepackEnabled();
     LOG_INFO(Render_Vulkan, "69-byte vertex layout repacking {} ({})",
@@ -529,11 +628,44 @@ void BufferCacheRuntime::TickFrame(Common::SlotVector<Buffer>& slot_buffers) noe
     if (upload_pool) {
         upload_pool->TickFrame();
     }
+    if (uma_direct || uma_generations) {
+        // The known GPU tick is otherwise refreshed only when something waits or runs out, and
+        // a stale one keeps every range used.
+        try {
+            scheduler.GetMasterSemaphore().Refresh();
+        } catch (const vk::Exception&) {
+        }
+    }
     for (auto it = slot_buffers.begin(); it != slot_buffers.end(); it++) {
-        if (arena.IsFree(it->LastUsageTick())) {
+        if (uma_generations) {
+            it->AgeUsageTracking();
+        } else if (arena.IsFree(it->LastUsageTick() + (uma_direct ? 1 : 0))) {
+            // Direct uploads wait one tick more, as AgeUsageTracking does.
             it->ResetUsageTracking();
         }
     }
+    if (uma_coalesce || uma_direct || uma_generations) {
+        ReportUmaUploads();
+    }
+}
+
+void BufferCacheRuntime::ReportUmaUploads() noexcept {
+    ++uma_uploads.frames;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - uma_report_time < std::chrono::seconds{1}) {
+        return;
+    }
+    uma_report_time = now;
+    const UmaUploads& uploads = uma_uploads;
+    LOG_INFO(Render_Vulkan,
+             "UMA direct uploads: {} direct, {} staged, bytes {} direct, {} staged ({} reordered "
+             "{} bytes, {} in order {} bytes; {} not mapped, {} in use by pending GPU work) in {} "
+             "frames",
+             uploads.direct, uploads.reordered + uploads.in_order, uploads.direct_bytes,
+             uploads.reordered_bytes + uploads.in_order_bytes, uploads.reordered,
+             uploads.reordered_bytes, uploads.in_order, uploads.in_order_bytes, uploads.unmapped,
+             uploads.busy, uploads.frames);
+    uma_uploads = {};
 }
 
 bool BufferCacheRuntime::IsFree(u64 tick) {
@@ -565,16 +697,16 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
     master.Wait(tick);
 }
 
-void BufferCacheRuntime::Finish() {
+void BufferCacheRuntime::Finish(std::source_location location) {
     const BufferArena::ImmediateScope immediate{arena};
-    scheduler.Finish();
+    scheduler.Finish({}, {}, location);
 }
 
-void BufferCacheRuntime::FinishForHostRead() {
+void BufferCacheRuntime::FinishForHostRead(std::source_location location) {
     const BufferArena::ImmediateScope immediate{arena};
     arena.OutsideRenderPass();
     arena.CopyBarrier(BufferArena::Barrier::HostRead);
-    scheduler.Finish();
+    scheduler.Finish({}, {}, location);
 }
 
 u64 BufferCacheRuntime::SubmitForHostRead() {
@@ -589,10 +721,27 @@ u64 BufferCacheRuntime::QueueForHostRead() {
     arena.OutsideRenderPass();
     arena.CopyBarrier(BufferArena::Barrier::HostRead);
     const u64 tick = scheduler.CurrentTick();
-    if (!scheduler.DeferFlush()) {
+    // EDEN_NX2_EARLY_SUBMIT: the early download goes to the GPU right behind the write that
+    // fills its pages. Deferred, it waits for the next submission (up to the DeferFlush window,
+    // longer while the back records a long list), and the guest's read waits for that too.
+    if (VideoCore::AsyncReadback::EarlySubmit() != 0) {
+        scheduler.Flush();
+        VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.early_flushes, 1);
+    } else if (!scheduler.DeferFlush()) {
         scheduler.Flush();
     }
     return tick;
+}
+
+void BufferCacheRuntime::WaitForMappedRead(u64 write_tick) {
+    const auto wait = VideoCommon::Nx2MappedReads::ChooseHostRead(
+        scheduler.HostReadsMappedBuffers(), write_tick);
+    if (wait == VideoCommon::Nx2MappedReads::HostReadWait::FinishAll) {
+        FinishForHostRead();
+        return;
+    }
+    // Every submission ends with a host-read barrier (Scheduler::SubmitExecution).
+    WaitForHostRead(write_tick);
 }
 
 void BufferCacheRuntime::WaitForHostRead(u64 tick) {
@@ -602,9 +751,14 @@ void BufferCacheRuntime::WaitForHostRead(u64 tick) {
     // A queued tick may not be submitted yet. Only the split's back submits: other threads ask it
     // to, as for fences (InnerFence::Wait). On the back, and once it has stopped, Wait submits it.
     if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active() &&
-        !VideoCommon::GpuSplit::OnBackThread() && scheduler.WaitSubmitted(tick)) {
-        scheduler.GetMasterSemaphore().Wait(tick);
-        return;
+        !VideoCommon::GpuSplit::OnBackThread()) {
+        const u64 submit_start = VideoCore::AsyncReadback::Now();
+        const bool submitted = scheduler.WaitSubmitted(tick);
+        VideoCore::AsyncReadback::CountSubmitWait(VideoCore::AsyncReadback::Now() - submit_start);
+        if (submitted) {
+            scheduler.GetMasterSemaphore().Wait(tick);
+            return;
+        }
     }
     scheduler.Wait(tick);
 }
@@ -620,39 +774,142 @@ bool BufferCacheRuntime::IsFreeNow(u64 tick) {
     return scheduler.IsFree(tick);
 }
 
-bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,
+bool BufferCacheRuntime::CanReorderUpload(Buffer& buffer,
                                           std::span<const VideoCommon::BufferCopy> copies) {
+    bool can_use_upload_cmdbuf = false;
     if (Settings::values.disable_buffer_reorder) {
+        can_use_upload_cmdbuf = false;
+    } else {
+        can_use_upload_cmdbuf =
+            std::ranges::all_of(copies, [&](const VideoCommon::BufferCopy& copy) {
+                return !buffer.IsRegionUsed(copy.dst_offset, copy.size);
+            });
+    }
+    if (uma_coalesce || uma_direct || uma_generations) {
+        u64 bytes = 0;
+        for (const VideoCommon::BufferCopy& copy : copies) {
+            bytes += copy.size;
+        }
+        if (can_use_upload_cmdbuf) {
+            ++uma_uploads.reordered;
+            uma_uploads.reordered_bytes += bytes;
+        } else {
+            ++uma_uploads.in_order;
+            uma_uploads.in_order_bytes += bytes;
+        }
+    }
+    if (!buffer.DirectUploadSpan().empty()) {
+        // The staged copy is a GPU write still to run, in this submission's upload command
+        // buffer or in order: a later direct write of these bytes has to wait for it.
+        for (const VideoCommon::BufferCopy& copy : copies) {
+            buffer.MarkUsage(copy.dst_offset, copy.size);
+        }
+    }
+    return can_use_upload_cmdbuf;
+}
+
+u8* BufferCacheRuntime::DirectUploadTarget(Buffer& buffer,
+                                           std::span<const VideoCommon::BufferCopy> copies) {
+    if (!uma_direct) {
+        return nullptr;
+    }
+    const std::span<u8> mapped = buffer.DirectUploadSpan();
+    if (mapped.empty()) {
+        ++uma_uploads.unmapped;
+        return nullptr;
+    }
+    // Safe when no command recorded and not yet run by the host GPU reads or writes the bytes:
+    // every such use marks its range (Buffer::MarkUsage), and a range is forgotten only once the
+    // GPU is past the last use of its generation (TickFrame). The write then lands before any
+    // command that can see it, as the staged copy would.
+    u64 bytes = 0;
+    for (const VideoCommon::BufferCopy& copy : copies) {
+        if (copy.dst_offset > mapped.size() || copy.size > mapped.size() - copy.dst_offset ||
+            buffer.IsRegionUsed(copy.dst_offset, copy.size)) {
+            ++uma_uploads.busy;
+            return nullptr;
+        }
+        bytes += copy.size;
+    }
+    ++uma_uploads.direct;
+    uma_uploads.direct_bytes += bytes;
+    return mapped.data();
+}
+
+bool BufferCacheRuntime::ClearNewBufferDirect(Buffer& buffer) {
+    const std::span<u8> mapped = buffer.DirectUploadSpan();
+    if (mapped.empty() || mapped.size() > MAX_DIRECT_CLEAR_BYTES) {
         return false;
     }
-    const bool can_use_upload_cmdbuf =
-        std::ranges::all_of(copies, [&](const VideoCommon::BufferCopy& copy) {
-            return !buffer.IsRegionUsed(copy.dst_offset, copy.size);
-        });
-    return can_use_upload_cmdbuf;
+    std::memset(mapped.data(), 0, mapped.size());
+    return true;
 }
 
 void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
                                     std::span<const VideoCommon::BufferCopy> copies, bool barrier,
                                     bool can_reorder_upload) {
+    const VideoCommon::BufferCopySite site =
+        std::exchange(copy_site, VideoCommon::BufferCopySite::Other);
     if (dst_buffer == VK_NULL_HANDLE || src_buffer == VK_NULL_HANDLE) {
         return;
     }
     // Measuring a popular game, this number never exceeds the specified size once data is warmed up
     boost::container::small_vector<VkBufferCopy, 8> vk_copies(copies.size());
     std::ranges::transform(copies, vk_copies.begin(), MakeBufferCopy);
-    const std::span<const VkBufferCopy> span{vk_copies.data(), vk_copies.size()};
-    const bool stream = src_buffer == UploadPool().StreamBuf();
-    if (stream && can_reorder_upload) {
-        arena.Copy(src_buffer, dst_buffer, span, BufferArena::CopyMode::UploadBuffer, false);
+    if (src_buffer == UploadPool().StreamBuf() && can_reorder_upload) {
+        if (uma_coalesce && !vk_copies.empty()) {
+            scheduler.RecordReorderedUpload(
+                src_buffer, dst_buffer,
+                std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()});
+            return;
+        }
+        scheduler.RecordWithUploadBuffer([src_buffer, dst_buffer, vk_copies](
+                                             vk::CommandBuffer, vk::CommandBuffer upload_cmdbuf) {
+            upload_cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
+        });
         return;
     }
-    arena.OutsideRenderPass();
-    // Only in-order stream uploads share barriers. Dedicated staging buffers retain their normal
-    // recording path and tick-based reuse.
-    const bool batched = barrier && stream && !vk_copies.empty();
-    arena.Copy(src_buffer, dst_buffer, span,
-               batched ? BufferArena::CopyMode::Batched : BufferArena::CopyMode::Plain, barrier);
+
+    scheduler.RequestOutsideRenderPassOperationContext();
+    if (barrier && src_buffer == UploadPool().StreamBuf() && !vk_copies.empty()) {
+        // Only in-order stream uploads share barriers. Dedicated staging buffers retain their
+        // normal recording path and tick-based reuse.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
+        return;
+    }
+    if (uma_coalesce && !vk_copies.empty()) {
+        // EDEN_NX2_UMA bit 1: downloads, DMA copies, gathers and dedicated staging uploads join
+        // the batch too. It is recorded before the next command and within this tick, between
+        // the same barriers as below, and holds no copy that depends on another of its copies.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
+        return;
+    }
+    if (uma_batch_copies && barrier && !vk_copies.empty()) {
+        // EDEN_NX2_UMA bit 64: bit 1's batching of the copies that take their own barriers, as
+        // above. Copies bracketed by PreCopyBarrier and PostCopyBarrier share theirs already.
+        scheduler.RecordUpload(src_buffer, dst_buffer,
+                               std::span<const VkBufferCopy>{vk_copies.data(), vk_copies.size()},
+                               UploadBatchCategory(site));
+        return;
+    }
+    scheduler.RecordEmu(CopyCategory(site), {static_cast<u32>(vk_copies.size()), 0, 0},
+        [src_buffer, dst_buffer, vk_copies, barrier](vk::CommandBuffer cmdbuf) {
+        if (barrier) {
+            cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, READ_BARRIER);
+        }
+        cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
+        if (barrier) {
+            // Later transfers too: a reordered upload of the same bytes in a later submission
+            // has no barrier of its own before it.
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER, 0, WRITE_BARRIER);
+        }
+    });
 }
 
 void BufferCacheRuntime::PreCopyBarrier() {
@@ -694,6 +951,7 @@ bool BufferCacheRuntime::BindMultiRangeStorageBuffer(u64 key, bool is_written) {
                 .dst_offset = u64(dst_offset),
                 .size = size_t(source.size),
             }};
+            SetCopySite(VideoCommon::BufferCopySite::Gather);
             CopyBuffer(ref.handle, source.handle, copy, false);
             dst_offset += source.size;
         }

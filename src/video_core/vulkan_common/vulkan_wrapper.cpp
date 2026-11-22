@@ -20,6 +20,27 @@ namespace Vulkan::vk {
 
 namespace {
 
+/// Runs a Vulkan "count, then fetch" enumeration. The count can change between the two calls
+/// (a surface or swapchain being resized, for one): the driver then returns VK_INCOMPLETE, which
+/// is a success code, and the query has to be repeated.
+template <typename T, typename Query>
+std::vector<T> Enumerate(Query&& query) {
+    static constexpr int MAX_ATTEMPTS = 8;
+    std::vector<T> out;
+    VkResult result = VK_INCOMPLETE;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS && result == VK_INCOMPLETE; ++attempt) {
+        u32 num{};
+        result = query(&num, nullptr);
+        if (result == VK_SUCCESS || result == VK_INCOMPLETE) {
+            out.resize(num);
+            result = query(&num, out.data());
+            out.resize(num);
+        }
+    }
+    Check(result);
+    return out;
+}
+
 template <typename Func>
 void SortPhysicalDevices(std::vector<VkPhysicalDevice>& devices, const InstanceDispatch& dld,
                          Func&& func) {
@@ -102,6 +123,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdBlitImage);
     X(vkCmdClearAttachments);
     X(vkCmdClearColorImage);
+    X(vkCmdClearDepthStencilImage);
     X(vkCmdCopyBuffer);
     X(vkCmdCopyBufferToImage);
     X(vkCmdCopyImage);
@@ -236,6 +258,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetPipelineBinaryDataKHR);
     X(vkReleaseCapturedPipelineDataKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
+    X(vkGetPipelineExecutableInternalRepresentationsKHR);
     X(vkGetSemaphoreCounterValue);
     X(vkMapMemory);
     X(vkQueueBindSparse);
@@ -329,8 +352,10 @@ bool Load(VkInstance instance, InstanceDispatch& dld) noexcept {
     X(vkDestroySurfaceKHR);
     X(vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR);
     X(vkGetPhysicalDeviceFeatures2);
+    X(vkGetPhysicalDeviceFragmentShadingRatesKHR);
     X(vkGetPhysicalDeviceFormatProperties2);
     X(vkGetPhysicalDeviceProperties2);
+    X(vkGetPhysicalDeviceQueueFamilyProperties2);
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
     X(vkGetPhysicalDeviceSurfaceCapabilities2KHR);
     X(vkGetPhysicalDeviceSurfaceFormatsKHR);
@@ -666,11 +691,9 @@ void CommandPool::SetObjectNameEXT(const char* name) const {
 }
 
 std::vector<VkImage> SwapchainKHR::GetImages() const {
-    u32 num;
-    Check(dld->vkGetSwapchainImagesKHR(owner, handle, &num, nullptr));
-    std::vector<VkImage> images(num);
-    Check(dld->vkGetSwapchainImagesKHR(owner, handle, &num, images.data()));
-    return images;
+    return Enumerate<VkImage>([this](u32* num, VkImage* images) {
+        return dld->vkGetSwapchainImagesKHR(owner, handle, num, images);
+    });
 }
 
 void Event::SetObjectNameEXT(const char* name) const {
@@ -942,6 +965,42 @@ std::vector<VkPipelineExecutableStatisticKHR> Device::GetPipelineExecutableStati
     return statistics;
 }
 
+std::vector<VkPipelineExecutableInternalRepresentationKHR>
+Device::GetPipelineExecutableInternalRepresentationsKHR(
+    VkPipeline pipeline, u32 executable_index, std::vector<std::vector<char>>& storage) const {
+    storage.clear();
+    if (!dld->vkGetPipelineExecutableInternalRepresentationsKHR) {
+        return {};
+    }
+    const VkPipelineExecutableInfoKHR executable_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR,
+        .pNext = nullptr,
+        .pipeline = pipeline,
+        .executableIndex = executable_index,
+    };
+    u32 num{};
+    dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                           nullptr);
+    std::vector<VkPipelineExecutableInternalRepresentationKHR> representations(num);
+    for (auto& representation : representations) {
+        representation.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR;
+    }
+    // Without pData the driver writes each one's dataSize.
+    Check(dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                                 representations.data()));
+    representations.resize(num);
+    storage.resize(representations.size());
+    for (size_t index = 0; index < representations.size(); ++index) {
+        storage[index].resize(representations[index].dataSize);
+        representations[index].pData = storage[index].data();
+    }
+    // VK_INCOMPLETE leaves what fitted.
+    Filter(dld->vkGetPipelineExecutableInternalRepresentationsKHR(handle, &executable_info, &num,
+                                                                  representations.data()));
+    representations.resize(num);
+    return representations;
+}
+
 void Device::UpdateDescriptorSets(Span<VkWriteDescriptorSet> writes,
                                   Span<VkCopyDescriptorSet> copies) const noexcept {
     dld->vkUpdateDescriptorSets(handle, writes.size(), writes.data(), copies.size(), copies.data());
@@ -1008,6 +1067,37 @@ std::vector<VkQueueFamilyProperties> PhysicalDevice::GetQueueFamilyProperties() 
     return properties;
 }
 
+std::vector<VkQueueGlobalPriorityKHR> PhysicalDevice::GetQueueFamilyGlobalPriorities(
+    u32 family) const {
+    if (!dld->vkGetPhysicalDeviceQueueFamilyProperties2) {
+        return {};
+    }
+    u32 num = 0;
+    dld->vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &num, nullptr);
+    if (family >= num) {
+        return {};
+    }
+    std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> priorities(
+        num, VkQueueFamilyGlobalPriorityPropertiesKHR{
+                 .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR,
+                 .pNext = nullptr,
+                 .priorityCount = 0,
+                 .priorities = {},
+             });
+    std::vector<VkQueueFamilyProperties2> properties(num);
+    for (u32 i = 0; i < num; ++i) {
+        properties[i] = VkQueueFamilyProperties2{
+            .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2,
+            .pNext = &priorities[i],
+            .queueFamilyProperties = {},
+        };
+    }
+    dld->vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &num, properties.data());
+    const VkQueueFamilyGlobalPriorityPropertiesKHR& found = priorities[family];
+    const u32 count = (std::min)(found.priorityCount, u32{VK_MAX_GLOBAL_PRIORITY_SIZE_KHR});
+    return {found.priorities, found.priorities + count};
+}
+
 std::vector<VkPhysicalDeviceToolProperties> PhysicalDevice::GetPhysicalDeviceToolProperties()
     const {
     u32 num = 0;
@@ -1043,6 +1133,29 @@ std::vector<VkCooperativeMatrixPropertiesKHR> PhysicalDevice::GetCooperativeMatr
     return properties;
 }
 
+std::vector<VkPhysicalDeviceFragmentShadingRateKHR> PhysicalDevice::GetFragmentShadingRatesKHR()
+    const {
+    if (!dld->vkGetPhysicalDeviceFragmentShadingRatesKHR) {
+        return {};
+    }
+    u32 num = 0;
+    if (dld->vkGetPhysicalDeviceFragmentShadingRatesKHR(physical_device, &num, nullptr) !=
+        VK_SUCCESS) {
+        return {};
+    }
+    std::vector<VkPhysicalDeviceFragmentShadingRateKHR> rates(
+        num, VkPhysicalDeviceFragmentShadingRateKHR{
+                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR,
+                 .pNext = nullptr,
+             });
+    if (dld->vkGetPhysicalDeviceFragmentShadingRatesKHR(physical_device, &num, rates.data()) !=
+        VK_SUCCESS) {
+        return {};
+    }
+    rates.resize(num);
+    return rates;
+}
+
 bool PhysicalDevice::GetSurfaceSupportKHR(u32 queue_family_index, VkSurfaceKHR surface) const {
     VkBool32 supported;
     Check(dld->vkGetPhysicalDeviceSurfaceSupportKHR(physical_device, queue_family_index, surface,
@@ -1071,22 +1184,17 @@ bool PhysicalDevice::GetSurfaceCapabilities2KHR(VkSurfaceKHR surface,
 }
 
 std::vector<VkSurfaceFormatKHR> PhysicalDevice::GetSurfaceFormatsKHR(VkSurfaceKHR surface) const {
-    u32 num;
-    Check(dld->vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &num, nullptr));
-    std::vector<VkSurfaceFormatKHR> formats(num);
-    Check(
-        dld->vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &num, formats.data()));
-    return formats;
+    return Enumerate<VkSurfaceFormatKHR>([&](u32* num, VkSurfaceFormatKHR* formats) {
+        return dld->vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, num, formats);
+    });
 }
 
 std::vector<VkPresentModeKHR> PhysicalDevice::GetSurfacePresentModesKHR(
     VkSurfaceKHR surface) const {
-    u32 num;
-    Check(dld->vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &num, nullptr));
-    std::vector<VkPresentModeKHR> modes(num);
-    Check(dld->vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &num,
-                                                         modes.data()));
-    return modes;
+    return Enumerate<VkPresentModeKHR>([&](u32* num, VkPresentModeKHR* modes) {
+        return dld->vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, num,
+                                                              modes);
+    });
 }
 
 VkPhysicalDeviceMemoryProperties2 PhysicalDevice::GetMemoryProperties(

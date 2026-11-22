@@ -1,0 +1,15 @@
+/* TEAM */
+Maintainer: karimalsalah
+GitHub: https://github.com/karimalsalah
+Contributors: https://github.com/karimalsalah/guarana/graphs/contributors
+
+/* THANKS */
+The Lichii, Eglantine, Eden and yuzu contributors, whose emulator this fork is built on.
+Everyone who sends a device report or a benchmark row.
+
+/* SITE */
+Last update: 2026/11/13
+Language: English
+Standards: HTML, CSS, a little vanilla JavaScript
+Components: none (no frameworks, no trackers, no web fonts)
+Hosting: GitHub Pages

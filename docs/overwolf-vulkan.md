@@ -1,6 +1,6 @@
 # Overwolf Vulkan startup protection
 
-On Windows, Lichii reads enabled Vulkan layer registrations in both registry
+On Windows, Guarana reads enabled Vulkan layer registrations in both registry
 views under HKLM and HKCU before opening the Vulkan loader. Layers identified
 by an Overwolf name, manifest location or library path are disabled using their
 manifest's `disable_environment` controls and their exact layer names in
@@ -10,7 +10,7 @@ once per process and covers the startup probe and GUI/CLI Vulkan initialization.
 No registry entries or installed files are modified. Other applications can
 continue using Overwolf. A manifest's disable control can be shared by another
 overlay using the same hook implementation; that control also applies within
-the Lichii process. This cannot remove hooks injected before Lichii starts.
+the Guarana process. This cannot remove hooks injected before Guarana starts.
 
 This is a process-local compatibility exclusion rather than a change to
 Overwolf itself. No measured performance improvement is claimed.

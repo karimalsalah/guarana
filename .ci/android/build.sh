@@ -13,7 +13,7 @@ RETURN=0
 usage() {
     cat <<EOF
 Usage: $0 [-t|--target FLAVOR] [-b|--build-type BUILD_TYPE]
-       [-h|--help] [-r|--release] [extra options]
+       [-h|--help] [-r|--release] [-n|--nightly] [extra options]
 
 Build script for Android.
 Associated variables can be set outside the script,
@@ -29,7 +29,7 @@ Options:
     -b, --build-type <TYPE>	Build type (variable: TYPE)
                           	Valid values are: Release, RelWithDebInfo, Debug
                           	Default: Debug
-    -n, --nightly           Create a nightly build.
+    -n, --nightly           Use the nightly app id and name, independently of the update checker.
 
 Extra arguments are passed to CMake (e.g. -DCMAKE_OPTION_NAME=VALUE)
 Set the CCACHE variable to "true" to enable build caching.
@@ -73,6 +73,7 @@ done
 : "${TARGET:=standard}"
 : "${TYPE:=Release}"
 : "${DEVEL:=true}"
+: "${NIGHTLY:=false}"
 
 TARGET_LOWER=$(echo "$TARGET" | tr '[:upper:]' '[:lower:]')
 
@@ -94,6 +95,8 @@ LOWER_TYPE=$(echo "$TYPE" | sed 's/./\L&/')
 
 if [ -n "${ANDROID_KEYSTORE_B64}" ]; then
     export ANDROID_KEYSTORE_FILE="${GITHUB_WORKSPACE}/ks.jks"
+    # Deleted however the script ends: under sh -e a failed build never reaches the rm below.
+    trap 'rm -f "${ANDROID_KEYSTORE_FILE}"' EXIT
     echo "${ANDROID_KEYSTORE_B64}" | base64 --decode > "${ANDROID_KEYSTORE_FILE}"
 	SHA1SUM=$(keytool -list -v -storepass "${ANDROID_KEYSTORE_PASS}" -keystore "${ANDROID_KEYSTORE_FILE}" | grep SHA1 | cut -d " " -f3)
 	echo "-- Keystore SHA1 is ${SHA1SUM}"
@@ -104,18 +107,8 @@ chmod +x ./gradlew
 
 set -- "$@" -DUSE_CCACHE="${CCACHE}"
 
-nightly() {
-    [ "$NIGHTLY" = "true" ]
-}
-
-if nightly || [ "$DEVEL" != "true" ]; then
+if [ "$DEVEL" != "true" ]; then
     set -- "$@" -DENABLE_UPDATE_CHECKER=ON
-fi
-
-if nightly; then
-    NIGHTLY=true
-else
-    NIGHTLY=false
 fi
 
 echo "-- building..."

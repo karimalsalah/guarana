@@ -17,6 +17,9 @@
 
 #include <thread>
 #include <chrono>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace IDCache = Common::Android;
 

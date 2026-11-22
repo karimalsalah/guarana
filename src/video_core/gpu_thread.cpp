@@ -12,6 +12,7 @@
 
 #include "common/assert.h"
 #include "common/dkb_cpu_trace.h"
+#include "common/power_tuning.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -67,7 +68,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
 #endif
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
-        Common::SetCurrentThreadToPerformanceCores();
+        Common::SetCurrentThreadToRenderCores();
         if (Settings::values.pin_gpu_threads.GetValue()) {
             Common::PinCurrentThread(Common::PinnedRole::GpuFront);
         }

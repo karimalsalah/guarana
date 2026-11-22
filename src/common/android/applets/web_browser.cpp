@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+
+#include <string>
 #include "common/android/android_common.h"
 #include "common/android/id_cache.h"
 #include "common/android/applets/web_browser.h"

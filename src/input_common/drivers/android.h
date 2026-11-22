@@ -8,6 +8,9 @@
 #include <set>
 #include <common/threadsafe_queue.h>
 #include <jni.h>
+#include <string>
+#include <thread>
+#include <vector>
 #include "input_common/input_engine.h"
 
 namespace InputCommon {

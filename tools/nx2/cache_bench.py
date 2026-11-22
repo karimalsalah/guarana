@@ -6,7 +6,7 @@
                      [--cache cold,warm,second] [--mesh mesh,no_mesh] [--paths A,B] [--repeats N]
   cache_bench.py restore --config bench.json --session DIR
 
-Every run boots one game through lichii.exe -g with EDEN_NX2_DEBUG_SERVER and
+Every run boots one game through guarana.exe -g with EDEN_NX2_DEBUG_SERVER and
 EDEN_NX2_STUTTER_TRACE=1, drives it to a fixed spot through the debug server's input methods,
 takes screenshots, measures, kills it, copies its log and parses it with cache_metrics.py.
 
@@ -93,24 +93,33 @@ def differences(root, expected):
 
 
 class CacheDir:
-    """One directory a run touches, its backup copy and its manifest."""
+    """One directory a run touches, its backup copy and its manifest.
 
-    def __init__(self, key, path, backup_root, allowed_roots):
+    strict=False is for a folder other programs may write while the bench runs (a GPU driver's
+    shader cache, which every program on that GPU shares): it is moved aside and put back the same
+    way, but not compared with its manifest, since those writes are not the bench's."""
+
+    def __init__(self, key, path, backup_root, allowed_roots, strict=True):
         self.key = key
         self.path = Path(path)
         self.aside = self.path.with_name(self.path.name + ASIDE_SUFFIX)
         self.backup = Path(backup_root) / key
         self.manifest_file = Path(backup_root) / f"{key}.manifest.json"
+        self.strict = strict
         guard(self.path, allowed_roots)
 
     def expected(self):
         with open(self.manifest_file, encoding="utf-8") as stream:
             return json.load(stream)["files"]
 
+    def changes(self):
+        """differences() against the manifest; none for a folder that is not strict."""
+        return differences(self.path, self.expected()) if self.strict else []
+
     def back_up(self):
         """Copies the directory once and records its manifest; a second call only checks it."""
         if self.manifest_file.exists():
-            problems = differences(self.path, self.expected())
+            problems = self.changes()
             if problems:
                 raise BenchError(f"{self.path} changed since its backup: {problems[:5]}")
             return
@@ -127,7 +136,7 @@ class CacheDir:
 
     def check(self):
         """Before a run touches anything: the original matches its backup, nothing is aside."""
-        problems = differences(self.path, self.expected())
+        problems = self.changes()
         if problems:
             raise BenchError(f"{self.path} differs from its backup before the run: {problems[:5]}")
         if self.aside.exists():
@@ -158,7 +167,7 @@ class CacheDir:
             shutil.move(str(self.path), str(destination))
         if self.aside.exists():
             os.replace(self.aside, self.path)
-        problems = differences(self.path, self.expected())
+        problems = self.changes()
         if problems:
             raise BenchError(f"{self.path} does not match its backup after the run: {problems[:5]}")
         return left
@@ -201,7 +210,7 @@ def load_config(path):
         if not re.fullmatch(r"[0-9A-Fa-f]{16}", game.get("title_id", "")):
             raise BenchError(f"config: game {name} needs a 16-digit title_id")
         if "game" not in game:
-            raise BenchError(f"config: game {name} needs the 'game' path for lichii.exe -g")
+            raise BenchError(f"config: game {name} needs the 'game' path for guarana.exe -g")
     for name, path in config["paths"].items():
         if "package" not in path and "package" not in config:
             raise BenchError(f"config: path {name} needs a 'package' directory")
@@ -247,7 +256,8 @@ def run_env(config, run, base=None):
 
 def command(config, run):
     package = Path(config["paths"][run["path"]].get("package", config.get("package", "")))
-    exe = package / config.get("exe", "lichii.exe")
+    # guarana.exe; a package from before the rename has lichii.exe.
+    exe = package / (config.get("exe") or ("guarana.exe" if (package / "guarana.exe").is_file() else "lichii.exe"))
     return [str(exe), "-g", config["games"][run["game"]]["game"]], package
 
 
@@ -363,7 +373,7 @@ def wait_closed(address, seconds=30):
     deadline = time.monotonic() + seconds
     while port_open(address):
         if time.monotonic() > deadline:
-            raise BenchError(f"{address} still answers: another Lichii is running")
+            raise BenchError(f"{address} still answers: another Guarana is running")
         time.sleep(1.0)
 
 
@@ -404,7 +414,7 @@ def boot_and_measure(config, run, run_dir):
         deadline = time.monotonic() + float(game.get("boot_timeout_s", 900))
         while True:
             if process.poll() is not None:
-                raise BenchError(f"lichii exited with {process.returncode} while booting")
+                raise BenchError(f"guarana exited with {process.returncode} while booting")
             try:
                 if emulator.call("status", {"fps_window_ms": 0}, 10)["presents"] > 0:
                     break
@@ -500,10 +510,10 @@ def summarize(session, plan):
 
 def ensure_closed(config):
     """Nothing may write the caches while the bench moves them: no emulator, no debug server."""
-    exe_name = config.get("exe", "lichii.exe")
+    exe_names = [config["exe"]] if config.get("exe") else ["guarana.exe", "lichii.exe"]
     address = config.get("debug_server", "127.0.0.1:6545")
-    if lichii_running(exe_name) or port_open(address):
-        raise BenchError(f"{exe_name} is running or {address} answers: close it first")
+    if any(lichii_running(name) for name in exe_names) or port_open(address):
+        raise BenchError(f"{' or '.join(exe_names)} is running or {address} answers: close it first")
 
 
 def run_bench(config, plan, session):

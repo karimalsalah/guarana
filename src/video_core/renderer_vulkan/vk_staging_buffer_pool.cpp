@@ -155,6 +155,33 @@ void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
     cache_level.entries.push_back(std::move(node.mapped()));
 }
 
+void StagingBufferPool::RetainUntilCurrentTick(const StagingBufferRef& ref) {
+    const u64 tick = scheduler.CurrentTick();
+    if (ref.buffer == *stream_buffer) {
+        if (ref.mapped_span.empty()) {
+            return;
+        }
+        const size_t first = Region(static_cast<size_t>(ref.offset));
+        const size_t last = Region(static_cast<size_t>(ref.offset) + ref.mapped_span.size() - 1);
+        for (size_t region = first; region <= last; ++region) {
+            sync_ticks[region] = (std::max)(sync_ticks[region], tick);
+        }
+        return;
+    }
+    StagingBuffers& cache_level = GetCache(ref.usage)[ref.log2_level];
+    // Deferred inputs remain pinned until their owner's FreeDeferred call; they wait in their
+    // level's deferred map, not in its entries.
+    if (cache_level.deferred.contains(ref.index)) {
+        return;
+    }
+    auto& entries = cache_level.entries;
+    const auto it = std::find_if(entries.begin(), entries.end(), [&ref](const StagingBuffer& entry) {
+        return entry.index == ref.index;
+    });
+    ASSERT(it != entries.end());
+    it->tick = (std::max)(it->tick, tick);
+}
+
 void StagingBufferPool::TickFrame() {
     current_delete_level = (current_delete_level + 1) % NUM_LEVELS;
 
@@ -173,19 +200,21 @@ StagingBufferRef StagingBufferPool::GetStreamBuffer(size_t size) {
     std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + Region(iterator),
               current_tick);
     used_iterator = iterator;
-    free_iterator = (std::max)(free_iterator, iterator + size);
 
     if (iterator + size >= stream_buffer_size) {
         std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + NUM_SYNCS,
                   current_tick);
+        if (AreRegionsActive(0, Region(size) + 1)) {
+            // Avoid waiting for the previous usages to be free. The position is kept until the
+            // first regions are free: moved to the start here, it would make the guard above
+            // treat the first region as acquired and hand it out while it is still in use.
+            return GetStagingBuffer(size, MemoryUsage::Upload);
+        }
         used_iterator = 0;
         iterator = 0;
         free_iterator = size;
-
-        if (AreRegionsActive(0, Region(size) + 1)) {
-            // Avoid waiting for the previous usages to be free
-            return GetStagingBuffer(size, MemoryUsage::Upload);
-        }
+    } else {
+        free_iterator = (std::max)(free_iterator, iterator + size);
     }
     const size_t offset = iterator;
     iterator = Common::AlignUp(iterator + size, MAX_ALIGNMENT);

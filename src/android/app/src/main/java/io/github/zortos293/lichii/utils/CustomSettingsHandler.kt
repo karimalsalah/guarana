@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 
 object CustomSettingsHandler {
-    const val CUSTOM_CONFIG_ACTION = "dev.eden.eden_emulator.LAUNCH_WITH_CUSTOM_CONFIG"
+    const val CUSTOM_CONFIG_ACTION = "io.github.karimalsalah.guarana.LAUNCH_WITH_CUSTOM_CONFIG"
     const val EXTRA_TITLE_ID = "title_id"
     const val EXTRA_CUSTOM_SETTINGS = "custom_settings"
 

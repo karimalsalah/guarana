@@ -32,4 +32,9 @@ extern const char g_build_auto_update_repo[];
 extern const char g_build_auto_update_stable_api[];
 extern const char g_build_auto_update_stable_repo[];
 
+// Where the built-in console news reads its releases from (this project's, not the update checker's).
+extern const char g_build_news_api[];
+extern const char g_build_news_repo[];
+extern const char g_build_news_api_path[];
+
 } // namespace Common

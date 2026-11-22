@@ -1,0 +1,181 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build: release",
+      "detail": "ThinLTO (Windows), PGO and x86-64-v3, as the release workflow: build/release",
+      "type": "process",
+      "command": "echo",
+      "args": ["No build script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build-windows.ps1"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/build-linux.sh"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [
+        {
+          "owner": "clang-cl",
+          "fileLocation": "absolute",
+          "pattern": {
+            "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        },
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Build: release without PGO",
+      "detail": "build/release-nopgo (Linux: GCC, as the linux-x86_64 job)",
+      "type": "process",
+      "command": "echo",
+      "args": ["No build script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build-windows.ps1", "-NoPgo"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/build-linux.sh", "--no-pgo"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": [
+        {
+          "owner": "clang-cl",
+          "fileLocation": "absolute",
+          "pattern": {
+            "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        },
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Build: debug",
+      "detail": "build/debug, no ThinLTO or PGO",
+      "type": "process",
+      "command": "echo",
+      "args": ["No build script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build-windows.ps1", "-Config", "Debug"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/build-linux.sh", "--config", "Debug"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": [
+        {
+          "owner": "clang-cl",
+          "fileLocation": "absolute",
+          "pattern": {
+            "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        },
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Build: check prerequisites (dry run)",
+      "detail": "Lists what is installed and what the build would install; changes nothing",
+      "type": "process",
+      "command": "echo",
+      "args": ["No build script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build-windows.ps1", "-DryRun"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/build-linux.sh", "--dry-run"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: unit and tool tests",
+      "detail": "Builds build/tests as CI's build-check does, runs ctest and the Python tool tests",
+      "type": "process",
+      "command": "echo",
+      "args": ["No test script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/run-tests.ps1"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/run-tests.sh"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [
+        {
+          "owner": "clang-cl",
+          "fileLocation": "absolute",
+          "pattern": {
+            "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning|note):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        },
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Test: Python tool tests only",
+      "detail": "tools/nx2 and tools/bench tests; no C++ build needed",
+      "type": "process",
+      "command": "echo",
+      "args": ["No test script for this system: see docs/Build.md"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/run-tests.ps1", "-PythonOnly"]
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["${workspaceFolder}/scripts/run-tests.sh", "--python-only"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Package: Windows zip",
+      "detail": "build/release as build/package/<name>.zip with its .sha256",
+      "type": "process",
+      "command": "echo",
+      "args": ["scripts/package-windows.ps1 runs on Windows only"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/package-windows.ps1"]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

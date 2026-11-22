@@ -1,20 +1,20 @@
 name: Bug report
-description: A game crashes, freezes, renders wrong, runs slowly or misbehaves in Lichii
+description: A game crashes, freezes, renders wrong, runs slowly or misbehaves in Guarana
 title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        One bug per report, please. Search the open issues first, and try the [latest build](https://github.com/zortos293/lichii/releases/latest) if you can.
+        One bug per report, please. Search the open issues first, and try the [latest build](https://github.com/karimalsalah/guarana/releases/latest) if you can.
         Reports without a log usually can't be worked on, so the log field is required.
         Do not post games, keys, firmware, account credentials or unauthorized download links. Bug bundles, GPU traces, shader caches and memory dumps can contain game data: do not attach them publicly; ask a maintainer for handling instructions first.
 
   - type: input
     id: build
     attributes:
-      label: Lichii build
-      description: "The build number from Help → About, or the first line of eden_log.txt (`Lichii Version: ... | nx2-build-177`)."
+      label: Guarana build
+      description: "The build number from Help → About, or the first line of eden_log.txt (`Guarana Version: ... | nx2-build-177`)."
       placeholder: "e.g. build 177"
     validations:
       required: true
@@ -70,9 +70,20 @@ body:
         - AMD RX 9000 series
         - AMD RX 7000 series
         - AMD RX 6000 series or older
-        - Intel Arc
-        - Integrated graphics INTEL
-        - Integrated graphics AMD
+        - Intel Arc 140T / 140V (Arrow Lake H, Lunar Lake)
+        - Intel Arc (Meteor Lake)
+        - Intel Arc (Panther Lake)
+        - Other Intel integrated (Iris Xe, UHD)
+        - AMD Radeon 780M / 760M
+        - AMD Radeon 880M / 890M
+        - AMD Ryzen Z1 / Z2 (handheld)
+        - Other AMD integrated
+        - Qualcomm Adreno X1 / X2 (Snapdragon X laptops)
+        - Qualcomm Adreno 8xx (Snapdragon 8 Elite and newer)
+        - Qualcomm Adreno 7xx (Snapdragon 8 Gen 1 to 8 Gen 3)
+        - Qualcomm Adreno 6xx or older (Snapdragon 865, 888, 8cx)
+        - Other Android GPU (Mali, Xclipse, PowerVR)
+        - Intel Arc discrete (A or B series)
         - Apple silicon
         - Other
     validations:
@@ -82,7 +93,7 @@ body:
     id: gpu_driver
     attributes:
       label: GPU model and driver version
-      placeholder: "e.g. RTX 4070, NVIDIA 581.57 / RX 7800 XT, Adrenalin 25.10.1 / Steam Deck, Mesa 25.2"
+      placeholder: "e.g. RTX 4070, NVIDIA 581.57 / RX 7800 XT, Adrenalin 25.10.1 / Steam Deck, Mesa 25.2 / Adreno 740, Turnip 25.x"
     validations:
       required: true
 
@@ -92,6 +103,7 @@ body:
       label: Operating system
       options:
         - Windows 11
+        - Windows 11 on ARM (Snapdragon)
         - Windows 10
         - Linux
         - SteamOS
@@ -142,8 +154,8 @@ body:
     attributes:
       label: Log file
       description: |
-        Drag and drop eden_log.txt here. In Lichii, open File → Open Lichii Folders → Log Folder.
-        Upload it right after the problem happens and before you start Lichii again: eden_log.txt is the latest session and eden_log.txt.old the one before. Zip it if GitHub says it's too big.
+        Drag and drop eden_log.txt here. In Guarana, open File → Open Guarana Folders → Log Folder.
+        Upload it right after the problem happens and before you start Guarana again: eden_log.txt is the latest session and eden_log.txt.old the one before. Zip it if GitHub says it's too big.
         Review the log for personal information and credentials before posting. This field is for the text log, not a Ctrl+F12 bug bundle or a memory dump.
       placeholder: Drop eden_log.txt here
     validations:

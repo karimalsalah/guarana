@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include "common/common_types.h"
+#include "video_core/shader_cache_v2/cache_format.h"
 #include "video_core/shader_cache_v2/cache_writer.h"
 #include "video_core/shader_cache_v2/records.h"
 
@@ -21,8 +22,6 @@ struct LoweredNativeCode;
 }
 
 namespace VideoCommon::ShaderCacheV2 {
-
-struct LogRecord;
 
 /// The log of a title, in its shader cache directory
 inline constexpr std::string_view FileName{"lichii-cache.v2.bin"};
@@ -57,8 +56,9 @@ public:
 
     /// Takes the Program records of the log read at boot: the ones of this build's lowering are
     /// looked up from then on (FindProgram), and all are noted (AddProgram). Called once, while
-    /// FindProgram may already run on another thread.
-    void LoadPrograms(std::span<const LogRecord> live);
+    /// FindProgram may already run on another thread. With `for_each` (see ParseLog), the records
+    /// are decoded on its threads; the programs taken are the same.
+    void LoadPrograms(std::span<const LogRecord> live, const ForEach& for_each = {});
 
     /// The record of the program these inputs describe, if LoadPrograms took one of this build's
     /// lowering. Without locks or allocations on a hit; safe beside the writer thread.

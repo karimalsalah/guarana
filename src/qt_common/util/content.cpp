@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/file_sys/card_image.h"
+#include "core/file_sys/nup_container.h"
 #include "qt_common/util/content.h"
 #include "qt_common/util/game.h"
 
@@ -327,7 +328,7 @@ void FixProfiles() {
     QtCommon::Frontend::Critical(
         tr("Orphaned Profiles Detected!"),
         tr("UNEXPECTED BAD THINGS MAY HAPPEN IF YOU DON'T READ THIS!<br>"
-           "Eden has detected the following save directories with no attached profile:<br>"
+           "Guarana has detected the following save directories with no attached profile:<br>"
            "%1<br><br>"
            "The following profiles are valid:<br>"
            "%2<br><br>"
@@ -336,7 +337,7 @@ void FixProfiles() {
            "delete all orphaned profiles, and move your copied contents to the good "
            "profile.<br><br>"
            "Still confused? See the <a "
-           "href='https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/"
+           "href='https://github.com/karimalsalah/guarana/blob/main/docs/user/"
            "Orphaned.md'>help page</a>.<br>")
             .arg(qorphaned, qgood));
 
@@ -501,7 +502,7 @@ bool CheckKeys() {
     if (!ContentManager::AreKeysPresent()) {
         QtCommon::Frontend::Information(
             tr("Keys not installed"),
-            tr("Install decryption keys and restart Eden before attempting to install firmware."));
+            tr("Install decryption keys and restart Guarana before attempting to install firmware."));
         return false;
     }
 
@@ -554,6 +555,10 @@ void configureFilesystemProvider(const std::string& filepath) {
     // Ensure all NCAs are registered before launching the game
     const auto file = QtCommon::vfs->OpenFile(filepath, FileSys::OpenMode::Read);
     if (!file) {
+        return;
+    }
+    // A NUP registers nothing here, and its loader would read the whole container once more.
+    if (FileSys::NupContainer::IsNupFile(file)) {
         return;
     }
 

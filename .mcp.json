@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "emulator-debug": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-X", "utf8", "-I", "tools/nx2/debug_mcp.py", "--server", "127.0.0.1:6545"]
+    }
+  }
+}

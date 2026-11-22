@@ -3,6 +3,7 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <limits>
 
 #include "common/common_types.h"
@@ -12,6 +13,17 @@
 
 namespace Shader::Maxwell {
 namespace {
+/// EDEN_NX2_F2I_ABS_NEG=1 (Eden 6e24dcb4b5): F2I's bit 45 is the negation and bit 49 the absolute
+/// value, the reverse of the union below, as Eden found in Disco Elysium with RenderDoc. On with any
+/// number but 0, as PrecachedListStamp reads it.
+bool F2IAbsNegSwapped() {
+    static const bool swapped = [] {
+        const char* const value = std::getenv("EDEN_NX2_F2I_ABS_NEG");
+        return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+    }();
+    return swapped;
+}
+
 enum class DestFormat : u64 {
     I8,
     I16,
@@ -136,7 +148,10 @@ void TranslateF2I(TranslatorVisitor& v, u64 insn, const IR::F16F32F64& src_a) {
         .rounding = IR::FpRounding::DontCare,
         .fmz_mode = fmz_mode,
     };
-    const IR::F16F32F64 op_a{v.ir.FPAbsNeg(src_a, f2i.abs != 0, f2i.neg != 0)};
+    const bool swapped{F2IAbsNegSwapped()};
+    const bool use_abs{swapped ? f2i.neg != 0 : f2i.abs != 0};
+    const bool use_neg{swapped ? f2i.abs != 0 : f2i.neg != 0};
+    const IR::F16F32F64 op_a{v.ir.FPAbsNeg(src_a, use_abs, use_neg)};
     const IR::F16F32F64 rounded_value{[&] {
         switch (f2i.rounding) {
         case Rounding::Round:

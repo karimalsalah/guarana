@@ -24,6 +24,7 @@ static jmethodID s_disk_cache_load_progress;
 static jmethodID s_on_emulation_started;
 static jmethodID s_on_emulation_stopped;
 static jmethodID s_on_program_changed;
+static jmethodID s_on_frame_presented;
 static jmethodID s_copy_to_storage;
 static jmethodID s_file_exists;
 static jmethodID s_file_extension;
@@ -172,6 +173,10 @@ namespace Common::Android {
 
     jmethodID GetOnProgramChanged() {
         return s_on_program_changed;
+    }
+
+    jmethodID GetOnFramePresented() {
+        return s_on_frame_presented;
     }
 
     jclass GetGameClass() {
@@ -501,6 +506,8 @@ void Initialize(JavaVM* vm, JNIEnv *env) {
         env->GetStaticMethodID(s_native_library_class, "onEmulationStopped", "(I)V");
     s_on_program_changed =
         env->GetStaticMethodID(s_native_library_class, "onProgramChanged", "(I)V");
+    s_on_frame_presented =
+        env->GetStaticMethodID(s_native_library_class, "onFramePresented", "(J)V");
 
     const jclass game_class = env->FindClass("io/github/zortos293/lichii/model/Game");
     s_game_class = reinterpret_cast<jclass>(env->NewGlobalRef(game_class));

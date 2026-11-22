@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -62,6 +63,7 @@ struct Recorder {
     std::vector<std::pair<DAddr, u64>> cached;
     std::string last_trace;
     std::string last_error;
+    u32 last_presents = 0;
     Clock::time_point last_file_check;
 
     std::mutex dirty_mutex;
@@ -281,8 +283,20 @@ void Finish(Recorder& r) {
     const u64 bytes = r.writer->BytesIn();
     if (r.writer->Finish()) {
         r.last_trace = r.options.path.string();
+        r.last_presents = r.presents;
         LOG_INFO(HW_GPU, "GPU trace: wrote {} ({} presents, {} MiB before compression)",
                  r.last_trace, r.presents, bytes >> 20);
+        if (r.presents == 0) {
+            // The snapshot of a 3D scene takes a while: a game closed or a recording stopped
+            // meanwhile leaves a trace no replay can show a frame of.
+            r.last_error =
+                r.last_trace + " holds no presents: the recording ended before its first frame";
+            LOG_ERROR(HW_GPU, "GPU trace: {}", r.last_error);
+        } else if (r.presents < r.options.presents &&
+                   r.options.presents != std::numeric_limits<u32>::max()) {
+            LOG_WARNING(HW_GPU, "GPU trace: the recording ended after {} of {} presents",
+                        r.presents, r.options.presents);
+        }
     } else {
         r.last_error = "writing " + r.options.path.string() + " failed";
         LOG_ERROR(HW_GPU, "GPU trace: {}", r.last_error);
@@ -452,6 +466,7 @@ RecorderStatus GetRecorderStatus() {
         .path = r.options.path.string(),
         .last_trace = r.last_trace,
         .last_error = r.last_error,
+        .last_presents = r.last_presents,
     };
 }
 

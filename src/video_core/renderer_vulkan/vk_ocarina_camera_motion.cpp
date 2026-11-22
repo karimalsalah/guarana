@@ -21,6 +21,8 @@
 #include "video_core/host_shaders/ocarina_dlss_bias_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_base_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_comp_spv.h"
+#include "video_core/host_shaders/ocarina_extrapolation_guide_comp_spv.h"
+#include "video_core/host_shaders/ocarina_motion_guide_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
@@ -28,6 +30,7 @@
 #endif
 
 #include "video_core/host_shaders/ocarina_camera_motion_comp_spv.h"
+#include "video_core/host_shaders/ocarina_actor_guide_frag_spv.h"
 #include "video_core/host_shaders/ocarina_actor_motion_frag_spv.h"
 #include "video_core/host_shaders/ocarina_actor_motion_vert_spv.h"
 #include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
@@ -85,6 +88,33 @@ std::optional<Matrix> ClipToPreviousClip(const Matrix& current, const Matrix& pr
     return result;
 }
 
+/// Whether the far plane moves over a quarter of the screen between the two cameras: a cut, not
+/// a movement a predicted frame could continue.
+bool IsCameraCut(const Matrix& clip_to_previous_clip) {
+    static constexpr std::array<std::array<f32, 2>, 5> points{{
+        {0.0f, 0.0f}, {-0.5f, -0.5f}, {0.5f, -0.5f}, {-0.5f, 0.5f}, {0.5f, 0.5f},
+    }};
+    constexpr f32 limit = 0.5f; // clip units
+    for (const auto& point : points) {
+        const std::array<f32, 4> clip{point[0], point[1], 1.0f, 1.0f};
+        std::array<f32, 4> previous{};
+        for (size_t row = 0; row < 4; ++row) {
+            for (size_t col = 0; col < 4; ++col) {
+                previous[row] += clip_to_previous_clip[row * 4 + col] * clip[col];
+            }
+        }
+        if (previous[3] <= 1e-6f) {
+            return true;
+        }
+        const f32 x = previous[0] / previous[3] - point[0];
+        const f32 y = previous[1] / previous[3] - point[1];
+        if (!(std::hypot(x, y) <= limit)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 constexpr VkFormat MOTION_FORMAT = VK_FORMAT_R16G16_SFLOAT;
 constexpr std::array BINDINGS{
     VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
@@ -130,12 +160,20 @@ vk::Buffer UploadActorData(MemoryAllocator& allocator, std::span<const std::byte
     return buffer;
 }
 
+/// What ActorOverlay draws into: the full-size motion image, or the half-size extrapolation guide.
+struct ActorTarget {
+    VkFormat format{MOTION_FORMAT};
+    std::span<const u32> fragment{OCARINA_ACTOR_MOTION_FRAG_SPV};
+    f32 scale{1.0f}; ///< target pixels per scene pixel
+};
+
 class ActorOverlay {
 public:
     ActorOverlay(const Device& device, MemoryAllocator& allocator, const OcarinaActorMesh& mesh,
                  const ActorTransforms& transforms, VkImageView depth_view, VkSampler sampler,
-                 VkImageView motion_view, VkExtent2D extent_)
-        : extent{extent_}, jitter{transforms.jitter},
+                 VkImageView motion_view, VkExtent2D extent_, const ActorTarget& target = {})
+        : extent{extent_}, fragment_code{target.fragment}, scale{target.scale},
+          scene{transforms.extent}, jitter{transforms.jitter},
           index_count{static_cast<u32>(mesh.indices.size())}, vertex_bytes{mesh.vertices.size()},
           vertices{UploadActorData(allocator, std::as_bytes(std::span{mesh.vertices}),
                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)},
@@ -200,7 +238,7 @@ public:
         });
 
         const VkAttachmentDescription attachment{
-            .format = MOTION_FORMAT, .samples = VK_SAMPLE_COUNT_1_BIT,
+            .format = target.format, .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -262,9 +300,8 @@ public:
         cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *layout, 0, sets[0], {});
         // Offset like the game's jittered draws, so the replay rasterizes the same samples and its
         // depth matches the scene depth (unjittered, the depth test below dropped most of Link).
-        const VkViewport viewport{jitter[0], static_cast<f32>(extent.height) + jitter[1],
-                                  static_cast<f32>(extent.width), -static_cast<f32>(extent.height),
-                                  0, 1};
+        const VkViewport viewport{jitter[0] * scale, (scene[1] + jitter[1]) * scale,
+                                  scene[0] * scale, -scene[1] * scale, 0, 1};
         cmd.SetViewport(0, viewport);
         // Depth matches in the captured replay leveled off at this tolerance.
         constexpr u32 depth_tolerance = 16;
@@ -283,7 +320,7 @@ private:
         });
         const auto fragment = logical.CreateShaderModule({
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = sizeof(OCARINA_ACTOR_MOTION_FRAG_SPV), .pCode = std::data(OCARINA_ACTOR_MOTION_FRAG_SPV),
+            .codeSize = fragment_code.size_bytes(), .pCode = fragment_code.data(),
         });
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -345,7 +382,10 @@ private:
         });
     }
 
-    VkExtent2D extent;
+    VkExtent2D extent; ///< of the target
+    std::span<const u32> fragment_code;
+    f32 scale;
+    std::array<f32, 2> scene; ///< ActorTransforms::extent
     std::array<f32, 2> jitter; ///< ActorTransforms::jitter of the last upload
     u32 index_count;
     size_t vertex_bytes;
@@ -361,9 +401,10 @@ private:
 
 class CameraMotionPass final : public ComputePass {
 public:
-    CameraMotionPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool)
+    CameraMotionPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool,
+                     std::span<const u32> code = OCARINA_CAMERA_MOTION_COMP_SPV)
         : ComputePass(device_, scheduler, pool, BINDINGS, TEMPLATES, BANK, PUSH_CONSTANTS,
-                      OCARINA_CAMERA_MOTION_COMP_SPV) {}
+                      code) {}
 
     /// Fill camera motion from depth, then overwrite visible actor pixels with skinned motion.
     void Record(Scheduler& scheduler, const void* descriptors,
@@ -623,6 +664,13 @@ constexpr VkFormat LIVE_COLOR_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat EFFECTS_FORMAT = VK_FORMAT_R8_UNORM;
 // Streamline has no R8_UNORM: it rejects such a mask as "undefined format" and DLSS never sees it.
 constexpr VkFormat BIAS_FORMAT = VK_FORMAT_R16_SFLOAT;
+constexpr VkFormat GUIDE_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+/// EDEN_NX2_FG_GAME_MOTION copies each guide (GameMotionInterpolation::Push).
+VkImageUsageFlags GuideCopyUsage() {
+    return GameMotionRequested() ? VkImageUsageFlags{VK_IMAGE_USAGE_TRANSFER_SRC_BIT}
+                                 : VkImageUsageFlags{0};
+}
 
 vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                             VkImageUsageFlags usage) {
@@ -756,6 +804,9 @@ struct OcarinaUpscaler::Impl {
     /// which didn't evaluate it.
     bool output_fsr4{};
     std::optional<std::chrono::steady_clock::time_point> last_evaluation;
+    /// The largest scene FSR 3.1 was asked to keep images for (Record's largest_extent); zero
+    /// while its images follow each frame's extent.
+    VkExtent2D fsr_largest{};
 
     bool UsesFsr4() const {
         return fsr4 && !fsr4->Failed();
@@ -799,6 +850,34 @@ struct OcarinaUpscaler::Impl {
     std::unique_ptr<OcarinaEffectsPass<1>> effects_base_pass;
     std::unique_ptr<OcarinaEffectsPass<2>> effects_mark_pass;
     std::unique_ptr<OcarinaEffectsPass<3>> effects_bias_pass;
+    /// Half-size motion and depth for frame extrapolation (EDEN_NX2_EXTRAPOLATE).
+    std::unique_ptr<OcarinaEffectsPass<2>> guide_pass;
+    vk::Image guide;
+    vk::ImageView guide_view;
+    VkExtent2D guide_extent{};
+    std::optional<u64> guide_frame;
+    bool guide_cut{};
+
+    void PrepareGuide(VkExtent2D scene) {
+        const VkExtent2D extent{(scene.width + 1) / 2, (scene.height + 1) / 2};
+        if (!guide_pass) {
+            guide_pass = std::make_unique<OcarinaEffectsPass<2>>(
+                device, scheduler, pool, OCARINA_EXTRAPOLATION_GUIDE_COMP_SPV);
+        }
+        if (guide_view && guide_extent.width == extent.width &&
+            guide_extent.height == extent.height) {
+            return;
+        }
+        if (guide_view) {
+            scheduler.Finish(); // a generated frame may still read the old image
+        }
+        guide_frame.reset();
+        guide = CreateOcarinaImage(allocator, extent, GUIDE_FORMAT,
+                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       GuideCopyUsage());
+        guide_view = CreateOcarinaView(device, *guide, GUIDE_FORMAT);
+        guide_extent = extent;
+    }
 
     VkSampler LinearSampler() {
         if (!linear_sampler) {
@@ -826,6 +905,15 @@ OcarinaUpscaler::~OcarinaUpscaler() = default;
 
 bool OcarinaUpscaler::EvaluationFailed() const {
     return impl->Failed();
+}
+
+const char* OcarinaUpscaler::LastUpscalerName() const {
+#ifdef EGLANTINE_STREAMLINE
+    if (impl->dlss) {
+        return "DLSS";
+    }
+#endif
+    return impl->output_fsr4 ? "FSR 4" : "FSR 3.1";
 }
 
 void OcarinaUpscaler::SaveSceneReference(VkImageView color) {
@@ -928,11 +1016,27 @@ VkImageView OcarinaUpscaler::CompositedView() const {
     return *impl->composite_view;
 }
 
+VkImageView OcarinaUpscaler::SceneReferenceView() const {
+    return *impl->native_scene_view;
+}
+
+std::optional<ExtrapolationSource> OcarinaUpscaler::Extrapolation(u64 frame) const {
+    const auto& state = *impl;
+    if (state.guide_frame != frame || state.Failed()) {
+        return std::nullopt;
+    }
+    return ExtrapolationSource{.guide = *state.guide_view,
+                               .guide_image = *state.guide,
+                               .guide_extent = state.guide_extent,
+                               .cut = state.guide_cut};
+}
+
 bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView target, VkExtent2D extent,
                             VkExtent2D output_extent, VkExtent2D target_extent,
                             const Matrix& current, const Matrix& previous,
                             const OcarinaActorMesh& mesh, VkImage depth_image, u64 frame,
-                            std::array<f32, 2> jitter, [[maybe_unused]] VkExtent2D depth_extent) {
+                            std::array<f32, 2> jitter, VkExtent2D largest_extent,
+                            VkExtent2D depth_extent) {
     auto& state = *impl;
     if (state.last_frame == frame || state.Failed()) {
         return false;
@@ -941,6 +1045,10 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     const f32 projection_y = std::hypot(current[4], current[5], current[6]);
     if (!transform || !std::isfinite(projection_y) || projection_y < 0.01f) {
         return false;
+    }
+    const bool extrapolate = MotionGuideRequested();
+    if (extrapolate) {
+        state.PrepareGuide(extent); // before anything is queued: a resize waits for the GPU
     }
     state.scheduler.GetMasterSemaphore().Refresh();
     const auto slot = std::ranges::find_if(state.slots, [&](const auto& entry) {
@@ -1002,6 +1110,21 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
                        !std::ranges::equal(previous, state.last_view_projection,
                                            [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    if (extrapolate) {
+        state.queue.Acquire(state.scheduler, 3);
+        state.queue.AddSampledImage(*resources.motion_view, sampler);
+        state.queue.AddSampledImage(depth, sampler);
+        state.queue.AddImage(*state.guide_view);
+        state.guide_pass->Record(state.scheduler, state.queue.UpdateData(), *state.guide,
+                                 state.guide_extent);
+        // Unlike `reset`, a frame without a scene before this one is no cut: the game's previous
+        // camera still is the one the last scene was drawn with.
+        const bool continues = state.last_frame &&
+                               std::ranges::equal(previous, state.last_view_projection,
+                                                  [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+        state.guide_cut = !continues || IsCameraCut(*transform);
+        state.guide_frame = frame;
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (state.dlss && !state.dlss->Upscale({
             .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
@@ -1067,6 +1190,14 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             static_cast<f32>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f);
         // Taking over from FSR 4: FSR 3.1 has no history of the frames FSR 4 drew.
         const bool fsr_reset = reset || elapsed > 250.0f || state.output_fsr4;
+        // A scene size that follows the game's dynamic resolution: the largest so far, which
+        // only grows, so a step down and back up reallocates nothing.
+        if (largest_extent.width != 0 && largest_extent.height != 0) {
+            state.fsr_largest = {
+                (std::max)({state.fsr_largest.width, largest_extent.width, extent.width}),
+                (std::max)({state.fsr_largest.height, largest_extent.height, extent.height}),
+            };
+        }
         state.fsr->Upscale({
             .color = *resources.color_view,
             .depth = depth,
@@ -1082,6 +1213,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             .reactive_mask = bias_view,
             .transparency_mask = bias_view,
             .vertical_fov = 2.0f * std::atan(1.0f / projection_y),
+            .max_render_size = state.fsr_largest,
         });
         state.last_evaluation = now;
         static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;
@@ -1111,6 +1243,133 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     state.last_view_projection = current;
     return true;
 }
+
+struct OcarinaMotionGuide::Impl {
+    Impl(const Device& device_, Scheduler& scheduler_, DescriptorPool& pool,
+         ComputePassDescriptorQueue& queue_, MemoryAllocator& allocator_)
+        : device{device_}, scheduler{scheduler_}, queue{queue_}, allocator{allocator_},
+          pass{device, scheduler, pool, OCARINA_MOTION_GUIDE_COMP_SPV},
+          sampler{device.GetLogical().CreateSampler(VkSamplerCreateInfo{
+              .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+              .magFilter = VK_FILTER_NEAREST,
+              .minFilter = VK_FILTER_NEAREST,
+              .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+              .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+              .maxAnisotropy = 1.0f,
+          })} {}
+
+    /// Link's two poses of one frame; reused once the GPU has drawn them.
+    struct Slot {
+        u64 tick{};
+        std::unique_ptr<ActorOverlay> overlay;
+    };
+
+    const Device& device;
+    Scheduler& scheduler;
+    ComputePassDescriptorQueue& queue;
+    MemoryAllocator& allocator;
+    CameraMotionPass pass;
+    vk::Sampler sampler;
+    vk::Image guide;
+    vk::ImageView guide_view;
+    VkExtent2D guide_extent{};
+    VkExtent2D scene_extent{};
+    std::array<Slot, 4> slots;
+    std::optional<u64> frame;
+    Matrix last_view_projection{};
+    bool cut{};
+};
+
+OcarinaMotionGuide::OcarinaMotionGuide(const Device& device, Scheduler& scheduler,
+                                       DescriptorPool& pool, ComputePassDescriptorQueue& queue,
+                                       MemoryAllocator& allocator)
+    : impl{std::make_unique<Impl>(device, scheduler, pool, queue, allocator)} {}
+
+OcarinaMotionGuide::~OcarinaMotionGuide() = default;
+
+std::optional<ExtrapolationSource> OcarinaMotionGuide::Extrapolation(u64 frame) const {
+    if (impl->frame != frame) {
+        return std::nullopt;
+    }
+    return ExtrapolationSource{.guide = *impl->guide_view,
+                               .guide_image = *impl->guide,
+                               .guide_extent = impl->guide_extent,
+                               .cut = impl->cut};
+}
+
+bool OcarinaMotionGuide::Record(VkImageView depth, VkExtent2D extent, const Matrix& current,
+                                const Matrix& previous, const OcarinaActorMesh& mesh, u64 frame,
+                                std::array<f32, 2> jitter) {
+    auto& state = *impl;
+    if (state.frame == frame) {
+        return true;
+    }
+    const auto transform = ClipToPreviousClip(current, previous);
+    if (!transform) {
+        return false;
+    }
+    if (!state.guide_view || state.scene_extent.width != extent.width ||
+        state.scene_extent.height != extent.height) {
+        if (state.guide_view) {
+            state.scheduler.Finish(); // a generated frame may still read the old image
+        }
+        state.slots = {};
+        state.frame.reset();
+        state.guide_extent = {(extent.width + 1) / 2, (extent.height + 1) / 2};
+        state.scene_extent = extent;
+        state.guide = CreateOcarinaImage(state.allocator, state.guide_extent, GUIDE_FORMAT,
+                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                             GuideCopyUsage());
+        state.guide_view = CreateOcarinaView(state.device, *state.guide, GUIDE_FORMAT);
+    }
+
+    // Without Link's pose, or while the GPU still reads all four, the motion is the camera's.
+    Impl::Slot* slot = nullptr;
+    if (!mesh.indices.empty()) {
+        state.scheduler.GetMasterSemaphore().Refresh();
+        const auto free = std::ranges::find_if(state.slots, [&](const Impl::Slot& entry) {
+            return !entry.overlay || state.scheduler.IsFree(entry.tick);
+        });
+        if (free != state.slots.end()) {
+            slot = &*free;
+            const ActorTransforms transforms{
+                current, previous, mesh.current_origin, mesh.previous_origin,
+                {static_cast<f32>(extent.width), static_cast<f32>(extent.height)}, jitter,
+            };
+            if (!slot->overlay ||
+                !slot->overlay->Update(state.device, mesh, transforms, depth, *state.sampler)) {
+                slot->overlay = std::make_unique<ActorOverlay>(
+                    state.device, state.allocator, mesh, transforms, depth, *state.sampler,
+                    *state.guide_view, state.guide_extent,
+                    ActorTarget{GUIDE_FORMAT, OCARINA_ACTOR_GUIDE_FRAG_SPV, 0.5f});
+            }
+        }
+    }
+
+    state.scheduler.RequestOutsideRenderPassOperationContext();
+    state.queue.Acquire(state.scheduler, 2);
+    state.queue.AddSampledImage(depth, *state.sampler);
+    state.queue.AddImage(*state.guide_view);
+    state.pass.Record(state.scheduler, state.queue.UpdateData(), {*transform, jitter},
+                      *state.guide, state.guide_extent, slot ? slot->overlay.get() : nullptr);
+    if (slot) {
+        slot->tick = state.scheduler.CurrentTick();
+    }
+    state.scheduler.InvalidateState();
+
+    // The game's previous camera is the one the last guide was made with, unless it cut.
+    const bool continues = state.frame &&
+                           std::ranges::equal(previous, state.last_view_projection,
+                                              [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    state.cut = !continues || IsCameraCut(*transform);
+    state.frame = frame;
+    state.last_view_projection = current;
+    return true;
+}
+
 VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device) {
     const char* value = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
     bool dlss_available = false;

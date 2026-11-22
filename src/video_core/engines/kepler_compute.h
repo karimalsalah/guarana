@@ -270,8 +270,14 @@ public:
     bool ProcessGameDlss(u64 program_id, u64 native_key);
     /// Ocarina of Time with anti-aliasing at No sharpening (oot_network.h): true when this
     /// dispatch of the game's network is skipped, or its output pass replaced by a copy of the
-    /// tonemapped image.
-    bool BypassOotNetwork(u64 program_id, u64 native_key);
+    /// tonemapped image. Dispatches left to the game are logged with their key and shader hash.
+    bool BypassOotNetwork(u64 program_id, u64 native_key, u64 unique_hash);
+    /// EDEN_NX2_OOT_FSR_ANY (experiment, false without it): whether the program being dispatched
+    /// is Ocarina of Time's output pass, its upscale, at any dynamic resolution step. Known as
+    /// BypassOotNetwork knows it with EDEN_NX2_OOT_BYPASS_ANY (shader hashes, and
+    /// EDEN_NX2_OOT_BYPASS_OUTPUT), or by its shape: it reads one image, E5B9G9R9, and stores
+    /// one, B10G11R11 and no smaller.
+    bool IsOotOutputPass(u64 native_key, u64 unique_hash);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
@@ -352,14 +358,21 @@ private:
         u32 bad_checks{};
         VideoCore::GameDlssReason failure{};
         u32 drops{};
-        /// Programs of evaluations that reached their output pass; they are skipped only once
-        /// the network is dropped for good (DlssNetworkDroppedForGood).
+        /// Programs of evaluations that reached their output pass; they are skipped once the
+        /// network is dropped for good (DlssNetworkDroppedForGood), and with
+        /// EDEN_NX2_DLSS_SKIP_PASSES while the replacement keeps drawing or the network cannot be
+        /// shown (video_core/dlss_skip_passes.h).
         std::unordered_set<u64> programs;
         /// This evaluation's programs and dispatches so far. Its programs join `programs` only
         /// at its output pass, so compute work after a look-alike first pass keeps running.
         std::unordered_set<u64> pending;
         u32 dispatches{};
         u32 evaluations{};
+        /// Whether the replacement upscale drew the last evaluation's output. While it does, and
+        /// this evaluation's jitter was captured, EDEN_NX2_DLSS_SKIP_PASSES=drew skips the
+        /// network's other passes: their results only feed the output pass the replacement draws
+        /// over.
+        bool replacement_drew{};
         /// What the Graphics tab was last told.
         VideoCore::GameDlssStatus status{};
     } dlss_chain;

@@ -69,7 +69,7 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
     if (stream.is_open()) {
         const std::streamoff size = stream.tellg();
         if (size > 0) {
-            log.bytes.resize(static_cast<size_t>(size));
+            log.bytes.resize_destructive(static_cast<size_t>(size));
             stream.seekg(0);
             // In chunks: MinGW's libstdc++ hands one read to the CRT's _read, which aborts the
             // process (invalid parameter) on a count above INT_MAX, a cache past 2 GiB
@@ -88,6 +88,16 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
         }
     }
     log.parsed = ParseLog(log.bytes, for_each);
+    return log;
+}
+
+LogFile MapLogFile(const std::filesystem::path& file, const ForEach& for_each) {
+    LogFile log;
+    log.mapping = Common::FS::MappedFile{file};
+    if (!log.mapping.IsMapped()) {
+        return ReadLogFile(file, for_each);
+    }
+    log.parsed = ParseLog(log.mapping.Bytes(), for_each);
     return log;
 }
 

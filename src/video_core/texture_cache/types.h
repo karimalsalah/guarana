@@ -51,6 +51,44 @@ enum class ImageViewType : u32 {
 };
 constexpr size_t NUM_IMAGE_VIEW_TYPES = 9;
 
+/// What a draw's render targets are to the asynchronous shaders' skip rule
+/// (EDEN_NX2_ASYNC_DISCARD=2, ported from Fritchii a962f20533). Ordered from the safest to skip to
+/// the least: a draw takes the last class of all its targets.
+enum class DrawTargetClass : u8 {
+    /// Fully cleared in this frame and in one of the few before: a per-frame target, so a
+    /// skipped draw is missing for a frame and drawn again in the next.
+    Recurring,
+    /// Fully cleared in this frame for the first time (or not registered yet): a new per-frame
+    /// target or a layer the game renders once. Its draws wait.
+    FirstTime,
+    /// Not cleared in this frame (a draw over contents that stay), or no target at all (its
+    /// effects are storage writes). Its draws wait.
+    Persistent,
+};
+
+/// Frames back an earlier full clear may be for a target cleared in this frame to count as
+/// recurring.
+constexpr u64 RECURRING_CLEAR_WINDOW = 4;
+
+/// The class of one target from the frames (the texture cache's frame_tick) of its last two full
+/// clears (~0 = none) and the current frame. A tick that lands inside a game frame can only push a
+/// target out of Recurring: its clear counts in the tick before the draw's, so the draw waits. It
+/// never makes a target recurring, which takes two full clears in different frames within the
+/// window, so a mis-tick costs a wait and never a skip.
+[[nodiscard]] constexpr DrawTargetClass ClassifyClearedTarget(u64 last_clear_frame,
+                                                              u64 previous_clear_frame,
+                                                              u64 frame) noexcept {
+    constexpr u64 Never = ~u64{0};
+    if (last_clear_frame == Never || last_clear_frame != frame) {
+        return DrawTargetClass::Persistent;
+    }
+    if (previous_clear_frame == Never || previous_clear_frame >= frame ||
+        frame - previous_clear_frame > RECURRING_CLEAR_WINDOW) {
+        return DrawTargetClass::FirstTime;
+    }
+    return DrawTargetClass::Recurring;
+}
+
 enum class RelaxedOptions : u32 {
     Size = 1 << 0,
     Format = 1 << 1,

@@ -35,7 +35,9 @@ android {
     namespace = "io.github.zortos293.lichii"
 
     compileSdkVersion = "android-36"
-    ndkVersion = "28.2.13676358"
+    // r29: its libc++ has std::atomic_ref, which dynarmic's ARM64 exclusive monitor and
+    // video_core/nx2.h use; r28's does not.
+    ndkVersion = "29.0.14206865"
 
     val isNightly =
         providers.gradleProperty("nightly").orNull?.toBooleanStrictOrNull() ?: false
@@ -63,7 +65,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.eden.eden_emulator"
+        // Guarana's own id (the project's GitHub Pages domain), so it installs beside Eden and
+        // the other forks that kept Eden's.
+        applicationId = "io.github.karimalsalah.guarana"
         minSdk = 24
         targetSdk = 36
         versionName = getGitVersion()
@@ -92,10 +96,7 @@ android {
                 )
 
                 if (isNightly) {
-                    arguments.addAll(listOf(
-                        "-DENABLE_UPDATE_CHECKER=ON",
-                        "-DNIGHTLY_BUILD=ON",
-                    ))
+                    arguments.add("-DNIGHTLY_BUILD=ON")
                 }
 
                 abiFilters("arm64-v8a")
@@ -134,11 +135,20 @@ android {
                 signingConfigs.getByName("default")
             }
 
+            // Without the owner's release key (docs/SIGNING.md) the APK is signed with the debug key
+            // committed here, which anyone can sign with. Such a build gets an id of its own, so the
+            // first build signed with the release key installs beside it instead of failing to
+            // update it, and nothing signed with the public key can pass for an update of that one.
+            val previewId = if (keystoreFile != null) "" else ".preview"
+            val previewName = if (keystoreFile != null) "" else " Preview"
             if (isNightly) {
-                applicationIdSuffix = ".nightly"
-                manifestPlaceholders += mapOf("appNameSuffix" to " Nightly")
+                applicationIdSuffix = ".nightly$previewId"
+                manifestPlaceholders += mapOf("appNameSuffix" to " Nightly$previewName")
             } else {
-                manifestPlaceholders += mapOf("appNameSuffix" to "")
+                if (previewId.isNotEmpty()) {
+                    applicationIdSuffix = previewId
+                }
+                manifestPlaceholders += mapOf("appNameSuffix" to previewName)
             }
 
             isMinifyEnabled = true
@@ -189,8 +199,8 @@ android {
             isDefault = true
             minSdk = 33
 
-            manifestPlaceholders += mapOf("appNameBase" to "Eden")
-            resValue("string", "app_name_suffixed", "Eden")
+            manifestPlaceholders += mapOf("appNameBase" to "Guarana")
+            resValue("string", "app_name_suffixed", "Guarana")
 
             ndk {
                 abiFilters += listOf("arm64-v8a")
@@ -264,12 +274,12 @@ android {
     }
 
     productFlavors.all {
-        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Eden"
+        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Guarana"
         val suffix = if (isNightly) " Nightly" else ""
 
         // apply nightly suffix I/A
         resValue("string", "app_name_suffixed", "$currentName$suffix")
-        resValue("string", "app_name", "Eden$suffix")
+        resValue("string", "app_name", "Guarana$suffix")
     }
 
     sourceSets {

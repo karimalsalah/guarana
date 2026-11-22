@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <compare>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -27,11 +28,13 @@
 #include "common/logging.h"
 #include "common/polyfill_thread.h"
 #include "common/settings.h"
+#include "video_core/gpu_costs.h"
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/vk_buffer_arena.h"
 #include "video_core/renderer_vulkan/fragment_barrier_state.h"
 #include "video_core/renderer_vulkan/frame_pacer.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
+#include "video_core/renderer_vulkan/vk_perf_query.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace VideoCommon {
@@ -50,10 +53,71 @@ class UploadBatch;
 
 struct QueryCacheParams;
 
+/// Emulator-issued GPU work timed by the cost tracer (DKB gpu_work "emu:<name>" rows).
+enum class TraceCategory : u8 {
+    ImageCopy,
+    ImageCopyMsaa,
+    ImageReinterpret,
+    ImageBlit,
+    ImageConvert,
+    ImageUpload,
+    ImageDownload,
+    BufferCopy,        ///< The sum of the BufferCopy* rows: nothing is timed under it
+    BufferUploadBatch, ///< The sum of the BufferUploadBatch* rows: nothing is timed under it
+    UploadCmdbuf, ///< The whole reordered-upload command buffer of a submission
+    ComputeVertexRepack,
+    ComputeUint8Index,
+    ComputeQuadIndex,
+    ComputeCondResolve,
+    ComputeQueryPrefixScan,
+    ComputeAstc,
+    ComputeBcEncode,
+    ComputeUnswizzle3D,
+    QueryCopy,
+    ClearInPass,
+    Present,
+    /// Buffer copies recorded on their own, by call site (VideoCommon::BufferCopySite order).
+    BufferCopyOther,
+    BufferCopyUpload,
+    BufferCopyInline,
+    BufferCopyIndex,
+    BufferCopyDma,
+    BufferCopyDownload,
+    BufferCopyReadDownload,
+    BufferCopyFenceDownload,
+    BufferCopyListPage,
+    BufferCopyJoin,
+    BufferCopyGather,
+    /// Upload batches by the call site of their copies (VideoCommon::BufferCopySite order).
+    BufferUploadBatchOther,
+    BufferUploadBatchUpload,
+    BufferUploadBatchInline,
+    BufferUploadBatchIndex,
+    BufferUploadBatchDma,
+    BufferUploadBatchDownload,
+    BufferUploadBatchReadDownload,
+    BufferUploadBatchFenceDownload,
+    BufferUploadBatchListPage,
+    BufferUploadBatchJoin,
+    BufferUploadBatchGather,
+    BufferUploadBatchMixed, ///< Copies of more than one call site
+    /// Frame generation, per call (FrameGen in present/frame_gen.cpp).
+    FrameGenProcess,     ///< Once per real frame: history copies and optical flow
+    FrameGenInterpolate, ///< One in-between frame
+    FrameGenExtrapolate, ///< One frame predicted from the game's motion vectors
+    Count,
+};
+
 /// The scheduler abstracts command buffer and fence management with an interface that's able to do
 /// OpenGL-like operations on Vulkan command buffers.
 class Scheduler {
 public:
+    /// Whether every submission ends with a host-read barrier, so a host-visible buffer can be
+    /// read once the submission that last wrote it completes (EDEN_NX2_MAPPED_READS).
+    [[nodiscard]] bool HostReadsMappedBuffers() const noexcept {
+        return host_reads_mapped_buffers;
+    }
+
     explicit Scheduler(const Device& device, StateTracker& state_tracker);
     ~Scheduler();
 
@@ -100,7 +164,8 @@ public:
 
     enum class FrameMark : u8 { None, Start, End, Both };
     /// GPU thread, once per present: the frame-end mark this present gets. EDEN_DKB_FRAME_TRACE
-    /// marks every present; otherwise only the two presents after RequestGpuBusySample.
+    /// and cost sampling mark every present; otherwise only the two presents after
+    /// RequestGpuBusySample.
     [[nodiscard]] FrameMark NextFrameMark();
     void MarkFrameEnd(u64 frame, FrameMark mark);
     /// Any thread: asks for one host GPU timestamp sample of the frame after the next present.
@@ -109,23 +174,81 @@ public:
     }
     /// Host GPU busy time of the last sampled frame, nullopt when none was taken in 3 s.
     [[nodiscard]] std::optional<double> GpuBusyMs() const;
+    /// Any thread: turns the per-draw and per-pass timing of one frame a second on or off
+    /// without the DKB log lines. False when the query pools were not created at startup
+    /// (EDEN_NX2_COST_SAMPLING=1, EDEN_NX2_DEBUG_SERVER or EDEN_DKB_FRAME_TRACE=1).
+    bool RequestCostSampling(bool on) {
+        if (!trace_work_pool) {
+            return false;
+        }
+        if (cost_sampling.exchange(on, std::memory_order_relaxed) && !on) {
+            // One more frame-end mark closes the sample in flight.
+            gpu_busy_marks.store(1, std::memory_order_relaxed);
+        }
+        return true;
+    }
+    [[nodiscard]] bool CostSampling() const {
+        return cost_sampling.load(std::memory_order_relaxed);
+    }
+    /// Costs of the last sampled frame; frame is 0 when none was taken.
+    [[nodiscard]] VideoCore::GpuCostSnapshot GpuCosts() const;
+    /// EDEN_NX2_GPU_PERF: the hardware performance-counter sampler (gpu_perf).
+    [[nodiscard]] PerfQuery& Perf() {
+        return perf_query;
+    }
+    [[nodiscard]] const PerfQuery& Perf() const {
+        return perf_query;
+    }
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled
     /// submission. A draw passes its vertex and fragment hashes, a dispatch its compute hash.
+    /// kind tags other draws: m mesh, e emulated mesh, i indirect count, b indirect byte count.
     template <typename Func>
     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
-                      std::array<u32, 3> size, Func&& work) {
-        if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
+                      std::array<u32, 3> size, Func&& work, char kind = '\0') {
+        if (!trace_gpu_recording || !trace_costs_active) {
+            work();
+            return;
+        }
+        if (trace_work_count == TraceMaxWork) {
+            ++trace_work_dropped;
             work();
             return;
         }
         const u32 query = trace_work_count * 2;
-        trace_work_items[trace_work_count++] = {hash, fragment_hash, size};
+        trace_work_items[trace_work_count++] = {hash, fragment_hash, size, kind, cost_pass_open};
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query);
         work();
         cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool, query + 1);
     }
+
+    /// Worker thread, inside a recorded command: times emulator-issued work (kind 'x').
+    template <typename Func>
+    void TraceEmuWork(vk::CommandBuffer cmdbuf, TraceCategory category, std::array<u32, 3> size,
+                      Func&& work) {
+        TraceGpuWork(cmdbuf, static_cast<u64>(category), 0, size, std::forward<Func>(work),
+                     TraceEmuKind);
+    }
+
+    /// Record() whose command is timed as emulator work in sampled frames. Without the cost
+    /// pools (no tracing, sampling or debug server) it is Record().
+    template <typename T>
+        requires std::is_invocable_v<T, vk::CommandBuffer>
+    void RecordEmu(TraceCategory category, std::array<u32, 3> size, T&& c) {
+        if (!trace_work_pool) {
+            Record(std::move(c));
+            return;
+        }
+        Record([this, category, size, command = std::move(c)](vk::CommandBuffer cmdbuf) {
+            TraceEmuWork(cmdbuf, category, size, [&] { command(cmdbuf); });
+        });
+    }
+
+    /// Times everything recorded between the two calls as one emulator work item. Spans do not
+    /// nest and do not cross a submission; items timed inside one are counted in both.
+    void RecordEmuBegin(TraceCategory category, std::array<u32, 3> size);
+    void RecordEmuEnd();
 
     /// Sends currently recorded work to the worker thread.
     void DispatchWork();
@@ -174,6 +297,25 @@ public:
         compute_writes_pending = true;
     }
 
+    /// EDEN_NX2_MESH_BEFORE_PASS=1: the mesh emulation's compute passes of a draw inside the
+    /// active render pass run right before that pass begins instead of cutting it in two.
+    [[nodiscard]] static bool MeshBeforePassEnabled();
+
+    /// Recording thread, EDEN_NX2_MESH_BEFORE_PASS: records `command` so it runs before the
+    /// active render pass begins, when that pass draws into `framebuffer` (a deferred clear of
+    /// it becomes that pass), nothing in it wrote storage and its begin has not reached the
+    /// worker yet. False otherwise: the caller ends the pass and records the command itself.
+    bool RecordBeforePass(const Framebuffer* framebuffer,
+                          std::function<void(vk::CommandBuffer)>&& command);
+
+    /// The rasterizer's periodic DispatchWork; held back while a pass can still take commands
+    /// before its begin (RecordBeforePass).
+    void DispatchWorkUnlessHeld() {
+        if (!pass_prelude) {
+            DispatchWork();
+        }
+    }
+
     /// Returns true when a render pass is currently active in the scheduler state.
     bool IsRenderPassActive() const {
         JoinRecorders();
@@ -195,10 +337,23 @@ public:
     /// Update the pipeline to the current execution context.
     bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
 
+    /// A recorded draw bound other pipelines than the one UpdateGraphicsPipeline was told of
+    /// (alpha-test prepass split): the next draw binds its pipeline again.
+    void ForgetGraphicsPipeline() {
+        state.graphics_pipeline = nullptr;
+    }
+
     /// Worker thread only: whether the bound graphics pipeline failed to build, so the draws
     /// recorded after it must be dropped instead of reaching the driver without a pipeline.
     void SetGraphicsPipelineMissing(bool missing) {
         graphics_pipeline_missing = missing;
+    }
+    /// The pipeline replaced its driver object (an optimized pipeline swapped in): bind it again
+    /// at the next draw.
+    void ForgetGraphicsPipeline(GraphicsPipeline* pipeline) {
+        if (state.graphics_pipeline == pipeline) {
+            state.graphics_pipeline = nullptr;
+        }
     }
     [[nodiscard]] bool GraphicsPipelineMissing() const {
         return graphics_pipeline_missing;
@@ -225,7 +380,15 @@ public:
 
     /// Consecutive in-order staging uploads share barriers until their destinations overlap,
     /// a source depends on a pending copy, or the batch is full. Call outside a render pass.
-    void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
+    /// A batch is timed under the category of its copies (BufferUploadBatchMixed when they
+    /// differ).
+    void RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies,
+                      TraceCategory category = TraceCategory::BufferUploadBatchOther);
+
+    /// EDEN_NX2_UMA bit 1. Uploads that go in the upload command buffer, ahead of everything
+    /// recorded in this submission: they wait for the submission, or for an upload that writes
+    /// the same bytes, and are recorded as one vkCmdCopyBuffer per destination.
+    void RecordReorderedUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies);
 
     /// Send work to a separate thread.
     template <typename T>
@@ -248,7 +411,7 @@ public:
         if (chunk->Record(command)) {
             return;
         }
-        DispatchWork();
+        DispatchOrHold();
         (void)chunk->Record(command);
     }
 
@@ -267,7 +430,7 @@ public:
     /// uploads and a deferred clear reach the command buffer only at the next record or submit.
     [[nodiscard]] bool RecordedSinceSubmit() const noexcept {
         JoinRecorders();
-        return record_serial != submitted_serial || uploads_pending ||
+        return record_serial != submitted_serial || uploads_pending || reorders_pending ||
                deferred_clear.framebuffer != nullptr;
     }
     /// Counts a flush skipped because nothing was recorded (GPU profile).
@@ -498,12 +661,20 @@ private:
     void AllocateWorkerCommandBuffer();
 
     void TraceGpuSubmission();
-    void ReportWorkTimes();
+    /// Reads the work timestamps into trace_work_ms and cost_pass_*_ms; the item count.
+    u32 FetchWorkTimes();
+    void ReportWorkTimes(u32 count, double submission_sum_ms, VideoCore::GpuCostSnapshot& costs);
+    void ReportCostPassTimes(VideoCore::GpuCostSnapshot& costs);
+    /// Recording thread: whether draws and passes are to be timed in sampled frames.
+    [[nodiscard]] bool TraceCostsWanted() const {
+        return Common::DkbFrameTrace::Enabled() || cost_sampling.load(std::memory_order_relaxed);
+    }
     /// EDEN_DKB_GPU_SITES: before each recorded command, a marker that timestamps it in
     /// sampled submissions, so the frame's GPU time can be split by the code that recorded it.
     void RecordSiteMarker(std::source_location location);
     /// Worker thread, run by a marker: writes its timestamp while a sampled submission records.
-    void TraceSite(vk::CommandBuffer cmdbuf, const char* file, u32 line);
+    /// (Named TraceSiteStamp: TraceSite is the flush/pass-end location struct below.)
+    void TraceSiteStamp(vk::CommandBuffer cmdbuf, const char* file, u32 line);
     /// Logs the sampled frame's GPU time by recording site (the 25 most expensive), given each
     /// submission's begin and end timestamps.
     void ReportSiteTimes(const std::vector<u64>& submission_begin,
@@ -520,7 +691,34 @@ private:
     void ReportPassTimes(const std::vector<u64>& submission_begin,
                          const std::vector<u64>& submission_end);
 
-    u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
+    /// Where a flush or a render pass end was asked from (static strings; null when unknown).
+    struct TraceSite {
+        const char* file{};
+        const char* function{};
+        u32 line{};
+    };
+    static TraceSite MakeTraceSite(const std::source_location& location) {
+        return {location.file_name(), location.function_name(), location.line()};
+    }
+    enum class PassEnd : u8 {
+        Copy,
+        Wfi,
+        Query,
+        Submit,
+        Switch,
+        Upload,
+        Download,
+        Buffer,
+        Compute,
+        Dispatch,
+        Clear,
+        Other,
+        Count,
+    };
+    static PassEnd ClassifyPassEnd(const TraceSite& site, bool render_pass_request);
+
+    u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
+                        TraceSite site);
 
     void AllocateNewContext();
 
@@ -530,8 +728,21 @@ private:
 
     void AcquireNewChunk();
 
+    /// A full chunk: kept while a pass can still take commands before its begin, else sent.
+    void DispatchOrHold() {
+        if (!HoldFullChunk()) {
+            DispatchWork();
+        }
+    }
+
+    /// EDEN_NX2_MESH_BEFORE_PASS: a full chunk while pass_prelude is set is kept, and a new one
+    /// is current. False when the caller must dispatch it.
+    bool HoldFullChunk();
+
     const Device& device;
     StateTracker& state_tracker;
+    /// EDEN_NX2_MAPPED_READS on an integrated GPU other than MoltenVK.
+    const bool host_reads_mapped_buffers;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
     FragmentBarrierState fragment_barrier;
@@ -543,8 +754,14 @@ private:
 
     std::unique_ptr<UploadBatch> upload_batch;
     bool uploads_pending{};
+    TraceCategory upload_batch_category{TraceCategory::BufferUploadBatchOther};
     /// Records pending uploads before another command, worker handoff, or submission tick.
     void FlushUploads();
+
+    std::unique_ptr<UploadBatch> reorder_batch; ///< RecordReorderedUpload's pending copies
+    bool reorders_pending{};
+    /// Records the pending reordered uploads in the upload command buffer.
+    void FlushReorderedUploads();
 
     vk::QueryPool trace_query_pool;
     static constexpr u32 TraceMaxSubmissions = 512;
@@ -559,19 +776,67 @@ private:
         u32 num_shaders{};
         u32 untracked_uses{};
         std::array<ShaderUse, 32> shaders{};
+        /// Work and pass items recorded in this submission: [begin, end).
+        u32 work_begin{};
+        u32 work_end{};
+        u32 pass_begin{};
+        u32 pass_end{};
+        const char* flush_file{};
+        const char* flush_function{};
+        u32 flush_line{};
     };
     SubmissionTrace trace_work;
     std::vector<SubmissionTrace> trace_submissions;
-    static constexpr u32 TraceMaxWork = 4096;
+    static constexpr u32 TraceMaxWork = 8192;
+    static constexpr u32 CostMaxPasses = 2048;
+    static constexpr u32 TraceNoPass = ~u32{0};
+    static constexpr char TraceEmuKind = 'x'; ///< WorkTrace::kind of emulator work
     struct WorkTrace {
-        u64 hash{};
+        u64 hash{}; ///< A TraceCategory for emulator work
         u64 fragment_hash{};
         /// Dispatch grid, or vertex and instance counts of a draw; zero when indirect.
         std::array<u32, 3> size{};
+        char kind{};
+        u32 pass{TraceNoPass}; ///< The traced render pass it ran in
+        u32 span_end{};        ///< RecordEmuBegin items: the item count at RecordEmuEnd
     };
     vk::QueryPool trace_work_pool;
     std::vector<WorkTrace> trace_work_items;
+    std::vector<double> trace_work_ms; ///< Per item, negative when not measured
     u32 trace_work_count{};
+    u32 trace_work_dropped{};
+    u32 trace_span_item{TraceNoPass};   ///< Worker: the open RecordEmuBegin item
+    u32 trace_upload_item{TraceNoPass}; ///< Worker: this submission's UploadCmdbuf item
+    u32 trace_sub_work_begin{};         ///< Worker: work and pass counts when this
+    u32 trace_sub_pass_begin{};         ///< submission started
+    /// What DKB gpu_pass groups render passes by. Formats are PixelFormat values.
+    struct CostPass {
+        auto operator<=>(const CostPass&) const = default;
+
+        u32 width{};
+        u32 height{};
+        u8 color_format{}; ///< First color target's, Invalid without one
+        u8 num_colors{};
+        u8 depth_format{};
+        u8 samples{};
+    };
+    /// Worker thread: timestamps around a render pass of a sampled submission. Four per pass:
+    /// before and after vkCmdBeginRenderPass, before vkCmdEndRenderPass and after its barrier.
+    void CostPassBegin(vk::CommandBuffer cmdbuf, const CostPass& pass);
+    void CostPassStamp(vk::CommandBuffer cmdbuf, u32 stamp);
+    void CostPassEnd(vk::CommandBuffer cmdbuf, PassEnd reason);
+    vk::QueryPool cost_pass_pool;
+    std::vector<CostPass> cost_pass_items;
+    std::vector<PassEnd> cost_pass_reasons;
+    std::vector<double> cost_pass_draw_ms; ///< Guest work timed inside each pass
+    std::vector<double> cost_pass_emu_ms;  ///< Emulator work timed inside each pass
+    /// Recording thread: why the open traced pass is about to end (set by the caller of
+    /// EndRenderPass, Other otherwise).
+    PassEnd pass_end_reason{PassEnd::Other};
+    u32 cost_pass_count{};
+    u32 cost_pass_dropped{};
+    u32 cost_pass_open{TraceNoPass};
+    bool cost_pass_begun{}; ///< Recording thread: the open render pass recorded CostPassBegin
     static constexpr u32 TraceMaxSites = 32768;
     struct SiteTrace {
         const char* file{};
@@ -619,6 +884,15 @@ private:
     FrameMark trace_frame_mark{};
     /// The pending sample covers exactly one frame, so its busy time can be shown.
     bool trace_gpu_publish{};
+    /// Worker thread: the sample in flight times draws and passes (latched when it starts).
+    bool trace_costs_active{};
+
+    std::atomic<bool> cost_sampling{};
+    mutable std::mutex gpu_costs_mutex;
+    VideoCore::GpuCostSnapshot gpu_costs;
+
+    /// EDEN_NX2_GPU_PERF: performance-counter scopes around sampled submissions.
+    PerfQuery perf_query;
 
     std::atomic<u32> gpu_busy_marks{};
     struct GpuBusySample {
@@ -637,6 +911,20 @@ private:
 
     std::unique_ptr<CommandChunk> chunk;
     std::function<void()> on_submit;
+
+    /// EDEN_NX2_MESH_BEFORE_PASS: commands the active pass's begin runs before it begins. Set
+    /// from the begin until the begin's chunk goes to the worker or the pass ends; only the
+    /// recording thread adds to it, and only while it is set.
+    struct PassPrelude {
+        std::vector<std::function<void(vk::CommandBuffer)>> commands;
+    };
+    std::shared_ptr<PassPrelude> pass_prelude;
+    /// Full chunks kept from the worker while pass_prelude is set, in order; DispatchWork
+    /// hands them over before the current one.
+    std::vector<std::unique_ptr<CommandChunk>> held_chunks;
+    static constexpr size_t MaxHeldChunks = 32;
+    /// Counts the DispatchWork calls that sent a chunk, to tell if a begin was sent.
+    u64 chunks_dispatched{};
 
     State state;
     u64 recording_epoch = 0;

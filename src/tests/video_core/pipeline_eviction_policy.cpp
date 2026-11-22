@@ -9,8 +9,10 @@ using Vulkan::DefaultKeptPipelines;
 using Vulkan::KeptPipelinesForMemory;
 using Vulkan::MaxUnusedPrebuiltPipelines;
 using Vulkan::PipelinesToEvict;
+using Vulkan::PrebuildAfterLoadSave;
 using Vulkan::PrebuildLimit;
 using Vulkan::PrebuildStartsWithBootBuilds;
+using Vulkan::SaveDriverCacheAtLoadEnd;
 
 TEST_CASE("Nothing is evicted at or under the kept limit", "[video_core][pipeline_eviction]") {
     std::vector<u64> last_uses(1900);
@@ -67,6 +69,31 @@ TEST_CASE("The prebuild holds what the kept limit leaves past the boot builds",
     REQUIRE(PrebuildLimit(DefaultKeptPipelines, 0) == DefaultKeptPipelines);
     // Without a kept limit (Android), as many as eviction keeps unused
     REQUIRE(PrebuildLimit(0, 1500) == MaxUnusedPrebuiltPipelines);
+}
+
+TEST_CASE("The load's driver cache save and when the prebuild starts",
+          "[video_core][pipeline_eviction]") {
+    // Arguments: async boot, can read during builds, serializes reads, EDEN_NX2_LOAD_SAVE
+    // A driver that reads its cache during builds: saved, the prebuild runs beside the boot builds
+    REQUIRE(SaveDriverCacheAtLoadEnd(false, true, false, false));
+    REQUIRE_FALSE(PrebuildAfterLoadSave(false, false, true, false, false));
+    REQUIRE_FALSE(PrebuildAfterLoadSave(false, false, true, false, true));
+    // With a precache the prebuild waits for it, on every driver
+    REQUIRE(PrebuildAfterLoadSave(false, true, true, false, false));
+    REQUIRE(PrebuildAfterLoadSave(false, true, false, false, false));
+    // Intel's Windows driver as before: no save, the prebuild beside the boot builds
+    REQUIRE_FALSE(SaveDriverCacheAtLoadEnd(false, false, false, false));
+    REQUIRE_FALSE(PrebuildAfterLoadSave(false, false, false, false, false));
+    // ... with EDEN_NX2_LOAD_SAVE: the save, and the prebuild after it
+    REQUIRE(SaveDriverCacheAtLoadEnd(false, false, false, true));
+    REQUIRE(PrebuildAfterLoadSave(false, false, false, false, true));
+    // ... with EDEN_NX2_CACHE_SAFE: reads wait for builds, as before
+    REQUIRE(SaveDriverCacheAtLoadEnd(false, false, true, false));
+    REQUIRE(PrebuildAfterLoadSave(false, false, false, true, false));
+    // Async boot builds still run when the load ends: no save there, the prebuild at once
+    REQUIRE_FALSE(SaveDriverCacheAtLoadEnd(true, true, false, false));
+    REQUIRE_FALSE(SaveDriverCacheAtLoadEnd(true, false, false, true));
+    REQUIRE_FALSE(PrebuildAfterLoadSave(true, true, false, true, true));
 }
 
 TEST_CASE("The prebuild waits for the load's driver cache saves where reads race builds",

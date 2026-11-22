@@ -1,8 +1,8 @@
 # User Handbook - Command Line
 
-There are two main applications, an SDL-based app (`eden-cli`) and a Qt based app (`eden`); both accept the same command line arguments.
+There are two main applications, an SDL-based app (`guarana-cli`) and a Qt based app (`guarana`); both accept the same command line arguments.
 
-- `./eden <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `eden-cli`; allows dragging and dropping games into the application.
+- `./guarana <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `guarana-cli`; allows dragging and dropping games into the application.
 - `--debug/-d`: Enter debug mode, allow gdb stub at port `1234`
 - `--config/-c`: Specify alternate configuration file.
 - `--fullscreen/-f`: Use fullscreen.
@@ -24,6 +24,7 @@ Only the Qt frontend supports the following arguments:
     - Requires a copy of Atmosphere to be extracted onto `sdmc`.
     - This is a shorthand for `<eden folder>/sdmc/atmosphere/hbl.nsp`.
 - `-setup`: Launch setup applet.
+- `--launcher-session` (with `-g <path>`; 20.3.0 and later): what the Guarana launcher starts games with. The window never appears in its desktop form (no menu bar, status bar or game list): it opens as the fullscreen loading screen and then the game. The leave-fullscreen hotkey (Esc by default) stops the game instead of leaving fullscreen. When the emulation stops, for any reason, the program exits instead of going back to the game list: exit code `0` after a stop, `1` when the game did not start. On Windows it also takes the launcher's taskbar identity (AppUserModelID `io.github.karimalsalah.guarana`), so the game and the launcher are one app on the taskbar. Without a game it is ignored. See [launcher/CONTRACT.md](../../launcher/CONTRACT.md#launcher-session).
 
 `eden` (provided with `--room`), and `eden-room` supports the following options as well:
 
@@ -37,7 +38,7 @@ Only the Qt frontend supports the following arguments:
 - `-i/--preferred-game-id`: The preferred game-id for this room.
 - `-u/--username`: The username used for announce.
 - `-t/--token`: The token used for announce.
-- `-a/--web-api-url`: Lichii Web API url.
+- `-a/--web-api-url`: Guarana Web API url.
 - `-b/--ban-list-file`: The file for storing the room ban list.
 - `-l/--log-file`: The file for storing the room log.
 - `-h/--help`: Display this help and exit.

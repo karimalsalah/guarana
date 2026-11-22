@@ -37,6 +37,13 @@
 
 extern "C" {
 #include <libavcodec/jni.h>
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <utility>
 }
 
 #include "common/android/multiplayer/multiplayer.h"
@@ -48,6 +55,7 @@ extern "C" {
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "common/nx2_switch_file.h"
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "common/thread.h"
@@ -402,7 +410,46 @@ void EmulationSession::HaltEmulation() {
     m_cv.notify_one();
 }
 
+void EmulationSession::NoteEmulationThread() {
+    m_emulation_tid.store(static_cast<s32>(gettid()), std::memory_order_relaxed);
+}
+
+void EmulationSession::NotePresentThread() {
+    m_present_tid.store(static_cast<s32>(gettid()), std::memory_order_relaxed);
+}
+
+int EmulationSession::CopyThreadIds(s32* out) const {
+    const s32 emulation = m_emulation_tid.load(std::memory_order_relaxed);
+    const s32 present = m_present_tid.load(std::memory_order_relaxed);
+    int count = 0;
+    if (emulation > 0) {
+        out[count++] = emulation;
+    }
+    if (present > 0 && present != emulation) {
+        out[count++] = present;
+    }
+    return count;
+}
+
+void EmulationSession::NotifyFramePresented(s64 work_ns) {
+    NotePresentThread();
+    if (work_ns <= 0) {
+        return;
+    }
+    JNIEnv* env = Common::Android::GetEnvForThread();
+    const jmethodID method = Common::Android::GetOnFramePresented();
+    if (env == nullptr || method == nullptr) {
+        return;
+    }
+    env->CallStaticVoidMethod(Common::Android::GetNativeLibraryClass(), method,
+                              static_cast<jlong>(work_ns));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+}
+
 void EmulationSession::RunEmulation() {
+    NoteEmulationThread();
     {
         std::scoped_lock lock(m_mutex);
         m_is_running = true;
@@ -767,7 +814,12 @@ void Java_io_github_zortos293_lichii_NativeLibrary_surfaceDestroyed(JNIEnv* env,
 
 void Java_io_github_zortos293_lichii_NativeLibrary_setAppDirectory(JNIEnv* env, jobject instance,
                                                            [[maybe_unused]] jstring j_directory) {
-    Common::FS::SetAppDirectory(Common::Android::GetJString(env, j_directory));
+    const std::string directory = Common::Android::GetJString(env, j_directory);
+    Common::FS::SetAppDirectory(directory);
+    // The EDEN_NX2_* switches (docs/switches.md) are read from the environment, which an app
+    // has no way to set: like the desktop builds, read them from nx2_switches.txt in the user
+    // folder (Open Guarana folder), before anything reads a switch.
+    Common::Nx2SwitchFile::LoadPlayerFile(std::filesystem::path{directory} / "nx2_switches.txt");
 }
 
 int Java_io_github_zortos293_lichii_NativeLibrary_installFileToNand(JNIEnv* env, jobject instance,
@@ -990,6 +1042,18 @@ void Java_io_github_zortos293_lichii_NativeLibrary_initializeSystem(JNIEnv* env,
         EmulationSession::GetInstance().System().Initialize();
     }
     EmulationSession::GetInstance().InitializeSystem(reload);
+}
+
+jintArray Java_io_github_zortos293_lichii_NativeLibrary_getEmulationThreadIds(JNIEnv* env, jclass) {
+    s32 ids[2]{};
+    const int count = EmulationSession::GetInstance().CopyThreadIds(ids);
+    jintArray array = env->NewIntArray(count);
+    if (array == nullptr || count == 0) {
+        return array;
+    }
+    jint java_ids[2] = {static_cast<jint>(ids[0]), static_cast<jint>(ids[1])};
+    env->SetIntArrayRegion(array, 0, count, java_ids);
+    return array;
 }
 
 jdoubleArray Java_io_github_zortos293_lichii_NativeLibrary_getPerfStats(JNIEnv* env, jclass clazz) {

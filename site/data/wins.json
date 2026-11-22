@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "description": "Open wins: measurable open problems in Guarana that a contributor can take, with the scene, today's number, the target, where in the code to look and where to discuss it. Read by site/wins.html. Edit by hand when a number moves or a win is taken; move a finished win to status \"won\" and keep it, with the pull request.",
+  "updated": "2026-11-13",
+  "repository": "karimalsalah/guarana",
+  "reward": "Your name in the release notes, the hall of fame and the app's credits.",
+  "how_to_claim": "Comment on the issue with what you will try, then open a pull request that shows the number moving on the scene, with the baseline next to it (AGENTS.md, rule 1). A fix that does not move the number is still welcome as a measurement.",
+  "new_task_url": "https://github.com/karimalsalah/guarana/issues/new?template=agent-task.yml",
+  "wins": [
+    {
+      "id": "readback-stalls",
+      "status": "open",
+      "title": "Read-back stalls: the guest waits on GPU read-backs",
+      "scene": "A profiled gameplay scene on the maintainer's Intel Arc 140T laptop (EDEN_NX2_GPU_PROFILE=1 logs 'Async read-back per second').",
+      "metric": "p99 shown-frame interval",
+      "current": {
+        "value": 133,
+        "unit": "ms",
+        "text": "133 ms p99 shown-frame interval"
+      },
+      "target": {
+        "value": 33.6,
+        "unit": "ms",
+        "text": "33.6 ms or better with the switch off, the figure EDEN_NX2_EARLY_AFTER=1 already reaches in the same scene"
+      },
+      "switch": "EDEN_NX2_EARLY_AFTER",
+      "files": [
+        "src/video_core (the GPU back thread and its queue)",
+        "src/core/debugger/nx2_debug_server.cpp (frame_times)"
+      ],
+      "next_step": "A read path for the guest that does not wait behind the GPU back thread's queue.",
+      "measure": "python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{\"method\":\"frame_times\",\"params\":{\"seconds\":10}}' with EDEN_NX2_GPU_PROFILE=1, baseline and change back to back.",
+      "labels": [
+        "perf",
+        "frame-pacing"
+      ],
+      "issue_label": "frame-pacing",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3Aframe-pacing",
+      "related_issues": []
+    },
+    {
+      "id": "first-visit-shader-stutter",
+      "status": "open",
+      "title": "First-visit shader stutter",
+      "scene": "Any scene the first time it is visited, with a cleared pipeline cache (EDEN_NX2_STUTTER_TRACE=1 names each frame over 33 ms and its cause).",
+      "metric": "Frames over 33 ms caused by a pipeline built on the GPU thread, first visit",
+      "current": {
+        "value": null,
+        "unit": "frames",
+        "text": "Not yet counted on a fixed scene: the first measured count is a win of its own"
+      },
+      "target": {
+        "value": 0,
+        "unit": "frames",
+        "text": "None on the first visit of the scene"
+      },
+      "switch": null,
+      "files": [
+        "src/video_core/renderer_vulkan (pipeline cache and graphics pipelines)"
+      ],
+      "next_step": "Graphics pipeline library fast-link (VK_EXT_graphics_pipeline_library): the Intel Arc driver exposes it, so a draw can use a fast-linked pipeline while the optimized one builds.",
+      "measure": "Nx2StutterSummary in the log (frame-time histogram and builds), python -I tools/nx2/cache_metrics.py compare for A/B runs.",
+      "labels": [
+        "stutter",
+        "shader-cache",
+        "intel-arc"
+      ],
+      "issue_label": "stutter",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues/14",
+      "related_issues": [
+        14,
+        15,
+        13
+      ]
+    },
+    {
+      "id": "boot-time",
+      "status": "open",
+      "title": "Boot time: the Vulkan instance takes seconds",
+      "scene": "Cold start of the emulator to the first frame of any game (Nx2Boot lines with EDEN_NX2_STUTTER_TRACE=1).",
+      "metric": "Vulkan instance creation",
+      "current": {
+        "value": 4.2,
+        "unit": "s",
+        "text": "3.6 to 4.8 s (mid-range 4.2 s)"
+      },
+      "target": {
+        "value": 1,
+        "unit": "s",
+        "text": "Under 1 s (proposed; the first measured gain sets the real bar)"
+      },
+      "switch": null,
+      "files": [
+        "src/video_core/vulkan_common (instance and device creation)"
+      ],
+      "next_step": "Find out whether the Intel driver's shader cache size is what the instance waits for, then avoid it or defer it.",
+      "measure": "The Nx2Boot phases in the log, cold and warm, with python -I tools/nx2/cache_bench.py or by hand.",
+      "labels": [
+        "boot-time",
+        "intel-arc"
+      ],
+      "issue_label": "boot-time",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues/11",
+      "related_issues": [
+        11,
+        12
+      ]
+    },
+    {
+      "id": "hyrule-field-fps",
+      "status": "open",
+      "title": "Hyrule Field: a steady 30 fps",
+      "scene": "Ocarina of Time, Hyrule Field (the tools/bench scene oot-hyrule-field), Intel Arc 140T.",
+      "metric": "Game fps",
+      "current": {
+        "value": 25,
+        "unit": "fps",
+        "text": "25 fps, CPU-bound"
+      },
+      "target": {
+        "value": 30,
+        "unit": "fps",
+        "text": "A steady 30 fps, p99 frame time included"
+      },
+      "switch": null,
+      "files": [
+        "src/core (the guest threads and the JIT)",
+        "src/dynarmic"
+      ],
+      "next_step": "Find what the guest's main thread spends its frame on: EDEN_NX2_GUEST_THREAD_STATS=1 splits it into game code, SVCs and waits.",
+      "measure": "python -I tools/bench/bench.py run on the oot-hyrule-field scene; only rows that are valid with scene_ok true count.",
+      "labels": [
+        "perf",
+        "intel-arc",
+        "Ocarina of Time"
+      ],
+      "issue_label": "Ocarina of Time",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22Ocarina%20of%20Time%22%20label%3Aperf",
+      "related_issues": []
+    },
+    {
+      "id": "amd-first-reports",
+      "status": "open",
+      "title": "AMD Radeon 780M and 890M: the first reports",
+      "scene": "Ocarina of Time, Hyrule Field, with tools/bench on a Radeon 780M or 890M machine (a handheld or a laptop).",
+      "metric": "Verified-scene device reports for the class",
+      "current": {
+        "value": 0,
+        "unit": "reports",
+        "text": "0 verified-scene reports for AMD Radeon 780M / 760M or 880M / 890M"
+      },
+      "target": {
+        "value": 3,
+        "unit": "reports",
+        "text": "At least 3 validated reports per class, which is what the launcher's Auto mode needs to use community settings"
+      },
+      "switch": null,
+      "files": [
+        "tools/bench (the harness)",
+        ".github/ISSUE_TEMPLATE/device-report.yml (the form)"
+      ],
+      "next_step": "Run the scene and send the device report; set 'Credit me as' to your GitHub handle to be named on the Records board.",
+      "measure": "A tools/bench row that is valid with scene_ok true, pasted in the device report.",
+      "labels": [
+        "amd-igpu",
+        "needs-device-data",
+        "handheld"
+      ],
+      "issue_label": "needs-device-data",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues/28",
+      "related_issues": [
+        28,
+        29
+      ]
+    },
+    {
+      "id": "controller-gyro-rumble",
+      "status": "open",
+      "title": "Controller gyro and rumble: a pass over real pads",
+      "scene": "A game that uses motion and vibration, with a pad that has both (DualSense, Switch Pro, Joy-Con), on any GPU.",
+      "metric": "Pads where gyro and rumble both work",
+      "current": {
+        "value": null,
+        "unit": "pads",
+        "text": "No pass recorded yet"
+      },
+      "target": {
+        "value": null,
+        "unit": "pads",
+        "text": "A written pass per pad family: what works, what does not, and the fix for what does not"
+      },
+      "switch": null,
+      "files": [
+        "src/hid_core/frontend (emulated_controller.cpp, input_converter.cpp)",
+        "src/input_common"
+      ],
+      "next_step": "Test each pad family, write down what fails, then fix the first thing that fails.",
+      "measure": "Pass or fail per pad, game and feature, with the pad's model and connection (USB or Bluetooth).",
+      "labels": [
+        "help wanted",
+        "enhancement"
+      ],
+      "issue_label": "help wanted",
+      "issue_url": "https://github.com/karimalsalah/guarana/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22%20gyro%20OR%20rumble",
+      "related_issues": []
+    }
+  ]
+}

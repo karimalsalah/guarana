@@ -82,7 +82,7 @@ struct ReleaseList {
 // Get the latest releases, including prereleases.
 ReleaseList GetReleases();
 
-// Get the latest releases as text.
+// Get the latest releases of this project as text, for the built-in news (g_build_news_*).
 std::optional<std::string> GetReleasesBody();
 
 }

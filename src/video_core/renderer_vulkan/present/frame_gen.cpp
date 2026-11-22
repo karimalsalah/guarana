@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -11,14 +12,17 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "video_core/frame_budget.h"
 #include "video_core/frame_gen_choice.h"
 #ifdef HAS_FLYHIGH
 #include "video_core/frame_gen/flyhigh_model.h"
 #endif
+#include "video_core/nx2.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/shown_governor.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -33,13 +37,45 @@ namespace {
 constexpr size_t COLOR_CHANNELS = 4;
 constexpr u64 LSFG_REQUIRED_FRAMES = 2;
 constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
+constexpr u64 EXTRAPOLATION_LOG_INTERVAL = 600;
+/// EDEN_NX2_FG_GAME_MOTION: in-between frames between two lines of its log.
+constexpr u64 GAME_MOTION_LOG_INTERVAL = 600;
+
+/// EDEN_NX2_CADENCE: with extrapolated frames, hold real frames to an even share of the target
+/// rate so that every shown frame lasts the same time. 1 chooses the share (60, 30, 20 or 15 real
+/// frames) from what the game sustains; 2 to 4 fix it (30, 20 or 15 real frames). The shares are
+/// of 60: at a target of 120 each real frame is shown twice as many times, so 3 still means 20
+/// real frames, six shown frames each.
+[[nodiscard]] u32 CadenceSetting() {
+    static const u32 setting = [] {
+        const char* value = std::getenv("EDEN_NX2_CADENCE");
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
+    }();
+    return setting;
+}
+
+constexpr u32 CADENCE_MAX_DIVISOR = 4;
+
+/// The shown rate as configured. Same parse as the presenter (LiveShownRateHz).
+[[nodiscard]] f32 BaseTargetRate() {
+    return static_cast<f32>(VideoCore::ShownGovernor::LiveShownRateHz(
+        Settings::FrameGenTargetRate()));
+}
+
+/// The shown rate the cadence works to: the one EDEN_NX2_SHOWN_GOVERNOR chose, else the configured.
+[[nodiscard]] f32 CadenceTargetRate() {
+    const u32 governed = VideoCore::ShownGovernor::Rate();
+    return governed != 0 ? static_cast<f32>(governed) : BaseTargetRate();
+}
+
 constexpr auto ACTIVITY_LOG_INTERVAL = std::chrono::seconds(10);
 
 [[nodiscard]] std::string ModeText(Settings::FrameGenType active) {
     const char* type = active == Settings::FrameGenType::OpticalFlow ? "optical flow"
                        : active == Settings::FrameGenType::FlyHigh  ? "FlyHigh"
-                                                                   : "LSFG";
-    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+                       : active == Settings::FrameGenType::Fsr3     ? "FSR3"
+                                                                  : "LSFG";
+    const u32 target_rate = Settings::FrameGenTargetRate();
     if (target_rate != 0) {
         return fmt::format("{} up to {}x towards {} FPS", type, Settings::MAX_FRAME_GEN_MULTIPLIER,
                            target_rate);
@@ -255,11 +291,90 @@ void CopyPresentedFrame(vk::CommandBuffer cmdbuf, VkImage source, LsfgImage& des
 FrameGen::FrameGen(MemoryAllocator& memory_allocator_, Scheduler& scheduler_)
     : memory_allocator{memory_allocator_}, scheduler{scheduler_} {}
 
-FrameGen::~FrameGen() = default;
+FrameGen::~FrameGen() {
+    ReleaseCadence();
+}
+
+void FrameGen::SetExtrapolationSource(const std::optional<ExtrapolationSource>& source,
+                                      VkRect2D screen) {
+    extrapolation_source = source;
+    extrapolation_screen = screen;
+    game_motion_source = source;
+    game_motion_source_set = true;
+    // A guide made only for EDEN_NX2_FG_GAME_MOTION keeps frames interpolated.
+    if (source && !extrapolating && ExtrapolationRequested()) {
+        LOG_INFO(Render_Vulkan, "Frame generation: extrapolating from the game's motion vectors");
+        extrapolating = true;
+    }
+}
+
+void FrameGen::ProcessExtrapolated(const Device& device, Frame* frame, VkFormat format) {
+    if (chain || fsr3_chain || optical_flow_chain) {
+        scheduler.Finish();
+        chain.reset();
+        fsr3_chain.reset();
+        optical_flow_chain.reset();
+    }
+    frame_count = 0;
+    warm_streak = 0;
+    extrapolation_frame = frame;
+
+    if (!frame->storage_view) {
+        ReleaseCadence();
+        SetState(VideoCore::FrameGenState::UnsupportedSurface, format);
+        return;
+    }
+    SetState(VideoCore::FrameGenState::Running, format);
+
+    if (!extrapolation) {
+        extrapolation.emplace(device);
+    }
+
+    // Without motion or across a camera cut the real frame is shown alone.
+    const bool usable = extrapolation_source && !extrapolation_source->cut &&
+                        extrapolation_screen.extent.width != 0 &&
+                        extrapolation_screen.extent.height != 0;
+    extrapolation_usable = usable;
+    extrapolation_missing += extrapolation_source ? 0 : 1;
+    extrapolation_cuts += extrapolation_source && extrapolation_source->cut ? 1 : 0;
+    extrapolation_usable_frames += usable ? 1 : 0;
+    extrapolation_hud += usable && extrapolation_source->hud_reference != VK_NULL_HANDLE &&
+                                 extrapolation_source->hud_composite != VK_NULL_HANDLE
+                             ? 1
+                             : 0;
+    // A cadence holds real frames only while frames are predicted: menus and cut scenes without
+    // motion data run at the game's own rate.
+    unusable_streak = usable ? 0 : unusable_streak + 1;
+    if (usable) {
+        UpdateCadence();
+    } else if (unusable_streak > 30) {
+        ReleaseCadence();
+    }
+
+    last_generations = plan.generations;
+    generated = usable && plan.warm && plan.generations > 0;
+    if (FluidMode() == 0) {
+        // The FLUID presenter's predictions are counted as recorded (NoteFluidGenerated).
+        generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
+    }
+
+    if (++extrapolation_frames % EXTRAPOLATION_LOG_INTERVAL == 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Frame extrapolation: {} frames, {} without motion, {} camera cuts, {} planned "
+                 "per frame, HUD mask on {} of {} predictable frames",
+                 EXTRAPOLATION_LOG_INTERVAL, extrapolation_missing, extrapolation_cuts,
+                 plan.generations, extrapolation_hud, extrapolation_usable_frames);
+        extrapolation_missing = 0;
+        extrapolation_hud = 0;
+        extrapolation_usable_frames = 0;
+        extrapolation_cuts = 0;
+    }
+}
 
 void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                        VkExtent2D guest_extent) {
     generated = false;
+    extrapolation_usable = false;
 
     const Settings::FrameGenType chosen = Settings::values.frame_gen_type.GetValue();
     Settings::FrameGenType type = chosen == Settings::FrameGenType::NvidiaDlssG
@@ -277,6 +392,13 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     }
     unavailable = type == Settings::FrameGenType::Lsfg && !shaders->IsValid();
     const bool use_flyhigh = type == Settings::FrameGenType::FlyHigh;
+
+    if (extrapolating && Settings::values.frame_gen.GetValue()) {
+        // Extrapolation needs neither Lossless Scaling shaders nor an interpolation chain.
+        unavailable = false;
+        ProcessExtrapolated(device, frame, format);
+        return;
+    }
 
     const bool nvidia_frame_gen = type == Settings::FrameGenType::NvidiaDlssG;
     if (unavailable || !Settings::values.frame_gen.GetValue() || nvidia_frame_gen) {
@@ -297,6 +419,7 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                                                   : VideoCore::FrameGenState::UnsupportedGpu,
                      format);
         }
+        ReleaseCadence();
         return;
     }
 
@@ -305,6 +428,12 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         warm_streak = 0;
         return;
     }
+    SetState(VideoCore::FrameGenState::Running, format);
+    if (FluidInterpolation()) {
+        // EDEN_NX2_FLUID_INTERP: real frames at an even share of the shown rate.
+        UpdateCadence();
+    }
+
     const VkExtent2D extent{.width = frame->width, .height = frame->height};
     peak_guest_extent.width = (std::max)(peak_guest_extent.width, guest_extent.width);
     peak_guest_extent.height = (std::max)(peak_guest_extent.height, guest_extent.height);
@@ -335,10 +464,30 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     LogActivity();
 
     const bool use_optical_flow = type == Settings::FrameGenType::OpticalFlow;
+    const bool use_fsr3 = type == Settings::FrameGenType::Fsr3;
 
+    // gpu_costs frame_gen_process: timed only in sampled frames (Scheduler::RecordEmuBegin).
     if (use_optical_flow && optical_flow_chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
         optical_flow_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+    } else if (use_fsr3 && fsr3_chain) {
+        scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenProcess, {extent.width, extent.height, 0});
+        fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+        // EDEN_NX2_FG_GAME_MOTION: this real frame's guide, beside the chain's copy of the frame;
+        // none when no source came with it (HDR output, no motion this frame).
+        if (GameMotionRequested()) {
+            if (!game_motion) {
+                game_motion.emplace(device, memory_allocator);
+                LOG_INFO(Render_Vulkan, "Frame generation: in-between frames are warped from the "
+                                        "game's motion (EDEN_NX2_FG_GAME_MOTION)");
+            }
+            game_motion->Push(device, scheduler,
+                              game_motion_source_set ? game_motion_source
+                                                     : std::optional<ExtrapolationSource>{});
+            game_motion_source_set = false;
+        }
+        scheduler.RecordEmuEnd();
 #ifdef HAS_FLYHIGH
     } else if (flyhigh) {
         const size_t wanted = GeneratedFrameCount();
@@ -365,6 +514,7 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
 #endif
     } else if (chain) {
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenProcess, {extent.width, extent.height, 0});
         scheduler.Record([this, source = *frame->image, extent, count,
                           dispatch = warm](vk::CommandBuffer cmdbuf) {
             CopyPresentedFrame(cmdbuf, source, chain->Input(count), extent);
@@ -372,6 +522,7 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
                 chain->DispatchShared(cmdbuf, count);
             }
         });
+        scheduler.RecordEmuEnd();
 
         const bool dump_requested = generated && Settings::values.frame_gen_dump_flow.GetValue();
         if (!dump_requested) {
@@ -381,6 +532,19 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
             dumped = true;
         }
     }
+}
+
+void FrameGen::Pause() {
+    pacer.Reset();
+    plan = {};
+    frame_count = 0;
+    last_count = 0;
+    last_generations = 0;
+    warm_streak = 0;
+    generated = false;
+    extrapolation_usable = false;
+    extrapolation_source.reset();
+    ReleaseCadence();
 }
 
 void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
@@ -477,6 +641,21 @@ void FrameGen::LogActivity() {
     activity.generated = 0;
 }
 
+/// EDEN_NX2_FLUID_INTERP=1: with EDEN_NX2_FLUID and the FSR3 interpolation chain, the in-between
+/// frames of each pair of real frames take the presenter's vblank slots before the newer real frame,
+/// and EDEN_NX2_CADENCE holds real frames to an even share of the shown rate. Every object moves by
+/// the optical flow between the two real frames rather than by the camera alone, at one real frame
+/// interval more latency than extrapolation.
+bool FrameGen::FluidInterpolation() {
+    static const bool on = [] {
+        const char* fluid = std::getenv("EDEN_NX2_FLUID");
+        const char* interp = std::getenv("EDEN_NX2_FLUID_INTERP");
+        return fluid != nullptr && std::strtoul(fluid, nullptr, 10) != 0 && interp != nullptr &&
+               std::strtoul(interp, nullptr, 10) != 0;
+    }();
+    return on;
+}
+
 size_t FrameGen::WantedGenerations(size_t capacity, size_t free_frames,
                                    std::chrono::steady_clock::duration blocked) {
     if (unavailable) {
@@ -485,7 +664,232 @@ size_t FrameGen::WantedGenerations(size_t capacity, size_t free_frames,
     }
     plan = pacer.Plan(capacity, blocked);
     plan.generations = GenerationsWithoutWaiting(plan.generations, free_frames);
+    if (extrapolating && cadence_divisor != 0) {
+        // Extrapolated frames cost next to nothing: always fill the cadence — but never wait for
+        // a present frame (#2023): the fill is capped by the frames free now, one kept in reserve.
+        plan = {.generations = GenerationsWithoutWaiting(
+                    std::min<size_t>(capacity, cadence_divisor - 1), free_frames),
+                .warm = true};
+    } else if (!extrapolating && cadence_divisor != 0 && FluidInterpolation()) {
+        // EDEN_NX2_FLUID_INTERP: a frame for every slot between two real frames, same no-wait cap.
+        plan = {.generations = GenerationsWithoutWaiting(
+                    std::min<size_t>(capacity, cadence_divisor - 1), free_frames),
+                .warm = true};
+    }
     return plan.generations;
+}
+
+std::chrono::nanoseconds FrameGen::CadenceSpacing() const {
+    if (!extrapolating || !generated || last_generations == 0 || cadence_divisor == 0) {
+        return {};
+    }
+    return std::chrono::nanoseconds{static_cast<s64>(1.0e9 / CadenceTargetRate())};
+}
+
+f32 FrameGen::FluidInterval() const {
+    const f32 measured = pacer.SmoothedInterval();
+    if (measured <= 0.0f) {
+        return 0.0f;
+    }
+    // A cadence or frame budget holds real frames to an exact interval; jitter in the measured
+    // one would only move the predictions.
+    const f32 paced = static_cast<f32>(Tegra::g_nx2_guest_frame_interval_ns.load(
+                          std::memory_order_relaxed)) *
+                      1.0e-9f;
+    const f32 interval =
+        paced > 0.0f && std::abs(measured - paced) <= paced * 0.1f ? paced : measured;
+    return std::clamp(interval, 1.0f / 240.0f, 0.1f);
+}
+
+bool FrameGen::CanPredict() const {
+    return extrapolating && extrapolation_usable && extrapolation && extrapolation_source &&
+           extrapolation_frame != nullptr && extrapolation_frame->storage_view;
+}
+
+bool FrameGen::CanBlend() const {
+    return !extrapolating && generated && built_type == Settings::FrameGenType::Fsr3 &&
+           fsr3_chain.has_value();
+}
+
+bool FrameGen::GenerateBlend(const Device& device, Frame* destination, f32 blend) {
+    if (!CanBlend() || !destination->storage_view) {
+        return false;
+    }
+    const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                             {destination->width, destination->height, 0});
+    if (GameMotionRequested() &&
+        GenerateFromGameMotion(device, destination, std::clamp(blend, 0.0f, 1.0f))) {
+        scheduler.RecordEmuEnd();
+        return true;
+    }
+    fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
+                         std::clamp(blend, 0.0f, 1.0f), flow_scale);
+    scheduler.RecordEmuEnd();
+    return true;
+}
+
+bool FrameGen::GenerateFromGameMotion(const Device& device, Frame* destination, f32 t) {
+    const Fsr3FrameGen::FrameViews frames = fsr3_chain->Frames();
+    const bool ready = game_motion && game_motion->Ready() && frames.newest != VK_NULL_HANDLE &&
+                       frames.previous != VK_NULL_HANDLE &&
+                       extrapolation_screen.extent.width != 0 &&
+                       extrapolation_screen.extent.height != 0;
+    ++(ready ? game_motion_made : game_motion_fallbacks);
+    if (game_motion_made + game_motion_fallbacks >= GAME_MOTION_LOG_INTERVAL) {
+        LOG_INFO(Render_Vulkan,
+                 "Frame generation (EDEN_NX2_FG_GAME_MOTION): {} in-between frames from the "
+                 "game's motion, {} from the optical flow (no guide for one of the two real "
+                 "frames, a camera cut, or no frame copies yet)",
+                 game_motion_made, game_motion_fallbacks);
+        game_motion_made = 0;
+        game_motion_fallbacks = 0;
+    }
+    if (!ready) {
+        return false;
+    }
+    game_motion->Generate(device, scheduler, frames.newest, frames.previous,
+                          *destination->image, *destination->storage_view,
+                          VkExtent2D{.width = destination->width, .height = destination->height},
+                          extrapolation_screen, t);
+    return true;
+}
+
+bool FrameGen::GenerateAt(const Device& device, Frame* destination, f32 advance) {
+    if (!CanPredict() || !destination->storage_view) {
+        return false;
+    }
+    const VkExtent2D extent{.width = destination->width, .height = destination->height};
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.RecordEmuBegin(TraceCategory::FrameGenExtrapolate, {extent.width, extent.height, 0});
+    extrapolation->Generate(device, scheduler, *extrapolation_source,
+                            *extrapolation_frame->storage_view, *destination->image,
+                            *destination->storage_view, extent, extrapolation_screen, advance);
+    scheduler.RecordEmuEnd();
+    return true;
+}
+
+void FrameGen::NoteFluidGenerated(size_t count) {
+    generated_frames.fetch_add(count, std::memory_order_relaxed);
+}
+
+void FrameGen::ReleaseCadence() {
+    if (cadence_divisor == 0) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan, "Frame cadence: off, frame budget target back to {:.0f} FPS",
+             cadence_saved_target);
+    cadence_divisor = 0;
+    cadence_governed = 0;
+    cadence_slow_checks = 0;
+    cadence_fast_checks = 0;
+    VideoCore::FrameBudget::SetTargetFps(cadence_saved_target);
+}
+
+void FrameGen::UpdateCadence() {
+    const u32 setting = CadenceSetting();
+    if (setting == 0) {
+        return;
+    }
+    // EDEN_NX2_SHOWN_GOVERNOR: the governed shown rate, 0 while the governor is off.
+    const u32 governed = VideoCore::ShownGovernor::Rate();
+    const f32 base_target = BaseTargetRate();
+    const f32 target = governed != 0 ? static_cast<f32>(governed) : base_target;
+    // Shown frames per real frame per share of 60: 2 at a target of 120.
+    const u32 scale = (std::max)(1U, static_cast<u32>(std::lround(target / 60.0f)));
+    const auto apply = [this, target, base_target, governed](u32 divisor, const char* reason) {
+        // The governor moves the target, and with it the divisor, so a new rate is applied even
+        // when the divisor stayed.
+        if (divisor == cadence_divisor && governed == cadence_governed) {
+            return;
+        }
+        if (cadence_divisor == 0) {
+            cadence_saved_target = VideoCore::FrameBudget::TargetFps();
+        }
+        const f32 was_target =
+            cadence_governed != 0 ? static_cast<f32>(cadence_governed) : base_target;
+        LOG_INFO(Render_Vulkan,
+                 "Frame cadence: {:.0f} real frames shown as {:.0f} ({}), was {:.0f}",
+                 target / static_cast<f32>(divisor), target, reason,
+                 cadence_divisor != 0 ? was_target / static_cast<f32>(cadence_divisor) : 0.0f);
+        cadence_divisor = divisor;
+        cadence_governed = governed;
+        cadence_slow_checks = 0;
+        cadence_fast_checks = 0;
+        VideoCore::FrameBudget::SetTargetFps(target / static_cast<f32>(divisor));
+    };
+    // EDEN_NX2_CADENCE_DIVISOR=<n> (1 to 12): shown frames per real frame, as is: 5 at 120 holds
+    // real frames to 24 a second.
+    static const u32 raw_divisor = [] {
+        const char* value = std::getenv("EDEN_NX2_CADENCE_DIVISOR");
+        return value ? std::clamp<u32>(static_cast<u32>(std::strtoul(value, nullptr, 10)), 1U, 12U)
+                     : 0U;
+    }();
+    // With the governor the divisors below are those at the configured rate, scaled to the governed
+    // one so that real frames keep their rate (6 at 144 is 3 at 72 and 2 at 48).
+    const bool governing = VideoCore::ShownGovernor::Enabled();
+    const auto scaled = [base_target, governed](u32 divisor) {
+        return governed != 0
+                   ? VideoCore::ShownGovernor::ScaledDivisor(static_cast<f64>(base_target), divisor,
+                                                             governed)
+                   : divisor;
+    };
+    if (raw_divisor != 0) {
+        if (governing) {
+            VideoCore::ShownGovernor::SetRealTarget(static_cast<f64>(base_target) /
+                                                    static_cast<f64>(raw_divisor));
+        }
+        apply(scaled(raw_divisor), "fixed divisor");
+        return;
+    }
+    if (setting >= 2) {
+        const u32 base_scale = (std::max)(1U, static_cast<u32>(std::lround(base_target / 60.0f)));
+        const u32 fixed = std::min(setting, CADENCE_MAX_DIVISOR) * base_scale;
+        if (governing) {
+            VideoCore::ShownGovernor::SetRealTarget(static_cast<f64>(base_target) /
+                                                    static_cast<f64>(fixed));
+        }
+        apply(scaled(fixed), "fixed");
+        return;
+    }
+    if (governing) {
+        // The automatic cadence picks its own real frame rate.
+        VideoCore::ShownGovernor::SetRealTarget(0.0);
+    }
+    if (cadence_divisor == 0) {
+        apply(3 * scale, "start");
+        return;
+    }
+    if (governed != cadence_governed) {
+        // The governed shown rate moved: the divisor follows it, so that real frames keep their
+        // rate until the checks below find another. (Never with the governor off: both are 0.)
+        const f32 was_rate = cadence_governed != 0 ? static_cast<f32>(cadence_governed) : base_target;
+        const u32 followed = VideoCore::ShownGovernor::ScaledDivisor(
+            static_cast<f64>(was_rate), cadence_divisor, static_cast<u32>(std::lround(target)));
+        apply(std::clamp<u32>(followed, 1U, CADENCE_MAX_DIVISOR * scale), "the shown rate changed");
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - cadence_checked < std::chrono::milliseconds{500}) {
+        return;
+    }
+    cadence_checked = now;
+    // What four in five frames took without the pacing wait, 0 while unknown.
+    const f64 work_ms = VideoCore::FrameBudget::RecentWorkMs();
+    if (work_ms <= 0.0) {
+        return;
+    }
+    const f64 budget_ms = 1000.0 * cadence_divisor / target;
+    const f64 faster_ms = 1000.0 * (cadence_divisor - scale) / target;
+    cadence_slow_checks = work_ms > budget_ms * 1.03 ? cadence_slow_checks + 1 : 0;
+    cadence_fast_checks =
+        cadence_divisor > scale && work_ms < faster_ms * 0.90 ? cadence_fast_checks + 1 : 0;
+    if (cadence_slow_checks >= 3 && cadence_divisor < CADENCE_MAX_DIVISOR * scale) {
+        apply(cadence_divisor + scale, "the frames take longer");
+    } else if (cadence_fast_checks >= 8) {
+        apply(cadence_divisor - scale, "the frames leave room");
+    }
 }
 
 size_t FrameGen::GeneratedFrameCount() const {
@@ -493,6 +897,27 @@ size_t FrameGen::GeneratedFrameCount() const {
 }
 
 void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t generation) {
+    if (extrapolating) {
+        if (!extrapolation || !extrapolation_source || !extrapolation_frame ||
+            !destination->storage_view) {
+            return;
+        }
+        const f32 advance =
+            static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
+        const VkExtent2D extent{.width = destination->width, .height = destination->height};
+
+        scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenExtrapolate,
+                                 {extent.width, extent.height, 0});
+        // The storage view has the image's own format, so reads and writes encode alike.
+        extrapolation->Generate(device, scheduler, *extrapolation_source,
+                                *extrapolation_frame->storage_view, *destination->image,
+                                *destination->storage_view, extent, extrapolation_screen, advance);
+        scheduler.RecordEmuEnd();
+        return;
+    }
+
+    const bool use_fsr3 = built_type == Settings::FrameGenType::Fsr3;
     const bool use_optical_flow = built_type == Settings::FrameGenType::OpticalFlow;
 
 #ifdef HAS_FLYHIGH
@@ -508,19 +933,37 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         scheduler.RequestOutsideRenderPassOperationContext();
         optical_flow_chain->Generate(device, scheduler, *destination->image,
                                      *destination->storage_view, blend, flow_scale);
+    } else if (use_fsr3 && fsr3_chain) {
+        const f32 blend = static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
+        const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
+
+        scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                                 {destination->width, destination->height, 0});
+        fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
+                             blend, flow_scale);
+        scheduler.RecordEmuEnd();
     } else if (chain) {
+        if (destination->index >= LSFG_MAX_TARGETS) {
+            // The FLUID presenter's frames past Lossless Scaling's targets (EDEN_NX2_FLUID at over
+            // 75 shown frames a second): left as the real frame's copy.
+            return;
+        }
         chain->SetTarget(device, last_generations, generation, destination->index,
                          *destination->storage_view);
 
         const VkExtent2D extent{.width = destination->width, .height = destination->height};
 
         scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.RecordEmuBegin(TraceCategory::FrameGenInterpolate,
+                                 {extent.width, extent.height, 0});
         scheduler.Record([this, count = last_count, generation_count = last_generations, generation,
                           target = destination->index, image = *destination->image,
                           extent](vk::CommandBuffer cmdbuf) {
             chain->DispatchGeneration(cmdbuf, count, generation_count, generation, target, image,
                                       extent);
         });
+        scheduler.RecordEmuEnd();
     }
 }
 
@@ -568,6 +1011,9 @@ void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format,
     chain.reset();
     optical_flow_chain.reset();
     ResetFlyHigh();
+    fsr3_chain.reset();
+    // The guides pair with the chain's frame copies, which start again.
+    game_motion.reset();
 
     built_flow_scale = flow_scale;
     built_type = type;
@@ -593,6 +1039,8 @@ void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format,
             flyhigh_failed = true;
         }
 #endif
+    } else if (built_type == Settings::FrameGenType::Fsr3) {
+        fsr3_chain.emplace(device, memory_allocator, extent, format);
     } else {
         chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
     }

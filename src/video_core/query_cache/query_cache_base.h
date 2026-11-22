@@ -194,7 +194,8 @@ public:
     /// GPURender: the host sync of a value WriteImmediate wrote, at the next NotifyWFI.
     void AddPayloadSync(DAddr address, u64 value, u64 size);
 
-    void NotifyWFI();
+    /// Whether it recorded the barriers of a sync (host queries were pending).
+    bool NotifyWFI();
 
     bool AccelerateHostConditionalRendering();
     /// GPURender: what AccelerateHostConditionalRendering does for a static render enable.

@@ -5,17 +5,24 @@
 
 add_executable(tests
     common/addon_config.cpp
+    common/event_ring.cpp
     common/thread_worker.cpp
+    common/shutdown_steps.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/buffer_cache_ports.cpp
+    video_core/mapped_reads.cpp
     video_core/unswizzle_workers.cpp
     video_core/block_linear_swizzle.cpp
     video_core/aftermath_dump.cpp
     video_core/frame_dump_schedule.cpp
+    video_core/nx2_shown_frames.cpp
     video_core/frame_dump_decode.cpp
     video_core/frame_gen_generations.cpp
     video_core/frame_pacer.cpp
     video_core/nx2_stutter_trace.cpp
+    video_core/game_motion_warp.cpp
+    video_core/dlss_skip_passes.cpp
+    video_core/nx2_frame_predictor.cpp
     video_core/back_idle_trace.cpp
     video_core/list_macro_trace.cpp
     video_core/host_mip_limits.cpp
@@ -40,10 +47,17 @@ add_executable(tests
     core/nx2_present_pacer.cpp
     core/nx2_fence_action.cpp
     core/nx2_frame_interval.cpp
+    core/nce_readiness.cpp
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
+    core/svc_fastpath.cpp
+    lichii/performance_overlay_model.cpp
+    core/game_presets.cpp
+    core/game_resolver.cpp
+    core/community_evidence.cpp
     core/service_auto_stub.cpp
     core/key_derivation.cpp
+    common/boot_split.cpp
     core/profile_manager_reset.cpp
     core/eticket_title_key.cpp
     core/keyblob_cmac.cpp
@@ -77,6 +91,8 @@ add_executable(tests
     core/memory_span.cpp
     core/kip_blz.cpp
     core/builtin_patches.cpp
+    core/main_build_id.cpp
+    core/oot_render_scale.cpp
     core/cheat_parser.cpp
     core/builtin_font_glyphs.cpp
     core/system_test_context.h
@@ -86,6 +102,7 @@ add_executable(tests
     video_core/fast_fusion_byte_store.cpp
     video_core/vk_byte_addressed_shadow.cpp
     video_core/global_memory_coherence.cpp
+    video_core/global_memory_narrow_flags.cpp
     video_core/storage_buffer_pointer_tracking.cpp
     video_core/storage_write_extent.cpp
     video_core/storage_buffer_control_flow.cpp
@@ -96,7 +113,9 @@ add_executable(tests
     core/fs_read_throttle.cpp
     core/npdm_kac.cpp
     core/nx_archive.cpp
+    frontend_common/mod_manager.cpp
     frontend_common/nx_archive.cpp
+    frontend_common/problem_report.cpp
     core/vfs_vector.cpp
     core/vfs_real.cpp
     core/kip_ini.cpp
@@ -123,6 +142,21 @@ add_executable(tests
     video_core/maxwell_numeric.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
+    video_core/mesh_before_pass.cpp
+    video_core/cost_governor.cpp
+    video_core/autopilot_controller.cpp
+    video_core/frame_budget.cpp
+    video_core/fluid_present_mode.cpp
+    video_core/present_telemetry.cpp
+    video_core/present_error_policy.cpp
+    video_core/fluid_slot_math.cpp
+    video_core/present_sync.cpp
+    video_core/shown_governor.cpp
+    video_core/fluid_compose_math.cpp
+    video_core/auto_shading_rate.cpp
+    common/guarana_modes.cpp
+    common/power_governor.cpp
+    common/frame_target_hotkeys.cpp
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp
@@ -131,11 +165,15 @@ add_executable(tests
     video_core/device_memory_asid.cpp
     video_core/unbacked_fallback.cpp
     video_core/eviction_age.cpp
+    video_core/stale_targets.cpp
     video_core/host_memory_limit.cpp
     video_core/fire_emblem_upscale.cpp
+    video_core/shader_reuse.cpp
     video_core/dlss_contract.cpp
     video_core/dlss_mode.cpp
     video_core/frame_gen_choice.cpp
+    video_core/fsr3_pingpong.cpp
+    video_core/fsr3_median_once.cpp
     video_core/ampere_fast_fusion.cpp
     video_core/ampere_async_copy.cpp
     video_core/ampere_trap_guards.cpp
@@ -144,10 +182,16 @@ add_executable(tests
     video_core/bounded_store.cpp
     video_core/pipeline_eviction_policy.cpp
     video_core/async_shader_emission.cpp
+    video_core/async_translation_policy.cpp
+    video_core/graphics_pipeline_library_policy.cpp
+    video_core/pipeline_binaries_policy.cpp
     video_core/oot_network.cpp
     video_core/page_filter.cpp
     video_core/query_stream.cpp
+    video_core/pipeline_cache_policy.cpp
     video_core/pipeline_optimization.cpp
+    video_core/unoptimized_first.cpp
+    video_core/gpl_parallel_parts.cpp
     video_core/spirv_atomic_retry.cpp
     video_core/spirv_storage_alignment.cpp
     video_core/spirv_fragment_shuffle.cpp
@@ -173,6 +217,7 @@ add_executable(tests
     hid_core/sensor_info.cpp
     common/flat_allocator.cpp
     common/paged_scalar.cpp
+    common/period_worker.cpp
     common/queue_lifetime.cpp
     common/queue_timed_wait.cpp
     common/range_set_move.cpp
@@ -190,11 +235,13 @@ add_executable(tests
     video_core/ampere_tennis_tessellation.cpp
     video_core/ampere_stage_buffer_output.cpp
     video_core/pipeline_cache_files.cpp
+    video_core/driver_pipeline_cache_gate.cpp
     video_core/shader_cache_v2.cpp
     video_core/evicted_pointer_slots.cpp
     video_core/shader_cache_v2_programs.cpp
     video_core/shader_cache_v2_driver.cpp
     video_core/vulkan_pipeline_binaries.cpp
+    video_core/early_instance_slot.cpp
     video_core/vulkan_buffer_oom.cpp
     video_core/pipeline_layout_cache.cpp
     video_core/shader_precache.cpp
@@ -209,6 +256,7 @@ add_executable(tests
     video_core/nx2_video_av1.cpp
     video_core/nx2_video_render.cpp
     video_core/ampere_matrix.cpp
+    video_core/hmma_numerics.cpp
     video_core/spirv_software_matrix.cpp
     video_core/spirv_program_name.cpp
     video_core/spirv_builtin_capabilities.cpp
@@ -228,6 +276,8 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
+    common/device_profile.cpp
+    common/data_dir_migration.cpp
     common/event.cpp
     common/fibers.cpp
     common/fs_iterate.cpp
@@ -237,6 +287,7 @@ add_executable(tests
     common/host_memory.cpp
     common/host_memory_failure.cpp
     common/host_memory_test_access.h
+    common/ini_peek.cpp
     core/host_memory_failure.cpp
     common/memory_detect.cpp
     common/multi_level_page_table.cpp
@@ -289,6 +340,7 @@ add_executable(tests
     video_core/vp9_range_encoder.cpp
     video_core/nx2_gpu_mapping.cpp
     video_core/vertex_repack.cpp
+    video_core/query_copy.cpp
     video_core/vk_texel_buffer_range.cpp
     video_core/ampere_lowering.cpp
     video_core/ampere_geometry.cpp
@@ -308,6 +360,7 @@ add_executable(tests
     video_core/vertex_input_cache.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
+    video_core/draw_template.cpp
     video_core/descriptor_payload_growth.cpp
     video_core/global_address_tracking.cpp
     video_core/global_atomic_routing.cpp
@@ -355,6 +408,8 @@ target_compile_definitions(tests PRIVATE
     LICHII_TESTS_LOG_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-log")
 
 add_test(NAME tests COMMAND tests)
+# The path manager copies the old "lichii" user data folder on first use; a test run must not.
+set_tests_properties(tests PROPERTIES ENVIRONMENT "GUARANA_SKIP_DATA_MIGRATION=1")
 
 if ((HAS_NCE AND LINUX) OR HAS_HYPERVISOR)
     enable_language(ASM)

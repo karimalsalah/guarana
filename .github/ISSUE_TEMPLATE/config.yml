@@ -1,4 +1,14 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Eden Discord
-    url: https://discord.gg/HstXbPch7X
+  - name: Chat, help and setup questions
+    url: "https://discord.gg/urz7vMdRM"
+    about: "Ask in the Guarana Discord (discord.gg/urz7vMdRM): setup, drivers, settings, and real-time help from contributors. Bugs, device reports and tasks stay here on GitHub."
+  - name: Questions that deserve a lasting answer
+    url: "https://github.com/karimalsalah/guarana/discussions"
+    about: "Discussions keep an answer searchable. For quick chat and setup help use the Discord above. Issues are for bugs, device reports, performance ideas and agent tasks."
+  - name: Documentation
+    url: "https://github.com/karimalsalah/guarana/tree/main/docs"
+    about: "Building, the switch registry (docs/switches.md), lanes, the debug server and the benchmark."
+  - name: Report a security vulnerability
+    url: "https://github.com/karimalsalah/guarana/security/advisories/new"
+    about: "Privately, never in a public issue. See SECURITY.md."

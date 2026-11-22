@@ -56,7 +56,9 @@ struct TensorProgram {
     IR::Program program;
     Profile profile;
 
-    explicit TensorProgram(u32 count = 1, u32 software_depth = 0) {
+    /// zero_first_c: the first HMMA's accumulator is the zero register (two zero immediates, as
+    /// the translator builds it).
+    explicit TensorProgram(u32 count = 1, u32 software_depth = 0, bool zero_first_c = false) {
         program.stage = Stage::Compute;
         program.workgroup_size = {64, 1, 1};
         program.blocks = {&block};
@@ -79,10 +81,13 @@ struct TensorProgram {
                 ir.ShiftLeftLogical(lane, ir.Imm32(3))) : ir.IAdd(ir.Imm32((i + 1) * 0x01000100U), lane);
         }
         for (u32 i = 0; i < count; ++i) {
+            const IR::Value accumulator =
+                zero_first_c && i == 0 ? ir.CompositeConstruct(ir.Imm32(0u), ir.Imm32(0u))
+                                       : ir.CompositeConstruct(inputs[6], inputs[7]);
             const auto result = ir.TensorMulAdd(
                                        ir.CompositeConstruct(inputs[0], inputs[1], inputs[2], inputs[3]),
                                        ir.CompositeConstruct(inputs[4], inputs[5]),
-                                       ir.CompositeConstruct(inputs[6], inputs[7]), software_depth);
+                                       accumulator, software_depth);
             inputs[6] = IR::U32{ir.CompositeExtract(result, 0)};
             inputs[7] = IR::U32{ir.CompositeExtract(result, 1)};
         }
@@ -471,17 +476,20 @@ std::map<u32, u32> Constants(const std::vector<u32>& code) {
     return constants;
 }
 
-void RequireHmmaMatrixTypes(const std::vector<u32>& code, u32 columns = 8) {
+// Requires exactly the A (rows x 16), B (16 x columns) and accumulator (rows x columns) types.
+void RequireHmmaMatrixTypes(const std::vector<u32>& code, u32 columns = 8, u32 rows = 16) {
     const auto constants = Constants(code);
     const auto types = Instructions(code, OP_TYPE_COOPERATIVE_MATRIX);
     REQUIRE(types.size() == 3);
+    std::array<u32, 3> rows_by_use{};
     std::array<u32, 3> columns_by_use{};
     for (const auto& words : types) {
         REQUIRE(words.size() == 6);
         REQUIRE(constants.at(words[2]) == 3); // Subgroup scope
-        REQUIRE(constants.at(words[3]) == 16);
+        rows_by_use.at(constants.at(words[5])) = constants.at(words[3]);
         columns_by_use.at(constants.at(words[5])) = constants.at(words[4]);
     }
+    REQUIRE(rows_by_use == std::array<u32, 3>{rows, 16, rows});          // A, B, accumulator
     REQUIRE(columns_by_use == std::array<u32, 3>{16, columns, columns}); // A, B, accumulator
 }
 
@@ -782,6 +790,267 @@ TEST_CASE("16x16x16 cooperative HMMA runs both depths through shared memory",
     }
 }
 
+// Intel's fp16 shape (EDEN_NX2_INTEL_COOP_MATRIX): each HMMA is the top and bottom 8 rows of A and C
+// against one B. A K=16 HMMA is two of those per K half (B's upper half zeroed, then its lower
+// half), with a barrier between so the second reads the first's fp16 results: the guest rounds
+// after each K=8 group. K=8 is one product per row half.
+TEST_CASE("8x16x16 cooperative HMMA runs each HMMA as 8-row products through shared memory",
+          "[video_core][tensor][ampere]") {
+    for (const auto& [depth, version] : {std::pair{16U, 0x00010500U}, std::pair{16U, 0x00010600U},
+                                        std::pair{8U, 0x00010600U}}) {
+        TensorProgram fixture{3, depth};
+        fixture.profile.supported_spirv = version;
+        fixture.profile.support_cooperative_hmma_8x16x16 = true;
+        const auto code = fixture.Emit("cooperative-8x16x16-k" + std::to_string(depth) + "-" +
+                                       std::to_string(version));
+        REQUIRE(code[1] == version);
+        REQUIRE(HasCapability(code, CAPABILITY_COOPERATIVE_MATRIX));
+        REQUIRE(HasCapability(code, CAPABILITY_FLOAT16));
+        RequireVulkanMemoryModel(code);
+        RequireHmmaMatrixTypes(code, 16, 8);
+        REQUIRE(fixture.program.info.uses_cooperative_matrix);
+        // Per K half and HMMA: A and C for each of the two row halves, and B once.
+        const size_t k_halves = depth == 16 ? 2 : 1;
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_LOAD).size() == 3 * k_halves * 5);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 3 * k_halves * 2);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_STORE).size() == 3 * k_halves * 2);
+        // Per HMMA: after the tile stores, between the K halves, and after the cooperative stores.
+        REQUIRE(Instructions(code, 224).size() == 3 * (1 + k_halves)); // OpControlBarrier
+        REQUIRE(Instructions(code, 202).empty());                      // OpBitFieldUExtract
+        REQUIRE(Instructions(code, 57).empty());                       // OpFunctionCall
+        REQUIRE(Instructions(code, 345).empty());                      // OpGroupNonUniformShuffle
+        // Two subgroups, 512 words each: A, B, C and the second B tile.
+        REQUIRE(fixture.program.shared_memory_size == 2 * 512 * 4);
+    }
+}
+
+TEST_CASE("The 16x16x16 path wins when the profile also lists 8x16x16",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{3, 16};
+    fixture.profile.support_cooperative_hmma_16x16x16 = true;
+    fixture.profile.support_cooperative_hmma_8x16x16 = true;
+    const auto code = fixture.Emit();
+    RequireHmmaMatrixTypes(code, 16, 16);
+    REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 3);
+    REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
+}
+
+// EDEN_NX2_HMMA_K16_ONCE: on 8x16x16 a K=16 HMMA is one product per row half with both K halves
+// of B in one tile, rounding once as the 16x16x16 path does: no second B tile, no barrier between
+// K halves. K=8 is as without it, in the smaller scratch.
+TEST_CASE("8x16x16 cooperative HMMA runs K16 as one product with EDEN_NX2_HMMA_K16_ONCE",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {16U, 8U}) {
+        TensorProgram fixture{3, depth};
+        fixture.profile.support_cooperative_hmma_8x16x16 = true;
+        fixture.profile.cooperative_hmma_k16_once = true;
+        const auto code = fixture.Emit("cooperative-8x16x16-k16-once-k" + std::to_string(depth));
+        RequireVulkanMemoryModel(code);
+        RequireHmmaMatrixTypes(code, 16, 8);
+        REQUIRE(fixture.program.info.uses_cooperative_matrix);
+        // Per HMMA: A and C for each row half, and B once.
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_LOAD).size() == 3 * 5);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 3 * 2);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_STORE).size() == 3 * 2);
+        // Per HMMA: after the tile stores and after the cooperative stores.
+        REQUIRE(Instructions(code, 224).size() == 3 * 2); // OpControlBarrier
+        // Two subgroups, 384 words each: A, B and C.
+        REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
+    }
+}
+
+// EDEN_NX2_HMMA_ZERO_C: an HMMA whose accumulator is the zero register starts from one zero
+// matrix (a constant composite of the accumulator type) instead of a C tile it stored and loaded.
+// A K=16 HMMA on 8x16x16 still loads the first K half's results for the second.
+TEST_CASE("A zero accumulator skips the C tile with EDEN_NX2_HMMA_ZERO_C",
+          "[video_core][tensor][ampere]") {
+    for (const bool eight_rows : {false, true}) {
+        for (const u32 depth : {16U, 8U}) {
+            TensorProgram fixture{3, depth, true};
+            fixture.profile.support_cooperative_hmma_16x16x16 = !eight_rows;
+            fixture.profile.support_cooperative_hmma_8x16x16 = eight_rows;
+            fixture.profile.cooperative_hmma_zero_c = true;
+            const auto code = fixture.Emit(std::string{"cooperative-zero-c-"} +
+                                           (eight_rows ? "8x16x16" : "16x16x16") + "-k" +
+                                           std::to_string(depth));
+            RequireVulkanMemoryModel(code);
+            RequireHmmaMatrixTypes(code, 16, eight_rows ? 8 : 16);
+            const size_t row_halves = eight_rows ? 2 : 1;
+            const size_t k_halves = eight_rows && depth == 16 ? 2 : 1;
+            // Per HMMA and K half: A and C per row half and B once, but no C for the first HMMA's
+            // first K half.
+            REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_LOAD).size() ==
+                    3 * k_halves * (2 * row_halves + 1) - row_halves);
+            REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() ==
+                    3 * k_halves * row_halves);
+            REQUIRE(Instructions(code, 224).size() == 3 * (1 + k_halves)); // OpControlBarrier
+            u32 accumulator_type{};
+            const auto constants = Constants(code);
+            for (const auto& words : Instructions(code, OP_TYPE_COOPERATIVE_MATRIX)) {
+                if (constants.at(words[5]) == 2) { // MatrixAccumulatorKHR
+                    accumulator_type = words[0];
+                }
+            }
+            REQUIRE(accumulator_type != 0);
+            size_t zero_matrices = 0;
+            for (const auto& words : Instructions(code, 44)) { // OpConstantComposite
+                if (words[0] == accumulator_type) {
+                    REQUIRE(words.size() == 3); // one constituent fills a cooperative matrix
+                    ++zero_matrices;
+                }
+            }
+            REQUIRE(zero_matrices == 1);
+        }
+    }
+}
+
+// Programs the switches do not apply to keep their SPIR-V word for word: EDEN_NX2_HMMA_ZERO_C
+// without a zero accumulator, and EDEN_NX2_HMMA_K16_ONCE on the 16x16x16 path.
+TEST_CASE("HMMA traffic switches leave other programs unchanged", "[video_core][tensor][ampere]") {
+    for (const bool eight_rows : {false, true}) {
+        TensorProgram plain{3, 16};
+        TensorProgram switched{3, 16};
+        for (TensorProgram* const fixture : {&plain, &switched}) {
+            fixture->profile.support_cooperative_hmma_16x16x16 = !eight_rows;
+            fixture->profile.support_cooperative_hmma_8x16x16 = eight_rows;
+        }
+        switched.profile.cooperative_hmma_zero_c = true;
+        switched.profile.cooperative_hmma_k16_once = !eight_rows;
+        REQUIRE(plain.Emit() == switched.Emit());
+        REQUIRE(plain.program.shared_memory_size == switched.program.shared_memory_size);
+    }
+}
+
+// EDEN_NX2_TENSOR_LOG's line: counts, zero accumulators, shared A operands and the path taken.
+TEST_CASE("The tensor log describes a program's HMMA and its path", "[video_core][tensor][ampere]") {
+    TensorProgram fixture{3, 16, true};
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).find(
+                "3 HMMA (3 K=16, 0 K=8), 1 from a zero accumulator, 2 with the previous HMMA's A") ==
+            0);
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).ends_with(
+        "software, operands shuffled (the device lists no cooperative matrix shape for it)"));
+    fixture.profile.support_cooperative_hmma_8x16x16 = true;
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).ends_with(
+        "8x16x16 cooperative matrices through shared memory"));
+    fixture.profile.cooperative_hmma_k16_once = true;
+    fixture.profile.cooperative_hmma_zero_c = true;
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).ends_with(
+        "8x16x16 cooperative matrices through shared memory, zero accumulators skip C, K=16 at "
+        "once"));
+    fixture.program.workgroup_size = {48, 1, 1};
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).ends_with(
+        "software, operands shuffled (its workgroup rows leave a 32-lane warp unfilled)"));
+    TensorProgram none{0};
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(none.profile, none.program).empty());
+}
+
+namespace {
+// The component type of the accumulator matrix type: its OpTypeFloat's width.
+u32 AccumulatorWidth(const std::vector<u32>& code) {
+    const auto constants = Constants(code);
+    u32 component = 0;
+    for (const auto& words : Instructions(code, OP_TYPE_COOPERATIVE_MATRIX)) {
+        if (constants.at(words[5]) == 2) { // MatrixAccumulatorKHR
+            component = words[1];
+        }
+    }
+    for (const auto& words : Instructions(code, 22)) { // OpTypeFloat
+        if (words[0] == component) {
+            return words[1];
+        }
+    }
+    return 0;
+}
+} // namespace
+
+// EDEN_NX2_INTEL_COOP_MATRIX_8X8 (the Arc 140T lists 8x8x16 with fp32 accumulators only): each
+// HMMA is two 8x8x16 products, one per 8-row half, against the guest's own 16x8 B. A K=16 HMMA is
+// one product per half (it rounds once, as the CPU model's K16-once), so both depths emit alike.
+TEST_CASE("8x8x16 cooperative HMMA runs each HMMA as two products with fp32 accumulators",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {16U, 8U}) {
+        TensorProgram fixture{3, depth};
+        fixture.profile.support_cooperative_hmma_8x8x16 = true;
+        const auto code = fixture.Emit("cooperative-8x8x16-k" + std::to_string(depth));
+        RequireVulkanMemoryModel(code);
+        RequireHmmaMatrixTypes(code, 8, 8);
+        REQUIRE(AccumulatorWidth(code) == 32);
+        REQUIRE(fixture.program.info.uses_cooperative_matrix);
+        // Per HMMA: A and C for each row half, and B once.
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_LOAD).size() == 3 * 5);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 3 * 2);
+        REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_STORE).size() == 3 * 2);
+        // Per HMMA: after the tile stores and after the cooperative stores.
+        REQUIRE(Instructions(code, 224).size() == 3 * 2); // OpControlBarrier
+        REQUIRE(Instructions(code, 57).empty());            // OpFunctionCall
+        REQUIRE(Instructions(code, 345).empty());           // OpGroupNonUniformShuffle
+        // Two subgroups, 320 words each: A (128), B (64) and the fp32 C (128).
+        REQUIRE(fixture.program.shared_memory_size == 2 * 320 * 4);
+    }
+}
+
+TEST_CASE("8x8x16 cooperative HMMA starts a zero accumulator from one fp32 zero matrix",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{3, 16, true};
+    fixture.profile.support_cooperative_hmma_8x8x16 = true;
+    fixture.profile.cooperative_hmma_zero_c = true;
+    const auto code = fixture.Emit("cooperative-8x8x16-zero-c");
+    REQUIRE(AccumulatorWidth(code) == 32);
+    // The first HMMA loads no C for either row half.
+    REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_LOAD).size() == 3 * 5 - 2);
+    u32 accumulator_type{};
+    const auto constants = Constants(code);
+    for (const auto& words : Instructions(code, OP_TYPE_COOPERATIVE_MATRIX)) {
+        if (constants.at(words[5]) == 2) {
+            accumulator_type = words[0];
+        }
+    }
+    size_t zero_matrices = 0;
+    for (const auto& words : Instructions(code, 44)) { // OpConstantComposite
+        zero_matrices += words[0] == accumulator_type ? 1 : 0;
+    }
+    REQUIRE(zero_matrices == 1);
+}
+
+TEST_CASE("Any other cooperative path wins over 8x8x16", "[video_core][tensor][ampere]") {
+    for (const bool sixteen_rows : {true, false}) {
+        TensorProgram fixture{3, 16};
+        fixture.profile.support_cooperative_hmma_8x8x16 = true;
+        fixture.profile.support_cooperative_hmma_16x16x16 = sixteen_rows;
+        fixture.profile.support_cooperative_hmma_8x16x16 = !sixteen_rows;
+        const auto code = fixture.Emit();
+        RequireHmmaMatrixTypes(code, 16, sixteen_rows ? 16 : 8);
+        REQUIRE(AccumulatorWidth(code) == 16);
+    }
+}
+
+TEST_CASE("The tensor log names the 8x8x16 path", "[video_core][tensor][ampere]") {
+    TensorProgram fixture{3, 16};
+    fixture.profile.support_cooperative_hmma_8x8x16 = true;
+    REQUIRE(Backend::SPIRV::DescribeTensorProgram(fixture.profile, fixture.program).ends_with(
+        "8x8x16 fp32-accumulator cooperative matrices through shared memory"));
+}
+
+TEST_CASE("8x16x16 cooperative HMMA falls back to the software helper",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{1, 16};
+    fixture.profile.support_cooperative_hmma_8x16x16 = true;
+    SECTION("a workgroup that leaves a warp unfilled") {
+        fixture.program.workgroup_size = {48, 1, 1};
+    }
+    SECTION("coherent memory, which the Vulkan memory model has no decoration for") {
+        fixture.program.info.requires_coherent_image_memory = true;
+    }
+    SECTION("scratch past the shared memory limit") {
+        fixture.profile.max_compute_shared_memory_size = 2 * 512 * 4 - 4;
+    }
+    const auto code = fixture.Emit();
+    REQUIRE_FALSE(HasCapability(code, CAPABILITY_COOPERATIVE_MATRIX));
+    REQUIRE(Instructions(code, 57).size() == 1); // OpFunctionCall
+    REQUIRE(fixture.program.shared_memory_size == 0);
+    REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+}
+
 TEST_CASE("16x16x16 cooperative HMMA falls back to the software helper",
           "[video_core][tensor][ampere]") {
     TensorProgram fixture{1, 16};
@@ -803,6 +1072,225 @@ TEST_CASE("16x16x16 cooperative HMMA falls back to the software helper",
     REQUIRE(Instructions(code, 57).size() == 1); // OpFunctionCall
     REQUIRE(fixture.program.shared_memory_size == 0);
     REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+}
+
+namespace {
+
+constexpr u32 OP_VARIABLE = 59;
+constexpr u32 OP_ACCESS_CHAIN = 65;
+constexpr u32 OP_CONTROL_BARRIER = 224;
+constexpr u32 STORAGE_CLASS_WORKGROUP = 4;
+
+/// The instructions of a module that touch workgroup memory or synchronise it, by index.
+struct SharedAccesses {
+    std::vector<size_t> stores;
+    std::vector<size_t> loads;
+    std::vector<size_t> barriers;
+};
+
+SharedAccesses FindSharedAccesses(const Module& module) {
+    std::vector<u32> pointers;
+    SharedAccesses result;
+    for (size_t index = 0; index < module.insts.size(); ++index) {
+        const auto& inst = module.insts[index];
+        const auto is_shared = [&](u32 pointer) {
+            return std::ranges::find(pointers, pointer) != pointers.end();
+        };
+        if (inst.opcode == OP_VARIABLE && inst.words[2] == STORAGE_CLASS_WORKGROUP) {
+            pointers.push_back(inst.words[1]);
+        } else if (inst.opcode == OP_ACCESS_CHAIN && is_shared(inst.words[2])) {
+            pointers.push_back(inst.words[1]);
+        } else if (inst.opcode == Op::Store && is_shared(inst.words[0])) {
+            result.stores.push_back(index);
+        } else if (inst.opcode == Op::Load && is_shared(inst.words[2])) {
+            result.loads.push_back(index);
+        } else if (inst.opcode == OP_CONTROL_BARRIER) {
+            result.barriers.push_back(index);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_CASE("Shared-memory software HMMA gathers its operands instead of shuffling them",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {8U, 16U}) {
+        for (const bool vector_view : {false, true}) {
+            CAPTURE(depth, vector_view);
+            TensorProgram fixture{1, depth};
+            fixture.profile.support_software_matrix_shared_memory = true;
+            fixture.profile.support_explicit_workgroup_layout = vector_view;
+            // What the pipeline asks before the SPIR-V exists
+            REQUIRE(Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile,
+                                                                   fixture.program));
+            const auto code = fixture.Emit("shared-k" + std::to_string(depth) +
+                                           (vector_view ? "-vector" : "-scalar"));
+            REQUIRE(fixture.program.info.uses_subgroup_shared_scratch);
+            REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+            REQUIRE(fixture.program.shared_memory_size == 2 * 192 * 4); // Two warps
+            REQUIRE_FALSE(HasCapability(code, CAPABILITY_COOPERATIVE_MATRIX));
+            REQUIRE_FALSE(HasCapability(code, CAPABILITY_VULKAN_MEMORY_MODEL));
+            REQUIRE(Instructions(code, 57).size() == 1); // OpFunctionCall
+            REQUIRE(Instructions(code, 345).empty());    // OpGroupNonUniformShuffle
+
+            const Module module{code};
+            const auto& insts = module.insts;
+            const auto function = std::ranges::find_if(insts, [](const Module::Inst& inst) {
+                return inst.opcode == Op::Function && (inst.words[2] & 0x2) != 0;
+            });
+            REQUIRE(function != insts.end());
+            std::vector<u32> parameters;
+            for (auto it = function + 1; it != insts.end() && it->opcode == Op::FunctionParameter;
+                 ++it) {
+                parameters.push_back(it->words[1]);
+            }
+            REQUIRE(parameters.size() == 3);
+
+            // The group body: the loop body for K=16, the whole helper for K=8.
+            size_t body_begin = module.IndexOf(*function);
+            size_t body_end = insts.size();
+            const auto loop = std::ranges::find_if(
+                insts, [](const Module::Inst& inst) { return inst.opcode == Op::LoopMerge; });
+            REQUIRE((loop != insts.end()) == (depth == 16));
+            if (depth == 16) {
+                body_begin = module.IndexOf(*loop);
+                body_end = module.defs.at(loop->words[1]);
+                REQUIRE(body_begin < body_end);
+            }
+            const auto in_body = [&](size_t index) {
+                return index > body_begin && index < body_end;
+            };
+
+            // Each lane stores the registers of the groups that run: a0 a1 b0, then a2 a3 b1.
+            const SharedAccesses shared{FindSharedAccesses(module)};
+            std::vector<std::pair<u32, u32>> stored;
+            for (const size_t index : shared.stores) {
+                stored.push_back(OperandSource(module, insts[index].words[1], parameters));
+            }
+            std::ranges::sort(stored);
+            using Sources = std::vector<std::pair<u32, u32>>;
+            REQUIRE(stored == (depth == 8 ? Sources{{0, 0}, {0, 1}, {1, 0}}
+                                          : Sources{{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}}));
+
+            // A subgroup barrier after the stores, and one after the loads for the next multiply.
+            const auto constants = Constants(code);
+            REQUIRE(shared.barriers.size() == 2);
+            for (const size_t index : shared.barriers) {
+                const auto& words = insts[index].words;
+                REQUIRE(constants.at(words[0]) == 3);     // Subgroup execution scope
+                REQUIRE(constants.at(words[1]) == 3);     // Subgroup memory scope
+                REQUIRE(constants.at(words[2]) == 0x108); // AcquireRelease | WorkgroupMemory
+            }
+            for (const size_t index : shared.stores) {
+                REQUIRE(index > module.IndexOf(*function));
+                REQUIRE(index < shared.barriers[0]);
+            }
+            // A K=8 group reads four words of two A rows and of two B columns.
+            REQUIRE(shared.loads.size() == (vector_view ? 4U : 16U));
+            for (const size_t index : shared.loads) {
+                REQUIRE(index > shared.barriers[0]);
+                REQUIRE(index < shared.barriers[1]);
+                REQUIRE(in_body(index));
+            }
+            if (depth == 16) {
+                REQUIRE(shared.barriers[0] < body_begin);
+                REQUIRE(shared.barriers[1] > body_end);
+            }
+
+            // The arithmetic of the shuffling helper.
+            u32 roundings = 0, fmas = 0;
+            for (size_t index = 0; index < insts.size(); ++index) {
+                if (module.IsExtInst(insts[index], Op::RoundEven)) {
+                    CHECK(in_body(index));
+                    ++roundings;
+                } else if (module.IsExtInst(insts[index], Op::Fma)) {
+                    CHECK(in_body(index));
+                    ++fmas;
+                }
+            }
+            CHECK(roundings == 4);
+            CHECK(fmas == 32);
+        }
+    }
+}
+
+TEST_CASE("Shared-memory software HMMA shares one helper per depth",
+          "[video_core][tensor][ampere]") {
+    for (const u32 depth : {8U, 16U}) {
+        TensorProgram fixture{64, depth};
+        fixture.profile.support_software_matrix_shared_memory = true;
+        // No Vulkan memory model here, so coherent memory does not matter.
+        fixture.program.info.requires_coherent_global_memory = true;
+        // The scratch follows the guest's shared memory, from a multiple of four words.
+        fixture.program.shared_memory_size = 20;
+        const auto code = fixture.Emit("shared-k" + std::to_string(depth) + "-many");
+        REQUIRE(fixture.program.info.uses_subgroup_shared_scratch);
+        REQUIRE(fixture.program.shared_memory_size == 32 + 2 * 192 * 4);
+        REQUIRE(Instructions(code, 57).size() == 64);                // OpFunctionCall
+        REQUIRE(Instructions(code, OP_CONTROL_BARRIER).size() == 2); // In the helper only
+        REQUIRE(Instructions(code, 345).empty());                    // OpGroupNonUniformShuffle
+        const auto models = Instructions(code, 14); // OpMemoryModel
+        REQUIRE(models.size() == 1);
+        REQUIRE(models[0][1] == 1); // GLSL450
+
+        TensorProgram unsynchronized{64, depth};
+        unsynchronized.profile.support_software_matrix_shared_memory = true;
+        unsynchronized.profile.software_matrix_shared_memory_no_barrier = true;
+        const auto racy = unsynchronized.Emit();
+        REQUIRE(unsynchronized.program.info.uses_subgroup_shared_scratch);
+        REQUIRE(Instructions(racy, OP_CONTROL_BARRIER).empty());
+        REQUIRE(Instructions(racy, 345).empty()); // OpGroupNonUniformShuffle
+
+        TensorProgram scalar{64, depth};
+        scalar.profile.support_software_matrix_shared_memory = true;
+        scalar.profile.support_explicit_workgroup_layout = true;
+        scalar.profile.software_matrix_shared_memory_scalar_loads = true;
+        const Module words{scalar.Emit()};
+        REQUIRE(FindSharedAccesses(words).loads.size() == 16); // Despite the vector view
+    }
+}
+
+TEST_CASE("Shared-memory software HMMA keeps the shuffles where a program cannot gather",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{1, 16};
+    fixture.profile.support_software_matrix_shared_memory = true;
+    SECTION("a workgroup that leaves a warp unfilled") {
+        fixture.program.workgroup_size = {48, 1, 1};
+    }
+    SECTION("a workgroup row that leaves a warp unfilled") {
+        fixture.program.workgroup_size = {16, 2, 1};
+    }
+    SECTION("scratch past the shared memory limit") {
+        fixture.profile.max_compute_shared_memory_size = 2 * 192 * 4 - 4;
+    }
+    // The same program without the switch
+    TensorProgram reference{1, 16};
+    reference.program.workgroup_size = fixture.program.workgroup_size;
+    reference.profile.max_compute_shared_memory_size =
+        fixture.profile.max_compute_shared_memory_size;
+    REQUIRE_FALSE(
+        Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile, fixture.program));
+    const auto code = fixture.Emit();
+    REQUIRE(code == reference.Emit());
+    REQUIRE(Instructions(code, 345).size() == 16); // OpGroupNonUniformShuffle
+    REQUIRE(Instructions(code, OP_CONTROL_BARRIER).empty());
+    REQUIRE(fixture.program.shared_memory_size == 0);
+    REQUIRE_FALSE(fixture.program.info.uses_subgroup_shared_scratch);
+}
+
+TEST_CASE("Shared-memory software HMMA leaves tensor cores their multiplies",
+          "[video_core][tensor][ampere]") {
+    TensorProgram fixture{1, 16};
+    fixture.profile.support_software_matrix_shared_memory = true;
+    fixture.profile.support_cooperative_hmma_16x16x16 = true;
+    REQUIRE_FALSE(
+        Backend::SPIRV::UsesSoftwareMatrixSharedMemory(fixture.profile, fixture.program));
+    const auto code = fixture.Emit();
+    REQUIRE(Instructions(code, OP_COOPERATIVE_MATRIX_MUL_ADD).size() == 1);
+    REQUIRE(fixture.program.info.uses_cooperative_matrix);
+    REQUIRE_FALSE(fixture.program.info.uses_subgroup_shared_scratch);
+    REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
 }
 
 TEST_CASE("Captured Bananza matrix shaders lower without an environment override",
@@ -846,4 +1334,113 @@ TEST_CASE("Native matrix lowering selects compact software helpers without legac
     code[0].words[3] = 0;
     code[0].words[0] += 1U << 24;
     REQUIRE_FALSE(static_cast<bool>(Ampere::LowerToMaxwell(code, false, true)));
+}
+
+TEST_CASE("Cooperative matrix use is known before the SPIR-V is emitted",
+          "[video_core][tensor][ampere]") {
+    // What a deferred compute pipeline needs: its Info is copied before EmitSPIRV runs, so the
+    // answer for the pipeline's flags has to come from the program as it is, and match what
+    // EmitSPIRV stores afterwards.
+    const auto compare_with_emission = [](TensorProgram& fixture, bool expected) {
+        const u32 shared_memory_size{fixture.program.shared_memory_size};
+        REQUIRE(Shader::Backend::SPIRV::UsesCooperativeMatrix(fixture.profile, fixture.program) ==
+                expected);
+        REQUIRE(fixture.program.shared_memory_size == shared_memory_size);
+        REQUIRE_FALSE(fixture.program.info.uses_cooperative_matrix);
+        fixture.Emit();
+        REQUIRE(fixture.program.info.uses_cooperative_matrix == expected);
+    };
+    SECTION("16x8x16 matrices for the K16 form") {
+        TensorProgram fixture{3, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        compare_with_emission(fixture, true);
+    }
+    SECTION("16x16x16 matrices for the K16 form") {
+        TensorProgram fixture{3, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, true);
+        REQUIRE(fixture.program.shared_memory_size == 2 * 384 * 4);
+    }
+    SECTION("16x16x16 matrices for the K8 form") {
+        TensorProgram fixture{3, 8};
+        fixture.profile.supported_spirv = 0x00010600;
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, true);
+    }
+    SECTION("no cooperative matrix support in the profile") {
+        TensorProgram fixture{1, 16};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x8x16 matrices do not take the K8 form") {
+        TensorProgram fixture{1, 8};
+        fixture.profile.support_cooperative_hmma = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("a workgroup that leaves a warp unfilled") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        fixture.program.workgroup_size = {48, 1, 1};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("a workgroup row that leaves a warp unfilled") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.workgroup_size = {16, 2, 1};
+        compare_with_emission(fixture, false);
+    }
+    SECTION("coherent memory") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma = true;
+        fixture.program.info.requires_coherent_global_memory = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x16x16 scratch past the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.profile.max_compute_shared_memory_size = 2 * 384 * 4 - 4;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("no tensor instructions") {
+        TensorProgram fixture{0};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        compare_with_emission(fixture, false);
+    }
+    SECTION("16x16x16 aligned scratch exactly fits the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.shared_memory_size = 1;
+        fixture.profile.max_compute_shared_memory_size = 16 + 2 * 384 * 4;
+        compare_with_emission(fixture, true);
+        REQUIRE(fixture.program.shared_memory_size == fixture.profile.max_compute_shared_memory_size);
+    }
+    SECTION("16x16x16 alignment pushes scratch past the shared memory limit") {
+        TensorProgram fixture{1, 16};
+        fixture.profile.support_cooperative_hmma_16x16x16 = true;
+        fixture.program.shared_memory_size = 1;
+        fixture.profile.max_compute_shared_memory_size = 2 * 384 * 4 + 4;
+        compare_with_emission(fixture, false);
+    }
+}
+
+TEST_CASE("Early cooperative matrix info preserves SPIR-V and survives an info copy",
+          "[video_core][tensor][ampere]") {
+    for (const bool scratch : {false, true}) {
+        TensorProgram baseline{1, 16};
+        TensorProgram early{1, 16};
+        baseline.profile.support_cooperative_hmma = !scratch;
+        baseline.profile.support_cooperative_hmma_16x16x16 = scratch;
+        early.profile = baseline.profile;
+
+        // Match the deferred path: determine use, copy Info, then emit the job's program.
+        early.program.info.uses_cooperative_matrix =
+            Backend::SPIRV::UsesCooperativeMatrix(early.profile, early.program);
+        const Info copied_info{early.program.info};
+        REQUIRE(copied_info.uses_cooperative_matrix);
+        REQUIRE_FALSE(baseline.program.info.uses_cooperative_matrix);
+        const auto baseline_code = baseline.Emit();
+        const auto early_code = early.Emit();
+        REQUIRE(early_code == baseline_code);
+        REQUIRE(copied_info.uses_cooperative_matrix == early.program.info.uses_cooperative_matrix);
+        REQUIRE(early.program.shared_memory_size == baseline.program.shared_memory_size);
+    }
 }

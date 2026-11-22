@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <system_error>
 
+#include "common/frame_target_hotkeys.h"
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "nx2_switches.h"
@@ -35,6 +36,25 @@
 
 #ifdef _WIN32
 #include <QScreen>
+#include <cstring>
+#include <windows.h>
+#include <shobjidl.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "shell32.lib")
+#endif
+
+// A game the Guarana launcher starts takes the launcher's AppUserModelID, the one its Start menu
+// shortcut carries (the bundle identifier in launcher/src-tauri/tauri.conf.json). Windows then sees
+// one app: one taskbar button, and pinning the game's button pins the launcher. It must be set
+// before any window exists.
+static void JoinLauncherIdentity(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--launcher-session") == 0) {
+            SetCurrentProcessExplicitAppUserModelID(L"io.github.karimalsalah.guarana");
+            return;
+        }
+    }
+}
 
 static void OverrideWindowsFont() {
     // Qt5 chooses these fonts on Windows and they have fairly ugly alphanumeric/cyrillic characters
@@ -117,10 +137,15 @@ static void SetUpNvidiaShaderDiskCache() {
 #endif
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    JoinLauncherIdentity(argc, argv);
+#endif
 #if defined(__unix__) && !defined(__APPLE__) && !defined(__ANDROID__)
     SetUpNvidiaShaderDiskCache();
 #endif
     LoadNx2Switches(argv[0]);
+    // Freeze the switch after file values enter the environment, before any target readers run.
+    static_cast<void>(Common::FrameTargetHotkeys::Enabled());
 #if LICHII_ROOM
     bool launch_room = false;
     for (int i = 1; i < argc; i++) {
@@ -141,8 +166,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (StartupChecks(argv[0], &has_broken_vulkan,
-                      Settings::values.perform_vulkan_check.GetValue())) {
+    if (StartupChecks(argv[0], &has_broken_vulkan, PerformVulkanCheckSetting())) {
         return 0;
     }
 
@@ -152,7 +176,7 @@ int main(int argc, char* argv[]) {
 
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
-    QCoreApplication::setApplicationName(QStringLiteral("Lichii"));
+    QCoreApplication::setApplicationName(QStringLiteral("Guarana"));
 
     // Increases the maximum open file limit.
     // TODO: This should be common to all frontends.
@@ -204,7 +228,7 @@ int main(int argc, char* argv[]) {
 
     // Fix the Wayland appId. This needs to match the name of the .desktop file without the .desktop
     // suffix.
-    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.zortos293.lichii"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.karimalsalah.guarana"));
 #endif
 
     auto rounding_policy = GetHighDpiRoundingPolicy();
@@ -252,13 +276,27 @@ int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "C");
 
     try {
-        MainWindow main_window{has_broken_vulkan};
-        main_window.show();
-        app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
-                    &MainWindow::OnAppFocusStateChanged);
-        return app.exec();
+        int result{};
+        {
+            MainWindow main_window{has_broken_vulkan};
+            // A launcher session shows the window itself, only once the game is fullscreen.
+            if (!main_window.IsLauncherSession()) {
+                main_window.show();
+            }
+            app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
+                        &MainWindow::OnAppFocusStateChanged);
+            result = app.exec();
+            // 0 after a stop, 1 when the game did not start (MainWindow::closeEvent).
+            if (const auto code = main_window.LauncherSessionExitCode()) {
+                result = *code;
+            }
+        }
+        // Ended without a crash: the next start may skip the Vulkan check.
+        EndVulkanCheckSession();
+        return result;
     } catch (const std::exception& exception) {
-        QMessageBox::critical(nullptr, QObject::tr("Lichii startup stopped"),
+        EndVulkanCheckSession();
+        QMessageBox::critical(nullptr, QObject::tr("Guarana startup stopped"),
                               QString::fromUtf8(exception.what()));
         return EXIT_FAILURE;
     }

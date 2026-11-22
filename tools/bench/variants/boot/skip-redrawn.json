@@ -1,0 +1,15 @@
+{
+  "name": "skip-redrawn",
+  "description": "Asynchronous shaders on and EDEN_NX2_SKIP_REDRAWN (Eglantine #874): native draws into targets the game redraws are Bounded (wait within the frame's budget, then skip). Compare with async-shaders (stalls) and async-bounded (draws lost for a frame), and look at the screenshots for objects that stay missing.",
+  "cache_states": [
+    "cold"
+  ],
+  "env": {
+    "EDEN_NX2_SKIP_REDRAWN": "1"
+  },
+  "settings": {
+    "Renderer": {
+      "use_asynchronous_shaders": true
+    }
+  }
+}

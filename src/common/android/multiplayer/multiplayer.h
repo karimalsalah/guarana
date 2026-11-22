@@ -9,6 +9,7 @@
 #include <common/common_types.h>
 #include <network/network.h>
 #include <network/announce_multiplayer_session.h>
+#include <memory>
 
 namespace Core {
     class System;

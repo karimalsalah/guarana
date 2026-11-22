@@ -17,9 +17,19 @@ for example `DLSS QUALITY M (PERFORMANCE DOESN'T FIT)`. Nothing DLSS-related is
 shown when the game never calls its upscaler, or after DLSS has failed; a failure
 keeps DLSS off until the game restarts, and the log says why.
 
+In Ocarina of Time a status bar chip also shows the game's replaced upscaler on any
+GPU: the one that draws (FSR 3.1, FSR 4 or DLSS) with the render and output heights,
+for example `FSR 3.1 720p → 1080p`, and the exact sizes in its tooltip. With DLSS it
+shows only the sizes, next to the DLSS label. When the game's own upscaler draws
+instead, the chip says why: `OFF` (Ocarina FSR is off), `RES 1X` (the game's images
+are not the size or format the upscaler takes, as with a Resolution other than 1X),
+`NO CAMERA` or `NO DEPTH` (menus, cutscenes and loading screens), `WAITING`, or
+`UNAVAILABLE` (it could not start; the log says why). With no game running it reads
+`FSR` or `NO FSR`, and a click turns Ocarina FSR on or off.
+
 ## Model presets
 
-Lichii defaults to **M** for every quality mode. The available choices are NVIDIA
+Guarana defaults to **M** for every quality mode. The available choices are NVIDIA
 default, E/F, J/K and L/M. E/F are deprecated CNN models, J/K are DLSS 4 transformer
 models, and L/M are DLSS 4.5 transformer models. Removed and reserved presets are
 not offered.
@@ -31,7 +41,7 @@ and 30 GPUs without native FP8 support. K is a useful alternative on those cards
 J can reduce ghosting compared with K at the expense of more flicker. If Fire
 Emblem: Fortune's Weave shows horizontal lines with L/M at 2x, try K.
 
-No NVIDIA DLL ships with Lichii. The Graphics download button obtains Streamline
+No NVIDIA DLL ships with Guarana. The Graphics download button obtains Streamline
 2.14.16 and DLSS 310.9.16 from NVIDIA after license acceptance. That runtime supports
 all the listed presets. L/M need DLSS 310.5 or newer; replace an older locally
 installed runtime with NVIDIA's current files. The panel reports the discovered
