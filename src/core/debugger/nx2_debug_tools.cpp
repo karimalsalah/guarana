@@ -50,6 +50,7 @@
 #include "video_core/auto_shading_rate.h"
 #include "video_core/frame_budget.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_split.h"
 #include "video_core/gpu_trace/recorder.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_cache_stats.h"
@@ -973,6 +974,14 @@ json HostTiming(ToolState& state, const json& params) {
     return {{"previous", previous}, {"stats", stats.load()}};
 }
 
+json RenderFollower(ToolState&, const json& params) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (!split.RenderFollowerRunning()) {
+        throw std::runtime_error{"the GPU render follower is not running (EDEN_NX2_RENDER_FOLLOWER=1)"};
+    }
+    const bool previous = params.contains("on") ? split.SetRenderPosting(params.at("on").get<bool>())
+                                                : split.RenderPosting();
+    return {{"previous", previous}, {"on", split.RenderPosting()}};
 json PowerSwitches() {
     namespace Tuning = Common::PowerTuning;
     return {
@@ -1979,6 +1988,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"trace_status", handler(TraceStatus)},
         {"speed_limit", handler(SpeedLimit)},
         {"host_timing", handler(HostTiming)},
+        {"render_follower", handler(RenderFollower)},
         {"power", handler(Power)},
         {"power_set", handler(PowerSet)},
         {"gpu_costs", handler(GpuCosts)},

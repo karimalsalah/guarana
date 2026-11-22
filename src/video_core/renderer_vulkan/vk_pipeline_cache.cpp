@@ -340,6 +340,13 @@ ShaderTranslationKey MakeShaderTranslationKey(const GraphicsPipelineCacheKey& pi
         key.alpha_test_reference = state.alpha_test_ref;
         key.dual_source_blend = state.attachment0_dual_source_blend != 0;
         key.xfb_requested = state.xfb_enabled != 0;
+        const auto zeta_format{static_cast<Tegra::DepthFormat>(state.depth_format.Value())};
+        key.quantize_frag_depth_d24 =
+            state.depth_enabled != 0 && !device.SupportsD24DepthBuffer() &&
+            (zeta_format == Tegra::DepthFormat::Z24_UNORM_S8_UINT ||
+             zeta_format == Tegra::DepthFormat::X8Z24_UNORM ||
+             zeta_format == Tegra::DepthFormat::S8Z24_UNORM ||
+             zeta_format == Tegra::DepthFormat::V8Z24_UNORM);
         if (device.IsMoltenVK()) {
             std::ranges::transform(state.color_formats, key.color_output_types.begin(),
                                    &ColorOutputType);
@@ -447,6 +454,7 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
         info.alpha_test_reference = std::bit_cast<float>(key.alpha_test_reference);
         info.dual_source_blend = key.dual_source_blend;
         info.color_output_types = key.color_output_types;
+        info.quantize_frag_depth_d24 = key.quantize_frag_depth_d24;
         break;
     default:
         break;
@@ -1751,14 +1759,26 @@ void PipelineCache::SaveUsedPipelines() {
                               CacheV2::EncodeUseOrder(order));
 }
 
-GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
+GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline(bool key_unchanged) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::CurrentGraphicsPipeline");
 
+    ++graphics_lookups;
+    last_lookup_kept = false;
+    const std::array<u64, 6> hashes = graphics_key.unique_hashes;
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
         return nullptr;
     }
     const bool mesh_draw =
         maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
+    // Refresh would rebuild the key current_pipeline was found with: same registers, programs and
+    // topology (its parts kept behind dirty flags come from the same registers).
+    if (key_unchanged && current_pipeline != nullptr && !mesh_draw && !vertex_input_lent &&
+        hashes == graphics_key.unique_hashes) {
+        last_lookup_kept = true;
+        current_pipeline->MarkUsed(frame_count);
+        return BuiltPipeline(current_pipeline);
+    }
     if (vertex_input_lent && !mesh_draw) {
         // Refresh keeps the key's vertex input until the registers change it.
         vertex_input_lent = false;
@@ -1885,6 +1905,7 @@ bool PipelineCache::StaleNullPointerSlot(const ComputePipelineCacheEntry& entry)
 }
 
 ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::CurrentComputePipeline");
 
     const ShaderInfo* const shader{ComputeShader()};
     if (!shader) {
@@ -1957,6 +1978,36 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
     }
     return entry.Get(kepler_compute->IsNativeMode(),
                      kepler_compute->regs.code_loc.Address() + qmd.program_start, key);
+}
+
+ComputePipeline* PipelineCache::UnlentComputePipeline(u64& native_key) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::UnlentComputePipeline");
+    const ShaderInfo* const shader{KnownComputeShader()};
+    if (!shader) {
+        return nullptr;
+    }
+    const auto& qmd{kepler_compute->launch_description};
+    const ComputePipelineCacheKey key{
+        .unique_hash = shader->unique_hash,
+        .shared_memory_size = qmd.shared_alloc,
+        .workgroup_size{qmd.block_dim_x, qmd.block_dim_y, qmd.block_dim_z},
+    };
+    const auto it{compute_cache.find(key)};
+    if (it == compute_cache.end()) {
+        return nullptr;
+    }
+    ComputePipelineCacheEntry& entry{it->second};
+    if (!entry.pipeline || entry.pending_rebuild ||
+        (!entry.null_pointer_slots.empty() && entry.rebuilds < MaxComputeRebuilds &&
+         StaleNullPointerSlot(entry)) ||
+        !KnownComputeShaderChecks(shader)) {
+        return nullptr;
+    }
+    native_key = shader->lowered_native ? shader->lowered_native->native_program_key : 0;
+    if (VideoCommon::StutterTrace::Enabled() && !std::exchange(entry.used, true)) {
+        VideoCommon::StutterTrace::CountLookup(VideoCommon::StutterTrace::Lookup::ComputePrebuilt);
+    }
+    return entry.pipeline.get();
 }
 
 void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,

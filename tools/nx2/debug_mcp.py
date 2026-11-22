@@ -368,6 +368,13 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"stats": {"type": "boolean"}}},
     },
     {
+        "name": "render_follower",
+        "description": "With EDEN_NX2_RENDER_FOLLOWER=1, stops (on: false) or resumes (on: true) "
+                       "posting draws to GPURender, to time one scene both ways. Returns the "
+                       "previous and current state.",
+        "inputSchema": {"type": "object", "properties": {"on": {"type": "boolean"}}},
+    },
+    {
         "name": "power",
         "description": "Host power from the Windows energy meter, averaged over window_ms (0: "
                        "since the previous call): package_w, cpu_w (cores) and gpu_w (integrated "

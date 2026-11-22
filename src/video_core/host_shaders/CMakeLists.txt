@@ -99,8 +99,11 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/sgsr1_shader.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/sgsr1_shader_mobile.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/sgsr1_shader_mobile_edge_direction.frag
-    ${CMAKE_CURRENT_SOURCE_DIR}/frame_gen_optical_flow.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/frame_gen_luma_downsample.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/frame_gen_flow_search.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/frame_gen_interpolation.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_optical_flow.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation_median.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_motion_median.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fluid_compose.comp

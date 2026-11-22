@@ -103,6 +103,9 @@ struct RuntimeInfo {
 
     bool convert_depth_mode{};
     bool force_early_z{};
+    /// Fragment stage: the guest depth buffer is 24-bit UNORM but the host stores it as a float,
+    /// so FragDepth is rounded to the 24-bit values the guest would store.
+    bool quantize_frag_depth_d24{};
     /// Fragment stage, depth pass of an alpha-test prepass split (EDEN_NX2_PREPASS_HASHES): no
     /// colour is output, so only what decides a discard is left to compute. With the alpha test
     /// on, render target 0 keeps the alpha it reads.

@@ -251,6 +251,11 @@ it, as every other method.
 (`EDEN_NX2_HOSTTIMING_STATS`) on or off and returns the `previous` and current `stats` state.
 Read the lines with `log_tail` (`contains: "HostTiming wait"`).
 
+**`render_follower`** `{on?}`. With `EDEN_NX2_RENDER_FOLLOWER=1`, stops (`false`) or resumes
+(`true`) posting draws to GPURender, so one scene can be timed with and without it; the back
+records every draw itself while it is off. Returns the `previous` and current `on` state, and
+fails when the follower isn't running.
+
 **`power`** `{window_ms?}`. Host power from the Windows Energy Meter Interface, averaged over
 `window_ms` (default 1000; 0 means since the previous call): `package_w`, `cpu_w` (cores, the
 `PP0` channel) and `gpu_w` (integrated GPU, `PP1`), with `valid` false when nothing was measured

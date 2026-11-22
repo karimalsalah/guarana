@@ -1692,7 +1692,6 @@ TEST_CASE("NUP loader reads the build id of the main that boots", "[nup][loader]
     REQUIRE(FileSys::Nup::PackDump(root, updated) == FileSys::Nup::PackResult::Success);
     CHECK(build_id(updated) == expected(0x50));
 }
-
 TEST_CASE("NUP boot and platform probe use the same program's ExeFS", "[nup][boot-inputs]") {
     TempDir t;
     const auto root = t.path / "Game";

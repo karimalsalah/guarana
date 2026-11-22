@@ -410,18 +410,16 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .queryCount = CostMaxPasses * 4,
                     .pipelineStatistics = 0,
                 });
-                if (Common::DkbFrameTrace::Enabled()) {
-                    trace_pass_pool = device.GetLogical().CreateQueryPool({
-                        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-                        .pNext = nullptr,
-                        .flags = 0,
-                        .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                        .queryCount = TraceMaxPasses,
-                        .pipelineStatistics = 0,
-                    });
-                    trace_pass_items.resize(TraceMaxPasses);
-                    trace_pass_tails.resize(TraceMaxSubmissions);
-                }
+                trace_pass_pool = device.GetLogical().CreateQueryPool({
+                    .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                    .queryCount = TraceMaxPasses,
+                    .pipelineStatistics = 0,
+                });
+                trace_pass_items.resize(TraceMaxPasses);
+                trace_pass_tails.resize(TraceMaxSubmissions);
                 cost_sampling = cost_on || vrs_auto;
             }
             if (Common::DkbFrameTrace::GpuSitesEnabled()) {
@@ -461,6 +459,7 @@ Scheduler::~Scheduler() {
 
 u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                      std::source_location location) {
+    JoinRecorders();
     if (state.renderpass) {
         CountRenderPassEnd(location.file_name(), location.line());
         pass_end_reason = PassEnd::Submit;
@@ -485,6 +484,7 @@ void Scheduler::CountSkippedFlush() {
 }
 
 bool Scheduler::DeferFlush() {
+    JoinRecorders();
     // Fences come one per compute release: ~11,500 a second in Hyrule Warriors: Age of
     // Imprisonment fights, each a queue submission (~22,000 a second with the others), which
     // kept the Vulkan worker busy submitting. Batched within 500 us: ~10-15% more fps there.
@@ -506,6 +506,7 @@ bool Scheduler::DeferFlush() {
 }
 
 void Scheduler::FlushDeferred() {
+    JoinRecorders();
     if (flush_pending) {
         Flush();
     }
@@ -543,6 +544,7 @@ bool Scheduler::WaitSubmitted(u64 tick) {
 
 void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                        std::source_location location) {
+    JoinRecorders();
     if (state.renderpass) {
         CountRenderPassEnd(location.file_name(), location.line());
         pass_end_reason = PassEnd::Submit;
@@ -577,6 +579,7 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
 }
 
 void Scheduler::WaitWorker() {
+    JoinRecorders();
     DispatchWork();
 
     // Ensure the queue is drained.
@@ -590,6 +593,7 @@ void Scheduler::WaitWorker() {
 }
 
 Scheduler::FrameMark Scheduler::NextFrameMark() {
+    JoinRecorders();
     if (TraceCostsWanted()) {
         return FrameMark::Both;
     }
@@ -602,6 +606,7 @@ Scheduler::FrameMark Scheduler::NextFrameMark() {
 }
 
 void Scheduler::MarkFrameEnd(u64 frame, FrameMark mark) {
+    JoinRecorders();
     Record([this, frame, mark](vk::CommandBuffer) {
         trace_frame_end = frame;
         trace_frame_mark = mark;
@@ -622,6 +627,7 @@ VideoCore::GpuCostSnapshot Scheduler::GpuCosts() const {
 }
 
 void Scheduler::DispatchWork() {
+    JoinRecorders();
     if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::DispatchWork");
     }
@@ -729,8 +735,10 @@ bool Scheduler::RecordBeforePass(const Framebuffer* framebuffer,
 
 void Scheduler::RecordUpload(VkBuffer src, VkBuffer dst, std::span<const VkBufferCopy> copies,
                              TraceCategory category) {
+    JoinRecorders();
     if (VideoCommon::GpuSplit::check_owner) {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::RecordUpload");
+        BufferArena::CheckRecord("Scheduler::RecordUpload", std::source_location::current());
     }
     // Check each region so even a single upload larger than the capacity stays bounded, and
     // overlapping regions within that upload cannot enter the same batch.
@@ -980,6 +988,7 @@ void Scheduler::RealizeDeferredClear() {
 
 bool Scheduler::DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot,
                                 const VkClearValue& value) {
+    JoinRecorders();
     if (IsRenderPassActive()) {
         return false;
     }
@@ -994,6 +1003,7 @@ bool Scheduler::DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot,
 }
 
 bool Scheduler::DeferDepthStencilClear(const Framebuffer* framebuffer, const VkClearValue& value) {
+    JoinRecorders();
     if (IsRenderPassActive()) {
         return false;
     }
@@ -1008,6 +1018,7 @@ bool Scheduler::DeferDepthStencilClear(const Framebuffer* framebuffer, const VkC
 }
 
 void Scheduler::FlushDeferredClear() {
+    JoinRecorders();
     if (deferred_clear.framebuffer == nullptr) {
         return;
     }
@@ -1016,6 +1027,7 @@ void Scheduler::FlushDeferredClear() {
 }
 
 void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_location location) {
+    JoinRecorders();
     if (deferred_clear.framebuffer == framebuffer) {
         RealizeDeferredClear();
         return;
@@ -1047,6 +1059,7 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_lo
 }
 
 void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location location) {
+    JoinRecorders();
     if (state.renderpass) {
         CountRenderPassEnd(location.file_name(), location.line());
         if (cost_pass_begun) {
@@ -1057,6 +1070,7 @@ void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location lo
 }
 
 bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
+    JoinRecorders();
     if (state.graphics_pipeline == pipeline) {
         if (pipeline && pipeline->UsesExtendedDynamicState() &&
             state.needs_state_enable_refresh) {
@@ -1083,6 +1097,7 @@ bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
 }
 
 bool Scheduler::UpdateRescaling(bool is_rescaling, bool mesh_layout) {
+    JoinRecorders();
     if (state.rescaling_defined && is_rescaling == state.is_rescaling &&
         mesh_layout == state.mesh_layout) {
         return false;
@@ -1094,6 +1109,7 @@ bool Scheduler::UpdateRescaling(bool is_rescaling, bool mesh_layout) {
 }
 
 bool Scheduler::UpdateDescriptorBufferChunk(u32 descriptor_chunk) {
+    JoinRecorders();
     if (state.descriptor_buffer_bound && descriptor_chunk == state.descriptor_buffer_chunk) {
         return false;
     }
@@ -1205,6 +1221,7 @@ void Scheduler::TraceShader(u64 hash, u32 stage) {
 }
 
 void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
+    JoinRecorders();
     // Shader lists per submission only feed the DKB log lines.
     if (!trace_work_pool || !Common::DkbFrameTrace::Enabled()) {
         return;
@@ -1227,6 +1244,7 @@ void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
 }
 
 void Scheduler::TraceComputePipeline(u64 hash) {
+    JoinRecorders();
     if (!trace_work_pool || !Common::DkbFrameTrace::Enabled()) {
         return;
     }
@@ -2219,6 +2237,7 @@ void Scheduler::AllocateNewContext() {
 }
 
 void Scheduler::InvalidateState() {
+    JoinRecorders();
     ++recording_epoch;
     state.graphics_pipeline = nullptr;
     state.rescaling_defined = false;
@@ -2229,7 +2248,10 @@ void Scheduler::InvalidateState() {
 void Scheduler::EndPendingOperations() {
     // Pause, don't reset: a submission can land between a guest's counter reset and its report,
     // and resetting here would drop the samples counted so far (the report then reads too low).
-    query_cache->CounterClose(VideoCommon::QueryType::ZPassPixelCount64);
+    // Tests submit compute passes with no query cache.
+    if (query_cache) {
+        query_cache->CounterClose(VideoCommon::QueryType::ZPassPixelCount64);
+    }
     EndRenderPass();
 }
 

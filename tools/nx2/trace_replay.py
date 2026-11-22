@@ -54,14 +54,13 @@ NOISE_FRAMES = 8
 NOISE_STRIDE = 16
 
 
-def replay(cli, trace, out, extra=(), switches=None):
+def replay(cli, trace, out, extra=(), environment=None):
     """Replays `trace` with `switches` added to the environment; the frames.json it wrote."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     command = [str(cli), "--replay", str(trace), "--out", str(out), *extra]
-    environment = {**os.environ, **switches} if switches else None
-    result = subprocess.run(command, capture_output=True, text=True, errors="replace",
-                            env=environment)
+    env = {**os.environ, **environment} if environment else None
+    result = subprocess.run(command, capture_output=True, text=True, errors="replace", env=env)
     if result.returncode != 0:
         tail = "\n".join(result.stderr.splitlines()[-20:])
         raise RuntimeError(f"{' '.join(command)} failed ({result.returncode}):\n{tail}")
@@ -391,7 +390,8 @@ def check(cli, corpus_path, traces_dir, out, require, run=replay, generate=subpr
         work.mkdir(parents=True, exist_ok=True)
         if entry.get("source") == "generated":
             trace = work / "trace.lxtrace"
-            generate([str(cli), "--gpu-trace-sample", str(trace), *entry.get("generate", [])],
+            generator = entry.get("generator", "--gpu-trace-sample")
+            generate([str(cli), generator, str(trace), *entry.get("generate", [])],
                      check=True)
         else:
             trace = Path(traces_dir or ".") / entry["file"]
@@ -422,10 +422,18 @@ def check(cli, corpus_path, traces_dir, out, require, run=replay, generate=subpr
         start = entry.get("roundtrip_from")
         extra = [] if start is None else ["--record", str(work / "recorded.lxtrace"),
                                           "--record-from", str(start)]
-        result = run(cli, trace, work / "frames", extra)
+        environment = entry.get("environment")
+        if environment:
+            result = replay(cli, trace, work / "frames", extra, environment)
+        else:
+            result = run(cli, trace, work / "frames", extra)
         device = device_class(result.get("renderer", ""))
         if start is not None:
-            again = run(cli, work / "recorded.lxtrace", work / "recorded")
+            if environment:
+                again = replay(cli, work / "recorded.lxtrace", work / "recorded",
+                               environment=environment)
+            else:
+                again = run(cli, work / "recorded.lxtrace", work / "recorded")
             tail = [frame["hash"] for frame in result["frames"]][start:]
             if [frame["hash"] for frame in again["frames"]] != tail:
                 print(f"{trace_id}: FAIL, the trace recorded from present {start} replays to "

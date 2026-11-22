@@ -150,11 +150,29 @@ public:
 
     /// The pipeline for the current 3D state, built or queued when it isn't cached; null when
     /// the shaders can't be used.
-    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
+    /// key_unchanged: no register the key reads changed since this cache's last lookup, which
+    /// the caller made (EDEN_NX2_RENDER_UNLEND_FAST_DELTA).
+    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline(bool key_unchanged = false);
+    [[nodiscard]] u64 GraphicsLookups() const noexcept {
+        return graphics_lookups;
+    }
+    /// Whether the last lookup kept the current pipeline without refreshing the key.
+    [[nodiscard]] bool LastLookupKept() const noexcept {
+        return last_lookup_kept;
+    }
+
+    [[nodiscard]] const DynamicFeatures& Features() const noexcept {
+        return dynamic_features;
+    }
 
     void TickFrame();
 
     [[nodiscard]] ComputePipeline* CurrentComputePipeline(u64& native_key);
+    /// EDEN_NX2_RENDER_UNLEND_DISPATCH, on the back: CurrentComputePipeline when it is a plain
+    /// hit (the shader known, its entry built, no rebuild pending or due, no game hook acting);
+    /// nullptr, having created or retired nothing, otherwise. A retire stamps GPURender's tick,
+    /// which posted dispatches it has not recorded yet would outlive.
+    [[nodiscard]] ComputePipeline* UnlentComputePipeline(u64& native_key);
 
     /// Whether a Switch 2 dispatch whose compute pipeline is still building is skipped instead
     /// of waiting for the build, as native_async_draws decides for draws. Skipping leaves the
@@ -425,11 +443,11 @@ private:
     VideoCore::ShaderNotify& shader_notify;
     bool use_asynchronous_shaders{};
     bool use_vulkan_pipeline_cache{};
+    /// Whether this boot's Vulkan pipeline cache started from the saved file, not empty
+    bool vulkan_pipeline_cache_restored{};
     const bool use_shader_reuse;
     /// EDEN_NX2_ASYNC_TRANSLATE: skippable native graphics pipelines are translated on workers
     const bool use_async_translate;
-    /// Whether this boot's Vulkan pipeline cache started from the saved file, not empty
-    bool vulkan_pipeline_cache_restored{};
     /// The pipelines' builds, the prebuild and the precache. Declared before the pipelines, whose
     /// builds it runs.
     std::optional<VideoCommon::ShaderJobScheduler> shader_jobs;
@@ -448,6 +466,8 @@ private:
     bool mesh_vertex_inputs_seeded{};
     /// graphics_key holds vertex input another key lent it instead of the registers'
     bool vertex_input_lent{};
+    u64 graphics_lookups{};
+    bool last_lookup_kept{};
 
     /// EDEN_NX2_GPL: shader libraries shared by the graphics pipelines. Declared before the
     /// pipelines, so it outlives them.

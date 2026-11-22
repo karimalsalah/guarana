@@ -80,8 +80,12 @@ struct ShaderTranslationKey {
     bool y_negate;
     bool tess_clockwise;
     bool dual_source_blend;
-    /// Always zero: makes the padding explicit, so the key can be compared and hashed as bytes.
-    std::array<u8, 1> zero_padding;
+    /// Fragment stage: the guest depth buffer is 24-bit UNORM but the host stores it as a
+    /// float, so FragDepth is rounded to the 24-bit values the guest would store.
+    bool quantize_frag_depth_d24;
+    /// Twelve bools fill the 8-byte tail exactly (the u64 hash array sets 8-byte alignment):
+    /// no padding bytes remain, so the key can be compared and hashed as bytes. Adding a
+    /// bool here MUST re-check std::has_unique_object_representations below.
 
     bool operator==(const ShaderTranslationKey& rhs) const noexcept;
 };

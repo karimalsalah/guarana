@@ -1835,6 +1835,9 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     }
 
     // Vulkan part.
+    if (VideoCommon::GpuSplit::PlayingUnlent() && VideoCommon::GpuSplit::QuerySyncEnabled()) {
+        // EDEN_NX2_RENDER_QUERY_SYNC_E: outside a lent call, into the buffers the back obtained
+        // for this op (and outdated the read downloads of); the back's cache is not entered.
     std::vector<Buffer*> query_write_buffers;
     query_write_buffers.reserve(impl->little_cache.size());
     std::scoped_lock lk(impl->buffer_cache.mutex);
@@ -1849,11 +1852,6 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
             impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
             query_write_buffers.push_back(buffer);
         }
-    });
-    // The copies below are GPU writes the buffer cache doesn't record: reads taken before them
-    // must not keep the bytes they downloaded as the newest.
-    for (const auto& value : values) {
-        impl->buffer_cache.OutdateReadDownloads(value.address, value.size);
     }
 
     VkBuffer src_buffer;

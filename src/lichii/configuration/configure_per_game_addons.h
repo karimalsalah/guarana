@@ -11,6 +11,7 @@
 
 #include <QFutureWatcher>
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QWidget>
 
@@ -49,6 +50,10 @@ public:
     void SetFile(FileSys::VirtualFile file_);
 
     void SetTitleId(u64 id);
+    void ReloadAfterModStore(const QSet<QString>& store_toggled);
+
+signals:
+    void BrowseModsRequested();
 
 public slots:
     void InstallMods(const QStringList& mods);
@@ -66,6 +71,9 @@ protected:
     void showContextMenu(const QPoint& pos);
 
 private:
+    static constexpr int LOADED_CHECK_STATE = PATCH_LOCATION + 1;
+
+    static QString AddonKey(const QStandardItem& item);
     void changeEvent(QEvent* event) override;
     void RetranslateUI();
 
@@ -77,7 +85,7 @@ private:
 
     std::unique_ptr<Ui::ConfigurePerGameAddons> ui;
     FileSys::VirtualFile file;
-    u64 title_id;
+    u64 title_id{};
 
     QVBoxLayout* layout;
     QTreeView* tree_view;

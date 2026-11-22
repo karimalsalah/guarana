@@ -20,7 +20,7 @@ The English README is the reference. If a translation and the English text disag
 | German (Deutsch) | [README.de.md](README.de.md) | Draft, needs native-speaker review |
 | Russian (Русский) | [README.ru.md](README.ru.md) | Draft, needs native-speaker review |
 | Arabic (العربية) | [README.ar.md](README.ar.md) | Draft, needs native-speaker review (right-to-left) |
-| Finnish (Suomi) | [README.fi.md](README.fi.md) | Draft, needs native-speaker review | 
+| Finnish (Suomi) | [README.fi.md](README.fi.md) | Draft, needs native-speaker review |
 
 ## What stays in English
 

@@ -14,13 +14,12 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+option(LICHII_USE_PENDING_RELEASE_NOTES "Show the staged What's new notes for this build" OFF)
 # The About dialog's "Guarana contributors" list: names from CONTRIBUTORS.md, read at configure time.
 include(GuaranaContributors)
 guarana_contributors_header("${CMAKE_CURRENT_SOURCE_DIR}/../../CONTRIBUTORS.md"
                             "${CMAKE_CURRENT_SOURCE_DIR}/guarana_contributors.h.in"
                             "${CMAKE_CURRENT_BINARY_DIR}/guarana_contributors.h")
-
-option(LICHII_USE_PENDING_RELEASE_NOTES "Show the staged What's new notes for this build" OFF)
 
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
@@ -139,6 +138,12 @@ add_executable(lichii
     configuration/configure_per_game_addons.cpp
     configuration/configure_per_game_addons.h
     configuration/configure_per_game_addons.ui
+    mod_store/mod_store_client.cpp
+    mod_store/mod_store_client.h
+    mod_store/mod_store_dialog.cpp
+    mod_store/mod_store_dialog.h
+    mod_store/mod_store_install.cpp
+    mod_store/mod_store_install.h
     configuration/configure_profile_manager.cpp
     configuration/configure_profile_manager.h
     configuration/configure_profile_manager.ui
@@ -478,7 +483,7 @@ endif()
 
 target_link_libraries(lichii PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(lichii PRIVATE common core input_common frontend_common network video_core qt_common)
-target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network)
+target_link_libraries(lichii PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network QuaZip::QuaZip)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(lichii PRIVATE ZLIB::ZLIB)
 # Help > Report a Problem zips the logs (qt_common/util/compress.h) on every platform.
@@ -493,6 +498,26 @@ endif()
 
 if (UNIX AND NOT APPLE)
     target_link_libraries(lichii PRIVATE Qt6::DBus)
+endif()
+
+get_target_property(FLYHIGH_DIR video_core FLYHIGH_RUNTIME_DIR)
+if (FLYHIGH_DIR)
+    target_sources(lichii PRIVATE
+        configuration/flyhigh_dialog.cpp
+        configuration/flyhigh_dialog.h
+        configuration/flyhigh_menu_row.cpp
+        configuration/flyhigh_menu_row.h
+        configuration/flyhigh_panel.cpp
+        configuration/flyhigh_panel.h
+    )
+    set(FLYHIGH_LICENSE_DIR "$<TARGET_FILE_DIR:lichii>/licenses/flyhigh")
+    add_custom_command(TARGET lichii POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FLYHIGH_DIR}/lib/flyhigh.dll" "$<TARGET_FILE_DIR:lichii>"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${FLYHIGH_LICENSE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FLYHIGH_DIR}/LICENSE" "${FLYHIGH_DIR}/NOTICE" "${FLYHIGH_LICENSE_DIR}"
+        VERBATIM)
 endif()
 
 if (ENABLE_WEB_SERVICE)

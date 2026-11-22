@@ -31,9 +31,9 @@
 
 #include "common/cityhash.h"
 #include "common/fs/file_lock.h"
-#include "common/fs/mapped_file.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/fs/mapped_file.h"
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
 #include "shader_recompiler/program_header.h"
 #include "video_core/native_lowering.h"

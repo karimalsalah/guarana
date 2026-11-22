@@ -41,6 +41,9 @@ on:
         description: Commit to build
         type: string
         required: true
+  # Refreshes nx2's compiler caches, which every branch's build restores (see docs/CI.md).
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -64,6 +67,9 @@ jobs:
   prepare:
     name: Prepare release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
     timeout-minutes: 10
     outputs:
       channel: ${{ steps.plan.outputs.channel }}
@@ -75,6 +81,11 @@ jobs:
       publish: ${{ steps.plan.outputs.publish }}
       prerelease: ${{ steps.plan.outputs.prerelease }}
     steps:
+      - name: Refuse to publish an Aftermath build
+        if: inputs.nsight_aftermath && inputs.publish_release
+        run: |
+          echo "nsight_aftermath builds are test builds; run them with publish_release=false"
+          exit 1
       # channel: release (a vX.Y.Z tag), nightly (from nightly.yml) or test (a branch, never
       # published). version names the files: X.Y.Z[-pre] for a tag, "nightly", or test-<commit>.
       - name: Decide what to build
@@ -561,6 +572,7 @@ jobs:
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
             -DENABLE_UPDATE_CHECKER=OFF
             "-DLICHII_BUILD_TAG=$BUILD_TAG"
+            "-DLICHII_USE_PENDING_RELEASE_NOTES=$LICHII_USE_PENDING_RELEASE_NOTES"
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }}
             "-DNIGHTLY_BUILD=$NIGHTLY_BUILD"
             -DUSE_DISCORD_PRESENCE=OFF
@@ -620,10 +632,12 @@ jobs:
             -DLICHII_ROOM=OFF \
             -DLICHII_ROOM_STANDALONE=OFF \
             "-DLICHII_USE_BUNDLED_QT=$bundled_qt" \
+            -DENABLE_FLYHIGH=ON \
             -DENABLE_QT_TRANSLATION=ON \
             -DLICHII_USE_BUNDLED_SDL3=ON \
             -DENABLE_UPDATE_CHECKER=OFF \
             "-DLICHII_BUILD_TAG=$BUILD_TAG" \
+            "-DLICHII_USE_PENDING_RELEASE_NOTES=$LICHII_USE_PENDING_RELEASE_NOTES" \
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
             "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \
@@ -658,6 +672,7 @@ jobs:
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
             -DENABLE_UPDATE_CHECKER=OFF \
             "-DLICHII_BUILD_TAG=$BUILD_TAG" \
+            "-DLICHII_USE_PENDING_RELEASE_NOTES=$LICHII_USE_PENDING_RELEASE_NOTES" \
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
             "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \
@@ -835,7 +850,7 @@ jobs:
           if (-not (Test-Path "build/release/bin/$gui")) { $gui = 'lichii.exe' }
           $cli = 'guarana-cli.exe'
           if (-not (Test-Path "build/release/bin/$cli")) { $cli = 'eden-cli.exe' }
-          foreach ($exe in $gui, $cli) {
+          foreach ($exe in $gui, $cli, 'flyhigh.dll', 'licenses/flyhigh/LICENSE', 'licenses/flyhigh/NOTICE') {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
@@ -853,6 +868,11 @@ jobs:
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
           if (Get-ChildItem -Recurse build/release/bin -Filter 'GFSDK_*') {
             throw 'build/release/bin holds Nsight Aftermath files, which must not ship'
+          }
+          $excluded = 'flyhighfg.bin', 'flyhighfg.json', 'graph.json', 'models.json', 'WEIGHTS_LICENSE.md'
+          $unshippable = Get-ChildItem -Recurse -File build/release/bin | Where-Object { $_.Name -in $excluded }
+          if ($unshippable) {
+            throw "build/release/bin holds FlyHigh model files, which must not ship: $($unshippable.FullName -join ', ')"
           }
 
       # Authenticode signing of the two programs (docs/SIGNING.md) in builds that are published,

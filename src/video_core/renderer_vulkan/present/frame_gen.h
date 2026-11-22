@@ -15,7 +15,11 @@
 #include "video_core/renderer_vulkan/present/frame_gen_pacer.h"
 #include "video_core/renderer_vulkan/present/lsfg_chain.h"
 #include "video_core/renderer_vulkan/present/lsfg_shaders.h"
+#include "video_core/renderer_vulkan/present/fsr3_frame_gen.h"
 #include "video_core/renderer_vulkan/present/optical_flow_frame_gen.h"
+#ifdef HAS_FLYHIGH
+#include "video_core/renderer_vulkan/present/flyhigh_frame_gen.h"
+#endif
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
 namespace Vulkan {
@@ -85,6 +89,7 @@ public:
     void Pause();
 
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
+    void DrainFlyHighSubmissions();
 
     /// EDEN_NX2_FLUID_INTERP: records the frame `blend` of the way from the last real frame to the
     /// one Process was given into destination (FSR3 interpolation only). False when nothing was
@@ -106,6 +111,10 @@ private:
     void ReleaseCadence();
     void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale,
                  Settings::FrameGenType type);
+    [[nodiscard]] bool HasFlyHigh() const;
+    [[nodiscard]] bool FlyHighSettingsChanged() const;
+    [[nodiscard]] bool FlyHighBlocked(VkColorSpaceKHR color_space) const;
+    void ResetFlyHigh();
     /// Updates the status bar state and logs each change with its reason.
     void SetState(VideoCore::FrameGenState new_state, VkFormat format);
     /// Logs every 10 s how many frames were generated, when that changes.
@@ -121,6 +130,12 @@ private:
     std::optional<LsfgShaders> shaders;
     std::optional<LsfgChain> chain;
     std::optional<OpticalFlowFrameGen> optical_flow_chain;
+#ifdef HAS_FLYHIGH
+    std::optional<FlyHighFrameGen> flyhigh;
+    bool flyhigh_failed{};
+    bool built_protect_hud{};
+#endif
+    std::optional<Fsr3FrameGen> fsr3_chain;
     std::optional<FrameExtrapolation> extrapolation;
     /// EDEN_NX2_FG_GAME_MOTION: the guides of the last two real frames and the warp between them.
     std::optional<GameMotionInterpolation> game_motion;

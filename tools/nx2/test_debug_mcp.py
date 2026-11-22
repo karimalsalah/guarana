@@ -136,13 +136,12 @@ class AdapterTest(unittest.TestCase):
         names = [tool["name"] for tool in self.adapter.handle({"id": 2, "method": "tools/list"})
                  ["result"]["tools"]]
         self.assertEqual(names, ["status", "frame_times", "screenshot", "shown_frames", "log_tail",
-                                 "log_filter", "capture_frame",
-                                 "capture_image", "capture_bundle", "reject_shaders", "set_shading_rate",
-                                 "set_prepass", "sample", "speed_limit", "read_memory",
-                                 "search_memory", "read_gpu_memory", "input",
-                                 "input_sequence", "input_latency", "host_timing", "power",
-                                 "power_set",
-                                 "gpu_costs", "gpu_perf", "frame_budget", "autopilot", "memory", "trace_record",
+                                 "log_filter", "capture_frame", "capture_image", "capture_bundle",
+                                 "reject_shaders", "set_shading_rate", "set_prepass", "sample",
+                                 "speed_limit", "read_memory", "search_memory", "read_gpu_memory",
+                                 "input", "input_sequence", "input_latency", "host_timing",
+                                 "render_follower", "power", "power_set", "gpu_costs", "gpu_perf",
+                                 "frame_budget", "autopilot", "memory", "trace_record",
                                  "trace_stop", "trace_status", "thread_stats", "present_stats",
                                  "latency",
                                  "cache_stats", "readbacks", "boot_timing"])

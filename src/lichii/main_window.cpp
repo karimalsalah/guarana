@@ -48,6 +48,7 @@
 #include "set_play_time_dialog.h"
 #include "util/util.h"
 #include "lichii/game/game_list.h"
+#include "lichii/mod_store/mod_store_dialog.h"
 #include "lichii/nup_dialogs.h"
 #include "lichii/problem_report.h"
 #include "lichii/recommended_settings_dialog.h"
@@ -57,7 +58,6 @@
 #include "lichii/bug_report_dialog.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #ifdef LICHII_NX_TOOLS
-#include "core/file_sys/registered_cache.h"
 #include "lichii/nx_tools.h"
 #endif
 
@@ -70,6 +70,11 @@
 
 #include "configuration/configuration_shared.h"
 #include "configuration/configure_dialog.h"
+#ifdef HAS_FLYHIGH
+#include "configuration/flyhigh_dialog.h"
+#include "configuration/flyhigh_menu_row.h"
+#include "configuration/flyhigh_panel.h"
+#endif
 #include "configuration/configure_input.h"
 #include "configuration/configure_network.h"
 #include "configuration/configure_per_game.h"
@@ -106,6 +111,7 @@
 #include <QPalette>
 #include <QProgressDialog>
 #include <QScreen>
+#include <QSet>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QtConcurrentRun>
@@ -187,6 +193,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/file_sys/nup_writer.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/loader/nx.h"
@@ -514,6 +521,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     default_theme_paths = QIcon::themeSearchPaths();
 
+    // The first launch after an interface update switches to Lichii Dark and explains what moved.
+    const bool whats_new_pending =
+        UISettings::values.whats_new_version.GetValue() < WhatsNewDialog::Version;
+    if (whats_new_pending) {
+        UISettings::values.whats_new_version = WhatsNewDialog::Version;
+        UISettings::values.theme =
+            UISettings::themes[static_cast<size_t>(UISettings::default_theme)].second;
+    }
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -676,12 +691,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     const bool direct_launch =
         launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
                           launch_params->launch_qlaunch || launch_params->launch_hlaunch);
-    // A HOME-menu launch (no game path) scans the list later, to feed the QLaunch applet.
-    const bool launch_home = launch_params && launch_params->filepath.empty() &&
-                             !launch_params->launch_setup && launch_params->launch_qlaunch;
-    const bool launching_content =
-        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
-                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
+    const bool launching_content = direct_launch;
     const auto build = WhatsNewDialog::ParseBuildTag(Common::g_build_release_tag);
     const auto whats_new_action = WhatsNewDialog::OnStartup(
         build, UISettings::values.last_seen_release.GetValue(), first_start, launching_content,
@@ -689,6 +699,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (whats_new_action == WhatsNewDialog::StartupAction::Remember) {
         config->SaveLastSeenRelease(build);
     }
+    // A HOME-menu launch (no game path) scans the list later, to feed the QLaunch applet.
+    const bool launch_home = launch_params && launch_params->filepath.empty() &&
+                             !launch_params->launch_setup && launch_params->launch_qlaunch;
 
     // A launcher session never shows the game list, so it does not scan for it.
     if (!launcher_session && !launch_home) {
@@ -696,6 +709,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     }
     Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
 
+    // The launcher shows a version's notes in its own Updates screen; a launcher session goes
+    // straight to the game.
+    if (whats_new_pending && !launcher_session && !UISettings::values.first_start.GetValue() &&
+        UISettings::values.show_whats_new.GetValue()) {
+        QTimer::singleShot(0, this, &MainWindow::OnWhatsNew);
+    }
     // Set up game list mode checkboxes.
     SetGameListMode(UISettings::values.game_list_mode.GetValue());
 
@@ -1391,26 +1410,60 @@ void MainWindow::InitializeWidgets() {
     frame_gen_status_button->setCheckable(true);
     connect(frame_gen_status_button, &QPushButton::clicked, this, [this] {
         Settings::values.frame_gen.SetValue(!Settings::values.frame_gen.GetValue());
+#ifdef HAS_FLYHIGH
+        if (Settings::values.frame_gen.GetValue() &&
+            Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::FlyHigh) {
+            OfferFlyHighModel(this);
+        }
+#endif
         UpdateFrameGenButton();
     });
     UpdateFrameGenButton();
     frame_gen_status_button->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(frame_gen_status_button, &QPushButton::customContextMenuRequested,
             [this](const QPoint& menu_location) {
+#ifdef HAS_FLYHIGH
+                FlyHighTypeMenu context_menu;
+#else
                 QMenu context_menu;
-                for (auto const& [type, text] : ConfigurationShared::frame_gen_type_texts_map) {
+#endif
+                for (const auto& [type, text] : ConfigurationShared::frame_gen_type_texts_map) {
 #ifndef EGLANTINE_STREAMLINE
                     // Only builds with NVIDIA Streamline (Windows) have DLSS Frame Generation.
                     if (type == Settings::FrameGenType::NvidiaDlssG) {
                         continue;
                     }
 #endif
+#ifndef HAS_FLYHIGH
+                    if (type == Settings::FrameGenType::FlyHigh) {
+                        continue;
+                    }
+#endif
                     const QString label = ConfigurationShared::TranslateMapText(translator, text);
-                    context_menu.addAction(label, [this, type] {
+                    QAction* action = context_menu.addAction(label, [this, type] {
                         Settings::values.frame_gen_type.SetValue(type);
                         Settings::values.frame_gen.SetValue(true);
+#ifdef HAS_FLYHIGH
+                        if (type == Settings::FrameGenType::FlyHigh) {
+                            OfferFlyHighModel(this);
+                        }
+#endif
                         UpdateFrameGenButton();
                     });
+#ifdef HAS_FLYHIGH
+                    if (type == Settings::FrameGenType::FlyHigh) {
+                        context_menu.SetGear(action, [this] {
+                            FlyHighDialog dialog(this);
+                            if (dialog.exec() == QDialog::Accepted) {
+                                dialog.Apply();
+                                config->SaveAllValues();
+                                UpdateFrameGenButton();
+                            }
+                        });
+                    }
+#else
+                    (void)action;
+#endif
                 }
                 context_menu.exec(frame_gen_status_button->mapToGlobal(menu_location));
                 frame_gen_status_button->repaint();
@@ -2112,6 +2165,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_Folder, &MainWindow::OnInstallFirmware);
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
+    connect_menu(ui->action_Mod_Store, &MainWindow::OnOpenModStore);
 #if defined(_WIN32)
     connect_menu(ui->action_Check_For_Updates, [] { OpenLauncherUpdates(); });
 #elif defined(ENABLE_UPDATE_CHECKER)
@@ -2217,6 +2271,7 @@ void MainWindow::UpdateMenuState() {
     ui->action_Firmware_From_Folder->setEnabled(!emulation_running);
     ui->action_Firmware_From_ZIP->setEnabled(!emulation_running);
     ui->action_Install_Keys->setEnabled(!emulation_running);
+    ui->action_Mod_Store->setEnabled(!emulation_running);
 
     for (QAction* action : applet_actions) {
         action->setEnabled(is_firmware_available && !emulation_running);
@@ -2495,6 +2550,16 @@ bool MainWindow::ConfirmLowRamBoot(const QString& filename,
 
 void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletParameters params,
                           StartGameType type) {
+#ifdef HAS_FLYHIGH
+    // Frame generation was turned on in the settings, where nothing offers the model: offer it
+    // once before the first game.
+    static bool flyhigh_offered = false;
+    if (!flyhigh_offered && Settings::values.frame_gen.GetValue() &&
+        Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::FlyHigh) {
+        flyhigh_offered = true;
+        OfferFlyHighModel(this);
+    }
+#endif
 #ifdef LICHII_NX_TOOLS
     if (nx_metadata_write_in_progress) {
         QMessageBox::information(this, tr("NX Archive"),
@@ -2516,7 +2581,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         shader_warm_dialog->activateWindow();
         return;
     }
-    if (boot_in_progress || close_pending) {
+    if (boot_in_progress || close_pending || mod_store_open) {
         return;
     }
     if (whats_new_dialog) {
@@ -4998,6 +5063,153 @@ void MainWindow::OnConfigurePerGame() {
     OpenPerGameConfiguration(title_id, current_game_path.toStdString());
 }
 
+static u64 ParseModStoreTitleId(const QString& title_id) {
+    if (title_id.size() != 16) {
+        return 0;
+    }
+    const auto id = title_id.toULongLong(nullptr, 16);
+    return title_id.compare(QString::fromStdString(fmt::format("{:016X}", id)),
+                            Qt::CaseInsensitive) == 0
+               ? id
+               : 0;
+}
+
+void MainWindow::OnOpenModStore() {
+    QSet<QString> store_toggled;
+    if (OpenModStore(this, 0, {}, store_toggled)) {
+        OnGameListRefresh();
+    }
+}
+
+bool MainWindow::OpenModStore(QWidget* parent, u64 initial_title_id, const std::string& file_name,
+                              QSet<QString>& store_toggled) {
+    auto& system = *QtCommon::system;
+    if (mod_store_open || close_pending || boot_in_progress || emulation_running ||
+        system.IsPoweredOn()) {
+        return false;
+    }
+    if (nx_metadata_write_in_progress) {
+        QMessageBox::information(parent, tr("Mod Store"),
+                                 tr("Wait for the NX metadata edit to finish before browsing mods."));
+        return false;
+    }
+    if (game_list->IsPopulating()) {
+        QMessageBox::information(
+            parent, tr("Mod Store"), tr("Wait for the game library to finish loading before browsing mods."));
+        return false;
+    }
+
+    mod_store_open = true;
+    game_list->SetScanEnabled(false, false);
+    SCOPE_EXIT {
+        game_list->SetScanEnabled(true);
+        mod_store_open = false;
+    };
+    const auto lookup = [&](const QString& title_id) -> ModStore::GameIdentity {
+        const auto id = ParseModStoreTitleId(title_id);
+        if (id == 0) {
+            return {};
+        }
+
+        const auto open_game = [&](FileSys::VirtualFile file) -> std::unique_ptr<Loader::AppLoader> {
+            auto loader = Loader::GetLoader(system, std::move(file), id);
+            u64 actual_id{};
+            return loader && loader->ReadProgramId(actual_id) == Loader::ResultStatus::Success &&
+                           actual_id == id
+                       ? std::move(loader)
+                       : nullptr;
+        };
+        const auto open_path = [&](const std::string& path) {
+            return open_game(Core::GetGameFileFromPath(QtCommon::vfs, path));
+        };
+        const bool has_selected_path = id == initial_title_id && !file_name.empty();
+        std::unique_ptr<Loader::AppLoader> loader;
+        if (has_selected_path) {
+            loader = open_path(file_name);
+        } else {
+            const auto path = Service::NS::GetGameListApplicationPath(system, id);
+            if (path) {
+                loader = open_path(*path);
+            }
+            if (!loader) {
+                const auto* const model = game_list->GetModel();
+                const auto matches =
+                    model->match(model->index(0, 0), GameListItemPath::ProgramIdRole,
+                                 QVariant::fromValue(qulonglong{id}), -1,
+                                 Qt::MatchExactly | Qt::MatchRecursive);
+                for (const auto& match : matches) {
+                    const auto candidate = match.data(GameListItemPath::FullPathRole).toString()
+                                               .toStdString();
+                    if (!candidate.empty() && (!path || *path != candidate)) {
+                        loader = open_path(candidate);
+                        if (loader) {
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!loader) {
+                loader = open_game(system.GetContentProvider().GetEntryUnparsed(
+                    id, FileSys::ContentRecordType::Program));
+            }
+        }
+        if (!loader) {
+            return {};
+        }
+
+        ModStore::GameIdentity result{.installed = true};
+        if (const auto build = loader->ReadMainBuildIdHex(system);
+            build && build->find_first_not_of('0') != std::string::npos) {
+            result.build_id = QString::fromStdString(*build);
+        }
+        const bool updatable = loader->IsRomFSUpdatable();
+        const bool native_nx = updatable && loader->GetFileType() == Loader::FileType::NX;
+        std::string version;
+        if (!native_nx && loader->ReadDisplayVersion(version) == Loader::ResultStatus::Success) {
+            result.display_version = QString::fromStdString(version).trimmed();
+        }
+        if (result.display_version.isEmpty() && updatable) {
+            const FileSys::PatchManager patch{id, system.GetFileSystemController(),
+                                             system.GetContentProvider()};
+            if (const auto control = patch.GetControlMetadata().first) {
+                result.display_version = QString::fromStdString(control->GetVersionString()).trimmed();
+            }
+        }
+        return result;
+    };
+
+    return ModStore::ShowDialog(
+        parent, {.base_url = QString::fromStdString(UISettings::values.mod_store_api_url.GetValue()),
+                 .initial_title_id =
+                     initial_title_id == 0 ? QString{}
+                                           : QString::fromStdString(fmt::format("{:016X}", initial_title_id)),
+                 .mods_root = QDir(QString::fromStdString(
+                                      Common::FS::GetEdenPathString(Common::FS::EdenPath::LoadDir)))
+                                  .absolutePath(),
+                 .game_identity = lookup,
+                 .is_enabled = [](const QString& title_id, const QString& addon) {
+                     const auto id = ParseModStoreTitleId(title_id);
+                     if (id == 0 || addon.isEmpty()) {
+                         return false;
+                     }
+                     const auto& disabled = Settings::values.disabled_addons;
+                     const auto it = disabled.find(id);
+                     return it == disabled.end() ||
+                            std::ranges::find(it->second, addon.toStdString()) == it->second.end();
+                 },
+                 .set_enabled = [&](const QString& title_id, const QString& addon, bool enabled) {
+                     const auto id = ParseModStoreTitleId(title_id);
+                     if (id == 0 || addon.isEmpty() || system.IsPoweredOn() ||
+                         !config->SetAddonEnabled(id, addon.toStdString(), enabled)) {
+                         return false;
+                     }
+                     if (id == initial_title_id) {
+                         store_toggled.insert(addon);
+                     }
+                     return true;
+                 }});
+}
+
 void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_name) {
     ListVulkanDevices(true);
     Settings::SetConfiguringGlobal(false);
@@ -5006,6 +5218,14 @@ void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_
     // Artwork saved here wins over a SteamGridDB lookup still running for the game.
     connect(&dialog, &ConfigurePerGame::CustomArtworkChanged, game_list,
             &GameList::OnCustomArtworkChanged);
+    connect(&dialog, &ConfigurePerGame::BrowseModsRequested, this, [&] {
+        QSet<QString> store_toggled;
+        const bool changed = OpenModStore(&dialog, title_id, file_name, store_toggled);
+        if (changed || !store_toggled.isEmpty()) {
+            dialog.ReloadAddonsAfterModStore(store_toggled);
+            UISettings::values.is_game_list_reload_pending.exchange(true);
+        }
+    });
 
     const auto result = dialog.exec();
 
@@ -6531,8 +6751,11 @@ void MainWindow::UpdateFrameGenButton() {
     const bool dlssg_fallback = selected_type == Settings::FrameGenType::NvidiaDlssG &&
                                 emulation_running &&
                                 frame_gen_state == VideoCore::FrameGenState::Running;
+    const bool flyhigh_fallback = selected_type == Settings::FrameGenType::FlyHigh &&
+                                  emulation_running &&
+                                  frame_gen_state == VideoCore::FrameGenState::MissingFlyHigh;
     const Settings::FrameGenType shown_type =
-        dlssg_fallback ? Settings::FrameGenType::OpticalFlow : selected_type;
+        dlssg_fallback || flyhigh_fallback ? Settings::FrameGenType::OpticalFlow : selected_type;
     const QString& type_text =
         ConfigurationShared::frame_gen_type_texts_map.find(shown_type)->second;
     const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
@@ -6581,6 +6804,8 @@ void MainWindow::UpdateFrameGenButton() {
         break;
     case VideoCore::FrameGenState::NvidiaFrameGen:
         break;
+    case VideoCore::FrameGenState::MissingFlyHigh:
+        break;
     }
 
     if (!unavailable.isEmpty()) {
@@ -6594,7 +6819,10 @@ void MainWindow::UpdateFrameGenButton() {
     const QString fallback =
         dlssg_fallback ? tr(" NVIDIA DLSS Frame Generation can't run for this game or setup, so "
                             "Lichii Optical Flow Frame Generation runs instead; the log says why.")
-                       : QString();
+        : flyhigh_fallback
+            ? tr(" FlyHigh can't run yet (its model is not downloaded, or the log says why), so "
+                 "Lichii Optical Flow runs instead. Right-click FlyHigh to open its settings.")
+            : QString();
     if (frame_gen_generating) {
         frame_gen_status_button->setText(mode);
         frame_gen_status_button->setToolTip(
@@ -7135,6 +7363,7 @@ void MainWindow::UpdateMenuIcons() {
         {ui->action_Firmware_From_ZIP, "archive"},
         {ui->action_Verify_installed_contents, "check"},
         {ui->action_Data_Manager, "hdd"},
+        {ui->action_Mod_Store, "puzzle"},
         {ui->menu_cabinet_applet->menuAction(), "star"},
         {ui->menu_Applets->menuAction(), "apps"},
         {ui->menu_Create_Shortcuts->menuAction(), "share"},

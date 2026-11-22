@@ -2,7 +2,7 @@
 
 GPU traces (`.lxtrace`, see `docs/nx2/gpu-trace.md`) replay a scene without the game, so they make regression tests for rendering. Traces from games hold the game's shaders, textures and buffers, so they never go into this repository or a public place. The repository keeps only what checks them:
 
-- `corpus.json`: per trace its `id`, `file` (the trace's file name in the private store), `sha256`, `size`, the game's `program_id`, the `scene`, the `bug` it covers and `expected`: per device class (`lavapipe` for Mesa's CPU driver) the XXH3-128 hash of every replayed frame, in order. `"source": "generated"` marks a trace `guarana-cli` (`eden-cli` before v20.2) writes itself, which needs no store. `roundtrip_from` also records the replay from that present and checks that the new trace replays to the same frames. `generate` lists more arguments for `--gpu-trace-sample`, and `expect_failure` is text the replay must fail with: the entry passes only when the replay refuses the trace and says so.
+The `draws` and `motion` rows come from the sample's `--gpu-trace-sample-draws` and `--gpu-trace-sample-motion` modes; `draws-render-follower` and `draws-unlend` are the draws trace with `EDEN_NX2_RENDER_FOLLOWER=1` and `EDEN_NX2_RENDER_UNLEND=1`, which must leave its frames bit-identical; `sample-no-presents` is the sample recorded without its presents, which the replay must refuse.
 - `expected/<id>/`: when a frame's look matters for review, a small PNG of it (only frames whose content may be public).
 
 Check the corpus (CI runs this on lavapipe with the generated traces):

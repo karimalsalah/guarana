@@ -854,4 +854,3 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadMainBuildId(
 }
 
 } // namespace Loader
-
