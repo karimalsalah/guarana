@@ -1,0 +1,1 @@
+- Docs: record the measured `EDEN_NX2_NO_REACTIVE` regression in switches.md (position-balanced 4-leg vision-gated A/B on OoT Switch 2: OFF 39.32 ms vs ON 46.83 ms, +7.51 ms/frame; keep off).
