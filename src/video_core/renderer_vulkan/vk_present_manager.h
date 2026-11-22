@@ -316,7 +316,12 @@ private:
     void FluidPresentAhead();
 
     /// Presents an already submitted copy under swapchain_mutex after clearing its pending state.
-    void PresentCopyAhead();
+    /// True when the swapchain accepted the present.
+    bool PresentCopyAhead();
+
+    /// A real frame whose vkQueuePresent returned: one input-to-photon sample when the tracker
+    /// is on. Generated frames are ignored.
+    void NoteLatencyPresent(const Frame* frame);
 
     /// Frees a frame that is not shown. Holds swapchain_mutex.
     void FluidDiscard(Frame* frame);

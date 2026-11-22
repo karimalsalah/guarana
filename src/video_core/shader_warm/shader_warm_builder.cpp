@@ -580,8 +580,7 @@ bool DeleteWarmFiles(u64 title_id, std::string* error) {
     bool ok = true;
     for (const auto& path :
          {warm, WarmMarkerPath(warm), WarmCountPath(warm), WarmProgressPath(warm),
-          WarmRequestPath(warm), tmp, TitleDir(title_id) / "precache-graphics.bin"}) {
-    for (const auto& path : {warm, WarmMarkerPath(warm), WarmCountPath(warm), tmp,
+          WarmRequestPath(warm), tmp, TitleDir(title_id) / "precache-graphics.bin",
                              PrecachedPipelinesPath(title_id, false),
                              PrecachedPipelinesPath(title_id, true)}) {
         std::error_code ec;

@@ -1,0 +1,1 @@
+- Latency: a continuous input-to-photon tracker (`EDEN_NX2_LATENCY_TRACK`, off unless set) and a Reflex-style render-queue sleep (`EDEN_NX2_LATENCY_CLAWBACK`, off unless set) that holds the guest at the end of a Switch 2 present while more real frames are unshown than the target. The debug server's `latency` reports the rolling samples.

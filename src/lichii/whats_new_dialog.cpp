@@ -182,60 +182,16 @@ WhatsNewDialog::WhatsNewDialog(quint32 build, QDate build_date, bool include_pen
                                QWidget* parent)
     : QDialog(parent), releases(LoadReleases(build, build_date, include_pending)) {
     setObjectName(QStringLiteral("WhatsNewDialog"));
-    setWindowTitle(tr("What's new in Lichii"));
+    setWindowTitle(tr("What's New in Guarana"));
     const QIcon icon(QString::fromLatin1(app_icon));
     setWindowIcon(icon);
-    setWindowTitle(tr("What's New in Guarana"));
+    resize(600, 740);
 
     auto* const root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
     scroll = new QScrollArea;
-    auto* const content = new QWidget;
-    auto* const body = new QVBoxLayout(content);
-    body->setContentsMargins(24, 20, 24, 8);
-    body->setSpacing(0);
-
-    auto* const header = new QHBoxLayout;
-    header->setSpacing(14);
-    header->setContentsMargins(0, 0, 0, 10);
-    auto* const logo = new QLabel;
-    logo->setPixmap(QIcon(QStringLiteral(":/icons/default/256x256/lichii.png")).pixmap(44));
-    header->addWidget(logo, 0, Qt::AlignTop);
-    auto* const titles = new QVBoxLayout;
-    titles->setSpacing(3);
-    auto* const title = new QLabel(tr("Guarana has a new look"));
-    title->setObjectName(QStringLiteral("WhatsNewTitle"));
-    QFont title_font = title->font();
-    title_font.setBold(true);
-    title_font.setPointSizeF(title_font.pointSizeF() * 1.35);
-    title->setFont(title_font);
-    auto* const subtitle =
-        new QLabel(tr("Here is what changed. Menus and shortcuts are where they were."));
-    subtitle->setObjectName(QStringLiteral("WhatsNewText"));
-    subtitle->setWordWrap(true);
-    titles->addWidget(title);
-    titles->addWidget(subtitle);
-    header->addLayout(titles, 1);
-    body->addLayout(header);
-
-    body->addWidget(Item(QStringLiteral("wand"), tr("Guarana Dark theme"),
-                         tr("A darker theme with the Guarana pink accent. The old themes are still "
-                            "in Configure > General > UI.")));
-    body->addWidget(Item(QStringLiteral("sliders"), tr("Settings that fit your screen"),
-                         tr("Configure and game Properties open at a size that fits your screen, "
-                            "can be resized, and every tab scrolls, so nothing is cut off at "
-                            "150% or 200% scaling.")));
-    body->addWidget(Item(QStringLiteral("reset"), tr("Per-game changes are marked"),
-                         tr("In a game's Properties, a setting you changed for that game has a "
-                            "pink outline and a reset button. Settings that follow the global "
-                            "value say \"Use global\".")));
-    body->addWidget(Item(QStringLiteral("gamepad"), tr("Same places as before"),
-                         tr("Configure is in Emulation > Configure (Ctrl+,). Right-click a game "
-                            "and choose Properties for its own settings. Help > What's New in "
-                            "Guarana shows this again.")));
-    auto* const scroll = new QScrollArea;
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

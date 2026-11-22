@@ -6,6 +6,7 @@
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/latency_clawback.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
@@ -486,6 +487,9 @@ void ResourceManager::UpdateControllers(std::chrono::nanoseconds ns_late) {
 void ResourceManager::UpdateNpad(std::chrono::nanoseconds ns_late) {
     auto& core_timing = system.CoreTiming();
     npad->OnUpdate(system.Kernel(), core_timing);
+    // EDEN_NX2_LATENCY_TRACK / CLAWBACK: the pad the game can read was just published. Unset: a
+    // flag check.
+    Core::LatencyClawback::NoteInputSample();
 }
 
 void ResourceManager::UpdateMouseKeyboard(std::chrono::nanoseconds ns_late) {

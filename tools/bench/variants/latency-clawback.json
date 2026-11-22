@@ -1,0 +1,6 @@
+{
+  "name": "latency-clawback",
+  "description": "Reflex-style render-queue sleep. Holds the guest at the end of a Switch 2 present while more than one real frame is still unshown. Off in baseline.",
+  "settings": {},
+  "env": {"EDEN_NX2_LATENCY_CLAWBACK": "1"}
+}

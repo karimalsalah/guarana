@@ -193,8 +193,9 @@ bool WritePrecachedPipelines(const std::filesystem::path& file, const DriverStam
 /// it. The precache file and its count stay. Returns false when a marker cannot be removed.
 bool RemoveDriverCacheMarkers(const std::filesystem::path& title_dir);
 
-/// Removes the title's precache file, its marker and count, the list of precached graphics
-/// pipelines older builds kept and a leftover temporary file (rebuild or delete from the UI). Returns false when a file exists but cannot be removed, with
+/// Removes the title's precache file, its marker, count, progress and request, the list of
+/// precached graphics pipelines older builds kept and a leftover temporary file (rebuild or
+/// delete from the UI). Returns false when a file exists but cannot be removed, with
 /// the reason in `error` when given.
 bool DeleteWarmFiles(u64 title_id, std::string* error = nullptr);
 

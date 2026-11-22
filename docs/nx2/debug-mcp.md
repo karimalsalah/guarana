@@ -697,6 +697,20 @@ an A/B run without parsing logs.
 `cntfrq_hz`. `enabled` is false without the switch, and the rows are then empty. `top` (default
 16, at most 128) limits the rows; `threads_total` counts them all.
 
+**`latency`** `{}`. Continuous input-to-photon samples (`Core::LatencyClawback`,
+`src/core/latency_clawback.cpp`). `enabled` is false unless `EDEN_NX2_LATENCY_TRACK` or
+`EDEN_NX2_LATENCY_CLAWBACK` was set at launch, and the counters then stay empty. The input time
+is the first npad publish after a Switch 2 present returns (a publish during that present is
+dropped; after a clawback sleep, the first publish after the sleep). On Switch 1 it is the first
+publish after the guest present is counted. The present time is when `vkQueuePresent` returns for that guest
+frame's real host frame, paired in order; generated frames are not samples. Photon time adds
+half a refresh when the display period is known (`photon_adds_half_refresh`). `present`,
+`photon`, `queue` (present return minus the guest present) and `cpu` (guest present minus the
+input) each have `latest_ms`, `p50_ms`, `p95_ms` and `p99_ms` over the last 256 matched frames.
+`pending` is real frames submitted and not yet shown. This is not the picture-onset probe
+`input_latency`: it does not move the sticks or compare pictures, and the display's own lag
+after the present call is not included.
+
 **`present_stats`** `{}`. The present thread's counters
 (`PresentManager::GetPresentStats`, `src/video_core/renderer_vulkan/vk_present_manager.cpp`):
 the FLUID presenter's `slots`, `hits`, `missed` (= `no_frame` + `queued` + `overslept`),

@@ -33,6 +33,7 @@
 #include "common/settings.h"
 #include "common/stb.h"
 #include "core/core.h"
+#include "core/latency_clawback.h"
 #include "core/core_timing.h"
 #include "core/debugger/nx2_bug_bundle.h"
 #include "core/debugger/nx2_debug_server.h"
@@ -1916,6 +1917,50 @@ json BootTimingTool(ToolState&, const json& params) {
             {"split", std::move(split)}};
 }
 
+/// Continuous input-to-photon samples (EDEN_NX2_LATENCY_TRACK) and the render-queue sleep
+/// (EDEN_NX2_LATENCY_CLAWBACK). Both off: the counters stay empty.
+json LatencyTool(ToolState&, const json&) {
+    const Core::LatencyClawback::Readout readout = Core::LatencyClawback::Read();
+    const Core::LatencyClawback::Summary& summary = readout.summary;
+    const auto ms = [](s64 ns) { return static_cast<double>(ns) / 1'000'000.0; };
+    const auto series = [&](const Core::LatencyClawback::Series& row) {
+        return json{
+            {"latest_ms", ms(row.latest)},
+            {"p50_ms", ms(row.p50)},
+            {"p95_ms", ms(row.p95)},
+            {"p99_ms", ms(row.p99)},
+        };
+    };
+    const bool scanout = summary.refresh_ns >= Core::LatencyClawback::MinRefreshNs &&
+                         summary.refresh_ns <= Core::LatencyClawback::MaxRefreshNs;
+    return {
+        {"enabled", readout.tracking || readout.clawback},
+        {"tracking", readout.tracking},
+        {"clawback", readout.clawback},
+        {"target_queue", readout.target_queue},
+        {"samples", summary.samples},
+        {"dropped", summary.dropped},
+        {"pending", summary.pending},
+        {"intervals", summary.intervals},
+        {"interval_ms", ms(summary.interval_ns)},
+        {"sleeps", summary.sleeps},
+        {"last_sleep_ms", ms(summary.last_sleep_ns)},
+        {"refresh_ms", ms(summary.refresh_ns)},
+        {"photon_adds_half_refresh", scanout},
+        {"present", series(summary.present)},
+        {"photon", series(summary.photon)},
+        {"queue", series(summary.queue)},
+        {"cpu", series(summary.cpu)},
+        {"note",
+         "Input is the first npad publish after a Switch 2 present returns (a publish during that "
+         "present is dropped; after a clawback sleep, the first publish after the sleep). "
+         "Present is the real frame's vkQueuePresent "
+         "return, paired in order; generated frames are not samples. Photon adds half a refresh "
+         "when the period is known. Collection runs when the track or clawback switch is on. "
+         "This is not the picture-onset probe input_latency."},
+    };
+}
+
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
     const auto handler = [&state](json (*tool)(ToolState&, const json&)) -> Handler {
         return [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
@@ -1959,6 +2004,7 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"input_latency", waiting(InputLatency)},
         {"thread_stats", handler(ThreadStats)},
         {"present_stats", handler(PresentStatsTool)},
+        {"latency", handler(LatencyTool)},
         {"cache_stats", handler(CacheStats)},
         {"readbacks", handler(Readbacks)},
         {"boot_timing", handler(BootTimingTool)},

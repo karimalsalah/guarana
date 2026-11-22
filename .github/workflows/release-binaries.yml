@@ -86,7 +86,6 @@ jobs:
         run: |
           echo "nsight_aftermath builds are test builds; run them with publish_release=false"
           exit 1
-
       # channel: release (a vX.Y.Z tag), nightly (from nightly.yml) or test (a branch, never
       # published). version names the files: X.Y.Z[-pre] for a tag, "nightly", or test-<commit>.
       - name: Decide what to build
@@ -673,7 +672,7 @@ jobs:
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
             -DENABLE_UPDATE_CHECKER=OFF \
             "-DLICHII_BUILD_TAG=$BUILD_TAG" \
-            "-DLICHII_USE_PENDING_RELEASE_NOTES=$LICHII_USE_PENDING_RELEASE_NOTES"
+            "-DLICHII_USE_PENDING_RELEASE_NOTES=$LICHII_USE_PENDING_RELEASE_NOTES" \
             -DLICHII_BUILD_PLATFORM=${{ matrix.platform }} \
             "-DNIGHTLY_BUILD=$NIGHTLY_BUILD" \
             -DUSE_DISCORD_PRESENCE=OFF \

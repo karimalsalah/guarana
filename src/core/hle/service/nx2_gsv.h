@@ -48,6 +48,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/frame_budget.h"
+#include "core/latency_clawback.h"
 #include "video_core/framebuffer_config.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_client_session.h"
@@ -2243,6 +2244,12 @@ private:
             }
         }
         constexpr u64 AvailableSlots = 0x7fff;
+        // EDEN_NX2_LATENCY_CLAWBACK: this frame is already queued. Hold the guest while too many
+        // real frames are still unshown, so the next one starts later. Skip that hold when a
+        // suspended channel needs this return before the GPU can finish. The tracker also re-arms
+        // its input stamp here. Unset: returns at once.
+        const bool cpu_unblocks_gpu = frames_ahead == -1 && !auto_reached;
+        Core::LatencyClawback::FinishGuestPresent(!cpu_unblocks_gpu);
         TipcReplyWords(ctx, {static_cast<u32>(AvailableSlots),
                              static_cast<u32>(AvailableSlots >> 32), 0, 0, 0, 0});
     }

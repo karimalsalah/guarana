@@ -16,6 +16,8 @@ add_library(core STATIC
     constants.h
     core.cpp
     core.h
+    latency_clawback.cpp
+    latency_clawback.h
     nx2_autopilot_session.cpp
     nx2_autopilot_session.h
     nx2_power_session.cpp

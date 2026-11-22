@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "common/common_types.h"
-#include "video_core/renderer_vulkan/present/fsr3_frame_gen.h"
+#include "video_core/renderer_vulkan/present/optical_flow_frame_gen.h"
 
 using Vulkan::Fsr3PingPong;
 

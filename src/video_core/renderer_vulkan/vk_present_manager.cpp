@@ -31,6 +31,7 @@
 #include "common/windows/timer_resolution.h"
 #endif
 #include "core/frontend/emu_window.h"
+#include "core/latency_clawback.h"
 #include "video_core/autopilot_feed.h"
 #include "video_core/host_vsync.h"
 #include "video_core/nx2_profile.h"
@@ -1177,9 +1178,12 @@ bool PresentManager::FluidPresentThread(std::stop_token token) {
     VideoCore::ShownGovernor::SetRate(0);
     if (fluid_ahead_pending) {
         std::scoped_lock swapchain_lock{swapchain_mutex};
+        Frame* const ahead = fluid_ahead_frame;
         fluid_ahead_pending = false;
         fluid_ahead_frame = nullptr;
-        PresentCopyAhead();
+        if (PresentCopyAhead()) {
+            NoteLatencyPresent(ahead);
+        }
     }
     // Nothing is presented from here on: answer WaitPresent.
     {
@@ -1423,9 +1427,12 @@ void PresentManager::FluidTakeFrames(std::chrono::steady_clock::time_point now) 
     {
         std::scoped_lock swapchain_lock{swapchain_mutex};
         if (drain != 0 && fluid_ahead_pending) {
+            Frame* const ahead = fluid_ahead_frame;
             fluid_ahead_pending = false;
             fluid_ahead_frame = nullptr;
-            PresentCopyAhead();
+            if (PresentCopyAhead()) {
+                NoteLatencyPresent(ahead);
+            }
         }
         std::erase_if(fluid.pending, [this, drain](Frame* frame) {
             if (drain == 0 && frame->fluid_slot != FLUID_NOT_SHOWN) {
@@ -1697,9 +1704,12 @@ void PresentManager::FluidPresentAhead() {
             fluid_stats.copy_wait_max_ms = (std::max)(fluid_stats.copy_wait_max_ms, waited);
         }
     }
+    Frame* const ahead = fluid_ahead_frame;
     fluid_ahead_pending = false;
     fluid_ahead_frame = nullptr;
-    PresentCopyAhead();
+    if (PresentCopyAhead()) {
+        NoteLatencyPresent(ahead);
+    }
     if (shown_stats) {
         const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
         const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;
@@ -1717,10 +1727,10 @@ void PresentManager::FluidPresentAhead() {
     }
 }
 
-void PresentManager::PresentCopyAhead() {
+bool PresentManager::PresentCopyAhead() {
     present_operation = "presenting copy-ahead image";
     try {
-        swapchain.Present(fluid_ahead_semaphore);
+        return swapchain.Present(fluid_ahead_semaphore);
     } catch (const vk::Exception& except) {
         force_swapchain_recreation = true;
         const VkResult result = except.GetResult();
@@ -1731,6 +1741,26 @@ void PresentManager::PresentCopyAhead() {
             throw;
         }
     }
+    return false;
+}
+
+void PresentManager::NoteLatencyPresent(const Frame* frame) {
+    if (frame == nullptr || frame->shown_kind != VideoCore::Nx2ShownFrames::Kind::Real) {
+        return;
+    }
+    s64 refresh_ns = 0;
+    if (const FluidClock clock = GetFluidClock(); clock.Valid() && clock.refresh.count() > 0) {
+        refresh_ns = clock.refresh.count();
+    } else {
+        const f64 hz = display_refresh_hz.load(std::memory_order_relaxed);
+        if (hz >= 20.0 && hz <= 250.0) {
+            refresh_ns = static_cast<s64>(1.0e9 / hz);
+        }
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    Core::LatencyClawback::NotePresented(now, refresh_ns);
 }
 
 void PresentManager::FluidNoteCopyTime(Frame* frame) {
@@ -2343,10 +2373,13 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame, PresentSync::FrameSubmiss
     swapchain.RequestPresentIds(host_vsync);
     if (fluid_ahead_pending) {
         // EDEN_NX2_FLUID_COPY_AHEAD: one acquired image at a time; the one copied ahead goes first.
+        Frame* const ahead = fluid_ahead_frame;
         fluid_ahead_pending = false;
         fluid_ahead_frame = nullptr;
         present_operation = "presenting copy-ahead image";
-        swapchain.Present(fluid_ahead_semaphore);
+        if (swapchain.Present(fluid_ahead_semaphore)) {
+            NoteLatencyPresent(ahead);
+        }
     }
 
     // Recreate for size changes, SDR/HDR10/scRGB transitions, or a suboptimal swapchain.
@@ -2638,6 +2671,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame, PresentSync::FrameSubmiss
         .id = host_vsync && swapchain.WaitsForDisplay() ? ++last_present_id : 0,
     };
     record.accepted = swapchain.Present(render_semaphore, record.id);
+    if (record.accepted) {
+        NoteLatencyPresent(frame);
+    }
     if (timed) {
         const f64 lock = static_cast<f64>(swapchain.LastPresentLockNs()) * 1.0e-6;
         const f64 call = static_cast<f64>(swapchain.LastPresentCallNs()) * 1.0e-6;

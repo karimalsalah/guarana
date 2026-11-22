@@ -535,6 +535,17 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "latency",
+        "description": "Continuous input-to-photon samples. present/photon/queue/cpu each have "
+                       "latest_ms, p50_ms, p95_ms and p99_ms. Input is the first npad publish "
+                       "after a Switch 2 present returns; present is the real frame's "
+                       "vkQueuePresent return, paired in order; photon adds half a refresh when "
+                       "the period is known. pending is real frames not yet shown. Needs "
+                       "EDEN_NX2_LATENCY_TRACK or EDEN_NX2_LATENCY_CLAWBACK at launch; enabled "
+                       "is false without them. Not the picture-onset probe input_latency.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "cache_stats",
         "description": "Texture and buffer cache hit/miss/eviction counters since boot: lookups "
                        "that found a live image/buffer vs made a new one, hit rates, images "

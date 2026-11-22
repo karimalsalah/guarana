@@ -715,7 +715,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         UISettings::values.show_whats_new.GetValue()) {
         QTimer::singleShot(0, this, &MainWindow::OnWhatsNew);
     }
-
     // Set up game list mode checkboxes.
     SetGameListMode(UISettings::values.game_list_mode.GetValue());
 
@@ -885,7 +884,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         }
     }
 
-    if (whats_new_action == WhatsNewDialog::StartupAction::Show) {
+    // A launcher session goes straight to the game; its Updates screen shows the notes.
+    if (whats_new_action == WhatsNewDialog::StartupAction::Show && !launcher_session) {
         startup_whats_new_pending = true;
         QTimer::singleShot(0, this, &MainWindow::MaybeShowStartupWhatsNew);
     }

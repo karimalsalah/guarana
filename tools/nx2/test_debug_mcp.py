@@ -143,6 +143,7 @@ class AdapterTest(unittest.TestCase):
                                  "render_follower", "power", "power_set", "gpu_costs", "gpu_perf",
                                  "frame_budget", "autopilot", "memory", "trace_record",
                                  "trace_stop", "trace_status", "thread_stats", "present_stats",
+                                 "latency",
                                  "cache_stats", "readbacks", "boot_timing"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)
 

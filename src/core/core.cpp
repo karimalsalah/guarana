@@ -33,6 +33,7 @@
 #include "common/string_util.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
+#include "core/latency_clawback.h"
 
 #include "launch_timestamp_cache.h"
 #include "core/core_timing.h"
@@ -151,6 +152,8 @@ void RecordGuestPresent() {
                                .count();
     g_nx2_present_times_ns[present % g_nx2_present_times_ns.size()].store(
         present_ns, std::memory_order_relaxed);
+    // EDEN_NX2_LATENCY_TRACK / CLAWBACK. Unset: returns without recording.
+    LatencyClawback::NoteGuestPresent(static_cast<s64>(present_ns));
 }
 
 FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,

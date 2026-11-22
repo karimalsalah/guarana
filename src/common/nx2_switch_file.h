@@ -52,7 +52,8 @@ inline void Parse(const std::filesystem::path& path, std::map<std::string, std::
 /// The names a switch file may set: the EDEN_NX2_* switches and a few diagnostics.
 [[nodiscard]] inline bool IsSwitchName(const std::string& name) {
     return name.starts_with("EDEN_NX2_") || name == "EDEN_DKB_FRAME_TRACE" ||
-           name == "EDEN_DKB_INDIRECT_READBACK" || name == "EDEN_NATIVE_DRAW_CAPTURE" ||
+           name == "EDEN_DKB_GPU_SITES" || name == "EDEN_DKB_INDIRECT_READBACK" ||
+           name == "EDEN_NATIVE_DRAW_CAPTURE" ||
            name == "EDEN_NATIVE_DRAW_DIAGNOSTICS" || name == "EDEN_NATIVE_FRAME_CAPTURE" ||
            name == "EDEN_NATIVE_SHADER_OVERRIDE_DIR" || name == "EDEN_PUNCH_HOLE" ||
            name == "EDEN_STARFOX_WINDOW_TRACE" || name == "EDEN_VI2_MAX_RESOLUTION_MODE" ||

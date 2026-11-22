@@ -548,10 +548,11 @@ bool TensorLogEnabled() {
 /// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
 /// what the driver gets for a precache build. Resolution scaling bakes the scale into the
 /// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
-/// debug setting adds a create flag.
-u64 WarmVariant() {
+/// debug setting adds a create flag. `persisted`: whether the builds outlive the run, so neither
+/// the marker nor the progress of a run whose builds were dropped is taken by one that keeps them.
+u64 WarmVariant(bool persisted) {
     const auto& resolution = Settings::values.resolution_info;
-    const std::array<u64, 7> inputs{
+    const std::array<u64, 8> inputs{
         VideoCommon::ShaderWarm::EmissionStamp(),
         resolution.active ? 1ULL : 0ULL,
         resolution.up_scale,
@@ -559,6 +560,7 @@ u64 WarmVariant() {
         Settings::values.disable_shader_loop_safety_checks.GetValue() ? 1ULL : 0ULL,
         Settings::values.fix_bloom_effects.GetValue() ? 1ULL : 0ULL,
         Settings::values.renderer_debug.GetValue() ? 1ULL : 0ULL,
+        persisted ? 1ULL : 0ULL,
     };
     return Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs));
 }
@@ -572,7 +574,7 @@ VideoCommon::ShaderWarm::DriverStamp PrecachedListStamp(const Device& device,
                                                         const Shader::Profile& profile) {
     const char* const undef_zero = std::getenv("EDEN_NX2_UNDEF_ZERO");
     const std::array<u64, 13> inputs{
-        WarmVariant(),
+        WarmVariant(true),
         // As emit_spirv_undefined.cpp and tensor_mul_add.cpp read them
         undef_zero == nullptr || undef_zero[0] != '0' ? 1ULL : 0ULL,
         std::getenv("EDEN_NX2_NO_TENSOR") != nullptr ? 1ULL : 0ULL,
@@ -2200,6 +2202,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             vulkan_pipeline_cache = std::move(loaded_cache);
         }
         Common::BootTiming::Mark("shaders: driver pipeline cache loaded");
+        if (!vulkan_pipeline_cache_restored) {
+            // The precache progress names builds the lost cache held. Dropped before the empty
+            // cache is saved, which would make the progress readable again at the next boot.
+            std::error_code ec;
+            std::filesystem::remove(
+                ShaderWarm::WarmProgressPath(ShaderWarm::ComputeWarmPath(title_id)), ec);
+        }
         // The precache markers say what the driver cache file holds. Its load deletes a file it
         // can't use (cut short, of another version, rejected by the driver), and removing the
         // cache from the UI leaves none or an empty one: then nothing they list is in it.
@@ -3248,28 +3257,6 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     }
 }
 
-namespace {
-/// The precache marker's variant: the build's SPIR-V emission stamp and the settings that change
-/// what the driver gets for a precache build. Resolution scaling bakes the scale into the
-/// rescaling code of the shaders; the loop safety checks and the bloom fix change the SPIR-V; the
-/// debug setting adds a create flag. `persisted`: whether the builds outlive the run, so neither
-/// the marker nor the progress of a run whose builds were dropped is taken by one that keeps them.
-u64 WarmVariant(bool persisted) {
-    const auto& resolution = Settings::values.resolution_info;
-    const std::array<u64, 8> inputs{
-        VideoCommon::ShaderWarm::EmissionStamp(),
-        resolution.active ? 1ULL : 0ULL,
-        resolution.up_scale,
-        resolution.down_shift,
-        Settings::values.disable_shader_loop_safety_checks.GetValue() ? 1ULL : 0ULL,
-        Settings::values.fix_bloom_effects.GetValue() ? 1ULL : 0ULL,
-        Settings::values.renderer_debug.GetValue() ? 1ULL : 0ULL,
-        persisted ? 1ULL : 0ULL,
-    };
-    return Common::CityHash64(reinterpret_cast<const char*>(inputs.data()), sizeof(inputs));
-}
-} // Anonymous namespace
-
 void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_token stop_loading,
                                     const VideoCore::DiskResourceLoadCallback& callback) {
     namespace ShaderWarm = VideoCommon::ShaderWarm;
@@ -3457,6 +3444,24 @@ void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_tok
     std::optional<ShaderWarm::WarmStamp> compute_done;
     if (compute_pending && !skipped) {
         compute_done = stamp(file_entries);
+        std::filesystem::remove(ShaderWarm::WarmProgressPath(warm_file), ec);
+    }
+    std::function<void()> commit_progress;
+    if (compute_pending && skipped && current && persisted && total_built != 0 &&
+        !stop_loading.stop_requested()) {
+        // A closed load saves no Vulkan pipeline cache below.
+        for (size_t index = 0; index < jobs.size(); ++index) {
+            if (built[index]) {
+                built_before.insert(job_keys[index]);
+            }
+        }
+        commit_progress = [warm_file, at = *current, keys = std::move(built_before)] {
+            ShaderWarm::WriteWarmProgress(warm_file, at, keys);
+        };
+        if (!vulkan_cache) {
+            commit_progress();
+            commit_progress = {};
+        }
     }
     auto write_marker = [warm_file, compute_done] {
         if (compute_done) {
@@ -3471,7 +3476,13 @@ void PipelineCache::PrecacheShaders(u64 title_id, bool boot_saved, std::stop_tok
         // Without this, the builds reach the file only at the next boot, game change or clean
         // close, and are lost if the app ends otherwise. The warm-up's last save waits for this
         // one (WaitForRequests), so its marker is written before the process ends.
-        QueueVulkanPipelineCacheSave(std::move(write_marker));
+        QueueVulkanPipelineCacheSave([write_marker = std::move(write_marker),
+                                      commit_progress = std::move(commit_progress)] {
+            write_marker();
+            if (commit_progress) {
+                commit_progress();
+            }
+        });
     }
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
@@ -5366,7 +5377,11 @@ void PipelineCache::SerializeGraphicsPipeline(const GraphicsPipelineCacheKey& ke
     if (pipeline_cache_filename.empty()) {
         return;
     }
-    if (!disk_pipelines.insert(key.Hash()).second) {
+    const bool incomplete_record = [&] {
+        std::scoped_lock lock{incomplete_prebuilds_mutex};
+        return incomplete_prebuilds.erase(key.Hash()) != 0;
+    }();
+    if (!disk_pipelines.insert(key.Hash()).second && !incomplete_record) {
         // In the disk cache already, only not built at boot.
         QueueVulkanPipelineCacheFlush();
         return;
@@ -6000,6 +6015,7 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
             .pInitialData = data};
         return device.GetLogical().CreatePipelineCache(pipeline_cache_ci);
     };
+    vulkan_pipeline_cache_restored = false;
     {
         // What the file holds, for SerializeVulkanPipelineCache: nothing unless it is read below
         std::scoped_lock lock{vulkan_cache_save_mutex};
@@ -6076,6 +6092,7 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
             }
             std::scoped_lock lock{vulkan_cache_save_mutex};
             driver_cache_save_tracker.SetSavedSize(held_size);
+            vulkan_pipeline_cache_restored = true;
             return cache;
         } catch (const vk::Exception& e) {
             // The blob came from another driver or driver version (e.g. switching between
