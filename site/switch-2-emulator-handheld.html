@@ -42,7 +42,7 @@
       "isPartOf": {
         "@id": "https://karimalsalah.github.io/guarana/#website"
       },
-      "dateModified": "2026-11-13",
+      "dateModified": "2026-11-18",
       "about": {
         "@type": "SoftwareApplication",
         "name": "Guarana",
@@ -81,7 +81,7 @@
           "name": "Does Guarana run on Android handhelds or SteamOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Release builds are Windows x64. Nothing outside Windows is tested here. We do not have an Android build, and the Steam Deck on SteamOS is untested."
+            "text": "Android 13 or newer on a 64-bit Arm phone or handheld (arm64-v8a) has an APK; look for -android-arm64.apk on the stable or nightly release. The project has not boot-tested the APK. On Steam Deck the matching Linux package is x86_64, not aarch64; it needs glibc 2.39 or newer. We have not tested it on SteamOS."
           }
         },
         {
@@ -206,7 +206,7 @@
     <p>One report turns a page of guesses into data and puts your device on the <a href="benchmarks.html">leaderboard</a>.</p>
 <ul class="checklist">
   <li>Device, CPU, GPU and RAM</li>
-  <li>Graphics driver version and Windows version</li>
+  <li>Graphics driver version and operating system version</li>
   <li>Plugged in or on battery, and the power mode or wattage</li>
   <li>The Guarana build, every setting changed and every <code>EDEN_NX2_*</code> switch (or &ldquo;none&rdquo;)</li>
   <li>The scene, and average game fps measured after it settled</li>
@@ -231,7 +231,7 @@
 </div>
 <div class="faq-item">
   <h3>Does Guarana run on Android handhelds or SteamOS?</h3>
-  <p>Release builds are Windows x64. Nothing outside Windows is tested here. We do not have an Android build, and the Steam Deck on SteamOS is untested.</p>
+  <p>Android 13 or newer on a 64-bit Arm phone or handheld (<code>arm64-v8a</code>) has an APK; look for <code>-android-arm64.apk</code> on the <a href="https://github.com/karimalsalah/guarana/releases/latest">stable</a> or <a href="https://github.com/karimalsalah/guarana/releases/tag/nightly">nightly</a> release. The project has not boot-tested the APK. On <a href="devices/steam-deck.html">Steam Deck</a> the matching Linux package is <code>x86_64</code>, not <code>aarch64</code>; it needs glibc 2.39 or newer. We have not tested it on SteamOS.</p>
 </div>
 <div class="faq-item">
   <h3>How do I help get my handheld supported?</h3>
@@ -248,7 +248,7 @@
     <p>Guarana is free and open source (GPL-3.0-or-later). It ships no keys, firmware or games: you bring your own, dumped from hardware you own.</p>
     
     <ul>
-      <li><strong>Download:</strong> the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest release</a> is the only official download.</li>
+      <li><strong>Download:</strong> <a href="./#get-it">choose the package for your device</a> on the <a href="https://github.com/karimalsalah/guarana/releases/latest">stable release</a> or <a href="https://github.com/karimalsalah/guarana/releases/tag/nightly">nightly prerelease</a>.</li>
       <li><strong>Stuck?</strong> Ask in the <a href="https://discord.gg/urz7vMdRM">Discord</a> (bugs and device reports stay on GitHub so they are tracked).</li>
       <li><strong>Test:</strong> a <a href="https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml">device report</a> needs no code and puts your device on the <a href="benchmarks.html">leaderboard</a>.</li>
       <li><strong>Contribute with your AI agent:</strong> one sentence gets Claude Code, Codex, Gemini CLI, Cursor or Copilot to a pull request. Start at the <a href="agents.html">agents page</a>, or see <a href="wins.html">open wins</a> with numbers.</li>

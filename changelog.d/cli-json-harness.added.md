@@ -1,1 +1,0 @@
-- Add tools/cli-harness: a machine-readable JSON harness around guarana-cli and the nx2 debug RPC (status/switches/bench/screenshot/launch/log-tail/input/rpc/warm-pipelines/nup-pack/nup-unpack/version), with a draft agent SKILL.md and 18 standard-library unit tests (CLI-Anything trial).

@@ -1,0 +1,1 @@
+- Fix `EDEN_NX2_SVC_FASTPATH` (default off) hanging games at boot: a SVC that migrates the current thread to another core now returns to the scheduler instead of continuing on the source core's JIT (Ocarina of Time Switch 2 hung at guest ~31 s with zero presents; the same build with the switch off boots normally).

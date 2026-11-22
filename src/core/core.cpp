@@ -470,6 +470,10 @@ struct System::Impl {
             return SystemResultStatus::ErrorMemoryAllocation;
         }
         Kernel::Nx2ThreadStats::ReadSwitch();
+#if defined(ARCHITECTURE_x86_64)
+        core_timing.ConfigureInlineCntpct(!Kernel::Nx2ThreadStats::g_enabled &&
+                                         !system.DebuggerEnabled());
+#endif
         Service::FileSystem::ReadTraceScope::ReadSwitch();
         kernel.Initialize();
         return SystemResultStatus::Success;
@@ -1499,6 +1503,9 @@ void System::NotifyApplicationChanged(u64 program_id) {
 }
 
 void System::ApplySettings() {
+#if defined(ARCHITECTURE_x86_64)
+    impl->core_timing.RefreshInlineCntpct();
+#endif
     impl->RefreshTime(*this);
 
     if (IsPoweredOn()) {

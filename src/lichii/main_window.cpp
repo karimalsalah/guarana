@@ -179,6 +179,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applet_web_browser_types.h"
+#include "core/hle/service/ns/game_list_applications.h"
 #include "core/hle/service/bcat/backend/nextendo.h"
 
 #include "core/file_sys/card_image.h"
@@ -241,11 +242,26 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 
 #include <QPlatformSurfaceEvent>
 #include <QSettings>
+#include <QUrl>
 #include <dwmapi.h>
 #include <windows.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "Dwmapi.lib")
 #endif
+
+// Help > Check for Updates hands off to the Guarana launcher, which installs and switches versions
+// (issue #44): its Updates screen, through the guarana:// link its installer registers for the
+// current user. Without the launcher, the releases page.
+static void OpenLauncherUpdates() {
+    const QSettings scheme(QStringLiteral("HKEY_CURRENT_USER\\Software\\Classes\\guarana"),
+                           QSettings::NativeFormat);
+    if (scheme.contains(QStringLiteral("URL Protocol")) &&
+        QDesktopServices::openUrl(QUrl(QStringLiteral("guarana://updates")))) {
+        return;
+    }
+    QDesktopServices::openUrl(
+        QUrl(QStringLiteral("https://github.com/karimalsalah/guarana/releases/latest")));
+}
 
 static inline void ApplyWindowsTitleBarDarkMode(HWND hwnd, bool enabled) {
     if (!hwnd)
@@ -648,8 +664,29 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
+    // Parsed before the Vulkan devices are listed: a game started from the command line (a
+    // launcher or a shortcut) boots without the list.
+    std::optional<Core::LaunchParams> launch_params;
+    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
+        QList<QByteArray> qba{};
+        for (auto const& e : args)
+            qba.push_back(e.toUtf8());
+        std::vector<char*> args_cstr{};
+        for (auto& e : qba)
+            args_cstr.push_back(e.data());
+
+        launch_params = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(),
+                                                args_cstr.data(), nullptr);
+    }
+    const bool direct_launch =
+        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
+                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
+    // A HOME-menu launch (no game path) scans the list later, to feed the QLaunch applet.
+    const bool launch_home = launch_params && launch_params->filepath.empty() &&
+                             !launch_params->launch_setup && launch_params->launch_qlaunch;
+
     // A launcher session never shows the game list, so it does not scan for it.
-    if (!launcher_session) {
+    if (!launcher_session && !launch_home) {
         game_list->PopulateAsync(UISettings::values.game_dirs);
     }
     Common::BootTiming::Mark("frontend: content providers and keys ready, game list scan started");
@@ -680,23 +717,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(&update_input_timer, &QTimer::timeout, this, &MainWindow::UpdateInputDrivers);
     update_input_timer.start();
 
-    // Parsed before the Vulkan devices are listed: a game started from the command line (a
-    // launcher or a shortcut) boots without the list.
-    std::optional<Core::LaunchParams> launch_params;
-    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
-        QList<QByteArray> qba{};
-        for (auto const& e : args)
-            qba.push_back(e.toUtf8());
-        std::vector<char*> args_cstr{};
-        for (auto& e : qba)
-            args_cstr.push_back(e.data());
-
-        launch_params = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(),
-                                                args_cstr.data(), nullptr);
-    }
-    const bool direct_launch =
-        launch_params && (!launch_params->filepath.empty() || launch_params->launch_setup ||
-                          launch_params->launch_qlaunch || launch_params->launch_hlaunch);
 
     // EDEN_NX2_STARTUP_CHECK_ASYNC: the Vulkan check's child ran while the frontend started.
     // Nothing above uses Vulkan; the device list and the game below do, so its verdict comes first.
@@ -764,6 +784,59 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         game_list->PopulateAsync(UISettings::values.game_dirs);
     }
 
+    // Once FixProfiles has read the configured NAND and -u may have picked another user.
+    Common::Nextendo::MigrateAccountFile(
+        Service::Account::Nextendo::CurrentProfile(*QtCommon::system));
+    // A default user made for an unreadable profiles.dat would make every account an orphan.
+    auto& profile_manager = QtCommon::system->GetProfileManager();
+    auto orphans =
+        profile_manager.UserSaveFileRead()
+            ? Common::Nextendo::OrphanAccounts(profile_manager.FindExistingProfileUUIDs())
+            : std::vector<Common::UUID>{};
+    std::erase_if(orphans, [kept = Settings::values.nextendo_kept_accounts.GetValue()](
+                               const Common::UUID& profile) {
+        return kept.find(profile.FormattedString()) != std::string::npos;
+    });
+    if (!orphans.empty()) {
+        const auto answer = QMessageBox::question(
+            this, tr("Nextendo Sign-ins"),
+            tr("Guarana found Nextendo sign-ins for %n profile(s) this NAND doesn't have. Profiles "
+               "deleted in an older build left theirs behind.\n\nRemove and sign out those "
+               "sign-ins? Keep them if the profiles are in another NAND folder.",
+               "", static_cast<int>(orphans.size())));
+        if (answer == QMessageBox::Yes) {
+            for (const auto& profile : orphans) {
+                const auto account = Common::Nextendo::LoadAccount(profile);
+                Common::Nextendo::ClearAccount(profile);
+                if (account && !account->refresh_token.empty()) {
+                    void(QtConcurrent::run(
+                        [client_id = Settings::values.nextendo_client_id.GetValue(),
+                         token = account->refresh_token] {
+                            Common::Nextendo::RevokeToken(client_id, token);
+                        }));
+                }
+            }
+        } else {
+            std::string kept = Settings::values.nextendo_kept_accounts.GetValue();
+            for (const auto& profile : orphans) {
+                kept += fmt::format("{}{}", kept.empty() ? "" : ",", profile.FormattedString());
+            }
+            Settings::values.nextendo_kept_accounts = kept;
+        }
+    }
+    nextendo_session_timer.start(std::chrono::minutes{2});
+    KeepNextendoSessionAlive();
+
+    if (launch_home) {
+        startup_qlaunch_connection = connect(
+            game_list, &GameList::PopulatingCompleted, this,
+            [this] {
+                LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
+            },
+            Qt::SingleShotConnection);
+        game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+
     if (launch_params) {
         auto const& lp = *launch_params;
 
@@ -784,9 +857,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             BootGame(QString::fromStdString(lp.filepath), ApplicationAppletParameters());
         } else if (lp.launch_setup) {
             LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::Starter), std::nullopt);
-        } else if (lp.launch_qlaunch) {
-            LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
-        } else if (lp.launch_hlaunch) {
+        } else if (!launch_home && lp.launch_hlaunch) {
             std::filesystem::path const sd_dir =
                 Common::FS::GetEdenPathString(Common::FS::EdenPath::SDMCDir);
             auto const hbl_path = (sd_dir / "atmosphere" / "hbl.nsp").string();
@@ -2035,7 +2106,9 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Firmware_From_Folder, &MainWindow::OnInstallFirmware);
     connect_menu(ui->action_Firmware_From_ZIP, &MainWindow::OnInstallFirmwareFromZIP);
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
-#ifdef ENABLE_UPDATE_CHECKER
+#if defined(_WIN32)
+    connect_menu(ui->action_Check_For_Updates, [] { OpenLauncherUpdates(); });
+#elif defined(ENABLE_UPDATE_CHECKER)
     connect_menu(ui->action_Check_For_Updates, [this] { CheckForUpdates(true); });
 #else
     ui->action_Check_For_Updates->setVisible(false);
@@ -2440,6 +2513,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (boot_in_progress || close_pending) {
         return;
     }
+    disconnect(startup_qlaunch_connection);
     boot_in_progress = true;
     game_list->SetScanEnabled(false);
     QElapsedTimer boot_timer;
@@ -4170,26 +4244,39 @@ void MainWindow::OnLaunchInNewSession(u64 program_id) {
                     program_id);
         return;
     }
-    auto* const model = game_list->GetModel();
-    const auto matches =
-        model->match(model->index(0, 0), GameListItemPath::ProgramIdRole,
-                     QVariant::fromValue(qulonglong{program_id}), 1,
-                     Qt::MatchExactly | Qt::MatchRecursive);
     QString filename;
-    if (!matches.isEmpty()) {
-        filename = matches.front().data(GameListItemPath::FullPathRole).toString();
-    } else if (const auto nca = QtCommon::system->GetContentProviderUnion().GetEntryRaw(
-                   program_id, FileSys::ContentRecordType::Program)) {
-        filename = QString::fromStdString(nca->GetFullPath());
+    if (const auto path = Service::NS::GetGameListApplicationPath(*QtCommon::system, program_id)) {
+        if (!Service::NS::OpenGameListApplication(*QtCommon::system, *path, program_id)) {
+            LOG_WARNING(Frontend, "No matching program for HOME Menu application {:016X} in {}",
+                        program_id, *path);
+            return;
+        }
+        filename = QString::fromStdString(*path);
+    } else {
+        auto* const model = game_list->GetModel();
+        const auto matches =
+            model->match(model->index(0, 0), GameListItemPath::ProgramIdRole,
+                         QVariant::fromValue(qulonglong{program_id}), 1,
+                         Qt::MatchExactly | Qt::MatchRecursive);
+        if (!matches.isEmpty()) {
+            filename = matches.front().data(GameListItemPath::FullPathRole).toString();
+        }
+    }
+    if (filename.isEmpty()) {
+        const auto nca = QtCommon::system->GetContentProviderUnion().GetEntryRaw(
+            program_id, FileSys::ContentRecordType::Program);
+        if (nca != nullptr) {
+            filename = QString::fromStdString(nca->GetFullPath());
+        }
     }
 
-    LOG_INFO(Frontend, "HOME Menu launch of {:016X} in a new session from {}", program_id,
-             filename.toStdString());
-
-    ShutdownGame();
     if (filename.isEmpty()) {
+        LOG_WARNING(Frontend, "No launch path for HOME Menu application {:016X}", program_id);
         return;
     }
+    LOG_INFO(Frontend, "HOME Menu launch of {:016X} in a new session from {}", program_id,
+             filename.toStdString());
+    ShutdownGame();
 
     auto params = ApplicationAppletParameters();
     params.program_id = program_id;

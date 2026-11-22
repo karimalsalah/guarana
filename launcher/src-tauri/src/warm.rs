@@ -8,13 +8,12 @@
 //! about to start; it only stops one of another title, and the next warm-up of that title, which
 //! then exits 3, is run again once.
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -161,39 +160,7 @@ const NO_WARM_UP: &str =
 /// guarana-cli would take the title id for a game path, and still rewrite the configuration and
 /// rotate the log, so it is never started for this. Cached per file size and time.
 fn supports_warm_up(exe: &Path) -> bool {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (u64, Option<SystemTime>, bool)>>> = OnceLock::new();
-    let Ok(meta) = std::fs::metadata(exe) else { return false };
-    let stamp = (meta.len(), meta.modified().ok());
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((len, modified, found)) = cache.lock().ok().and_then(|c| c.get(exe).cloned()) {
-        if (len, modified) == stamp {
-            return found;
-        }
-    }
-    let found = file_contains(exe, b"warm-pipelines");
-    if let Ok(mut c) = cache.lock() {
-        c.insert(exe.to_path_buf(), (stamp.0, stamp.1, found));
-    }
-    found
-}
-
-fn file_contains(path: &Path, needle: &[u8]) -> bool {
-    let Ok(mut f) = std::fs::File::open(path) else { return false };
-    let mut buf = vec![0u8; (1 << 20) + needle.len()];
-    let mut carry = 0;
-    loop {
-        let n = match std::io::Read::read(&mut f, &mut buf[carry..]) {
-            Ok(0) | Err(_) => return false,
-            Ok(n) => n,
-        };
-        let filled = carry + n;
-        if buf[..filled].windows(needle.len()).any(|w| w == needle) {
-            return true;
-        }
-        // Keep the tail so a match across two reads is found.
-        carry = (needle.len() - 1).min(filled);
-        buf.copy_within(filled - carry..filled, 0);
-    }
+    util::program_knows(exe, b"warm-pipelines")
 }
 
 fn cli_exe(app: &AppHandle) -> CmdResult<PathBuf> {
@@ -603,23 +570,6 @@ mod tests {
             Some((2, "precache".to_string(), 100, 4660, 4660, 141.0))
         );
         assert_eq!(parse_progress("warm: title 0400486024dec000, renderer ready after 1.4 s"), None);
-    }
-
-    #[test]
-    fn probe_finds_the_option_across_reads() {
-        let dir = std::env::temp_dir().join(format!("guarana-warm-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("guarana-cli.exe");
-        let needle = b"warm-pipelines";
-        // The first read takes 1 MiB + the needle's length; start the needle 5 bytes before that.
-        let mut data = vec![b'x'; (1 << 20) + needle.len() - 5];
-        data.extend_from_slice(needle);
-        data.extend_from_slice(&[b'y'; 100]);
-        std::fs::write(&path, &data).unwrap();
-        assert!(file_contains(&path, needle));
-        std::fs::write(&path, vec![b'x'; 3 << 20]).unwrap();
-        assert!(!file_contains(&path, needle));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

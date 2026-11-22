@@ -180,6 +180,7 @@ private:
     /// must not cache a null pipeline.
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> NewGraphicsPipeline(bool& prebuilt,
                                                                         bool& skip_draw);
+    [[nodiscard]] bool SkipPendingMeshDraw() const;
 
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).

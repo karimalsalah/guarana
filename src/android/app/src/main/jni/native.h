@@ -65,6 +65,14 @@ public:
 
     static void OnEmulationStarted();
 
+    /// Linux tids of the emulation thread and the present thread, for the ADPF hint session.
+    void NoteEmulationThread();
+    void NotePresentThread();
+    /// Writes up to two positive tids. Returns how many were written.
+    int CopyThreadIds(s32* out) const;
+    /// Records the present thread and, when work_ns is positive, reports that frame to Java.
+    void NotifyFramePresented(s64 work_ns);
+
     static u64 GetProgramId(JNIEnv* env, jstring jprogramId);
 
 private:
@@ -87,6 +95,8 @@ private:
     Core::SystemResultStatus m_load_result{Core::SystemResultStatus::ErrorNotInitialized};
     std::atomic<bool> m_is_running = false;
     std::atomic<bool> m_is_paused = false;
+    std::atomic<s32> m_emulation_tid{0};
+    std::atomic<s32> m_present_tid{0};
     Common::Android::SoftwareKeyboard::AndroidKeyboard* m_software_keyboard{};
     std::unique_ptr<FileSys::ManualContentProvider> m_manual_provider;
     int m_applet_id{1};

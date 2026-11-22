@@ -195,7 +195,66 @@ constexpr std::array<std::string_view, 1> OCARINA_SOFTWARE_TENSOR_ADDONS{
     "Max Resolution (built-in)",
 };
 
+// Ocarina of Time on Adreno 830 (Snapdragon 8 Elite). Turnip's A8xx driver is experimental:
+// compute shared memory above 32 KiB fails Vulkan conformance, and a compute job after a tiled
+// render pass has hung the GPU. Nothing here is a paired measurement. Tensor anti-aliasing is
+// left alone (matrix support on this part is unmeasured). Frame generation stays off. Extended
+// dynamic state, pipeline libraries and guest compute pipelines stay off, and asynchronous GPU
+// emulation and presentation are turned off so submission does not overlap a tiled pass. The
+// match is any integrated Qualcomm GPU: presets cannot name a GPU family until that family is
+// classified, and Adreno 830 is the part this set was written for. Listed before the Intel
+// preset; the two matches do not overlap.
+constexpr std::array OCARINA_ADRENO_830_SETTINGS{
+    SettingValue{"frame_gen", "false",
+                 "frame generation is unmeasured on Adreno 830 and adds compute after tiled "
+                 "render passes, which experimental Turnip A8xx has hung on",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"use_asynchronous_gpu_emulation", "false",
+                 "submit GPU work synchronously; experimental Turnip A8xx has hung when compute "
+                 "follows a tiled render pass",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"async_presentation", "false",
+                 "present in lockstep with the GPU; asynchronous presentation is unmeasured on "
+                 "Turnip A8xx",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"vram_usage_mode", "0", // Conservative
+                 "conservative VRAM on unified phone memory; Turnip A8xx is experimental",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"frame_pacing_mode", "0", // Auto
+                 "automatic frame pacing; a 120 Hz cadence set is not measured on Adreno 830",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"dyna_state", "0", // Disabled
+                 "extended dynamic state off; Turnip A8xx is experimental",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"use_graphics_pipeline_library", "false",
+                 "graphics pipeline libraries were measured on Intel only",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"enable_compute_pipelines", "false",
+                 "guest compute pipelines stay off; Turnip A8xx compute shared memory above "
+                 "32 KiB fails conformance",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"gpu_accuracy", "0", // Low
+                 "low GPU accuracy; high accuracy is unmeasured on Adreno 830",
+                 PRESET_NOT_MEASURED},
+    SettingValue{"vertex_input_dynamic_state", "false",
+                 "vertex input dynamic state off; unmeasured on Turnip A8xx",
+                 PRESET_NOT_MEASURED},
+};
+
+constexpr std::array<std::string_view, 3> OCARINA_ADRENO_830_ADDONS{
+    "Max Resolution (built-in)",
+    "Texture Pool x2 (built-in)",
+    "FPS Unlock (built-in)",
+};
+
 constexpr std::array PRESETS{
+    Preset{
+        .title_id = OCARINA_TITLE_ID,
+        .gpu = {.vendor = GameSettings::GPUVendor::Qualcomm, .integrated = true},
+        .settings = OCARINA_ADRENO_830_SETTINGS,
+        .addons = OCARINA_ADRENO_830_ADDONS,
+        .reason = "Ocarina of Time on Adreno 830 (Snapdragon 8 Elite)",
+    },
     Preset{
         .title_id = 0x0400486024DEC000,
         .gpu = {.vendor = GameSettings::GPUVendor::Intel,
@@ -426,6 +485,8 @@ GameSettings::GPUVendor VendorOfPciId(u32 vendor_id) {
         return GameSettings::GPUVendor::AMD;
     case 0x10DE:
         return GameSettings::GPUVendor::Nvidia;
+    case 0x5143:
+        return GameSettings::GPUVendor::Qualcomm;
     default:
         return GameSettings::GPUVendor::Unknown;
     }
@@ -694,6 +755,8 @@ std::string_view VendorName(GameSettings::GPUVendor vendor) {
         return "AMD";
     case GameSettings::GPUVendor::Nvidia:
         return "NVIDIA";
+    case GameSettings::GPUVendor::Qualcomm:
+        return "Qualcomm";
     default:
         return "unknown vendor";
     }
@@ -1041,7 +1104,8 @@ std::string ApplySwitchDefaults(u64 title_id, const GpuInfo& gpu, const DisplayI
 bool ReportsFirstBoot(u64 title_id, const GpuInfo& gpu) {
     return gpu.integrated &&
            (gpu.vendor == GameSettings::GPUVendor::Intel ||
-            gpu.vendor == GameSettings::GPUVendor::AMD) &&
+            gpu.vendor == GameSettings::GPUVendor::AMD ||
+            gpu.vendor == GameSettings::GPUVendor::Qualcomm) &&
            std::ranges::any_of(FIRST_BOOT_TITLES, [title_id](const FirstBootTitle& title) {
                return title.title_id == title_id;
            });
@@ -1067,7 +1131,7 @@ void ReportFirstBoot(u64 title_id, const GpuInfo& gpu, std::string_view gpu_name
         }
     }
     LOG_INFO(Core, "First boot of {} on {} ({} integrated GPU{}): {}", title->name, gpu_name,
-             gpu.vendor == GameSettings::GPUVendor::Intel ? "Intel" : "AMD",
+             VendorName(gpu.vendor),
              gpu.software_tensor_math ? " without matrix cores" : "",
              summary.empty() ? std::string_view{"no preset for this GPU, settings as configured"}
                              : summary);

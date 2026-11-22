@@ -2,8 +2,8 @@
   "schema_version": 1,
   "repo": "karimalsalah/guarana",
   "since": "2026-11-13",
-  "as_of": "2026-11-20",
-  "commits": 1166,
+  "as_of": "2026-11-22",
+  "commits": 1240,
   "people": [
     {
       "login": "mushymeow",
@@ -15,7 +15,7 @@
     {
       "login": "zortos293",
       "name": null,
-      "commits": 318,
+      "commits": 340,
       "coauthored": 5,
       "first": "2026-11-04"
     },
@@ -23,7 +23,7 @@
       "login": "kraibse",
       "name": null,
       "commits": 2,
-      "coauthored": 1,
+      "coauthored": 2,
       "first": "2026-11-05"
     },
     {
@@ -127,7 +127,7 @@
     {
       "login": "danieljesus",
       "name": null,
-      "commits": 47,
+      "commits": 57,
       "coauthored": 1,
       "first": "2026-11-13"
     },
@@ -148,7 +148,7 @@
     {
       "login": "goof787lord",
       "name": null,
-      "commits": 4,
+      "commits": 5,
       "coauthored": 0,
       "first": "2026-11-13"
     },
@@ -197,7 +197,7 @@
     {
       "login": "karimalsalah",
       "name": null,
-      "commits": 365,
+      "commits": 400,
       "coauthored": 0,
       "first": "2026-11-13"
     },
@@ -288,7 +288,7 @@
     {
       "login": "RomainROCH",
       "name": null,
-      "commits": 2,
+      "commits": 3,
       "coauthored": 2,
       "first": "2026-11-13"
     },
@@ -394,13 +394,13 @@
       "login": null,
       "name": "Frizti",
       "commits": 0,
-      "coauthored": 6,
+      "coauthored": 8,
       "first": "2026-11-14"
     },
     {
       "login": "GoatTech-42",
       "name": null,
-      "commits": 2,
+      "commits": 4,
       "coauthored": 0,
       "first": "2026-11-14"
     },
@@ -687,7 +687,7 @@
     {
       "login": "the-cashman",
       "name": null,
-      "commits": 1,
+      "commits": 2,
       "coauthored": 1,
       "first": "2026-11-16"
     },
@@ -720,9 +720,16 @@
       "first": "2026-11-17"
     },
     {
+      "login": null,
+      "name": "Mcm190",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-20"
+    },
+    {
       "login": "tomvita",
       "name": null,
-      "commits": 1,
+      "commits": 2,
       "coauthored": 0,
       "first": "2026-11-20"
     },
@@ -737,11 +744,11 @@
   "tools": [
     {
       "name": "Claude",
-      "commits": 656
+      "commits": 676
     },
     {
       "name": "Capy",
-      "commits": 261
+      "commits": 293
     },
     {
       "name": "OpenAI Codex / ChatGPT",
@@ -765,11 +772,11 @@
     },
     {
       "name": "GitHub Actions",
-      "commits": 5
+      "commits": 6
     },
     {
       "name": "Instinct",
-      "commits": 2
+      "commits": 4
     }
   ]
 }

@@ -29,6 +29,7 @@
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/nx2_hitch.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_mapped_reads.h"
 #include "video_core/nx2_uma.h"
 #include "video_core/renderer_vulkan/mesh_before_pass.h"
 #include "video_core/renderer_vulkan/upload_batch.h"
@@ -347,6 +348,8 @@ void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
 
 Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
     : device{device_}, state_tracker{state_tracker_},
+      host_reads_mapped_buffers{VideoCommon::Nx2MappedReads::Active(device_.IsIntegrated(),
+                                                                    device_.IsMoltenVK())},
       master_semaphore{std::make_unique<MasterSemaphore>(device)},
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)},
       upload_batch{std::make_unique<UploadBatch>()},
@@ -2107,6 +2110,12 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
         };
+        static constexpr VkMemoryBarrier HOST_READ_BARRIER{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        };
         // EDEN_NX2_GPU_PERF: the performance-counter scope wraps the whole submission
         // (uploads included); a no-op unless a sampling window is running.
         perf_query.Begin(cmdbuf);
@@ -2114,6 +2123,11 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         if (trace_gpu_recording && trace_upload_item != TraceNoPass) {
             upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_work_pool,
                                         trace_upload_item * 2 + 1);
+        }
+        if (host_reads_mapped_buffers) {
+            // Copies in this command buffer (reordered uploads, EDEN_NX2_UMA bits 1 and 64).
+            upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                          VK_PIPELINE_STAGE_HOST_BIT, 0, HOST_READ_BARRIER);
         }
         upload_cmdbuf.End();
         if (trace_gpu_recording) {
@@ -2146,6 +2160,12 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             trace_pass = {};
         }
         perf_query.End(cmdbuf, signal_value);
+        if (host_reads_mapped_buffers) {
+            // Draws, dispatches and in-order copies. Together with the upload command buffer's
+            // barrier, a mapped read can wait for this submission (WaitForMappedRead).
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_HOST_BIT, 0, HOST_READ_BARRIER);
+        }
         cmdbuf.End();
 
         if (on_submit) {

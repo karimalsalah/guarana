@@ -63,8 +63,7 @@
       "description": "Open-source Nintendo Switch 2 emulator fork tuned for integrated GPUs: Intel Arc iGPU laptops and handhelds first, AMD Radeon iGPU handhelds next. Focus on frame pacing, frame generation and measured GPU fixes. Ships no keys, firmware or games.",
       "applicationCategory": "GameApplication",
       "applicationSubCategory": "Game console emulator",
-      "operatingSystem": "Windows, Linux, macOS",
-      "softwareVersion": "20.4.0",
+      "operatingSystem": ["Windows x64", "Linux (x86_64 or aarch64, glibc 2.39 or newer)", "macOS 15 or newer (Apple silicon)", "Android 13 or newer (arm64-v8a)"],
       "downloadUrl": "https://github.com/karimalsalah/guarana/releases/latest",
       "installUrl": "https://github.com/karimalsalah/guarana/releases/latest",
       "releaseNotes": "https://github.com/karimalsalah/guarana/blob/main/CHANGELOG.md",
@@ -89,12 +88,12 @@
         "url": "https://github.com/zortos293/Lichii"
       },
       "featureList": [
-        "Guarana Setup: a one-click Windows installer and launcher with play modes, a doctor and an autopilot (since v20.1)",
+        "Guarana Setup: a Windows x64 installer and launcher with play modes, a doctor and an autopilot (since v20.1)",
         "Global-memory routing fix for native shaders (EDEN_NX2_GM=11): 14.75 to 22.83 game fps in one scene on Intel Arc 140T",
         "Frame generation by extrapolation from the game's motion vectors, with the HUD kept in place",
         "A vblank-locked presenter that shows each real frame, on by default for Ocarina of Time on Windows integrated GPUs (since v20.2)",
         "Headless shader warm-up: 4,515 pipelines and programs in 155 s on Intel Arc 140T (since v20.1)",
-        "Release builds with ThinLTO and profile-guided optimization (PGO)"
+        "Optional profile-guided optimization (PGO) packages for Windows x64 and Linux"
       ],
       "keywords": "Switch 2 emulator, Intel Arc, integrated GPU, iGPU, handheld PC, frame pacing, frame generation"
     },
@@ -108,7 +107,7 @@
       "isPartOf": {
         "@id": "https://karimalsalah.github.io/guarana/#website"
       },
-      "dateModified": "2026-11-14",
+      "dateModified": "2026-11-18",
       "about": {
         "@id": "https://karimalsalah.github.io/guarana/#software"
       },
@@ -120,7 +119,7 @@
     {
       "@type": "HowTo",
       "@id": "https://karimalsalah.github.io/guarana/#setup",
-      "name": "Set up Guarana on Windows",
+      "name": "Set up Guarana on Windows x64",
       "description": "Download Guarana Setup, add your own keys, firmware and games, and play.",
       "supply": [
         {
@@ -139,7 +138,7 @@
           "@type": "HowToStep",
           "position": 1,
           "name": "Download Guarana Setup",
-          "text": "Get Guarana-Setup-<version>.exe from the GitHub releases page, the only official download. It installs for your user, without admin rights.",
+          "text": "Get Guarana-Setup-<version>.exe from Assets on the GitHub release you chose. It installs for your user, without admin rights.",
           "url": "https://karimalsalah.github.io/guarana/#setup-step-1"
         },
         {
@@ -200,10 +199,10 @@
       <h1 id="hero-title">Switch 2 emulation tuned for integrated GPUs</h1>
       <p class="lede">For laptops and handhelds without a gaming graphics card: Intel Arc first, AMD Radeon handhelds next. A fork of Lichii that works on frame pacing, frame generation and GPU fixes, and publishes every number with the machine it came from.</p>
       <div class="btn-row">
-        <a class="btn" href="https://github.com/karimalsalah/guarana/releases/latest"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Download the latest release</a>
+        <a class="btn" href="#get-it"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 3v9m0 0l-4-4m4 4l4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>Choose a download</a>
         <a class="btn btn-secondary" href="#devices">Will it run on my PC?</a>
       </div>
-      <p class="fine">Free. Windows 11 x64 is the tested platform; Linux and macOS builds are on the same page. Official downloads come only from GitHub Releases. No keys, firmware or games included.</p>
+      <p class="fine">Tested on one Windows 11 x64 laptop. GitHub Releases also has packages for Android, Linux and Apple silicon Macs. No keys, firmware or games included.</p>
     </div>
     <img class="hero-mark" src="assets/logo-mark.svg" alt="" width="240" height="240">
   </div>
@@ -243,9 +242,19 @@
 
 <section class="section" aria-labelledby="get-it">
   <div class="wrap">
-    <h2 id="get-it">Get it in three steps</h2>
+    <h2 id="get-it">Choose a download</h2>
+    <p class="section-intro">Open the <a href="https://github.com/karimalsalah/guarana/releases/latest">latest stable release</a>, or the <a href="https://github.com/karimalsalah/guarana/releases/tag/nightly">nightly prerelease</a> to test newer changes. Under <strong>Assets</strong>, match the file to both your operating system and your CPU.</p>
+    <ul>
+      <li><strong>Windows x64:</strong> choose <code>Guarana-Setup-&lt;version&gt;.exe</code>, or the portable <code>-windows-x86_64.zip</code>. The x64 build needs an x86-64-v3 CPU (including AVX2) and a Vulkan driver.</li>
+      <li><strong>Android 13 or newer:</strong> choose the file ending in <code>-android-arm64.apk</code>. It needs 64-bit Arm Android (<code>arm64-v8a</code>) and a compatible Vulkan 1.1 driver. There is no 32-bit or x86 Android APK. We have not boot-tested it on a phone or handheld.</li>
+      <li><strong>Linux:</strong> choose <code>linux-x86_64</code> (x86-64-v3) or <code>linux-aarch64</code> (64-bit Arm), as an AppImage or tar.gz. Both need glibc 2.39 or newer.</li>
+      <li><strong>macOS 15 or newer:</strong> choose the <code>macos-arm64</code> DMG or ZIP for an Apple silicon Mac. There is no Intel Mac package.</li>
+      <li><strong>Windows on Arm (Snapdragon X):</strong> look for a file ending in <code>-windows-arm64.zip</code>. The project targets it in CI, but neither v20.5.1 nor the November 17, 2026 nightly published that file. Guarana Setup is an x64 installer.</li>
+    </ul>
+    <p>Check the file against <code>SHA256SUMS.txt</code> from the same release (<a href="https://github.com/karimalsalah/guarana/blob/main/docs/SIGNING.md">verification instructions</a>). Our game measurements come from <a href="devices/arc-140t.html">one Windows 11 x64 laptop</a>; a package alone does not tell you whether your game will boot.</p>
+    <h3>Set up Windows x64 in three steps</h3>
     <ol class="steps">
-<li id="setup-step-1"><h3>Download Guarana Setup</h3><p>Get <code>Guarana-Setup-&lt;version&gt;.exe</code> from the <a href="https://github.com/karimalsalah/guarana/releases/latest">GitHub releases page</a>, the only official download. It installs for your user, without admin rights.</p></li>
+<li id="setup-step-1"><h3>Download Guarana Setup</h3><p>Get <code>Guarana-Setup-&lt;version&gt;.exe</code> from Assets on the GitHub release you chose. It installs for your user, without admin rights.</p></li>
 <li id="setup-step-2"><h3>Bring your own keys, firmware and games</h3><p>Dump them from hardware you own. Guarana Setup finds them on your PC with your consent. None are included.</p></li>
 <li id="setup-step-3"><h3>Play</h3><p>On a Windows integrated GPU, Ocarina of Time sets up its own frame pacing; on an Intel iGPU without matrix cores, such as the Arc 140T, it also turns frame generation on (since v20.2). The first visit to each area hitches once while shaders compile.</p></li>
     </ol>
@@ -256,7 +265,7 @@
 <section class="section" aria-labelledby="devices">
   <div class="wrap">
     <h2 id="devices">Will it run on my PC?</h2>
-    <p class="section-intro">Windows x64 is the tested platform (Linux and macOS builds are on Releases, untested on these devices); you need an x86-64 CPU with AVX2 and a Vulkan driver. 16 GB of RAM is below the comfortable floor, because the integrated GPU shares it. Tested means we measured it. Community reports means someone else did, on their build. Untested means nobody has reported yet, so your report counts.</p>
+    <p class="section-intro">Our measured results come from one Windows 11 x64 laptop with an Intel Arc 140T. Other GPUs and handhelds below have third-party reports or are untested. On a Windows PC with 16 GB of RAM, the integrated GPU shares that memory. See <a href="#get-it">downloads by platform</a> before choosing a build.</p>
     <ul class="legend">
   <li><span class="badge badge-tested"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.9 8.3l2.1 2.1 4.2-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Tested</span><span>Measured by the maintainers on this build.</span></li>
   <li><span class="badge badge-community"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.4 3.2h11.2v7.4H7.8l-3.3 2.6v-2.6H2.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Community reports</span><span>Reported by others, on other builds. Not verified by us.</span></li>
@@ -424,7 +433,7 @@
       </article>
       <article class="card">
         <h3>Optimized builds</h3>
-        <p>Release builds are compiled with ThinLTO and profile-guided optimization (PGO).</p>
+        <p>Windows x64 and Linux have both standard packages and packages marked <code>-pgo</code> for profile-guided optimization.</p>
       </article>
     </div>
     <figure class="pace">

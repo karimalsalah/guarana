@@ -17,6 +17,7 @@
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/nx2_svc_fastpath.h"
 #include "core/hle/kernel/physical_core.h"
 #include "core/hle/kernel/svc.h"
 
@@ -26,6 +27,9 @@ PhysicalCore::PhysicalCore(KernelCore& kernel, std::size_t core_index)
     : m_core_index{core_index}, m_idle_stats{std::getenv("EDEN_NX2_IDLE_STATS") != nullptr}
 {
     m_is_single_core = !kernel.IsMulticore();
+    if (m_core_index == 0 && Nx2SvcFastpath::Enabled()) {
+        LOG_INFO(Core_ARM, "EDEN_NX2_SVC_FASTPATH: no-halt SVCs continue the JIT loop in place");
+    }
 }
 PhysicalCore::~PhysicalCore() = default;
 
@@ -163,6 +167,24 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
         if (supervisor_call) {
             // Perform call.
             Svc::Call(system, interface->GetSvcNumber());
+            // EDEN_NX2_SVC_FASTPATH: a SVC that left this thread runnable with no interrupt
+            // pending continues the JIT loop in place. The outer guest-thread loop re-enters
+            // RunThread with the same thread under exactly these conditions, so this skips
+            // only the scheduler round trip. A SVC that blocks or yields to another thread
+            // already switched fibers inside the call; one that terminates or suspends leaves
+            // the thread non-runnable and still returns to the scheduler. The same_core gate
+            // covers a migration of the current thread inside the call: the fiber then resumes
+            // on another host core and the outer loop would re-enter via CurrentPhysicalCore(),
+            // not this core (see nx2_svc_fastpath.h). Multicore only: the single-core loop must
+            // advance CoreTiming after every return.
+            if (Nx2SvcFastpath::ContinueAfterSvc(Nx2SvcFastpath::Enabled(), m_is_single_core,
+                                                 IsInterrupted(),
+                                                 thread->GetState() == ThreadState::Runnable,
+                                                 kernel.CurrentPhysicalCoreIndex() ==
+                                                     m_core_index)) {
+                Nx2SvcFastpath::g_continues[m_core_index].fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
             return;
         }
 

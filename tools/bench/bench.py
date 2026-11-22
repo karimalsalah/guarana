@@ -2883,23 +2883,29 @@ def load_suite(path, args, defaults):
 
 def render_suite(rows, compare_to):
     """Markdown table of one suite run: every variant against its baseline."""
-    by_key = {(row["scene"], row["variant"]): row for row in rows}
+    by_key = collections.defaultdict(dict)
+    for row in rows:
+        by_key[row["scene"], row["variant"]][_display(row)] = row
     display, pacing = optional_columns(rows)
     lines = ["| scene | variant | " + ("display | " if display else "") + "fps | vs baseline | p50 ms | p99 ms | "
              + ("shown fps | within 2 ms of p50 | " if pacing else "") + "watts | GPU MHz | limited by | "
              "late fps | valid |",
              "|---|---|" + ("---|" if display else "") + "---:|---:|---:|---:|" + ("---:|---:|" if pacing else "")
              + "---:|---:|---|---:|---|"]
-    for key, row in by_key.items():
+    for row in rows:
+        key = (row["scene"], row["variant"])
         target = compare_to.get(key)
-        base = by_key.get((key[0], target))
+        candidates = by_key.get((key[0], target), {})
+        base = candidates.get(_display(row))
         delta = "-"
         if target == key[1]:
             delta = "baseline"
-        elif base and display_mode(base) != display_mode(row):
-            delta = f"not compared: {target} ran {display_mode(base)}"
-        elif base and base["valid"] and row["valid"] and base["fps"] and row["fps"]:
-            delta = f"{(row['fps'] / base['fps'] - 1) * 100:+.1f}% vs {target}"
+        elif candidates and not base:
+            delta = f"not compared: {target} ran {', '.join(candidates)}"
+        elif base and not _output_size(row):
+            delta = "not compared: output size unknown"
+        elif base and (change := _fps_change(base, row)):
+            delta = f"{change} vs {target}"
         lines.append("| " + " | ".join(
             [_cell(key[0]), _cell(key[1])] + ([_display(row)] if display else [])
             + [_cell(row["fps"]), delta, _cell(row["p50_ms"]), _cell(row["p99_ms"])]
@@ -2907,8 +2913,9 @@ def render_suite(rows, compare_to):
             + [_cell(row["watts"]), _cell(row.get("gpu_mhz")), _cell(row.get("gpu_limited_by")),
                _cell((row.get("late") or {}).get("fps")),
                _status(row) + (" (probe)" if row.get("probe") else "")]) + " |")
-    lines += ["", "A percentage is given only when both rows are valid. Traced variants are compared "
-              "with the traced baseline: tracing itself costs time."] + ([MIXED_NOTE] if display else [])
+    lines += ["", "A percentage requires two verified, valid rows at the same display mode and known output size. "
+              "Traced variants are compared with the traced baseline: tracing itself costs time."] + (
+              [MIXED_NOTE] if display else [])
     return "\n".join(lines) + "\n"
 
 
@@ -2952,9 +2959,22 @@ def display_mode(row):
     return "fullscreen" if (row.get("fullscreen_requested") if fullscreen is None else fullscreen) else "windowed"
 
 
+def _output_size(row):
+    """The measured output size; older rows may record only the window's client size."""
+    size = (row.get("output") or {}).get("size") or row.get("window")
+    return size if isinstance(size, str) and re.fullmatch(r"[1-9]\d*x[1-9]\d*", size) else None
+
+
 def _display(row):
-    size = (row.get("output") or {}).get("size")
+    size = _output_size(row)
     return display_mode(row) + (f" {size}" if size else "")
+
+
+def _fps_change(a, b):
+    if (a.get("valid") is True and b.get("valid") is True and a.get("scene_ok") is True and b.get("scene_ok") is True
+            and a.get("fps") and b.get("fps") and _output_size(a) and _display(a) == _display(b)):
+        return f"{(b['fps'] / a['fps'] - 1) * 100:+.1f}%"
+    return None
 
 
 def _pacing(row, key):
@@ -2977,14 +2997,15 @@ PACING_COLUMNS = (
     ("within 2 ms of p50", lambda row: _pct(_pacing(row, "within_2ms_pct"))),
     ("on their slot", _on_slot),
 )
-MIXED_NOTE = ("Windowed and fullscreen rows measure different paths (fullscreen adds the scaling and frame "
-              "generation at the display's size): they are listed apart and never compared with each other.")
+MIXED_NOTE = ("Windowed and fullscreen runs measure different paths, and the output size changes how many "
+              "pixels the presenter handles. Different modes or sizes are listed apart and never compared.")
 
 
 def optional_columns(rows):
     """(display column shown, pacing columns shown): each only when some row has it, so pages of
     rows without them stay as they were."""
-    return (any(display_mode(row) == "fullscreen" for row in rows), any(row.get("pacing") for row in rows))
+    display = any(display_mode(row) == "fullscreen" for row in rows) or len({_display(row) for row in rows}) > 1
+    return display, any(row.get("pacing") for row in rows)
 
 
 def variant_label(row):
@@ -2994,11 +3015,11 @@ def variant_label(row):
 
 
 def latest_rows(rows):
-    """One row per (scene, variant, display mode): the newest valid one, else the newest. A boot
-    suite's rows count per cache state."""
+    """One row per scene, variant, display mode and output size: the newest valid one, else the
+    newest. A boot suite's rows count per cache state."""
     chosen = {}
     for row in sorted(rows, key=lambda item: item.get("timestamp_utc", "")):
-        key = (row.get("scene"), variant_label(row), display_mode(row))
+        key = (row.get("scene"), variant_label(row), _display(row))
         if key not in chosen or row.get("valid") or not chosen[key].get("valid"):
             chosen[key] = row
     return chosen
@@ -3056,7 +3077,7 @@ def render_table(directory, every=False):
         rows.sort(key=lambda row: row.get("timestamp_utc", ""))
         lines += [f"## Machine `{machine}`", "", hardware_line(rows[-1].get("hardware") or {}), "", header]
         shown = rows if every else sorted(latest_rows(rows).values(),
-                                          key=lambda row: (row.get("scene"), variant_label(row), display_mode(row)))
+                                          key=lambda row: (row.get("scene"), variant_label(row), _display(row)))
         for row in shown:
             lines.append("| " + " | ".join(
                 [_cell(row.get("scene")), _cell(variant_label(row))] + ([_display(row)] if display else [])
@@ -3084,7 +3105,6 @@ def render_compare(path_a, path_b):
         first = next(iter(rows.values()), {})
         lines.append(f"- **{label}**: `{os.path.basename(path)}`, machine `{first.get('machine_id', '?')}`: "
                      f"{hardware_line(first.get('hardware') or {})}")
-    # Rows are matched by scene, variant and display mode: a windowed row never meets a fullscreen one.
     display, pacing = optional_columns(list(sides[0].values()) + list(sides[1].values()))
     lines += ["",
               "| scene | variant | " + ("display | " if display else "") + "fps A | fps B | B vs A | p50 ms A / B | "
@@ -3094,19 +3114,18 @@ def render_compare(path_a, path_b):
               + ("---:|---:|" if pacing else "") + "---|"]
     for key in sorted(set(sides[0]) | set(sides[1]), key=lambda item: tuple(map(str, item))):
         a, b = sides[0].get(key, {}), sides[1].get(key, {})
-        delta = "-"
-        if a.get("valid") and b.get("valid") and a.get("fps") and b.get("fps"):
-            delta = f"{(b['fps'] / a['fps'] - 1) * 100:+.1f}%"
         lines.append("| " + " | ".join(
             [_cell(key[0]), _cell(key[1])] + ([key[2]] if display else [])
-            + [_cell(a.get("fps")), _cell(b.get("fps")), delta,
+            + [_cell(a.get("fps")), _cell(b.get("fps")), _fps_change(a, b) or "-",
                f"{_cell(a.get('p50_ms'))} / {_cell(b.get('p50_ms'))}",
                f"{_cell(a.get('p99_ms'))} / {_cell(b.get('p99_ms'))}",
                _sustained(a), _sustained(b), f"{_cell(a.get('watts'))} / {_cell(b.get('watts'))}"]
             + ([f"{_cell(_pacing(a, 'shown_fps'))} / {_cell(_pacing(b, 'shown_fps'))}",
                 f"{_pct(_pacing(a, 'within_2ms_pct'))} / {_pct(_pacing(b, 'within_2ms_pct'))}"] if pacing else [])
             + [f"{_cell(a.get('scene_ok'))} / {_cell(b.get('scene_ok'))}"]) + " |")
-    lines += ["", "B vs A is given only when both rows are valid."] + ([MIXED_NOTE] if display else [])
+    lines += ["", "B vs A requires two verified, valid rows at the same display mode and known output size. "
+              "Across machines or sessions it describes the readings, not a switch's gain."] + (
+              [MIXED_NOTE] if display else [])
     return "\n".join(lines) + "\n"
 
 

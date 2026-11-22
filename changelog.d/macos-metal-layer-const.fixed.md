@@ -1,0 +1,1 @@
+- Fixed the macOS build with Vulkan-Headers 1.4.368, which made VkMetalSurfaceCreateInfoEXT.pLayer non-const.

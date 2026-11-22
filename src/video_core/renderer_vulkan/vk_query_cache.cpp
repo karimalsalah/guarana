@@ -1835,15 +1835,19 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     }
 
     // Vulkan part.
+    std::vector<Buffer*> query_write_buffers;
+    query_write_buffers.reserve(impl->little_cache.size());
     std::scoped_lock lk(impl->buffer_cache.mutex);
     impl->buffer_cache.BufferOperations([&] {
         impl->buffers_to_upload_to.clear();
+        query_write_buffers.clear();
         for (auto& pair : impl->little_cache) {
             static constexpr auto sync_info = VideoCommon::ObtainBufferSynchronize::FullSynchronize;
             const auto post_op = VideoCommon::ObtainBufferOperation::DoNothing;
             const auto [buffer, offset] = impl->buffer_cache.ObtainCPUBuffer(
                 pair.first, static_cast<u32>(pair.second - pair.first), sync_info, post_op);
             impl->buffers_to_upload_to.emplace_back(buffer->Handle(), offset);
+            query_write_buffers.push_back(buffer);
         }
     });
     // The copies below are GPU writes the buffer cache doesn't record: reads taken before them
@@ -1891,6 +1895,11 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     }
 
     impl->scheduler.RequestOutsideRenderPassOperationContext();
+    // The copies below go in the current submission: a mapped read waits for it.
+    const u64 write_tick = impl->scheduler.CurrentTick();
+    for (Buffer* written : query_write_buffers) {
+        written->SetGpuWriteTick(write_tick);
+    }
     impl->scheduler.RecordEmu(TraceCategory::QueryCopy, {0, 0, 1},
         [src_buffer, dst_buffers = std::move(impl->buffers_to_upload_to), vk_copies = std::move(impl->copies_setup)](vk::CommandBuffer cmdbuf) {
         size_t size = dst_buffers.size();

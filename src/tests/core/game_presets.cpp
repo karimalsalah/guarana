@@ -270,6 +270,32 @@ TEST_CASE("A game preset sums up what it did in one line", "[core][game_presets]
     CHECK(Apply(OcarinaTitleId, {.vendor = GPUVendor::Nvidia}).empty());
 }
 
+TEST_CASE("Ocarina of Time on an integrated Qualcomm GPU uses the Adreno 830 preset",
+          "[core][game_presets]") {
+    const GpuInfo adreno{.vendor = GPUVendor::Qualcomm, .integrated = true};
+    const Preset* found = Find(Presets(), OcarinaTitleId, adreno);
+    REQUIRE(found != nullptr);
+    CHECK(found->reason == "Ocarina of Time on Adreno 830 (Snapdragon 8 Elite)");
+    CHECK(Find(Presets(), OcarinaTitleId, {.vendor = GPUVendor::Qualcomm}) == nullptr);
+    CHECK(Find(Presets(), OcarinaTitleId, Arc140T) != found);
+    CHECK(ChoosePacingSet(OcarinaTitleId, adreno, 120) == PacingSet::None);
+
+    SettingsScope scope;
+    ResetToDefaults();
+    auto& async_gpu = Settings::values.use_asynchronous_gpu_emulation;
+    async_gpu.SetGlobal(true);
+    async_gpu.SetValue(true);
+    const std::string summary = Apply(OcarinaTitleId, adreno);
+    CHECK(summary.find("Ocarina of Time on Adreno 830 (Snapdragon 8 Elite)") != std::string::npos);
+    CHECK(summary.find("use_asynchronous_gpu_emulation=false") != std::string::npos);
+    CHECK(summary.find("async_presentation=false") != std::string::npos);
+    CHECK(summary.find("add-on \"Texture Pool x2 (built-in)\" enabled") != std::string::npos);
+    CHECK(summary.find("add-on \"FPS Unlock (built-in)\" enabled") != std::string::npos);
+    CHECK(Settings::values.use_asynchronous_gpu_emulation.GetValue() == false);
+    CHECK(Settings::values.use_asynchronous_gpu_emulation.GetValue(true) == true);
+    CHECK(Settings::IsPresetValue(Settings::values.use_asynchronous_gpu_emulation));
+}
+
 TEST_CASE("Ocarina of Time on a Windows integrated GPU gets the pacing switches", "[core][game_presets]") {
 #ifdef _WIN32
     const auto names = [](std::span<const SwitchValue> items) {
@@ -332,8 +358,9 @@ TEST_CASE("The GPU vendor is read from the PCI vendor ID", "[core][game_presets]
     CHECK(VendorOfPciId(0x8086) == GPUVendor::Intel);
     CHECK(VendorOfPciId(0x1002) == GPUVendor::AMD);
     CHECK(VendorOfPciId(0x10DE) == GPUVendor::Nvidia);
-    // Other vendors (Qualcomm, Arm, Apple, Mesa's software renderers) and no ID are unknown.
-    for (const u32 id : {0U, 0x5143U, 0x13B5U, 0x106BU, 0x10005U, 0x1AE0U}) {
+    CHECK(VendorOfPciId(0x5143) == GPUVendor::Qualcomm);
+    // Other vendors (Arm, Apple, Mesa's software renderers) and no ID are unknown.
+    for (const u32 id : {0U, 0x13B5U, 0x106BU, 0x10005U, 0x1AE0U}) {
         CAPTURE(id);
         CHECK(VendorOfPciId(id) == GPUVendor::Unknown);
     }
@@ -652,6 +679,8 @@ TEST_CASE("The GPU family changes no preset or switch default yet", "[core][game
 TEST_CASE("Ocarina of Time's first boot on an integrated GPU is reported", "[core][game_presets]") {
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, Arc140T));
     REQUIRE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD, .integrated = true}));
+    REQUIRE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::Qualcomm, .integrated = true}));
+    REQUIRE_FALSE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::Qualcomm}));
     REQUIRE_FALSE(ReportsFirstBoot(OcarinaTitleId, {.vendor = GPUVendor::AMD}));
     REQUIRE_FALSE(ReportsFirstBoot(OcarinaTitleId,
                                    {.vendor = GPUVendor::Nvidia, .integrated = true}));

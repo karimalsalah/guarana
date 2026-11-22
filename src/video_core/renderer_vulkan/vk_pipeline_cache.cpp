@@ -961,12 +961,14 @@ PipelineWorkerCounts GetSmartPipelineWorkers(const Device* device = nullptr,
 
     if (device) {
         // NVIDIA proprietary driver serializes vkCreateGraphicsPipelines. On <=8 thread CPUs,
-        // one driver worker avoids that lock. This branch has no Device::IsAmdLegacyGcn.
+        // one driver worker avoids that lock.
         if (device->GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY && total_threads <= 8) {
             driver_w = 1;
         }
         if (device->HasBrokenParallelShaderCompiling()) {
             driver_w = 1;
+        } else if (device->IsAmdLegacyGcn()) {
+            driver_w = std::min<size_t>(driver_w, 2ULL);
         }
     }
     return {cpu_w, driver_w};
@@ -1438,6 +1440,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     }
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
         .cpu_threads = std::max(boot_workers.cpu_workers, gameplay_workers.cpu_workers),
+        // Both profiles already carry the AMD legacy-GCN driver cap (GetSmartPipelineWorkers).
         .driver_threads = std::max(boot_workers.driver_workers, gameplay_workers.driver_workers),
         .name = "VkShader",
         .wait_boost = wait_boost,
@@ -3589,6 +3592,22 @@ void ReportUnsupportedMeshPipeline(const GraphicsPipelineCacheKey& key, const Pr
                 position, generic, other, others, info.primitive_lines.size(), primitive_attributes,
                 has_pixel, with_task, per_primitive, non_triangle);
 }
+
+void LogSkippedPipelineLookup(bool mesh) {
+    if (mesh) {
+        static std::atomic<u64> mesh_skipped{};
+        if ((mesh_skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+            LOG_INFO(Render_Vulkan, "Async shaders: {} mesh pipeline lookups skipped",
+                     mesh_skipped.load(std::memory_order_relaxed));
+        }
+    }
+    static std::atomic<u64> skipped{};
+    if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+        // Counts lookups, not draws: a draw state can look its pipeline up more than once.
+        LOG_INFO(Render_Vulkan, "Async shaders: {} pipeline lookups skipped for unbuilt pipelines",
+                 skipped.load(std::memory_order_relaxed));
+    }
+}
 } // Anonymous namespace
 
 namespace {
@@ -3676,17 +3695,32 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
             }
         }
         if (it == graphics_cache.end()) {
-            // Not in flight, or its translation was left to the GPU thread.
-            bool skip_draw = false;
-            std::unique_ptr<GraphicsPipeline> new_pipeline{NewGraphicsPipeline(prebuilt, skip_draw)};
-            if (!new_pipeline && (skip_draw || translating_graphics.contains(graphics_key))) {
-                return nullptr;
+            // A hoisted mesh dispatch is queued: take a ready prebuild or skip this lookup
+            // instead of waiting or building inline (skip_unbuilt_mesh_draws).
+            if (scheduled_prebuild && SkipPendingMeshDraw()) {
+                auto ready = scheduled_prebuild->TryTakeReady(graphics_key);
+                if (!ready) {
+                    LogSkippedPipelineLookup(true);
+                    return nullptr;
+                }
+                ReportNewPipelineKey(graphics_key);
+                it = graphics_cache.emplace(graphics_key, std::move(*ready)).first;
+                is_new = true;
+                prebuilt = true;
+            } else {
+                // Not in flight, or its translation was left to the GPU thread.
+                bool skip_draw = false;
+                std::unique_ptr<GraphicsPipeline> new_pipeline{
+                    NewGraphicsPipeline(prebuilt, skip_draw)};
+                if (!new_pipeline && (skip_draw || translating_graphics.contains(graphics_key))) {
+                    return nullptr;
+                }
+                it = graphics_cache.find(graphics_key);
+                if (it == graphics_cache.end()) {
+                    it = graphics_cache.emplace(graphics_key, std::move(new_pipeline)).first;
+                }
+                is_new = true;
             }
-            it = graphics_cache.find(graphics_key);
-            if (it == graphics_cache.end()) {
-                it = graphics_cache.emplace(graphics_key, std::move(new_pipeline)).first;
-            }
-            is_new = true;
         }
     } else if (StutterTrace::Enabled() && it->second && !it->second->WasUsed()) {
         StutterTrace::CountLookup(StutterTrace::Lookup::GraphicsPrebuilt);
@@ -4036,7 +4070,8 @@ PipelineCache::PendingDrawPolicy PipelineCache::CurrentPendingDrawPolicy() const
     // A native draw counts as depth-tested only when every render target it writes color into
     // was first written in an earlier frame, which the title redraws every frame: Mario Kart
     // World bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer
-    // alone doesn't test (Eglantine #874). Mesh draws always wait. Judged only when a mode other
+    // alone doesn't test (Eglantine #874). Mesh draws wait unless the mesh skip setting is on.
+    // Judged only when a mode other
     // than Wait is chosen: it takes the texture cache's lock and looks up the bound targets.
     const auto& regs = maxwell3d->regs;
     const auto writes_color = [&regs](u32 rt_index) {
@@ -4130,6 +4165,11 @@ void PipelineCache::ChargeNativeWait(std::chrono::steady_clock::time_point begin
     }
 }
 
+bool PipelineCache::SkipPendingMeshDraw() const {
+    return use_asynchronous_shaders && Settings::values.skip_unbuilt_mesh_draws.GetValue() &&
+           maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
+}
+
 /// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
 /// draw may be skipped while it builds (asynchronous shaders; native draws only with
 /// EDEN_NX2_ASYNC_DISCARD=1). Each nullptr returned for an unbuilt pipeline is counted for the log.
@@ -4203,16 +4243,12 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
                      skipped_redrawn.load(std::memory_order_relaxed));
         }
     }
-    if (discard) {
-        static std::atomic<u64> skipped{};
-        if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
-            // Counts lookups, not draws: a draw state can look its pipeline up more than once.
-            LOG_INFO(Render_Vulkan,
-                     "Async shaders: {} pipeline lookups skipped for unbuilt pipelines",
-                     skipped.load(std::memory_order_relaxed));
-        }
+    const bool skip_mesh = SkipPendingMeshDraw();
+    if (discard || skip_mesh) {
+        LogSkippedPipelineLookup(skip_mesh);
+        return nullptr;
     }
-    return discard ? nullptr : pipeline;
+    return pipeline;
 }
 
 bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data) {

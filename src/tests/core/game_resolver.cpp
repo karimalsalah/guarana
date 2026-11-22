@@ -41,8 +41,8 @@ struct Combo {
 std::vector<Combo> AllCombos() {
     std::vector<Combo> combos;
     for (const u64 title : {OcarinaTitleId, OtherTitleId}) {
-        for (const GPUVendor vendor :
-             {GPUVendor::Unknown, GPUVendor::Intel, GPUVendor::AMD, GPUVendor::Nvidia}) {
+        for (const GPUVendor vendor : {GPUVendor::Unknown, GPUVendor::Intel, GPUVendor::AMD,
+                                       GPUVendor::Nvidia, GPUVendor::Qualcomm}) {
             for (const bool integrated : {false, true}) {
                 for (const bool tensor : {false, true}) {
                     for (const double hz : {0.0, 1.0, 24.0, 59.94, 60.0, 100.0, 114.4, 115.0, 119.88,
@@ -93,6 +93,22 @@ std::vector<std::pair<std::string_view, std::string_view>> ExpectedOcarinaSettin
 #endif
         {"vram_usage_mode", "1"},
         {"frame_pacing_mode", "0"},
+    };
+}
+
+// The Adreno 830 / Snapdragon 8 Elite preset: conservative Vulkan, unmeasured.
+std::vector<std::pair<std::string_view, std::string_view>> ExpectedAdreno830Settings() {
+    return {
+        {"frame_gen", "false"},
+        {"use_asynchronous_gpu_emulation", "false"},
+        {"async_presentation", "false"},
+        {"vram_usage_mode", "0"},
+        {"frame_pacing_mode", "0"},
+        {"dyna_state", "0"},
+        {"use_graphics_pipeline_library", "false"},
+        {"enable_compute_pipelines", "false"},
+        {"gpu_accuracy", "0"},
+        {"vertex_input_dynamic_state", "false"},
     };
 }
 
@@ -152,10 +168,11 @@ TEST_CASE("The resolver gives today's values for every title, GPU and display ra
             CHECK(resolution.switches[i].value == expected_switches[i].value);
         }
 
-        // The settings preset applies to Ocarina of Time on an Intel integrated GPU without
-        // matrix cores, and to nothing else.
+        // Intel integrated without matrix cores, or integrated Qualcomm (the Adreno 830 preset).
         const bool preset = combo.title_id == OcarinaTitleId && combo.vendor == GPUVendor::Intel &&
                             combo.integrated && combo.software_tensor_math;
+        const bool adreno = combo.title_id == OcarinaTitleId &&
+                            combo.vendor == GPUVendor::Qualcomm && combo.integrated;
         if (preset) {
             const auto expected = ExpectedOcarinaSettings();
             REQUIRE(resolution.settings.size() == expected.size());
@@ -167,6 +184,19 @@ TEST_CASE("The resolver gives today's values for every title, GPU and display ra
             CHECK(resolution.addons[0].name == "Max Resolution (built-in)");
             CHECK(resolution.preset_reason ==
                   "Ocarina of Time on an Intel integrated GPU without matrix cores");
+        } else if (adreno) {
+            const auto expected = ExpectedAdreno830Settings();
+            REQUIRE(resolution.settings.size() == expected.size());
+            for (size_t i = 0; i < expected.size(); ++i) {
+                CHECK(resolution.settings[i].label == expected[i].first);
+                CHECK(resolution.settings[i].value == expected[i].second);
+            }
+            REQUIRE(resolution.addons.size() == 3);
+            CHECK(resolution.addons[0].name == "Max Resolution (built-in)");
+            CHECK(resolution.addons[1].name == "Texture Pool x2 (built-in)");
+            CHECK(resolution.addons[2].name == "FPS Unlock (built-in)");
+            CHECK(resolution.preset_reason ==
+                  "Ocarina of Time on Adreno 830 (Snapdragon 8 Elite)");
         } else {
             CHECK(resolution.settings.empty());
             CHECK(resolution.addons.empty());
@@ -496,6 +526,7 @@ TEST_CASE("The names of the decisions are distinct", "[core][game_resolver]") {
     CHECK(VendorName(GPUVendor::Intel) == "Intel");
     CHECK(VendorName(GPUVendor::AMD) == "AMD");
     CHECK(VendorName(GPUVendor::Nvidia) == "NVIDIA");
+    CHECK(VendorName(GPUVendor::Qualcomm) == "Qualcomm");
 }
 
 TEST_CASE("The boot resolution is recorded for the debug server", "[core][game_resolver]") {

@@ -46,6 +46,7 @@ jmethodID GetExitEmulationActivity();
 jmethodID GetOnEmulationStarted();
 jmethodID GetOnEmulationStopped();
 jmethodID GetOnProgramChanged();
+jmethodID GetOnFramePresented();
 
 jclass GetGameClass();
 jmethodID GetGameConstructor();

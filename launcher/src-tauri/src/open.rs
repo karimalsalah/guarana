@@ -20,13 +20,19 @@ use crate::types::{Container, Game};
 
 pub const EVENT: &str = "launch://request";
 
-/// What `take_launch_request` returns: the game to start, or why it cannot be.
+/// What `take_launch_request` returns: the game to start, or why it cannot be, or a screen to show.
 #[derive(Debug, Clone, Serialize)]
 pub struct LaunchRequest {
     /// `file` (Explorer, a shortcut or the command line) or `link` (`guarana://`).
     pub source: String,
     pub game: Option<Game>,
     pub error: Option<String>,
+    /// `updates`: `guarana://updates`, from the emulator's Help > Check for Updates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
+    /// The channel an updates link names (`stable` or `nightly`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 impl LaunchRequest {
@@ -35,7 +41,11 @@ impl LaunchRequest {
             Ok(g) => (Some(g), None),
             Err(e) => (None, Some(e)),
         };
-        Self { source: source.to_string(), game, error }
+        Self { source: source.to_string(), game, error, screen: None, channel: None }
+    }
+
+    fn updates(channel: Option<String>) -> Self {
+        Self { source: "link".to_string(), game: None, error: None, screen: Some("updates".to_string()), channel }
     }
 }
 
@@ -78,15 +88,22 @@ pub fn from_args(app: &AppHandle, argv: &[String], cwd: &Path) {
 fn from_link(app: &AppHandle, url: String) {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = args::parse_link(&url).and_then(|link| resolve_link(link, &app.state::<AppState>().load()));
-        queue(&app, LaunchRequest::new("link", result));
+        let request = match args::parse_request(&url) {
+            Ok(args::Request::Updates(channel)) => LaunchRequest::updates(channel),
+            Ok(args::Request::Launch(link)) => {
+                LaunchRequest::new("link", resolve_link(link, &app.state::<AppState>().load()))
+            }
+            Err(e) => LaunchRequest::new("link", Err(e)),
+        };
+        queue(&app, request);
     });
 }
 
 fn queue(app: &AppHandle, request: LaunchRequest) {
-    match (&request.game, &request.error) {
-        (Some(g), _) => log::info!("Asked to start {} ({}) from a {}", g.title, g.path, request.source),
-        (None, Some(e)) => log::warn!("Refused a {} request: {e}", request.source),
+    match (&request.game, &request.error, &request.screen) {
+        (Some(g), _, _) => log::info!("Asked to start {} ({}) from a {}", g.title, g.path, request.source),
+        (None, Some(e), _) => log::warn!("Refused a {} request: {e}", request.source),
+        (None, None, Some(screen)) => log::info!("Asked to show {screen} from a {}", request.source),
         _ => {}
     }
     let st = app.state::<AppState>();

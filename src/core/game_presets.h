@@ -40,8 +40,9 @@ struct GpuInfo {
 };
 
 /// The vendor a PCI vendor ID (VkPhysicalDeviceProperties::vendorID) names: Intel 0x8086, AMD
-/// 0x1002, NVIDIA 0x10DE, else Unknown. Pure. The renderer reads the vendor once, from the device
-/// profile's PCI vendor ID, and gives it to the settings presets and the switch defaults alike.
+/// 0x1002, NVIDIA 0x10DE, Qualcomm 0x5143, else Unknown. Pure. The renderer reads the vendor once,
+/// from the device profile's PCI vendor ID, and gives it to the settings presets and the switch
+/// defaults alike.
 [[nodiscard]] GameSettings::GPUVendor VendorOfPciId(u32 vendor_id);
 
 /// What a preset asks of the GPU. Unknown takes any vendor or device class, None any GPU family,

@@ -32,14 +32,16 @@ and events between them are in [CONTRACT.md](CONTRACT.md).
   in `%APPDATA%\guarana\config\qt-config.ini`. Both are backed up to `guarana-backups\` first.
 - **Starts games** with `guarana.exe --launcher-session -f -g "<game file>"` (`-g/--game` boots the
   file, `-f/--fullscreen` starts fullscreen; `src/core/launch_params.cpp`). `--launcher-session`
-  (20.3.0 and later) means the emulator's own window never appears: once the game starts loading,
+  (every build that has it, nightlies and release candidates included: the launcher reads that from
+  the program, not its version label) means the emulator's own window never appears: once the game starts loading,
   its loading screen and then the game fill the screen (until then the launcher's screen stays),
   and the emulator exits when the game stops, so you are back in the launcher. The leave-fullscreen key (Esc by default) stops the game
-  (see [CONTRACT.md](CONTRACT.md#launcher-session)). Older versions get `-f -g` only.
+  (see [CONTRACT.md](CONTRACT.md#launcher-session)). Builds from before it (20.2.0 and older) get `-f -g` only.
   While the game boots, the launch screen shows what the emulator is doing (loading the game,
   loading shaders with the real count, starting the game), read from the boot marks the emulator
   writes to the launcher in a launcher session, and it switches to "Playing" once the game is on
-  screen. When the game exits, the launcher comes back to the front.
+  screen. From the game's first frame the launcher hides, so the game is the one window and taskbar
+  button while it plays; when the game exits, the launcher comes back to the front.
   `launcher.log` stamps its lines to the millisecond and records each start's timeline (Play
   pressed, command built, process spawned, each boot phase, the exit). With the environment switch
   `EDEN_NX2_LAUNCHER_PAD_IDLE=1` (off by default, not measured) the launcher stops polling

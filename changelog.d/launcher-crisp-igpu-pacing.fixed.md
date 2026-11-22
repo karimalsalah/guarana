@@ -1,1 +1,0 @@
-- Integrated-GPU profiles now default to crisp repeated real frames at even 120 Hz pacing (`EDEN_NX2_FLUID_INTERP=0`, `CADENCE=3`, `SHOWN_RATE=120`) instead of interpolated in-betweens, which ghost every moving edge at low real fps; a new "Interpolated in-betweens" toggle turns prediction back on for GPUs that hold 60+ real fps.

@@ -26,27 +26,22 @@ use crate::state::{self, AppState};
 use crate::timeline::Timeline;
 use crate::types::{GameExited, LaunchResult, PrefetchResult};
 use crate::util::{self, CmdResult, Context};
-use crate::{appdir, autopilot, boot, controllers, install, modes, paths, profiles, system, warm};
+use crate::{appdir, autopilot, boot, controllers, modes, paths, profiles, system, warm};
 
 pub const EXITED_EVENT: &str = "game://exited";
 
-/// The first emulator release that understands `--launcher-session`. The flag was added when the
-/// repository's `VERSION` read 20.2.0, the newest release then, so it ships in the next one; this
-/// assumes that is 20.3.0 or later. Raise it if the next release is numbered otherwise.
-const LAUNCHER_SESSION_SINCE: &str = "20.3.0";
-
-/// Whether the emulator version `current.json` names understands `--launcher-session`. Older
-/// builds, which the launcher can roll back to, get `-f -g` only. A nightly, a pre-release or any
-/// label that is not a release version counts as older: its label does not say what it was built
-/// from.
-fn understands_launcher_session(version: &str) -> bool {
-    !install::is_newer(LAUNCHER_SESSION_SINCE, version)
+/// Whether the emulator `exe` understands `--launcher-session`: the option's name is in its option
+/// table (`src/core/launch_params.cpp`). Read from the program, not from its version label, so a
+/// nightly or a release candidate that has it gets it; builds from before it (20.2.0 and older),
+/// which the launcher can roll back to, get `-f -g` only.
+fn understands_launcher_session(exe: &Path) -> bool {
+    util::program_knows(exe, b"launcher-session")
 }
 
-/// The arguments that boot `game` in the emulator `version`.
-fn game_args(version: &str, game: &Path) -> Vec<OsString> {
+/// The arguments that boot `game`, in a launcher session when the build understands one.
+fn game_args(session: bool, game: &Path) -> Vec<OsString> {
     let mut args = Vec::new();
-    if understands_launcher_session(version) {
+    if session {
         args.push(OsString::from("--launcher-session"));
     }
     args.push(OsString::from("-f"));
@@ -217,6 +212,7 @@ pub fn launch(
         timeline.mark("runs from the version folder");
     }
     let exe = paths::emulator_exe_in(&run.dir).ok_or_else(missing)?;
+    let session = understands_launcher_session(&exe);
     let launch_on_battery = st.system().power.on_ac == Some(false);
     let mut cmd = Command::new(&exe);
     cmd.current_dir(exe.parent().unwrap_or(Path::new(".")));
@@ -224,10 +220,10 @@ pub fn launch(
     // autopilot reads them after the game.
     cmd.env("EDEN_NX2_SHOWN_STATS", "1");
     if let Some(gp) = &game_path {
-        cmd.args(game_args(&current.version, gp));
+        cmd.args(game_args(session, gp));
     }
     // A launcher session writes its boot to stdout until the game is on screen (`boot.rs`).
-    let follow_boot = game_path.is_some() && understands_launcher_session(&current.version);
+    let follow_boot = game_path.is_some() && session;
     if follow_boot {
         cmd.stdout(Stdio::piped());
     }
@@ -281,6 +277,9 @@ pub fn launch(
     // and from the foreground watcher; both stop once the game is shown or the process is gone.
     let boot_done = Arc::new(AtomicBool::new(false));
     let exit_done = boot_done.clone();
+    // The launcher's window steps aside while the game plays and comes back at its exit.
+    let stage = boot::Stage::default();
+    let exit_stage = stage.clone();
     let boot_out = if had_game { child.stdout.take() } else { None };
     std::thread::Builder::new()
         .name("game-watch".into())
@@ -295,14 +294,17 @@ pub fn launch(
             log::info!("Guarana (pid {pid}) exited with {code} after {seconds:.0} s");
             let _ = app2.emit(EXITED_EVENT, GameExited { code, seconds });
             if had_game {
-                // Back to the launcher at once; to the front only if the player was not in another app.
-                if let Some(window) = app2.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
-                        let _ = window.set_focus();
+                // Back to the launcher at once, under the stage's lock so a late hide cannot follow; to
+                // the front only if the player was not in another app.
+                exit_stage.end(|| {
+                    if let Some(window) = app2.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        if !matches!(foreground, Some(p) if p != pid && p != std::process::id()) {
+                            let _ = window.set_focus();
+                        }
                     }
-                }
+                });
                 let info = autopilot::SessionInfo { title_id: session_tid, exit_code: code, seconds, launch_on_battery };
                 crate::share::after_session(&app2, &info);
                 autopilot::after_session(&app2, info);
@@ -317,9 +319,9 @@ pub fn launch(
     // After the game-watch thread exists, so `boot_done` is always set when the process ends.
     if had_game {
         if let Some(out) = boot_out {
-            boot::follow(app, out, boot_done.clone(), timeline);
+            boot::follow(app, out, boot_done.clone(), stage.clone(), timeline);
         }
-        boot::watch_foreground(app, pid, boot_done, timeline);
+        boot::watch_foreground(app, pid, boot_done, stage, !follow_boot, timeline);
     }
 
     // The game-watch thread now exists, so start the booster's elevated helper (one UAC prompt) on
@@ -340,23 +342,26 @@ mod tests {
 
     #[test]
     fn launcher_session_only_for_builds_that_know_it() {
-        assert!(understands_launcher_session("20.3.0"));
-        assert!(understands_launcher_session("v20.3.0"));
-        assert!(understands_launcher_session("20.10.1"));
-        assert!(understands_launcher_session("21.0.0"));
-        assert!(!understands_launcher_session("20.2.0"), "the newest release before the flag");
-        assert!(!understands_launcher_session("20.0.2"));
-        assert!(!understands_launcher_session("20.3.0-rc1"), "a pre-release counts as older");
-        assert!(!understands_launcher_session("nightly-20261113-1a2b3c4"));
-        assert!(!understands_launcher_session("bundled"));
+        let dir = std::env::temp_dir().join(format!("guarana-launch-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A build with the option in its table, whatever its label (a nightly or release candidate).
+        let knows = dir.join("knows.exe");
+        std::fs::write(&knows, b"MZ\0\0{\"fullscreen\"}\0{\"launcher-session\"}\0{\"game\"}").unwrap();
+        // A build from before it (20.2.0 and older).
+        let older = dir.join("older.exe");
+        std::fs::write(&older, b"MZ\0\0{\"fullscreen\"}\0{\"game\"}").unwrap();
+        assert!(understands_launcher_session(&knows));
+        assert!(!understands_launcher_session(&older));
+        assert!(!understands_launcher_session(&dir.join("missing.exe")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn game_arguments_by_version() {
+    fn game_arguments_with_and_without_a_session() {
         let game = Path::new(r"D:\Games\Zelda [0400486024DEC000].nsp");
-        assert_eq!(strings(game_args("20.2.0", game)), ["-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]);
+        assert_eq!(strings(game_args(false, game)), ["-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]);
         assert_eq!(
-            strings(game_args("20.3.0", game)),
+            strings(game_args(true, game)),
             ["--launcher-session", "-f", "-g", r"D:\Games\Zelda [0400486024DEC000].nsp"]
         );
     }

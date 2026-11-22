@@ -9,9 +9,11 @@
 #include <atomic>
 #include <chrono>
 #include <optional>
+#include <source_location>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <boost/container/static_vector.hpp>
 
@@ -19,6 +21,7 @@
 #include "common/dkb_cpu_trace.h"
 #include "common/dkb_frame_trace.h"
 #include "common/shutdown_progress.h"
+#include "common/unique_function.h"
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -235,7 +238,8 @@ private:
     std::chrono::steady_clock::time_point poll_refreshed_at{};
 
     template <typename Func>
-    void PrepareDraw(bool is_indexed, Func&&, bool is_indirect = false);
+    void PrepareDraw(bool is_indexed, Func&&, bool is_indirect = false,
+                     std::optional<u32> direct_instances = std::nullopt);
 
     void CaptureIndirectTrace();
     void CollectIndirectTrace();
@@ -262,6 +266,13 @@ private:
     /// Records the dynamic state of the draw being prepared with `pipeline` (null for
     /// DrawTexture's blit).
     void UpdateDynamicStates(const GraphicsPipeline* pipeline);
+
+    using DynamicCommands = std::vector<Common::UniqueFunction<void, const vk::CommandBuffer&>>;
+    DynamicCommands* dynamic_commands{};
+
+    template <typename F>
+    void RecordDynamic(F&& command,
+                       std::source_location location = std::source_location::current());
 
     void HandleTransformFeedback();
 

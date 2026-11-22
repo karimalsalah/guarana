@@ -1,0 +1,1 @@
+- Vulkan: `EDEN_NX2_MAPPED_READS=1` keeps the buffer cache host-visible on integrated GPUs and reads a GPU-written buffer after the submission that wrote it, instead of waiting for the whole queue (ported from [Lichii #1903](https://github.com/zortos293/Lichii/pull/1903); off unless set, not measured here).

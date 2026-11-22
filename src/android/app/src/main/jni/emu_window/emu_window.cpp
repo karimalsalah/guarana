@@ -66,8 +66,15 @@ void EmuWindow_Android::OnTouchReleased(int id) {
 }
 
 void EmuWindow_Android::OnFrameDisplayed() {
+    s64 work_ns = 0;
+    const auto now = Clock::now();
+    if (m_last_frame_display_time.time_since_epoch().count() != 0) {
+        work_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_last_frame_display_time)
+                      .count();
+    }
     UpdateObservedFrameRate();
     UpdateFrameRateHint();
+    EmulationSession::GetInstance().NotifyFramePresented(work_ns);
 
     if (!m_first_frame) {
         Common::Android::RunJNIOnFiber<void>(

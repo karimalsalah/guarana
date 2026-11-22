@@ -22,6 +22,7 @@
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_render_follower.h"
 
 namespace Core {
 class System;
@@ -207,10 +208,13 @@ public:
     [[nodiscard]] static bool OnGpuThread() {
         return on_gpu_thread;
     }
-    /// Whether the calling thread owns the Vulkan scheduler: the back while it runs, else the
-    /// GPU thread. Other threads (CPU cores, services) must not record or submit work.
+    /// The GPU back owns the scheduler while the split runs, except while a draw packet is
+    /// lent to GPURender. Without the split the GPU thread owns it.
     [[nodiscard]] static bool OwnsScheduler() {
-        return Get().BackRunning() ? on_back_thread : on_gpu_thread;
+        if (on_render_thread) {
+            return true;
+        }
+        return Get().BackRunning() ? on_back_thread && !instance.RenderPending() : on_gpu_thread;
     }
     /// Draw state belongs to the split back thread, or the sole GPU scheduler owner.
     [[nodiscard]] static bool CanReuseDrawState() {
@@ -264,6 +268,15 @@ public:
     /// Vulkan). Called by the front between commands.
     void MaybeStart(Core::System& system);
     void Stop();
+
+    void SetRenderFollowerSupported(bool supported) {
+        render_follower_supported = supported;
+    }
+    [[nodiscard]] bool CanPostRender() const {
+        return on_back_thread && render_terminal_draw;
+    }
+    void PostRender(Nx2RenderFollower::Work work);
+    void WaitRender();
 
     /// What the sender of an entry tells about the guest memory the back writes running it, for
     /// the front's reads of guest memory (WaitForWrites, MemoryWritesTarget).
@@ -784,7 +797,8 @@ private:
 
     /// One step of a front wait for the back to consume `target`.
     void Backoff(u32 spins, u32 spin_limit, u64 target);
-    /// After the back stored `consumed`: wakes a front sleeping in Backoff.
+    void SleepForBack(u64 target, bool wait_for_idle = false);
+    /// After the back published consumption or finished its idle hook.
     void NotifyFront() {
         if (front_waiting.load(std::memory_order_seq_cst)) {
             front_wake.fetch_add(1, std::memory_order_seq_cst);
@@ -797,6 +811,11 @@ private:
     void ServeReadLane(u64 position);
     /// Back thread: counts the reads served ahead of entries that the back has now run (position).
     void SettleReadShadows(u64 position);
+    void RenderLoop();
+    [[nodiscard]] bool RenderPending() const {
+        return render_follower && render_follower->Pending();
+    }
+    [[nodiscard]] bool CanOverlapRender(u64 entry) const;
     /// Runs the entry at `entry` (of the `words` published before the ring's end), returns its size.
     size_t Execute(const u64* entry, size_t words);
 
@@ -906,6 +925,13 @@ private:
     static GpuSplit instance;
     static inline thread_local bool on_back_thread{};
     static inline thread_local bool on_gpu_thread{};
+    static inline thread_local bool on_render_thread{};
+    bool render_follower_supported{};
+    bool render_terminal_draw{};
+    std::optional<Nx2RenderFollower> render_follower;
+    std::jthread render_thread;
+    u64 render_overlap_entries{};
+    u64 render_joins{};
     void (*idle_hook)(void*){};
     void* idle_argument{};
     void (*read_lane_hook)(void*){};

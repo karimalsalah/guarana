@@ -45,7 +45,7 @@ public:
     explicit Buffer(BufferCacheRuntime& runtime, VAddr cpu_addr_, u64 size_bytes_,
                     bool sparse_compatible_);
 
-    [[nodiscard]] VkBufferView View(u32 offset, u32 size, VideoCore::Surface::PixelFormat format);
+    [[nodiscard]] VkBufferView View(VkDeviceSize offset, VkDeviceSize size, VkFormat format);
 
     [[nodiscard]] VkBuffer Handle() const noexcept {
         return *buffer;
@@ -109,9 +109,9 @@ public:
 
 private:
     struct BufferView {
-        u32 offset;
-        u32 size;
-        VideoCore::Surface::PixelFormat format;
+        VkDeviceSize offset;
+        VkDeviceSize size;
+        VkFormat format;
         vk::BufferView handle;
     };
 
@@ -189,6 +189,10 @@ public:
 
     /// Waits for a SubmitForHostRead or QueueForHostRead tick, on any thread.
     void WaitForHostRead(u64 tick);
+
+    /// Waits until the host may read a host-visible buffer last written by the GPU at
+    /// `write_tick`. Submissions that do not end with a host-read barrier wait for all work.
+    void WaitForMappedRead(u64 write_tick);
 
     /// Whether the host GPU completed `tick`, asking it when the tick is submitted but not known
     /// to be done.
@@ -403,15 +407,7 @@ public:
     }
 
     void BindTextureBuffer(Buffer& buffer, u32 offset, u32 size,
-                           VideoCore::Surface::PixelFormat format) {
-        // An unmapped texture buffer has no format; its view is the null buffer's anyway.
-        if (format == VideoCore::Surface::PixelFormat::Invalid) {
-            format = VideoCore::Surface::PixelFormat::R8_UNORM;
-        }
-        guest_descriptor_queue.AddTexelBuffer(buffer.View(offset, size, format),
-                                              buffer.DeviceAddress(), offset, size,
-                                              TexelBufferFormat(format));
-    }
+                           VideoCore::Surface::PixelFormat format);
 
     bool ShouldLimitDynamicStorageBuffers() const {
         return limit_dynamic_storage_buffers;
@@ -432,8 +428,6 @@ private:
             guest_descriptor_queue.AddBuffer(handle, buffer.DeviceAddress(), offset, range);
         }
     }
-
-    VkFormat TexelBufferFormat(VideoCore::Surface::PixelFormat format) const;
 
     void ReserveNullBuffer();
     vk::Buffer CreateNullBuffer();

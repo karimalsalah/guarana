@@ -1,0 +1,1 @@
+- Fixed a deterministic GPU-render-thread crash (access violation in the descriptor dedup memcmp) on draws whose graphics pipeline uses per-stage descriptor sets: the deferred draw preparation now snapshots their descriptor entries, which RecordBinding reads at the stage offsets.

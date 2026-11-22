@@ -10,6 +10,7 @@ add_executable(tests
     common/shutdown_steps.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/buffer_cache_ports.cpp
+    video_core/mapped_reads.cpp
     video_core/unswizzle_workers.cpp
     video_core/block_linear_swizzle.cpp
     video_core/aftermath_dump.cpp
@@ -32,6 +33,7 @@ add_executable(tests
     video_core/hdr_output.cpp
     video_core/host_vsync.cpp
     core/mii_model.cpp
+    core/address_space.cpp
     core/nx2_streamplay.cpp
     core/nx2_gpu_only_regions.cpp
     core/nx2_video_ready.cpp
@@ -48,6 +50,7 @@ add_executable(tests
     core/nce_readiness.cpp
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
+    core/svc_fastpath.cpp
     lichii/performance_overlay_model.cpp
     core/game_presets.cpp
     core/game_resolver.cpp
@@ -129,6 +132,7 @@ add_executable(tests
     video_core/ampere_logged_textures.cpp
     video_core/native_texture_header_index.cpp
     video_core/texture_alias_ticks.cpp
+    video_core/texture_cache_gob_layout.cpp
     video_core/sampled_views.cpp
     video_core/texture_handles.cpp
     video_core/ampere_selevet_modes.cpp
@@ -193,6 +197,7 @@ add_executable(tests
     video_core/multi_range_refresh.cpp
     video_core/command_fetch_order.cpp
     video_core/gpu_trace.cpp
+    video_core/nx2_render_follower.cpp
     video_core/gpu_written_pages.cpp
     video_core/nx2_semaphore_mirror.cpp
     video_core/command_writer.cpp
@@ -203,6 +208,7 @@ add_executable(tests
     video_core/pending_maps.cpp
     video_core/maxwell_fast_method.cpp
     hid_core/emulated_controller_config.cpp
+    hid_core/npad_assignment.cpp
     hid_core/sensor_info.cpp
     common/flat_allocator.cpp
     common/paged_scalar.cpp
@@ -270,6 +276,7 @@ add_executable(tests
     common/fibers.cpp
     common/fs_iterate.cpp
     frontend_common/install_keys.cpp
+    frontend_common/play_time.cpp
     common/game_presets.cpp
     common/host_memory.cpp
     common/host_memory_failure.cpp
@@ -288,7 +295,6 @@ add_executable(tests
     common/scratch_buffer.cpp
     common/slot_vector.cpp
     common/sparse_large_vector.cpp
-    common/undefined_fix.cpp
     common/unique_function.cpp
     common/zstd_compression.cpp
     core/core_timing.cpp
@@ -329,6 +335,7 @@ add_executable(tests
     video_core/nx2_gpu_mapping.cpp
     video_core/vertex_repack.cpp
     video_core/query_copy.cpp
+    video_core/vk_texel_buffer_range.cpp
     video_core/ampere_lowering.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_i2f.cpp

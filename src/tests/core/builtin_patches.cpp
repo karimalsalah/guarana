@@ -130,6 +130,28 @@ constexpr std::string_view ClothDtRoutineHead =
 constexpr size_t StepRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46900;
 constexpr size_t AmbientRoutineOffset = sizeof(Loader::NSOHeader) + 0x3C46B60;
 constexpr size_t AmbientRoutineSize = 60;
+// The solver step count's store in each of its two functions, the routine's cave, and the branches
+// the hook writes for a site at function + 0x5C and function + 0x1A0.
+struct SolverSite {
+    size_t offset;
+    size_t cave;
+    u32 to_cave;
+    u32 back;
+};
+constexpr std::array<SolverSite, 2> SolverSites{{
+    {sizeof(Loader::NSOHeader) + 0x38AEBDC, sizeof(Loader::NSOHeader) + 0x3C46400, 0x140E5E09,
+     0x17F1A1DA},
+    {sizeof(Loader::NSOHeader) + 0x38AFDB0, sizeof(Loader::NSOHeader) + 0x3C46480, 0x140E59B4,
+     0x17F1A62F},
+}};
+constexpr u32 SolverCutInstruction = 0x1E380001;   // fcvtzs w1, s0
+constexpr u32 SolverStoreInstruction = 0xB902C801; // str w1, [x0, #0x2c8]
+constexpr size_t SolverRoutineSize = 124;
+constexpr std::string_view SolverRoutine =
+    "0100381EE20FBFA9E20FBFAD02423BD5E34D82526350A7726200271E0238221E4820201E"
+    "4D0200542820201E0D0200544020211ECA010054438FA8526300271E2020231E4C010054"
+    "A399995283B9A7726300271E4238231E4300281E7F04007163A49F1A7F00016B61C0811A"
+    "02421BD5E20FC1ACE20FC1A8";
 constexpr size_t UnlockStateSize = 0xA8;
 constexpr size_t StepStateOffset = sizeof(Loader::NSOHeader) + 0x4E9EE00;
 constexpr size_t StepStateSize = 0x110;
@@ -567,6 +589,11 @@ std::vector<u8> MakeDynamicMain() {
     return nso;
 }
 
+void PutSolverSite(std::vector<u8>& nso, size_t offset) {
+    std::memcpy(nso.data() + offset, &SolverCutInstruction, sizeof(u32));
+    std::memcpy(nso.data() + offset + 4, &SolverStoreInstruction, sizeof(u32));
+}
+
 } // Anonymous namespace
 
 TEST_CASE("Built-in FPS Unlock defaults on and replaces Dynamic FPS", "[patch_manager]") {
@@ -847,6 +874,61 @@ TEST_CASE("Built-in FPS Unlock applies all step counters", "[patch_manager]") {
     REQUIRE(std::equal(nso.begin() + HitstopHookOffset + sizeof(u32),
                        nso.begin() + HitstopHookOffset + 44,
                        patched.begin() + HitstopHookOffset + sizeof(u32)));
+}
+
+TEST_CASE("Built-in FPS Unlock rounds up the physics solver's steps", "[patch_manager]") {
+    PatchManagerTestContext context;
+    auto nso = MakeDynamicMain();
+    for (const auto& site : SolverSites) {
+        PutSolverSite(nso, site.offset);
+    }
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(WordAt(patched, HudHookOffset) == HudHookInstruction);
+    for (const auto& site : SolverSites) {
+        REQUIRE(WordAt(patched, site.offset) == site.to_cave);
+        REQUIRE(WordAt(patched, site.offset + 4) == SolverStoreInstruction);
+        REQUIRE(Common::HexToString(std::span{patched}.subspan(site.cave, SolverRoutineSize - 4)) ==
+                SolverRoutine);
+        REQUIRE(WordAt(patched, site.cave + SolverRoutineSize - 4) == site.back);
+    }
+}
+
+TEST_CASE("Built-in FPS Unlock leaves out a solver hook it can't place", "[patch_manager]") {
+    PatchManagerTestContext context;
+    auto nso = MakeDynamicMain();
+    const auto& kept = SolverSites[1];
+    const auto& left = SolverSites[0];
+    PutSolverSite(nso, kept.offset);
+    SECTION("Not in the function") {}
+    SECTION("In the function twice") {
+        PutSolverSite(nso, left.offset);
+        PutSolverSite(nso, left.offset + 0x40);
+    }
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    // The rest of FPS Unlock and the other hook still apply.
+    REQUIRE(WordAt(patched, HudHookOffset) == HudHookInstruction);
+    REQUIRE(WordAt(patched, kept.offset) == kept.to_cave);
+    REQUIRE(std::equal(nso.begin() + left.offset - 0x40, nso.begin() + left.offset + 0x80,
+                       patched.begin() + left.offset - 0x40));
+    REQUIRE(std::all_of(patched.begin() + left.cave,
+                        patched.begin() + left.cave + SolverRoutineSize,
+                        [](u8 byte) { return byte == 0; }));
+}
+
+TEST_CASE("Built-in FPS Unlock leaves a solver store changed by a user mod alone",
+          "[patch_manager]") {
+    const auto& site = SolverSites[0];
+    PatchManagerTestContext context{NopInstruction, site.offset + sizeof(u32)};
+    auto nso = MakeDynamicMain();
+    PutSolverSite(nso, site.offset);
+    PutSolverSite(nso, SolverSites[1].offset);
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(WordAt(patched, HudHookOffset) == HudHookInstruction);
+    REQUIRE(WordAt(patched, site.offset) == SolverCutInstruction);
+    REQUIRE(WordAt(patched, site.offset + sizeof(u32)) == NopInstruction);
+    REQUIRE(std::equal(nso.begin() + site.cave, nso.begin() + site.cave + SolverRoutineSize,
+                       patched.begin() + site.cave));
+    REQUIRE(WordAt(patched, SolverSites[1].offset) == SolverSites[1].to_cave);
 }
 
 TEST_CASE("Built-in Dynamic FPS leaves all step counters untouched", "[patch_manager]") {
@@ -2355,15 +2437,100 @@ TEST_CASE("FPS Unlock guards the OoT day/night clock carry", "[patch_manager][oo
     }
 }
 
+TEST_CASE("OoT compaction interval is opt-in and skips changed code or state",
+          "[patch_manager][oot_compaction]") {
+    constexpr std::string_view Name = "Texture heap compaction interval (built-in)";
+    constexpr size_t Site = sizeof(Loader::NSOHeader) + 0x777278;
+    constexpr size_t Entry = sizeof(Loader::NSOHeader) + 0x177EDC4;
+    constexpr size_t LastWord = sizeof(Loader::NSOHeader) + 0x177E9D4;
+    constexpr size_t State = sizeof(Loader::NSOHeader) + 0x4E9D200;
+    constexpr u32 Original = 0x36080088;
+    auto nso = MakeDynamicMain();
+    std::memcpy(nso.data() + Site, &Original, sizeof(Original));
+    std::optional<u32> mod;
+    size_t mod_offset = LastWord;
+    std::string_view cheat;
+    std::vector<std::string> unchecked;
+    bool listed = true;
+    bool installs = false;
+    u64 title = OcarinaTitleId;
+    std::string module = "main";
+    SECTION("Unchecked by default") {
+        unchecked.emplace_back(Name);
+    }
+    SECTION("Explicit opt-in with FPS Unlock disabled") {
+        unchecked.emplace_back(FpsUnlock);
+        installs = true;
+    }
+    SECTION("Different build") {
+        nso[offsetof(Loader::NSOHeader, build_id)] ^= 1;
+    }
+    SECTION("Different title") {
+        title = OtherTitleId;
+        listed = false;
+    }
+    SECTION("Different module") {
+        module = "sdk";
+    }
+    SECTION("Changed original instruction") {
+        nso[Site] ^= 1;
+    }
+    SECTION("Occupied alignment slot") {
+        nso[LastWord + 3] = 1;
+    }
+    SECTION("Occupied BSS") {
+        nso[State + 15] = 1;
+    }
+    SECTION("IPS-modified code slot") {
+        mod = NopInstruction;
+    }
+    SECTION("IPS-modified BSS") {
+        mod = NopInstruction;
+        mod_offset = State;
+    }
+    SECTION("Static cheat writes the BSS timestamp") {
+        cheat = "[Compaction overlap]\n08000000 04E9D200 00000000 00000000\n";
+    }
+
+    PatchManagerTestContext context{mod, mod_offset};
+    const auto manager = context.Manager(title);
+    const auto entries = manager.GetPatches();
+    const auto entry = std::ranges::find(entries, Name, &FileSys::Patch::name);
+    REQUIRE((entry != entries.end()) == listed);
+    if (listed) {
+        REQUIRE(entry->off_by_default);
+        REQUIRE_FALSE(entry->enabled);
+        Settings::values.disabled_addons[title] =
+            FileSys::StoredDisabledAddons(title, unchecked);
+        const auto updated = manager.GetPatches();
+        const auto choice = std::ranges::find(updated, Name, &FileSys::Patch::name);
+        REQUIRE(choice != updated.end());
+        REQUIRE(choice->enabled == (unchecked.empty() || installs));
+    }
+    if (!cheat.empty()) {
+        context.WriteCheat(cheat);
+    }
+    const auto patched = manager.PatchNSO(nso, module);
+    REQUIRE(WordAt(patched, Site) == (installs ? 0x14401ED3 : WordAt(nso, Site)));
+    REQUIRE(WordAt(patched, Entry) == (installs ? 0x360FDD88 : 0));
+    if (mod) {
+        REQUIRE(WordAt(patched, mod_offset) == *mod);
+    }
+    REQUIRE(WordAt(patched, LastWord) ==
+            (installs ? 0x17BFE22Au
+                      : mod && mod_offset == LastWord ? *mod : WordAt(nso, LastWord)));
+}
+
 TEST_CASE("Unchecked add-on lists store off-by-default built-ins when checked", "[patch_manager]") {
     const std::string Double{"Text Speed 2x (built-in)"};
     const std::string Quadruple{"Text Speed 4x (built-in)"};
     const std::string Instant{"Text Speed Instant (built-in)"};
+    const std::string Compaction{"Texture heap compaction interval (built-in)"};
     const std::string MaxResolutionName{MaxResolution};
 
     SECTION("Unchecked off-by-default built-ins are not stored, checked ones get their key") {
         auto stored = FileSys::StoredDisabledAddons(OcarinaTitleId,
-                                                    {MaxResolutionName, Double, Instant});
+                                                    {MaxResolutionName, Double, Instant, Compaction});
         std::ranges::sort(stored);
         std::vector<std::string> expected{MaxResolutionName,
                                           FileSys::EnabledAddonKey(Quadruple)};

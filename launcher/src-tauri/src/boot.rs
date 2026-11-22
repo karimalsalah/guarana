@@ -10,13 +10,17 @@
 //!
 //! A second watcher reports when a window of the emulator's process has the foreground, which
 //! works with every emulator version, including those that write nothing.
+//!
+//! Once the game has the screen the launcher's window steps aside (`Stage`): hidden, so the game is
+//! the one window and taskbar button while it plays. The game-watch thread in `launch.rs` shows it
+//! again when the emulator exits.
 
 use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::timeline::{phase_text, PhaseChanges, Timeline};
 use crate::types::BootProgress;
@@ -160,10 +164,50 @@ impl Tracker {
     }
 }
 
+/// The launcher's window during one game: it steps aside once the game has the screen and comes
+/// back when the game's process ends. One lock orders the two, so a hide that races the exit can
+/// never land after the exit has shown the window again.
+#[derive(Clone, Default)]
+pub struct Stage(Arc<Mutex<StageState>>);
+
+#[derive(Default)]
+struct StageState {
+    ended: bool,
+    hidden: bool,
+}
+
+impl Stage {
+    /// Hides the launcher's main window, once, unless the game has already ended.
+    pub fn step_aside(&self, app: &AppHandle, timeline: Timeline) {
+        let hid = self.aside_with(|| app.get_webview_window("main").is_some_and(|w| w.hide().is_ok()));
+        if hid {
+            timeline.mark("launcher hidden while the game plays");
+        }
+    }
+
+    /// Runs `hide` under the lock, once, unless the game has ended. True when it hid the window.
+    fn aside_with(&self, hide: impl FnOnce() -> bool) -> bool {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.ended || state.hidden {
+            return false;
+        }
+        state.hidden = hide();
+        state.hidden
+    }
+
+    /// At the game's exit: `bring_back` shows the window again, under the lock.
+    pub fn end(&self, bring_back: impl FnOnce()) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.ended = true;
+        bring_back();
+    }
+}
+
 /// Reads the session output on its own thread until the emulator exits (it stops writing once the
 /// game is shown, but keeps the pipe open), and emits `game://boot`. It reads to the end even after
-/// the last event: the emulator writes with blocking calls, so a full pipe would hold it up.
-pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<AtomicBool>, timeline: Timeline) {
+/// the last event: the emulator writes with blocking calls, so a full pipe would hold it up. At the
+/// first frame (or once the game is shown) the launcher steps aside.
+pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<AtomicBool>, stage: Stage, timeline: Timeline) {
     let app = app.clone();
     let spawned = std::thread::Builder::new().name("game-boot".into()).spawn(move || {
         let mut reader = BufReader::new(out);
@@ -182,6 +226,9 @@ pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<Atomic
                 if phases.is_new(&progress.phase) {
                     timeline.mark(&format!("boot phase {}", phase_text(&progress)));
                 }
+                if progress.phase == Phase::FirstFrame.name() || progress.phase == Phase::Shown.name() {
+                    stage.step_aside(&app, timeline);
+                }
                 if progress.phase == Phase::Shown.name() {
                     log::info!("The game is on screen");
                     done.store(true, Ordering::Relaxed);
@@ -197,8 +244,17 @@ pub fn follow(app: &AppHandle, out: impl Read + Send + 'static, done: Arc<Atomic
 }
 
 /// Emits `game://boot` with phase `window` once a window of process `pid` has the foreground,
-/// polling until then, until `done` (the game was shown or has exited) or for 15 minutes.
-pub fn watch_foreground(app: &AppHandle, pid: u32, done: Arc<AtomicBool>, timeline: Timeline) {
+/// polling until then, until `done` (the game was shown or has exited) or for 15 minutes. For a
+/// build that writes no boot (`aside_on_window`), that is also when the launcher steps aside: it
+/// has no other sign that the game took over.
+pub fn watch_foreground(
+    app: &AppHandle,
+    pid: u32,
+    done: Arc<AtomicBool>,
+    stage: Stage,
+    aside_on_window: bool,
+    timeline: Timeline,
+) {
     let app = app.clone();
     let spawned = std::thread::Builder::new().name("game-window".into()).spawn(move || {
         let started = Instant::now();
@@ -206,6 +262,9 @@ pub fn watch_foreground(app: &AppHandle, pid: u32, done: Arc<AtomicBool>, timeli
             if foreground_pid() == Some(pid) {
                 timeline.mark("emulator window has the foreground");
                 let _ = app.emit(BOOT_EVENT, BootProgress { phase: "window".into(), done: 0, total: 0 });
+                if aside_on_window {
+                    stage.step_aside(&app, timeline);
+                }
                 return;
             }
             std::thread::sleep(FOREGROUND_POLL);
@@ -232,6 +291,32 @@ pub(crate) fn foreground_pid() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_launcher_steps_aside_once_and_never_after_the_exit() {
+        let stage = Stage::default();
+        let mut hides = 0;
+        assert!(stage.aside_with(|| {
+            hides += 1;
+            true
+        }));
+        assert!(!stage.aside_with(|| {
+            hides += 1;
+            true
+        }));
+        assert_eq!(hides, 1, "once a game");
+        // The exit showed the window first: a watcher that sees the game's window only now must not
+        // hide the launcher with no game left to come back from.
+        let late = Stage::default();
+        let mut shown = false;
+        late.end(|| shown = true);
+        assert!(shown);
+        assert!(!late.aside_with(|| panic!("a hide after the exit")));
+        // A hide that failed is tried again by the next sign.
+        let retry = Stage::default();
+        assert!(!retry.aside_with(|| false));
+        assert!(retry.aside_with(|| true));
+    }
 
     fn feed_all(lines: &[&str]) -> Vec<(String, u64, u64)> {
         let mut t = Tracker::default();

@@ -11,6 +11,64 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
+## [20.7.2] - 2026-11-21
+
+### Added
+
+- Add tools/cli-harness: a machine-readable JSON harness around guarana-cli and the nx2 debug RPC (status/switches/bench/screenshot/launch/log-tail/input/rpc/warm-pipelines/nup-pack/nup-unpack/version), with a draft agent SKILL.md and 18 standard-library unit tests (CLI-Anything trial).
+- `EDEN_NX2_HOT_PAGES` (experimental, off): guest pages the CPU rewrites every frame stay
+  unprotected and are uploaded at most once a frame, instead of being write-protected after each
+  upload and faulting on the next write. Ported from Eglantine (`f27522bfb9`), where Ocarina of
+  Time's frame went from 25.9 to 24.7 ms.
+- The launcher now downloads the native Windows ARM64 build on ARM64 PCs (it sees through x64 emulation), and falls back to the x86_64 build when a release has no ARM64 asset.
+- Old installed versions are pruned automatically after an install, keeping the current version and the two newest others, and the Updates screen gained a "Clean up old versions" button (`prune_versions`).
+- Help > Check for Updates in the emulator (Windows) opens the Guarana launcher's Updates screen,
+  which checks for an update and installs it, so there is one updater, the launcher's
+  ([#44](https://github.com/karimalsalah/guarana/issues/44)). The menu item goes through a new
+  `guarana://updates` link (optionally `?channel=stable` or `?channel=nightly`), which only shows
+  the screen and never installs by itself. Without the launcher installed it opens the releases
+  page.
+
+### Changed
+
+- Tests: Catch2 3.16.1, up from 3.13.0.
+- Install downloads resume from the bytes already on disk after an interruption and retry up to three times; the finished file is still checked against the release's SHA-256 before anything is unpacked.
+- Upstream nx2 sync to 1d142ccfc3 (38 commits): warm direct draws recorded on an ordered GPU
+  follower (#2319), unpaced FPS-unlocked games held to 240 fps (#2178), OoT physics solver steps
+  rounded up with FPS Unlock (#2179), host VRAM spill collected at the critical threshold instead
+  of OOM (#2167), unloaded modules recorded in the crash minidump (#2177), native NVN storage
+  descriptor sizes honored (#2262), Maxwell GOB hint for BC7 textures (#2305), service waiters
+  woken on registration (#2250), legacy AMD driver pipeline workers capped at two (#2311),
+  single-candidate NVIDIA compute routes kept (#2291), lone Joy-Con assignment fix (#2292),
+  game-directory titles listed in the HOME Menu as virtual forwarders (#2148), and more.
+- Vulkan-Headers and Vulkan-Utility-Libraries 1.4.368, up from 1.4.345: newer extension
+  definitions for future work. No renderer behaviour changes.
+- xxHash 0.8.4, up from 0.8.3, for the shader cache v2 and GPU trace checksums. Hash values are
+  unchanged; arm64 builds use NEON instead of SVE for XXH3.
+
+### Fixed
+
+- Android: folder scans and Open With now recognize `.nup` games. NUPs in configured content
+  folders are also considered for add-ons, and the library uses the version in a container's own
+  control data when no installed metadata is available. Thanks to [Webmaster-25
+  (Lichii #1150)](https://github.com/zortos293/Lichii/pull/1150) and [Aidan Kinzett
+  (Eglantine #383)](https://github.com/Eglantine-Community/Eglantine/pull/383).
+- Integrated-GPU profiles now default to crisp repeated real frames at even 120 Hz pacing (`EDEN_NX2_FLUID_INTERP=0`, `CADENCE=3`, `SHOWN_RATE=120`) instead of interpolated in-betweens, which ghost every moving edge at low real fps; a new "Interpolated in-betweens" toggle turns prediction back on for GPUs that hold 60+ real fps.
+- Launcher: the mode is set in one place. When the launcher applies a mode (at every Play, and
+  Advanced > Apply), it removes the mode block the emulator's own Guarana settings page wrote into
+  `nx2_switches.txt` and sets that page back to Custom. The two blocks used to mix: the page's Smooth
+  added frame-pacing lines under the launcher's mode, its Battery added a second autopilot, and its
+  `EDEN_NX2_EXTRAPOLATE=1` survived on Intel integrated GPUs where the launcher leaves that line to
+  the emulator ([#119](https://github.com/karimalsalah/guarana/issues/119)). A hand-made profile
+  (Custom in the launcher) leaves the page's block as it is.
+
+### Security
+
+- Network: cpp-httplib 0.66.0, up from 0.46.0, for the updater, the DLSS and FSR4 runtime
+  downloads, icon search and the Nextendo sign-in. It brings the security fixes of 18 releases,
+  among them one that sent the `Cookie` header on to another host after a redirect
+  ([GHSA-22mf-w2v3-r2jv](https://github.com/yhirose/cpp-httplib/security/advisories/GHSA-22mf-w2v3-r2jv)).
+
 ## [20.7.1] - 2026-11-20
 
 ### Fixed

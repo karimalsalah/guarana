@@ -204,6 +204,10 @@ export interface LaunchRequest {
   game: Game | null;
   /** Why it cannot start (missing file, a link outside the game folders...). */
   error: string | null;
+  /** A screen to show instead of a game: guarana://updates, from the emulator's Help > Check for Updates. */
+  screen?: "updates";
+  /** The channel an updates link names. */
+  channel?: "stable" | "nightly";
 }
 
 export interface Notifications {

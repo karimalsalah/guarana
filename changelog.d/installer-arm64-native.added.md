@@ -1,1 +1,0 @@
-- The launcher now downloads the native Windows ARM64 build on ARM64 PCs (it sees through x64 emulation), and falls back to the x86_64 build when a release has no ARM64 asset.

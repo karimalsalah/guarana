@@ -29,11 +29,11 @@ Hard rules (legal and trust):
 | `import_keys` | `{ path }` | `ImportResult` |
 | `add_game_folder` | `{ path }` | `Game[]` |
 | `list_games` | – | `Game[]` |
-| `apply_profile` | `{ profile_id, overrides?: Record<string,string\|number\|boolean> }` | `AppliedProfile`. `overrides` holds only the toggles that differ from `Toggle.default`. A manual apply sets the mode to `custom` |
+| `apply_profile` | `{ profile_id, overrides?: Record<string,string\|number\|boolean> }` | `AppliedProfile`. `overrides` holds only the toggles that differ from `Toggle.default`. A manual apply sets the mode to `custom`. Every apply (also a mode's at each start) removes the emulator settings page's mode block (`# >>> Guarana mode`) from `nx2_switches.txt` and sets the page's `[UI] guarana_mode` to `custom`, so the launcher is the one place the mode is set; `changed` says so. Custom mode's rewrite of the launcher's block at each start leaves them |
 | `run_doctor` | – | `Check[]`; streams `doctor://progress` |
 | `apply_fix` | `{ fix_id }` | `Check` |
 | `prefetch_caches` | `{ title_id }` | `{ bytes_warmed: number }` (reads shader/pipeline cache files into the OS file cache in the background) |
-| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `%LOCALAPPDATA%\Guarana\app\guarana.exe --launcher-session -f -g <file>` (see "Program folder"), or `-f -g <file>` for a version older than 20.3.0, a nightly or a pre-release (see "Launcher session") |
+| `launch_game` | `{ title_id?: string, path?: string, profile_id?: string }` | `{ pid: number, follows_boot: boolean }` (`follows_boot`: the emulator writes its boot, a game in a launcher session); emits `game://boot` `BootProgress` while the game boots and `game://exited` `{ code, seconds }`. Runs `%LOCALAPPDATA%\Guarana\app\guarana.exe --launcher-session -f -g <file>` (see "Program folder"), or `-f -g <file>` for a build whose program does not know the option, 20.2.0 and older (see "Launcher session") |
 | `collect_report` | `{ kind: "bug" \| "performance" \| "crash", note?: string }` | `{ zip_path: string, issue_url: string, summary_md: string }` |
 | `open_path` | `{ path }` | – (opens Explorer) |
 | `open_url` | `{ url }` | – (default browser; only https URLs) |
@@ -148,7 +148,9 @@ interface StopResult { was_running: boolean; title_id: string | null; stopped: b
 interface AskAi { service: "claude" | "chatgpt"; url: string; prompt: string; url_chars: number; }
 interface LaunchRequest { source: "file" | "link";  // Explorer, a shortcut or a second start; or guarana://
   game: Game | null;                  // checked; `container` is "other" and `title_id` may be "" for an .nca
-  error: string | null; }             // why it can't start, to show as is
+  error: string | null;               // why it can't start, to show as is
+  screen?: "updates";                 // guarana://updates: show the Updates screen instead of a game
+  channel?: "stable" | "nightly"; }   // the channel that link names
 interface Notifications { enabled: boolean; }
 
 interface BoosterLevelInfo { level: number; title: string; summary: string;
@@ -285,6 +287,7 @@ moment `launch_game` reached the backend):
     Launch timeline: process spawned (pid 1234) at +75.3 ms
     Launch timeline: boot phase starting at +410.2 ms          (each boot phase, once, with the counts for shaders and precache)
     Launch timeline: emulator window has the foreground at +980.0 ms
+    Launch timeline: launcher hidden while the game plays at +9310.4 ms
     Launch timeline: process exited with 0 at +612345.6 ms
 
 The boot phases are the ones in the table below, logged when the launcher first sees them (the
@@ -347,22 +350,34 @@ first frame (a topmost launcher, or the emulator cloaking its window) is not don
 launcher would hide the emulator's dialogs (load errors, user selection, the software keyboard)
 behind it, and the cloaked window needs a check on a device first.
 
+While a game plays, the launcher's window steps aside: it is hidden (`boot::Stage`), so the game
+is the one window on screen, in Alt+Tab and on the taskbar. That happens at the boot phase
+`first-frame` or `shown`, whichever comes first; for a build that writes no boot, when its window
+has the foreground (`window`). Until then the launch stage stays reachable with Alt+Tab while the
+shaders load, and an emulator dialog before the first frame (a load error, a missing key) leaves it
+in place. A second start of the launcher (its Start menu entry, a game file, a `guarana://` link)
+shows it at any time.
+
 `game://exited` brings the launcher back as soon as the process is gone: it is restored if
 minimized and shown, and brought to the front (`set_focus`) only when the foreground window at the
 exit belongs to the emulator, the launcher or nobody: a player who moved to another app keeps it.
+The hide and this show take one lock, and no hide follows the exit, so a watcher that sees the
+game's window in its last moment never leaves the launcher hidden with no game running.
 `code` is that exit code.
 A code of 1 can arrive late (the player may leave the load error open for minutes), so `seconds`
 alone does not tell a failed start from a session; the autopilot ignores a code-1 session that
 showed no frame (`autopilot::decide`).
 
-Only versions that understand the flag get it: a stable version of 20.3.0 or later
-(`LAUNCHER_SESSION_SINCE` in `launch.rs`, compared with `current.json`). The flag was added when the
-repository's `VERSION` read 20.2.0; the assumption is that the next release is 20.3.0 or later. A
-nightly, a pre-release or any other label gets `-f -g <file>` only, as do older versions the
-launcher installs or rolls back to: they show the emulator's window around the game and go back to
-its game list when the game stops, until the player closes it. An older build that receives it
-ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the gate is
-about behaviour, not safety.
+Only builds that understand the flag get it. The launcher reads that from the program: the
+option's name, `launcher-session`, is in the emulator's option table (`src/core/launch_params.cpp`),
+and `understands_launcher_session` in `launch.rs` looks for it in the executable, once per file, size
+and time (`util::program_knows`, the same check `warm_shaders` makes for `--warm-pipelines`). So
+every build since the flag was added gets it, nightlies and release candidates included, whatever
+their version label says. Builds from before it (20.2.0 and older), which the launcher can install
+or roll back to, get `-f -g <file>` only: they show the emulator's window around the game and go
+back to its game list when the game stops, until the player closes it. An older build that receives
+the flag ignores it (getopt reports an unrecognized option on stderr and parsing continues), so the
+gate is about behaviour, not safety.
 
 ## Opening games from Windows
 
@@ -388,9 +403,14 @@ launcher.
     (`CON`, `NUL`, `COM1` …), extension `.nsp` `.xci` `.nup` or `.nca`; it must sit inside one of the
     game folders the user added, and only then is the disk read: a regular file, not a link to one.
     `%20` is a space and `+` stays a plus.
+  - `guarana://updates` (optionally `?channel=stable` or `?channel=nightly`): shows the Updates
+    screen, which checks for an update as it opens. The emulator's Help > Check for Updates opens it
+    on Windows (`src/lichii/main_window.cpp`; the releases page when the scheme is not registered).
+    It never installs anything by itself.
   - Refused: any other scheme, action or parameter, a user name, password, port or fragment, repeated
     parameters, both or neither of a title id and a path, links over 2048 characters. A link only
-    ever picks a game for `launch_game`; it never names a program, an argument or a setting.
+    ever picks a game for `launch_game` or shows the Updates screen; it never names a program, an
+    argument or a setting.
 - **The UI** takes the request with `take_launch_request` and opens the launch screen, which calls
   `launch_game` with the `path` (and `title_id` when known), the same start as a library game. It
   shows `error` instead, and does not navigate while a game starts or runs, before the first run is

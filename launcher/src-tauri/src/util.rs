@@ -1,8 +1,10 @@
 //! Small helpers: time stamps, atomic writes, backups, process checks, opening pages.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `Result<T, String>`: what every command returns; Tauri hands the string to the UI.
@@ -207,10 +209,71 @@ pub fn normalize_title_id(s: &str) -> Option<String> {
     (t.len() == 16 && t.chars().all(|c| c.is_ascii_hexdigit())).then(|| t.to_ascii_lowercase())
 }
 
+/// Whether the program `exe` holds `needle`, the name of an option in its option table: how the
+/// launcher tells what an emulator build can do without starting it, whatever its version label
+/// says. Cached per file, needle, size and time.
+pub fn program_knows(exe: &Path, needle: &'static [u8]) -> bool {
+    type Seen = (u64, Option<SystemTime>, bool);
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, &'static [u8]), Seen>>> = OnceLock::new();
+    let Ok(meta) = fs::metadata(exe) else { return false };
+    let stamp = (meta.len(), meta.modified().ok());
+    let key = (exe.to_path_buf(), needle);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((len, modified, found)) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+        if (len, modified) == stamp {
+            return found;
+        }
+    }
+    let found = file_contains(exe, needle);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(key, (stamp.0, stamp.1, found));
+    }
+    found
+}
+
+fn file_contains(path: &Path, needle: &[u8]) -> bool {
+    let Ok(mut f) = fs::File::open(path) else { return false };
+    let mut buf = vec![0u8; (1 << 20) + needle.len()];
+    let mut carry = 0;
+    loop {
+        let n = match std::io::Read::read(&mut f, &mut buf[carry..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(n) => n,
+        };
+        let filled = carry + n;
+        if buf[..filled].windows(needle.len()).any(|w| w == needle) {
+            return true;
+        }
+        // Keep the tail so a match across two reads is found.
+        carry = (needle.len() - 1).min(filled);
+        buf.copy_within(filled - carry..filled, 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn probe_finds_the_option_across_reads() {
+        let dir = std::env::temp_dir().join(format!("guarana-util-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("guarana-cli.exe");
+        let needle = b"warm-pipelines";
+        // The first read takes 1 MiB + the needle's length; start the needle 5 bytes before that.
+        let mut data = vec![b'x'; (1 << 20) + needle.len() - 5];
+        data.extend_from_slice(needle);
+        data.extend_from_slice(&[b'y'; 100]);
+        std::fs::write(&path, &data).unwrap();
+        assert!(file_contains(&path, needle));
+        assert!(program_knows(&path, needle));
+        std::fs::write(&path, vec![b'x'; 3 << 20]).unwrap();
+        assert!(!file_contains(&path, needle));
+        assert!(!program_knows(&path, needle), "a new size is read again");
+        assert!(!program_knows(&dir.join("missing.exe"), needle));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn rfc3339_known_dates() {

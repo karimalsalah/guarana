@@ -1,1 +1,0 @@
-- Old installed versions are pruned automatically after an install, keeping the current version and the two newest others, and the Updates screen gained a "Clean up old versions" button (`prune_versions`).
