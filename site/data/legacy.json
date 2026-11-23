@@ -3,7 +3,7 @@
   "repo": "karimalsalah/guarana",
   "since": "2026-11-13",
   "as_of": "2026-11-22",
-  "commits": 1240,
+  "commits": 1286,
   "people": [
     {
       "login": "mushymeow",
@@ -15,7 +15,7 @@
     {
       "login": "zortos293",
       "name": null,
-      "commits": 340,
+      "commits": 364,
       "coauthored": 5,
       "first": "2026-11-04"
     },
@@ -85,7 +85,7 @@
     {
       "login": "Reiixan",
       "name": null,
-      "commits": 6,
+      "commits": 9,
       "coauthored": 2,
       "first": "2026-11-12"
     },
@@ -127,7 +127,7 @@
     {
       "login": "danieljesus",
       "name": null,
-      "commits": 57,
+      "commits": 63,
       "coauthored": 1,
       "first": "2026-11-13"
     },
@@ -197,7 +197,7 @@
     {
       "login": "karimalsalah",
       "name": null,
-      "commits": 400,
+      "commits": 410,
       "coauthored": 0,
       "first": "2026-11-13"
     },
@@ -484,7 +484,7 @@
     {
       "login": "pabCMX",
       "name": null,
-      "commits": 1,
+      "commits": 2,
       "coauthored": 1,
       "first": "2026-11-14"
     },
@@ -721,6 +721,13 @@
     },
     {
       "login": null,
+      "name": "Janek",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-20"
+    },
+    {
+      "login": null,
       "name": "Mcm190",
       "commits": 0,
       "coauthored": 1,
@@ -739,16 +746,37 @@
       "commits": 2,
       "coauthored": 0,
       "first": "2026-11-20"
+    },
+    {
+      "login": "haidanQAQ",
+      "name": null,
+      "commits": 1,
+      "coauthored": 0,
+      "first": "2026-11-21"
+    },
+    {
+      "login": null,
+      "name": "Developer",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-22"
+    },
+    {
+      "login": null,
+      "name": "grokbot",
+      "commits": 0,
+      "coauthored": 1,
+      "first": "2026-11-22"
     }
   ],
   "tools": [
     {
       "name": "Claude",
-      "commits": 676
+      "commits": 685
     },
     {
       "name": "Capy",
-      "commits": 293
+      "commits": 317
     },
     {
       "name": "OpenAI Codex / ChatGPT",
@@ -760,18 +788,18 @@
     },
     {
       "name": "Cursor",
-      "commits": 11
+      "commits": 12
     },
     {
       "name": "Cursor Grok 4.7",
       "commits": 11
     },
     {
-      "name": "Gemini",
-      "commits": 6
+      "name": "GitHub Actions",
+      "commits": 7
     },
     {
-      "name": "GitHub Actions",
+      "name": "Gemini",
       "commits": 6
     },
     {
