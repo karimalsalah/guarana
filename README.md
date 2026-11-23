@@ -18,7 +18,7 @@ Intel Arc iGPUs and Radeon handhelds are the measured home ground; NVIDIA and AM
 
 </div>
 
-**Measured, with the machine named.** So far on one laptop: Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED, in Ocarina of Time's Hyrule Field.
+**Verified benchmark results, with the machine named.** The `tools/bench` figures so far come from one laptop: Core Ultra 9 285H, Arc 140T, Intel driver 32.0.101.9175, 120 Hz OLED, in Ocarina of Time's Hyrule Field. Separate single-session Panther Lake readings are documented below, without verified bench rows.
 
 - **Frames on time.** On the laptop's 120 Hz screen, v20.4.0's 120 Hz set put **98 to 100%** of shown frames within 2 ms of the median and missed **0 to 4 of 1,200** display slots per 10 s, in three lab runs. The 60 Hz set, unchanged since v20.3, had **0 late flips** and up to **599 of 600** slots on time. [Measured wins](#measured-wins)
 - **One shader fix: 14.8 to 22.8 game fps**, frame generation off (`EDEN_NX2_GM=11`, on by default for Ocarina of Time only). [Measured wins](#measured-wins)
@@ -61,6 +61,7 @@ The Windows x64 build needs an x86-64-v3 CPU (including AVX2) and a Vulkan drive
 | Intel Arc **140V** / 130V (Lunar Lake) | MSI Claw 8 AI+, MSI Claw 7 AI+ | Community report: 22-24 fps in gameplay on a third-party build, not verified by us ([source](docs/DEVICES.md#third-party-data-points)). Untested here: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
 | Intel Arc (Meteor Lake) | MSI Claw A1M | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
 | Intel Arc B370 / **B390** (Panther Lake) | MSI Claw 8 EX AI+, other Arc G3 handhelds | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
+| Intel Graphics, 4 Xe3 cores (Panther Lake) | Panther Lake laptops | Single-session readings only; no verified bench rows ([notes](docs/DEVICES.md#intel-graphics-4-xe3-cores-panther-lake)) |
 | AMD Radeon **780M** | ROG Ally, ROG Ally X, Legion Go | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
 | AMD Radeon **880M / 890M** | ROG Xbox Ally X, Legion Go 2, MSI Claw A8 | Community report: about 30 fps in Ocarina of Time on an 890M, upstream Lichii [issue #1433](https://github.com/zortos293/Lichii/issues/1433), not verified by us. Untested here: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |
 | AMD Radeon **8060S** (Strix Halo) | | Untested: [send a report](https://github.com/karimalsalah/guarana/issues/new?template=device-report.yml) |

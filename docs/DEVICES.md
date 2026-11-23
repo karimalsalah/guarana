@@ -20,7 +20,7 @@ earn a row in the matrix below. The standing call is
 
 | | Requirement | Tested with |
 |---|---|---|
-| Operating system | Windows x64 is the tested platform. Linux and macOS builds are on Releases; untested on these devices ([docs/Build.md](Build.md) to build from source) | Windows |
+| Operating system | Stable packages: Windows x86_64/ARM64, Linux x86_64/aarch64 and Android ARM64. The nightly also publishes macOS arm64. Only Windows 11 x64 has been gameplay-tested ([stable releases](https://github.com/karimalsalah/guarana/releases/latest); [nightly](https://github.com/karimalsalah/guarana/releases/tag/nightly)) | Windows 11 x64 |
 | CPU | x86-64 with AVX2: release builds use `x86-64-v3` code | Core Ultra 9 285H |
 | GPU | A Vulkan driver; an integrated GPU is the target | Arc 140T, Intel driver 32.0.101.9175 |
 | Memory | 16 GB of shared memory is below the comfortable floor: Switch 2 titles use a 12 GiB guest memory layout, and the iGPU takes its memory from the same RAM | 32 GB |
@@ -37,7 +37,7 @@ With 16 GB, enlarge the Windows page file before your first run:
 | Intel Arc 140V / 130V | Lunar Lake | MSI Claw 8 AI+, MSI Claw 7 AI+ | Untested: send a report |
 | Intel Arc | Meteor Lake | MSI Claw A1M | Untested: send a report |
 | Intel Arc B370 / B390 | Panther Lake | MSI Claw 8 EX AI+, other Arc G3 handhelds | Untested: send a report |
-| Intel Graphics, 4 Xe3 cores | Panther Lake | Laptops | Untested: single runs on one laptop, no bench rows yet ([notes](#intel-graphics-4-xe3-cores-panther-lake)) |
+| Intel Graphics, 4 Xe3 cores | Panther Lake | Laptops | Untested: single-session readings only on a second laptop; no verified bench rows ([notes](#intel-graphics-4-xe3-cores-panther-lake)) |
 | AMD Radeon 780M | | ROG Ally, ROG Ally X, Legion Go | Untested: send a report |
 | AMD Radeon 880M / 890M | | ROG Xbox Ally X, Legion Go 2, MSI Claw A8 | Untested: send a report |
 | AMD Radeon 8060S | Strix Halo | | Untested: send a report |
@@ -53,10 +53,12 @@ Discrete GPUs are not a target of this fork and are not tested here; reports are
 
 ## What has been measured
 
-All Guarana numbers so far come from one laptop and one game: Core Ultra 9 285H, Arc 140T, Intel
-driver 32.0.101.9175, 32 GB RAM, *The Legend of Zelda: Ocarina of Time*. The switch A/B was measured
-at the Hyrule Field overlook. **Game fps** counts the frames the game renders; generated frames are
-not included.
+The verified `tools/bench` results below come from one laptop and one game: Core Ultra 9 285H, Arc
+140T, Intel driver 32.0.101.9175, 32 GB RAM, *The Legend of Zelda: Ocarina of Time*. The switch A/B
+was measured at the Hyrule Field overlook. Separate single-session readings from a second Panther
+Lake laptop appear in the notes below and the [v20.3.0 changelog](../CHANGELOG.md); they have no
+verified bench rows and do not make that GPU tested. **Game fps** counts the frames the game renders;
+generated frames are not included.
 
 | Configuration | Game fps |
 |---|---:|
@@ -87,13 +89,14 @@ great first contribution.
 - v20 includes three Arc driver fixes ported from
   [Fritchii-Intel-Fixes](https://github.com/LuckyLuckLucky/Fritchii-Intel-Fixes): broken light beams,
   flashing lights and NaN bloom, and native float atomics.
-- Start with the play config from the [quick start](../README.md#quick-start): `EDEN_NX2_GM=11`,
-  `EDEN_NX2_POWER_POLICY=igpu`, and for Ocarina of Time `EDEN_NX2_EXTRAPOLATE=1` with frame generation
-  3x toward 60.
-- Intel's driver takes 0.4-1 s to compile one pipeline, so first visits hitch. Saving the pipeline
-  cache while pipelines are being built can crash the driver
-  ([IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)); a
-  fix is in progress.
+- Ocarina of Time already defaults to `EDEN_NX2_GM=11`; leave it unset unless you need to override
+  it. The Windows Intel iGPU preset chooses frame-generation settings for the display. On 120/144 Hz
+  displays, leave `EDEN_NX2_EXTRAPOLATE` unset: enabling it overrides the shipped locked interpolation
+  sets ([#119](https://github.com/karimalsalah/guarana/issues/119)).
+- Intel's driver takes 0.4-1 s to compile one pipeline, so first visits hitch. The pipeline-cache
+  crash reported in [IGCIT #1614](https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1614)
+  has an experimental, opt-in mitigation behind `EDEN_NX2_CACHE_SAFE=1` ([#7](https://github.com/karimalsalah/guarana/issues/7)).
+  It remains off by default while its boot deadlock is unresolved.
 - Results depend on the driver build: name yours in every report.
 
 ### Intel Graphics, 4 Xe3 cores (Panther Lake)
@@ -116,7 +119,7 @@ parts are in the family without evidence of their own.
 - **Measured:** single runs of Ocarina of Time in Kokiri Forest with the 144 Hz pacing set, which
   is chosen for this display by default: 24 real and 91.5 shown frames a second against 20 and
   50.5 with the 60 Hz set, in one session. The numbers and their caveats are in the
-  [CHANGELOG](../CHANGELOG.md) and next to the set in `src/core/game_presets.cpp`.
+  [v20.3.0 CHANGELOG entry](../CHANGELOG.md) and next to the set in `src/core/game_presets.cpp`.
 - **Not measured:** any `tools/bench` row on a verified scene, so no setting is chosen for this
   GPU alone. A preset for it needs a paired run on a verified scene first
   ([AGENTS.md](../AGENTS.md), rule 1).
