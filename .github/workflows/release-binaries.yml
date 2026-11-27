@@ -310,7 +310,7 @@ jobs:
       - name: Restore apt packages
         if: startsWith(matrix.platform, 'linux-x86_64')
         id: apt-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/apt-archives
           key: apt-${{ matrix.platform }}-v1-${{ github.run_id }}
@@ -427,7 +427,7 @@ jobs:
 
       - name: Save apt packages
         if: steps.apt-trim.outputs.save == 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/apt-archives
           key: ${{ steps.apt-cache.outputs.cache-primary-key }}
